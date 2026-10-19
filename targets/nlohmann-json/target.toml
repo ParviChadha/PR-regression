@@ -1,0 +1,21 @@
+# Target config for nlohmann/json, read by scripts/*.sh (via scripts/lib/cfg.py).
+# Only fields that Stage 0 scripts use. Documented in NOTES.md.
+name = "nlohmann-json"
+upstream_url = "https://github.com/nlohmann/json"
+pinned_sha = "0e95fe8200adbf0e033d0c0818eea473e1d4d346"            # upstream develop HEAD tested in Stage 0 (v3.11.3-763-g0e95fe820)
+
+# Extra data the tests need, vendored into the image at build time (no runtime network).
+test_data_url = "https://github.com/nlohmann/json_test_data/archive/refs/tags/v3.2.0.tar.gz"
+test_data_sha256 = "9a9dc990be2cb51f0fb85e10065c6e52cd4c29c0704cc302f8352efeda3630b9"
+test_data_dir = "/opt/test_data"   # path inside the image
+
+# CMake configure options (the source dir and build dir are supplied by the scripts).
+cmake_args = ["-DCMAKE_BUILD_TYPE=Debug", "-DJSON_BuildTests=ON", "-DJSON_TestDataDirectory=/opt/test_data"]
+coverage_cmake_args = ["-DCMAKE_CXX_FLAGS=--coverage"]
+# ctest arguments (the scripts add --parallel and --output-on-failure)
+ctest_args = []
+
+# Paths relative to the repo root.
+test_paths = ["tests/src"]
+public_headers = ["include/nlohmann"]
+coverage_scope = ["include/nlohmann"]   # gcovr --filter, relative to repo root
