@@ -7,7 +7,8 @@ if [ "${1:-}" = "--coverage" ]; then MODE=coverage; EXTRA="$(cfg coverage_cmake_
 JOBS="${JOBS:-6}"
 START=$(date +%s)
 run_in_container -- bash -ec "
-  cmake -S /src -B /build/$MODE -DCMAKE_EXPORT_COMPILE_COMMANDS=ON $(cfg cmake_args | tr '\n' ' ') $(echo $EXTRA | tr '\n' ' ')
+  rsync -a --delete /src/ /build/src/   # writable copy: some tests write into their cwd; others git-clone the source dir (so .git is copied)
+  cmake -S /build/src -B /build/$MODE -DCMAKE_EXPORT_COMPILE_COMMANDS=ON $(cfg cmake_args | tr '\n' ' ') $(echo $EXTRA | tr '\n' ' ')
   cmake --build /build/$MODE --parallel $JOBS
   ccache -s | head -12
 "

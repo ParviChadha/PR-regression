@@ -9,6 +9,10 @@ test_data_url = "https://github.com/nlohmann/json_test_data/archive/refs/tags/v3
 test_data_sha256 = "9a9dc990be2cb51f0fb85e10065c6e52cd4c29c0704cc302f8352efeda3630b9"
 test_data_dir = "/opt/test_data"   # path inside the image
 
+# Git repos that tests fetch at configure time (FetchContent), mirrored into the image and
+# redirected with git url.insteadOf, so tests run offline. Format: "<url>@<tag>@<commit sha>".
+vendored_git = ["https://github.com/fmtlib/fmt.git@12.2.0@1be298e1bd68957e4cd352e1f676f00e07dcfb57"]
+
 # CMake configure options (the source dir and build dir are supplied by the scripts).
 cmake_args = ["-DCMAKE_BUILD_TYPE=Debug", "-DJSON_BuildTests=ON", "-DJSON_TestDataDirectory=/opt/test_data"]
 coverage_cmake_args = ["-DCMAKE_CXX_FLAGS=--coverage"]

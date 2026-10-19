@@ -7,4 +7,5 @@ docker build --platform linux/arm64 -t "$IMAGE" -f "$ROOT/targets/$T/Dockerfile"
   --build-arg TEST_DATA_URL="$(cfg test_data_url)" \
   --build-arg TEST_DATA_SHA256="$(cfg test_data_sha256)" \
   --build-arg TEST_DATA_DIR="$(cfg test_data_dir)" \
+  --build-arg VENDORED_GIT="$(cfg vendored_git | tr '\n' ' ')" \
   "$ROOT/targets/$T"

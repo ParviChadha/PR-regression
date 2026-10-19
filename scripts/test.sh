@@ -7,7 +7,7 @@ for a in "$@"; do case "$a" in --coverage) MODE=coverage;; --no-network) NET=(--
 JOBS="${JOBS:-6}"
 START=$(date +%s)
 set +e
-run_in_container "${NET[@]}" -- bash -c "
+run_in_container ${NET[@]+"${NET[@]}"} -- bash -c "
   cd /build/$MODE && ctest -V --parallel $JOBS $(cfg ctest_args | tr '\n' ' ') > /build/$MODE/ctest-$TAG.log 2>&1
   rc=\$?; python3 /scripts/summarize.py /build/$MODE/ctest-$TAG.log; exit \$rc"
 RC=$?

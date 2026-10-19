@@ -13,12 +13,13 @@ use_target() {
 
 cfg() { python3 -I "$ROOT/scripts/lib/cfg.py" "$T" "$1"; }          # one value / newline-separated list
 
+# Source is mounted read-only at /src; build.sh rsyncs it to /build/src (writable) for building/testing.
 # run_in_container [--no-network] -- cmd...   (source is mounted read-only; build + ccache in named volumes)
 run_in_container() {
   local net=()
   if [ "${1:-}" = "--no-network" ]; then net=(--network none); shift; fi
   [ "${1:-}" = "--" ] && shift
-  docker run --rm "${net[@]}" \
+  docker run --rm ${net[@]+"${net[@]}"} \
     -v "$REPO":/src:ro \
     -v "$BUILD_VOL":/build \
     -v "$CCACHE_VOL":/ccache \
