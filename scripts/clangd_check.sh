@@ -5,7 +5,7 @@
 HDR="${2:?header}"; SRC="${3:?test source}"
 run_in_container -- bash -c "
   ls -l /build/default/compile_commands.json
-  echo '--- clang-tidy: test source'; clang-tidy -p /build/default --checks='-*,clang-diagnostic-*' /build/src/$SRC 2>&1 | tail -15
-  echo '--- clang-tidy: header';      clang-tidy -p /build/default --checks='-*,clang-diagnostic-*' /build/src/$HDR 2>&1 | tail -15
-  echo '--- clangd --check: test source'; clangd --compile-commands-dir=/build/default --check=/build/src/$SRC 2>&1 | tail -15
-  echo '--- clangd --check: header';      clangd --compile-commands-dir=/build/default --check=/build/src/$HDR 2>&1 | tail -15"
+  echo '--- clang-tidy: test source'; clang-tidy -p /build/default --checks='-*,misc-definitions-in-headers' --header-filter='.*/include/nlohmann/.*' /build/src/$SRC 2>&1 | grep -v 'tweak: ExpandDeducedType\|Found definition heuristically' | tail -12
+  echo '--- clang-tidy: header';      clang-tidy -p /build/default --checks='-*,misc-definitions-in-headers' --header-filter='.*/include/nlohmann/.*' /build/src/$HDR 2>&1 | grep -v 'tweak: ExpandDeducedType\|Found definition heuristically' | tail -12
+  echo '--- clangd --check: test source'; clangd --compile-commands-dir=/build/default --check=/build/src/$SRC 2>&1 | grep -v 'tweak: ExpandDeducedType\|Found definition heuristically' | tail -12
+  echo '--- clangd --check: header';      clangd --compile-commands-dir=/build/default --check=/build/src/$HDR 2>&1 | grep -v 'tweak: ExpandDeducedType\|Found definition heuristically' | tail -12"

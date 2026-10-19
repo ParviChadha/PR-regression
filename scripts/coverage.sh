@@ -7,8 +7,9 @@ FILTERS=""; while read -r p; do FILTERS="$FILTERS --filter /build/src/$p/"; done
 OUT="$ROOT/results/$T/coverage"; mkdir -p "$OUT"
 run_in_container -- bash -ec "
   mkdir -p /build/coverage/report && cd /build/coverage
-  gcovr --root /build/src --object-directory /build/coverage $FILTERS --gcov-executable gcov \
-        --merge-mode-functions=separate --gcov-ignore-parse-errors=suppress_warnings \
-        --txt --html-details /build/coverage/report/index.html --json-summary /build/coverage/report/summary.json \
-        --txt-metric line | tee /build/coverage/report/summary.txt
+  gcovr --root /build/src --object-directory /build/coverage $FILTERS --gcov-executable gcov -j 6 \
+        --merge-mode-functions=separate \
+        --txt /build/coverage/report/summary.txt --html-details /build/coverage/report/index.html --json-summary /build/coverage/report/summary.json \
+        --txt-metric line >&2
+  cat /build/coverage/report/summary.txt >&2
   tar -C /build/coverage/report -cf - ." | tar -C "$OUT" -xf -
