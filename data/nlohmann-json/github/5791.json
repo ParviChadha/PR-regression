@@ -1,0 +1,33 @@
+{
+ "base_ref": "develop",
+ "base_sha": "d33068da730aa1ffa3f1acb332e36653681efa2c",
+ "body": "## What\n\nSince #5746, `write_ubjson` (recursive) and `write_ubjson_iterative` (used past `detail::recursion_depth_limit()`, #5781) write each object key with\n\n```cpp\nstring_t storage;\nconst string_t& key = sanitize_utf8_for_write(el.first, j, storage);\n```\n\nWhen `object_t::key_type` is not `string_t` but converts to it implicitly, `el.first` becomes a temporary `string_t` that is destroyed at the end of this statement. `sanitize_utf8_for_write` returns a reference to its argument in every case except a sanitized `replace`/`ignore` copy, so `key` then refers to a dead object. AddressSanitizer reports `stack-use-after-scope` in `write_ubjson` for `to_ubjson` and `to_bjdata` with such a key type.\n\n- Only custom `ObjectType`s whose `key_type` differs from `string_t` are affected. Default `json` and `ordered_json` bind the key directly and never see a temporary.\n- No release is affected: v3.12.0 wrote keys via `el.first.size()` / `el.first.c_str()`. It was found while reviewing #5328.\n\n## Fix\n\n- New private alias `binary_writer::object_key_string_t`: `const string_t&` when `key_type` is `string_t`, `string_t` otherwise. Both UBJSON sites bind the key to it before sanitizing, so the default types get no extra copy.\n- A deleted template overload `sanitize_utf8_for_write(const T&, ...)` for any `T` other than `string_t` makes passing a converting key a compile error instead of a dangling reference. The doc comment explains this.\n\n## Tests\n\nNew test case in `tests/src/unit-binary_utf8_error_handler.cpp` using a local key type that converts to `std::string`. Keys are longer than the small-string buffer.\n- Well-formed keys under every `error_handler`, for UBJSON and BJData draft2/draft3, with all `use_count`/`use_type` combinations.\n- Ill-formed keys: `strict` throws, `replace`/`ignore` match `dump()`+`parse()`, `keep` passes the bytes through.\n- 200 nested objects, so the iterative writer is covered as well.\n\nVerified locally with `-fsanitize=address,undefined`:\n- **develop headers:** the new test crashes with `stack-use-after-scope` in `write_ubjson`.\n- **Iterative site alone:** with only the iterative site left unfixed, the nesting section crashes in `write_ubjson_iterative`.\n- **With the fix:** all 490 assertions pass in C++11 (`include/`) and C++17 with `JSON_DIAGNOSTICS=1` (`single_include/`).\n- **Guard:** reverting one site to `sanitize_utf8_for_write(el.first, ...)` fails to compile for the custom key type with \"call to deleted member function\", while `json`/`ordered_json` still compile.\n\n## Public API\n\nNo breaking changes. The alias and the deleted overload are private members of `detail::binary_writer`. All public entry points compile for exactly the same `basic_json` specializations as before; the only behavior change is that the affected custom key types no longer read freed memory.\n\n\ud83e\udd16 Generated with [Claude Code](https://claude.com/claude-code)\n",
+ "comments": [],
+ "created_at": "2026-10-09T07:02:04Z",
+ "fetched_at": "2026-11-17T20:10:06Z",
+ "head_sha": "c2239512acdc5c454a0842596171f701b1abdfe2",
+ "labels": [
+  "aspect: binary formats",
+  "L",
+  "tests",
+  "\ud83d\ude80 ready to merge"
+ ],
+ "linked_issues": [],
+ "merge_commit_sha": "374dfe4f0f3f259b1ccaab879a4ab706dbf97e4c",
+ "merged_at": "2026-10-09T15:05:37Z",
+ "number": 5791,
+ "referenced_numbers": [
+  5746,
+  5781,
+  5328
+ ],
+ "repo": "nlohmann/json",
+ "review_comments": [],
+ "state": "closed",
+ "title": "Keep converted object keys alive while writing UBJSON and BJData",
+ "transport": "gh",
+ "user": {
+  "login": "nlohmann",
+  "type": "User"
+ }
+}

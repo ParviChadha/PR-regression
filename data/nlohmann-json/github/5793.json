@@ -1,0 +1,76 @@
+{
+ "base_ref": "develop",
+ "base_sha": "44e8597701aaed2e7ff23312abeee497d203950b",
+ "body": "> Stacked on #5792. Review and merge that one first; this PR's diff is just the last commit.\n\n## Problem\n\nSince #5443 (c72f37a40, not in any release yet), `unflatten()` takes time and memory quadratic in the depth of a pointer. To decide between arrays and objects independently of iteration order, it collects the prefixes that have a reference token `0` below them in a `std::set<std::vector<string_t>>`:\n\n- each `0` token inserts a copy of the whole prefix so far, so an array chain of depth d stores about d\u00b2/2 strings\n- `get_and_create()` pushes onto a prefix vector and looks it up in the set at every step, comparing whole vectors\n\nOn `develop`, unflattening `{\"/0/0/\u2026/0\": 1}`:\n\n| depth | time | peak RSS |\n|---|---|---|\n| 1,000 | 125 ms | 16 MB |\n| 10,000 | 17.9 s | 1.28 GB |\n| 100,000 | killed after 86 s at 6 GB | |\n\n#5393 had confirmed that `unflatten()` handled a 500,000-level pointer before #5443.\n\n## Change\n\nThe prefixes are now numbered nodes of a tree (`prefix_tree`): `children[id]` maps a token to the id of the extended prefix, and `is_array[id]` records whether a `0` token appears directly below it. The first pass of `unflatten()` builds the tree, storing each prefix once. `get_and_create()` then follows it token by token instead of building and comparing prefix vectors. The rule from #5443 is unchanged: a value becomes an array exactly when some key has a `0` directly below it, regardless of iteration order.\n\n## Benchmark\n\nDeep pointer, `unflatten()` only, `-O2`, Apple clang 21, arm64:\n\n| depth | kind | before | after |\n|---|---|---|---|\n| 10,000 | arrays | 17.9 s / 1.28 GB | 1.9 ms / 3.9 MB |\n| 100,000 | arrays | did not finish | 12.9 ms / 24.7 MB |\n| 100,000 | objects | 6.8 ms / 21.6 MB | 10.8 ms / 31.2 MB |\n\nObject chains weren't quadratic before (no `0` tokens), so the tree adds a small constant cost there.\n\nOrdinary documents, best-of-7, median of 3 alternating runs (`dump()` output identical in every case):\n\n| input | type | new/old |\n|---|---|---|\n| wide, 1.3 MB, 82,503 entries | `json` | 1.01 |\n| wide | `ordered_json` | 1.07 |\n| nested, depth 7, 100,374 leaves | `json` | 0.65 |\n| nested | `ordered_json` | 0.64 |\n\nThe wide cases are within the noise of this benchmark (runs varied by up to \u00b125%). Wide `ordered_json` may be slower by about 5%.\n\n## Tests\n\n- The 100,000-level test from #5792 now round-trips through `unflatten()` at full depth; it was limited to 500 levels before.\n- New: unflattening a single 100,000-level array pointer and a 100,000-level object pointer, checked by walking the result.\n- New: order independence with `ordered_json`, where a `0` key comes after its sibling (`{\"/a/1\": 2, \"/a/0\": 1}` \u2192 `{\"a\": [1, 2]}`) and a prefix without a `0` key (`{\"/b/1\": 2}` \u2192 `{\"b\": {\"1\": 2}}`). The existing tests used `json`, whose sorted keys never put `0` second.\n\nLocally: `test-json_pointer` (C++11, C++20), `test-json_patch`, `test-alt-string`, `test-custom-array-type`, `test-custom-object-type`, `test-diagnostics` and `test-ordered_json2` pass, and the build shows no warnings.\n\n## Public API\n\nNo breaking changes. Only private members of `json_pointer` change (`array_parents_t` \u2192 `prefix_tree`, and the parameter of `get_and_create`), and the output of `unflatten()` is identical.\n\n\ud83e\udd16 Generated with [Claude Code](https://claude.com/claude-code)\n",
+ "comments": [],
+ "created_at": "2026-10-09T07:49:52Z",
+ "fetched_at": "2026-11-17T20:10:03Z",
+ "head_sha": "f6d27a655a383225930b04aef868b22e859e2da5",
+ "labels": [
+  "L",
+  "tests"
+ ],
+ "linked_issues": [],
+ "merge_commit_sha": "2913e9643383b8078b9f6d5572401081047ea28e",
+ "merged_at": "2026-10-09T15:57:32Z",
+ "number": 5793,
+ "referenced_numbers": [
+  5792,
+  5443,
+  5393
+ ],
+ "repo": "nlohmann/json",
+ "review_comments": [
+  {
+   "body": "Should the constructor (or NSDMIs) do this initial insert?  Alternatively, make this a member function (see next comment).",
+   "created_at": "2026-10-09T15:14:13Z",
+   "diff_hunk": "@@ -1030,19 +1044,31 @@ class json_pointer\n \n         // collect the pointer prefixes that have a reference token 0 among\n         // their children; the values below them are arrays, all others are\n-        // objects (see array_parents_t)\n-        array_parents_t array_parents;\n+        // objects (see prefix_tree)\n+        prefix_tree tree;\n+        tree.children.emplace_back();\n+        tree.is_array.push_back(false);",
+   "line": 1050,
+   "path": "include/nlohmann/detail/json_pointer.hpp",
+   "user": {
+    "login": "gregmarr",
+    "type": "User"
+   }
+  },
+  {
+   "body": "Seems like this should be a member function.",
+   "created_at": "2026-10-09T15:15:06Z",
+   "diff_hunk": "@@ -1030,19 +1044,31 @@ class json_pointer\n \n         // collect the pointer prefixes that have a reference token 0 among\n         // their children; the values below them are arrays, all others are\n-        // objects (see array_parents_t)\n-        array_parents_t array_parents;\n+        // objects (see prefix_tree)\n+        prefix_tree tree;\n+        tree.children.emplace_back();\n+        tree.is_array.push_back(false);\n         for (const auto& element : *value.m_data.m_value.object)\n         {\n             json_pointer ptr(element.first);\n-            std::vector<string_t> prefix;\n+            std::size_t id = 0;\n             for (auto& reference_token : ptr.reference_tokens)\n             {\n                 if (reference_token == \"0\")\n                 {\n-                    array_parents.insert(prefix);\n+                    tree.is_array[id] = true;\n+                }\n+\n+                // do not keep a reference into tree.children across the\n+                // push_back below, as it may reallocate\n+                const std::size_t next = tree.children.size();\n+                const auto inserted = tree.children[id].emplace(std::move(reference_token), next);\n+                id = inserted.first->second;\n+                if (inserted.second)\n+                {\n+                    tree.children.emplace_back();\n+                    tree.is_array.push_back(false);",
+   "line": 1070,
+   "path": "include/nlohmann/detail/json_pointer.hpp",
+   "user": {
+    "login": "gregmarr",
+    "type": "User"
+   }
+  },
+  {
+   "body": "Done in f6d27a655: the constructor of `prefix_tree` now creates the root node. *(Written by Claude Code.)*",
+   "created_at": "2026-10-09T15:27:33Z",
+   "diff_hunk": "@@ -1030,19 +1044,31 @@ class json_pointer\n \n         // collect the pointer prefixes that have a reference token 0 among\n         // their children; the values below them are arrays, all others are\n-        // objects (see array_parents_t)\n-        array_parents_t array_parents;\n+        // objects (see prefix_tree)\n+        prefix_tree tree;\n+        tree.children.emplace_back();\n+        tree.is_array.push_back(false);",
+   "line": 1050,
+   "path": "include/nlohmann/detail/json_pointer.hpp",
+   "user": {
+    "login": "nlohmann",
+    "type": "User"
+   }
+  },
+  {
+   "body": "Done in f6d27a655: inserting a child is now `prefix_tree::add_child()`, which returns the child's id. There's also a matching `find_child()`, used by `get_and_create()`. *(Written by Claude Code.)*",
+   "created_at": "2026-10-09T15:27:35Z",
+   "diff_hunk": "@@ -1030,19 +1044,31 @@ class json_pointer\n \n         // collect the pointer prefixes that have a reference token 0 among\n         // their children; the values below them are arrays, all others are\n-        // objects (see array_parents_t)\n-        array_parents_t array_parents;\n+        // objects (see prefix_tree)\n+        prefix_tree tree;\n+        tree.children.emplace_back();\n+        tree.is_array.push_back(false);\n         for (const auto& element : *value.m_data.m_value.object)\n         {\n             json_pointer ptr(element.first);\n-            std::vector<string_t> prefix;\n+            std::size_t id = 0;\n             for (auto& reference_token : ptr.reference_tokens)\n             {\n                 if (reference_token == \"0\")\n                 {\n-                    array_parents.insert(prefix);\n+                    tree.is_array[id] = true;\n+                }\n+\n+                // do not keep a reference into tree.children across the\n+                // push_back below, as it may reallocate\n+                const std::size_t next = tree.children.size();\n+                const auto inserted = tree.children[id].emplace(std::move(reference_token), next);\n+                id = inserted.first->second;\n+                if (inserted.second)\n+                {\n+                    tree.children.emplace_back();\n+                    tree.is_array.push_back(false);",
+   "line": 1070,
+   "path": "include/nlohmann/detail/json_pointer.hpp",
+   "user": {
+    "login": "nlohmann",
+    "type": "User"
+   }
+  }
+ ],
+ "state": "closed",
+ "title": "Unflatten in time and memory linear in the pointer depth",
+ "transport": "gh",
+ "user": {
+  "login": "nlohmann",
+  "type": "User"
+ }
+}

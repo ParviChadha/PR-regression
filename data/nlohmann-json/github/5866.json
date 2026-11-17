@@ -1,0 +1,43 @@
+{
+ "base_ref": "develop",
+ "base_sha": "0e95fe8200adbf0e033d0c0818eea473e1d4d346",
+ "body": "Fixes #5865.\n\n#5836 added a `prefix_tree` member named `slots`. Qt defines `slots` as an empty macro (unless `QT_NO_KEYWORDS` is set), so including any Qt header before `json.hpp` failed to compile. This PR:\n\n- renames the member to `table` (`include/nlohmann/detail/json_pointer.hpp`, re-amalgamated),\n- adds `tests/src/unit-qt_keywords.cpp`, which defines Qt's keyword macros as Qt does (`slots`, `signals`, `emit`, `foreach`, `forever`) before including the library and exercises parsing, dumping, flatten/unflatten, JSON pointers, the binary formats, and patch/diff. With the old header, this test fails to compile with the same errors as in the issue,\n- lists the check in the quality-assurance docs, next to the `<Windows.h>` check.\n\nThe bug only exists on `develop` since #5836 and is not in any release.\n\n## Breaking changes\n\nNone. The renamed member belongs to an internal `detail` type.\n\n\ud83e\udd16 Generated with [Claude Code](https://claude.com/claude-code)\n",
+ "comments": [],
+ "created_at": "2026-10-17T12:02:49Z",
+ "fetched_at": "2026-11-17T20:09:27Z",
+ "head_sha": "77052ec0f2c81b182826520e9323e32986dcc7a8",
+ "labels": [
+  "documentation",
+  "L",
+  "tests",
+  "\ud83d\ude80 ready to merge"
+ ],
+ "linked_issues": [
+  {
+   "body": "### Description\n\nCommit 0a4b3a84ee9631ae9ff1cdd6e161c86e06767a85 added `prefix_tree::slots`, which collides with Qt\u2019s slots keyword macro (defined in qtmetamacros.h for moc annotations). Qt defines slots as an empty macro, hence any file that includes a Qt header before this library no longer compiles.\n\n### Reproduction steps\n\nInclude any of the common Qt header before nlohmann::json (explicitly: qtmetamacros.h). \n\n### Expected vs. actual results\n\nExpected: No conflicts with major other frameworks\n\n### Minimal code example\n\n```cpp\nhttps://godbolt.org/z/T8c5YfYdj\n```\n\n### Error messages\n\n```Shell\nIn file included from <source>:2:\n/opt/compiler-explorer/libs/nlohmann_json/trunk/single_include/nlohmann/json.hpp:21515:40: error: expected expression\n 21515 |             std::vector<slot> old(slots.size() * 2);\n       |                                        ^\n/opt/compiler-explorer/libs/nlohmann_json/trunk/single_include/nlohmann/json.hpp:21517:43: error: expected expression\n 21517 |             const std::size_t mask = slots.size() - 1;\n       |                                           ^\n/opt/compiler-explorer/libs/nlohmann_json/trunk/single_include/nlohmann/json.hpp:21523:36: error: expected body of lambda expression\n 21523 |                     while (slots[i].token != nullptr)\n       |                                    ^\n/opt/compiler-explorer/libs/nlohmann_json/trunk/single_include/nlohmann/json.hpp:21527:30: error: expected body of lambda expression\n 21527 |                     slots[i] = s;\n       |                              ^\n/opt/compiler-explorer/libs/nlohmann_json/trunk/single_include/nlohmann/json.hpp:21540:20: error: expected class member or base class name\n 21540 |             : slots(16)\n       |                    ^\n/opt/compiler-explorer/libs/nlohmann_json/trunk/single_include/nlohmann/json.hpp:21550:43: error: expected expression\n 21550 |             const std::size_t mask = slots.size() - 1;\n       |                                           ^\n/opt/compiler-explorer/libs/nlohmann_json/trunk/single_include/nlohmann/json.hpp:21552:28: error: expected body of lambda expression\n 21552 |             while (slots[i].token != nullptr)\n       |                            ^\n/opt/compiler-explorer/libs/nlohmann_json/trunk/single_include/nlohmann/json.hpp:21554:29: error: expected body of lambda expression\n 21554 |                 if (slots[i].hash == hash && slots[i].parent == id && *slots[i].token == reference_token)\n       |                             ^\n/opt/compiler-explorer/libs/nlohmann_json/trunk/single_include/nlohmann/json.hpp:21554:54: error: expected body of lambda expression\n 21554 |                 if (slots[i].hash == hash && slots[i].parent == id && *slots[i].token == reference_token)\n       |                                                      ^\n/opt/compiler-explorer/libs/nlohmann_json/trunk/single_include/nlohmann/json.hpp:21554:80: error: expected body of lambda expression\n 21554 |                 if (slots[i].hash == hash && slots[i].parent == id && *slots[i].token == reference_token)\n       |                                                                                ^\n/opt/compiler-explorer/libs/nlohmann_json/trunk/single_include/nlohmann/json.hpp:21556:36: error: expected body of lambda expression\n 21556 |                     return slots[i].id;\n       |                                    ^\n/opt/compiler-explorer/libs/nlohmann_json/trunk/single_include/nlohmann/json.hpp:21563:22: error: expected body of lambda expression\n 21563 |             slots[i] = slot(hash, id, &reference_token, child);\n       |                      ^\n/opt/compiler-explorer/libs/nlohmann_json/trunk/single_include/nlohmann/json.hpp:21572:35: error: expected expression\n 21572 |             if (++used * 2 > slots.size())\n       |                                   ^\n13 errors generated.\nCompiler returned: 1\n```\n\n### Compiler and operating system\n\nAny\n\n### Library version\n\ndevelop since 0a4b3a84ee9631ae9ff1cdd6e161c86e06767a85\n\n### Validation\n\n- [x] The bug also occurs if the latest version from the [`develop`](https://github.com/nlohmann/json/tree/develop) branch is used.\n- [ ] I can successfully [compile and run the unit tests](https://github.com/nlohmann/json#execute-unit-tests).",
+   "labels": [
+    "kind: bug",
+    "solution: proposed fix"
+   ],
+   "number": 5865,
+   "state": "closed",
+   "title": "prefix_tree::slots collides with Qt\u2019s slots macro"
+  }
+ ],
+ "merge_commit_sha": "cc8334113c8672433bf2d656ef60d14cd57867c4",
+ "merged_at": "2026-10-19T20:00:31Z",
+ "number": 5866,
+ "referenced_numbers": [
+  5865,
+  5836
+ ],
+ "repo": "nlohmann/json",
+ "review_comments": [],
+ "state": "closed",
+ "title": "Do not use Qt's keyword macros as identifiers",
+ "transport": "gh",
+ "user": {
+  "login": "nlohmann",
+  "type": "User"
+ }
+}

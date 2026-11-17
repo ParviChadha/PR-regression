@@ -1,0 +1,62 @@
+{
+ "base_ref": "develop",
+ "base_sha": "732831013699a38d80f3e1933e64e0e14f76528e",
+ "body": "Fixes #5987.\n\nWith `JSON_DIAGNOSTICS` and `JSON_DIAGNOSTIC_POSITIONS` both set, an exception about the **root** value lost its `(bytes a-b)` range, because `exception::diagnostics()` returned early when the path had no tokens, before the byte range was appended. The json_view `diagnostics()` copied the same early return.\n\n### Changes\n\n- `detail/exceptions.hpp` and `detail/view/errors.hpp`: build the `(path) ` prefix only if there are tokens; always append the byte range.\n- `detail/exceptions.hpp`: `get_byte_positions()` returns no range for a null value. Without the early return, a value-initialized iterator (`json::iterator{} == j.begin()`, `invalid_iterator.212`) would now reach it with `JSON_DIAGNOSTICS` set too and dereference the null pointer. This is the same change and test as #6003, so the two PRs can be merged in either order.\n- `detail/view/errors.hpp`: the `found` result of `value_path()` is no longer needed. A value that is not found leaves no tokens, just like the root.\n- Tests: root, nested and constructed values in `unit-diagnostic-positions.cpp` (runs with and without `JSON_DIAGNOSTICS`) and `unit-json_view_positions.cpp`; the value-initialized iterator comparison from #6003 in `unit-diagnostic-positions.cpp`. One existing json_view check encoded the old behaviour (\"no bytes for the root with `JSON_DIAGNOSTICS`\") and now expects the range.\n- Docs: `json_diagnostic_positions.md` states that the root value also gets its range.\n\n| build | root | nested |\n|---|---|---|\n| `JSON_DIAGNOSTICS` only | \u2014 | `(/1) ` |\n| `JSON_DIAGNOSTIC_POSITIONS` only | `(bytes 0-4) ` | `(bytes 4-8) ` |\n| both (before) | \u2014 | `(/1) (bytes 4-8) ` |\n| both (after) | `(bytes 0-4) ` | `(/1) (bytes 4-8) ` |\n\nA value without positions (constructed, not parsed) still gets no range and no stray whitespace.\n\n### Performance\n\nOnly the exception-message path changes (it runs after a throw), so successful operations are unaffected.\n\n### Public API\n\nNo breaking changes. The `what()` text of exceptions about the root value changes in builds with both macros set: it now contains the byte range, as it already did with `JSON_DIAGNOSTIC_POSITIONS` alone. Since 3.12.0.\n\n### Verification\n\nBoth test files fail on develop with `JSON_DIAGNOSTICS=1` and pass with the fix; full `ctest` with ASan+UBSan: 188/188.\n\n\ud83e\udd16 Generated with [Claude Code](https://claude.com/claude-code)\n\n",
+ "comments": [
+  {
+   "body": "### Performance check\n\n**No performance impact.** The change only affects how the context string of an exception is built, which runs only after something has already gone wrong.\n\n- **Generated code** (default configuration): all 1,052 functions of the benchmark binary are byte-for-byte identical between base and PR. The changed code in `exceptions.hpp` and `view/errors.hpp` exists only under `JSON_DIAGNOSTICS`/`JSON_DIAGNOSTIC_POSITIONS`. Even there it runs only while an exception is being constructed (`diagnostics()` is instantiated only at throw sites), so no non-throwing path changes.\n- **Instruction counts**: all 38 rows are within \u00b10.4 %, as expected for identical code (e.g. parse twitter 1.0003, `json_document` parse twitter 1.0004).\n\n<details><summary>Method</summary>\n\n- PR head vs. its base (merge base), both compiled into one binary (namespaces renamed per copy) with the same workload: DOM parse (string, stream, callback), copy/destroy, `==`/`<`, iteration, `dump()`, msgpack/UBJSON/BJData read and write, `json_document` parse/`dump()`/`==`/`get<std::int64_t>()` on twitter, citm_catalog, canada and small_signed_ints.\n- **Generated code**: both variants disassembled (Apple clang 21, `-O3`, arm64), names and addresses masked, compared function by function.\n- **Instruction counts**: Apple M1 Max, instructions retired per repetition (minimum of 3 runs, setup subtracted). Rows whose machine code is identical vary by about \u00b10.4 %, which is the noise floor. Where a hot path changes, also GCC 13.3 `-O3` on x86-64 under callgrind, which gives exact counts (built with `-falign-functions=64 -falign-loops=64` unless a row says otherwise).\n</details>\n\n---\n*Written by Claude Code on behalf of @nlohmann.*\n",
+   "created_at": "2026-11-02T08:24:53Z",
+   "user": {
+    "login": "nlohmann",
+    "type": "User"
+   }
+  },
+  {
+   "body": "**AppVeyor** (`continuous-integration/appveyor/pr`) fails on ae792a4. This does not appear to be caused by this PR:\n\n- The AppVeyor branch build of `develop` itself fails as well (status from 02:17 UTC today), before this PR's build ran.\n- This PR only changes how the exception context string is built under `JSON_DIAGNOSTICS`/`JSON_DIAGNOSTIC_POSITIONS`; all 168 GitHub Actions checks on this head pass, including the MSVC, clang-cl and MinGW jobs.\n\nI could not read the AppVeyor log or re-run the build from here, so the root cause on `develop` is still open and no fix exists yet.\n\n---\n_Generated by [Claude Code](https://claude.ai/code)_",
+   "created_at": "2026-11-02T08:30:58Z",
+   "user": {
+    "login": "nlohmann",
+    "type": "User"
+   }
+  }
+ ],
+ "created_at": "2026-11-01T20:04:37Z",
+ "fetched_at": "2026-11-17T20:08:02Z",
+ "head_sha": "e28a1abb92cb49b870ec3b7bde67afdeac2425f9",
+ "labels": [
+  "documentation",
+  "L",
+  "tests",
+  "\ud83d\ude80 ready to merge",
+  "aspect: json_view"
+ ],
+ "linked_issues": [
+  {
+   "body": "### Description\n\nWith `JSON_DIAGNOSTIC_POSITIONS` alone, an exception about the **root** value of a parsed document names its byte range, e.g. `(bytes 0-4)`. As soon as `JSON_DIAGNOSTICS` is enabled as well, the root value's exception loses the byte range, while nested values keep both the path and the range:\n\n| build | `json::parse(\"true\").get<std::string>()` | `json::parse(\"[1, true]\")[1].get<std::string>()` |\n|---|---|---|\n| `JSON_DIAGNOSTIC_POSITIONS=1` | `[json.exception.type_error.302] (bytes 0-4) type must be string, but is boolean` | `\u2026 (bytes 4-8) type must be string, but is boolean` |\n| both macros | `[json.exception.type_error.302] type must be string, but is boolean` | `\u2026 (/1) (bytes 4-8) type must be string, but is boolean` |\n\nNothing in the [`JSON_DIAGNOSTIC_POSITIONS` documentation](https://json.nlohmann.me/api/macros/json_diagnostic_positions/) excludes the root value; its combined example only shows a nested value, and no test combines both macros on a root exception (`tests/src/unit-diagnostic-positions.cpp` lines 195-210 cover nested values only).\n\n**Root cause.** `exception::diagnostics()` returns early when the path has no tokens ([exceptions.hpp#L201-L204](https://github.com/nlohmann/json/blob/ddc34f546a652cd098dd78225d80f1909b921871/include/nlohmann/detail/exceptions.hpp#L201-L204)), before `get_byte_positions()` is appended at [#L212](https://github.com/nlohmann/json/blob/ddc34f546a652cd098dd78225d80f1909b921871/include/nlohmann/detail/exceptions.hpp#L212):\n\n```cpp\n        if (tokens.empty())\n        {\n            return \"\";\n        }\n        \u2026\n        return concat('(', str, \") \", get_byte_positions(leaf_element));\n```\n\nThe early return is from 2021 (74cc0ab470, before positions existed); #4585 appended the byte positions after it without revisiting it, although the discussion in #4561 intended that with both options set the message carries both. The json_view implementation copies the same early return ([view/errors.hpp#L260-L264](https://github.com/nlohmann/json/blob/ddc34f546a652cd098dd78225d80f1909b921871/include/nlohmann/detail/view/errors.hpp#L260-L264)), so `json_document::parse(\"true\").root().get<std::string>()` behaves the same way in all three builds.\n\n**Since when.** 3.12.0 (the release that added `JSON_DIAGNOSTIC_POSITIONS`); reproduced with the 3.12.0 single header.\n\n**Possible fix.** In both functions, build the path prefix only when there are tokens and always append the byte range:\n\n```cpp\n        std::string prefix;\n        if (!tokens.empty())\n        {\n            auto str = std::accumulate(\u2026);\n            prefix = concat('(', str, \") \");\n        }\n        return concat(prefix, get_byte_positions(leaf_element));\n```\n\nplus a test in `unit-diagnostic-positions.cpp` with both macros on a root value (and one in `unit-json_view_positions.cpp`).\n\n### Reproduction steps\n\n1. Save the program below as `rootpos.cpp`.\n2. `clang++ -std=c++17 -DJSON_DIAGNOSTIC_POSITIONS=1 -I include rootpos.cpp -o p1 && ./p1`\n3. `clang++ -std=c++17 -DJSON_DIAGNOSTIC_POSITIONS=1 -DJSON_DIAGNOSTICS=1 -I include rootpos.cpp -o p2 && ./p2`\n\n### Expected vs. actual results\n\nExpected (step 3): `true root: [json.exception.type_error.302] (bytes 0-4) type must be string, but is boolean`, like step 2.\n\nActual (step 3): `true root: [json.exception.type_error.302] type must be string, but is boolean`, while the nested value prints `(/1) (bytes 4-8)`.\n\n### Minimal code example\n\n```cpp\n#include <nlohmann/json.hpp>\n#include <cstdio>\nusing json = nlohmann::json;\nint main()\n{\n    for (const char* t : {\"true\", \"[1, true]\"})\n    {\n        json j = json::parse(t);\n        try { (void)j.get<std::string>(); } catch (const json::exception& e) { std::printf(\"%s root: %s\\n\", t, e.what()); }\n        if (j.is_array())\n        {\n            try { (void)j[1].get<std::string>(); } catch (const json::exception& e) { std::printf(\"%s /1:   %s\\n\", t, e.what()); }\n        }\n    }\n}\n```\n\n### Error messages\n\n```\n$ ./p1\ntrue root: [json.exception.type_error.302] (bytes 0-4) type must be string, but is boolean\n[1, true] root: [json.exception.type_error.302] (bytes 0-9) type must be string, but is array\n[1, true] /1:   [json.exception.type_error.302] (bytes 4-8) type must be string, but is boolean\n$ ./p2\ntrue root: [json.exception.type_error.302] type must be string, but is boolean\n[1, true] root: [json.exception.type_error.302] type must be string, but is array\n[1, true] /1:   [json.exception.type_error.302] (/1) (bytes 4-8) type must be string, but is boolean\n```\n\n### Compiler and operating system\n\nApple clang 21.0.0 (clang-2100.3.34.2), macOS 27.\n\n### Library version\n\ndevelop at ddc34f546a (2026-11-01) and 3.12.0.\n\n### Validation\n\n- [x] The bug also occurs if the latest version from the [`develop`](https://github.com/nlohmann/json/tree/develop) branch is used.\n- [x] I can successfully [compile and run the unit tests](https://github.com/nlohmann/json#execute-unit-tests).\n\n---\n*Found by a json_view-vs-DOM differential test during a bug hunt; written by Claude Code on behalf of @nlohmann.*\n",
+   "labels": [
+    "kind: bug",
+    "solution: proposed fix",
+    "aspect: json_view"
+   ],
+   "number": 5987,
+   "state": "closed",
+   "title": "Exception about the root value loses its byte range when JSON_DIAGNOSTICS and JSON_DIAGNOSTIC_POSITIONS are both set"
+  }
+ ],
+ "merge_commit_sha": "ff0bdfdef3ae115c9ee9e7ee053ad17119e1aced",
+ "merged_at": "2026-11-02T16:50:40Z",
+ "number": 5990,
+ "referenced_numbers": [
+  5987,
+  6003
+ ],
+ "repo": "nlohmann/json",
+ "review_comments": [],
+ "state": "closed",
+ "title": "Keep the byte range in exceptions about the root value",
+ "transport": "gh",
+ "user": {
+  "login": "nlohmann",
+  "type": "User"
+ }
+}

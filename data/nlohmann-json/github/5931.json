@@ -1,0 +1,29 @@
+{
+ "base_ref": "binary-review/bson",
+ "base_sha": "da65c02eeac369309ccb8589acc364d221dccf92",
+ "body": "## Summary\n- Reading an ND-array with element type `h` (`[$h#[$U#U 2 2 \u2026`) threw `parse_error.112` with a misleading byte; it is now read (`_ArrayType_: \"half\"`). The writer still does not pack `half` (a plain object that reads back equal). Verified against numpy float16 for all 65536 bit patterns and pybj.\n- BJData Draft 2 and 3 limit `C` to 0..127. ND-arrays with `_ArrayType_: \"char\"` wrote and accepted larger values. The writer now packs only 0..127 (other data falls back to a plain object that round-trips equal); the reader rejects `C` > 127 with `parse_error.113`, like the 1-D reader.\n- Docs: unused markers, ND example (3\u00d72), ND packing conditions, `byte`/binary rules, `H`, supported drafts, Draft 4 and column-major as unsupported, duplicate keys, Draft-3 links, `$` requires `#`, new `bjdata_version_t` API page with example, `parse_error.115`, `out_of_range.408`, `other_error.502`, binary values pages.\n\n## Breaking changes\nNo API or ABI change. Two edge-case behaviour changes: ND-arrays of `h` can now be read (they threw before); ND `char` data above 127 is no longer written as packed `C` (a plain object is written instead), and a packed ND `C` array containing a byte above 127 is now rejected with `parse_error.113` instead of being returned. Such streams are invalid under both drafts and rejected by pybj, but a stream written by an earlier version of this library could contain them.\n\nNot covered: column-major ND-arrays, packing `half`, Draft 4.\n\n## Stack\nThis PR is part of a stack of six PRs from a review of the binary formats against their specifications and other implementations (CBOR \u2192 MessagePack \u2192 UBJSON \u2192 BSON \u2192 BJData \u2192 BON8). Please merge in that order.\n\n\ud83e\udd16 Generated with [Claude Code](https://claude.com/claude-code)\n",
+ "comments": [],
+ "created_at": "2026-10-25T16:59:17Z",
+ "fetched_at": "2026-11-17T20:08:47Z",
+ "head_sha": "3f9c68f63fe7fe3f70d695800a9c27ebe3972da6",
+ "labels": [
+  "documentation",
+  "aspect: binary formats",
+  "L",
+  "tests"
+ ],
+ "linked_issues": [],
+ "merge_commit_sha": "60107eda3fe346097ce5b2c065b2854a688de909",
+ "merged_at": "2026-10-26T17:25:52Z",
+ "number": 5931,
+ "referenced_numbers": [],
+ "repo": "nlohmann/json",
+ "review_comments": [],
+ "state": "closed",
+ "title": "Read BJData ND-arrays of float16, restrict ND-array char to 0..127, correct BJData docs",
+ "transport": "gh",
+ "user": {
+  "login": "nlohmann",
+  "type": "User"
+ }
+}

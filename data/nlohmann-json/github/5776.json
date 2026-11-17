@@ -1,0 +1,26 @@
+{
+ "base_ref": "reamalgamate-5740",
+ "base_sha": "e3badb1d99ff0b520213c9a572639afd2efbbe36",
+ "body": "MSVC reports warning C5260 (\"the constant variable \u2026 has internal linkage in an included header file context, but external linkage in imported header unit context\") for `to_chars.hpp` when the library is used as a header unit or through a module, see #4826.\n\nThe warning comes from `kAlpha` and `kGamma`, the only `constexpr` variables at namespace scope in that file. The other constants there are function-local or static members. This declares the two constants `JSON_INLINE_VARIABLE constexpr`, which the library already uses for `static_const`. It expands to `inline` from C++17 on and to nothing before, so C++11 and C++14 are unchanged.\n\nNot verified on MSVC locally. Checked with Apple Clang at C++11, C++17, and C++20 for both headers (`-Wall -Wextra -Werror`, dumping floating-point numbers).\n\n## API impact\n\nNo breaking changes. The two constants are in `nlohmann::detail::dtoa_impl` and keep their values.\n\nWritten by Claude Code.\n\n\ud83e\udd16 Generated with [Claude Code](https://claude.com/claude-code)\n\n",
+ "comments": [],
+ "created_at": "2026-10-07T06:57:59Z",
+ "fetched_at": "2026-11-17T20:10:22Z",
+ "head_sha": "079b83b6f8f2de93d14b387a4a79200d5b3900c9",
+ "labels": [],
+ "linked_issues": [],
+ "merge_commit_sha": "30e542e52a801dfb64aac8de0fbcbf8e7fa30da1",
+ "merged_at": "2026-10-07T07:03:19Z",
+ "number": 5776,
+ "referenced_numbers": [
+  4826
+ ],
+ "repo": "nlohmann/json",
+ "review_comments": [],
+ "state": "closed",
+ "title": "Declare the namespace-scope constants in to_chars.hpp inline",
+ "transport": "gh",
+ "user": {
+  "login": "nlohmann",
+  "type": "User"
+ }
+}

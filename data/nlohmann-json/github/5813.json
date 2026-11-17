@@ -1,0 +1,41 @@
+{
+ "base_ref": "develop",
+ "base_sha": "40a62947d3e23f46cbc863afdcc6f5c933d5ed10",
+ "body": "Include analyzers (include-what-you-use, clang-tidy's `misc-include-cleaner`) told code that includes only `<nlohmann/json.hpp>` to also include internal headers, because `json.hpp` did not mark them as exported. Worst case, the suggested fix replaced `json.hpp` with `json_fwd.hpp` and the code stopped compiling (#5812).\n\n### Changes\n\n- `include/nlohmann/json.hpp`: `// IWYU pragma: export` on the includes whose names client code uses:\n\n  | Header | Client use |\n  |---|---|\n  | `json_fwd.hpp` | `nlohmann::json`, `ordered_json` (#5812) |\n  | `detail/json_ref.hpp` | brace initialization (IWYU only) |\n  | `json_literals.hpp` | `_json`, `_json_pointer` |\n  | `adl_serializer.hpp` | `adl_serializer` specializations (was `keep`) |\n  | `detail/macro_scope.hpp` | `NLOHMANN_DEFINE_*` macros |\n  | `detail/abi_macros.hpp` | `NLOHMANN_JSON_NAMESPACE_*` macros |\n\n- **CI:** `ci_single_binaries` only checked each header on its own, so it could not catch this. It now also builds three small client programs in `tests/iwyu_consumer/` and runs IWYU (`iwyu_tool --error`) and `clang-tidy --checks=-*,misc-include-cleaner --warnings-as-errors=*` on them.\n- With the exports, IWYU no longer gives `json_literals.hpp` the \"use json_fwd.hpp\" suggestion that kept it out of the IWYU gate, so it is gated again.\n- `single_include` is re-amalgamated. The amalgamated `json.hpp` contains `json_fwd.hpp` itself, so single-header users were not affected. It only gains pragma comment lines.\n\n### Verification\n\nI ran `ci_single_binaries` in the CI image (`silkeh/clang:22`, IWYU 0.23, clang-tidy 22):\n\n- **This branch:** passes.\n- **With develop's `json.hpp`:** fails. Both IWYU and include-cleaner flag all three client files, and IWYU also flags `json_literals.hpp`.\n\nI also ran clang-tidy 23 on the reproducer from the issue: clean with this change, two findings on develop.\n\n`NLOHMANN_JSON_SERIALIZE_ENUM` is not covered by the client programs. IWYU attributes the `basic_json` comparison inside its expansion to `<map>`, the same ambiguity that keeps `json.hpp` itself out of the gate. Its header is still covered by `NLOHMANN_DEFINE_TYPE_INTRUSIVE`.\n\nFixes #5812\n\n## Public API\n\nNo breaking changes. Only comment pragmas are added to the public headers.\n\n\ud83e\udd16 Generated with [Claude Code](https://claude.com/claude-code)",
+ "comments": [],
+ "created_at": "2026-10-13T08:21:46Z",
+ "fetched_at": "2026-11-17T20:09:51Z",
+ "head_sha": "1e9b85262a5d5effd210ded412cb2c74089879e2",
+ "labels": [
+  "L",
+  "tests",
+  "CMake",
+  "\ud83d\ude80 ready to merge"
+ ],
+ "linked_issues": [
+  {
+   "body": "### Description\n\n`nlohmann/json.hpp` includes `nlohmann/json_fwd.hpp`, which is the only header that declares the `nlohmann::json` alias (`using json = basic_json<>;`), but the include is not marked as exported. Include analysers that follow the IWYU model, such as clang-tidy's `misc-include-cleaner` and include-what-you-use, therefore attribute the `nlohmann::json` name to `json_fwd.hpp` and the class members to `json.hpp`.\n\nAs a result:\n\n- Any source that names `nlohmann::json` and uses it is told to include **both** headers, although `json.hpp` already provides everything `json_fwd.hpp` declares.\n- A source whose only uses are implicit (for example brace-initialising a `json` value) is told that `json_fwd.hpp` is sufficient. Applying the suggested fix replaces `json.hpp` with `json_fwd.hpp` and the code stops compiling with \"implicit instantiation of undefined template `nlohmann::basic_json<>`\".\n\n### Reproduction\n\n```cpp\n#include <nlohmann/json.hpp>\n\nauto Make() -> nlohmann::json { return { { \"a\", 1 } }; }\n```\n\n`clang-tidy --checks=-*,misc-include-cleaner` reports that no header providing `nlohmann::json` is directly included and suggests adding `<nlohmann/json_fwd.hpp>`.\n\n### Suggested fix\n\nMark the include in `json.hpp` (and the amalgamated single header's equivalent) as exported:\n\n```cpp\n#include <nlohmann/json_fwd.hpp> // IWYU pragma: export\n```\n\nBoth clang-tidy's include-cleaner and include-what-you-use honour this pragma, so users would only need `json.hpp` in sources and could keep `json_fwd.hpp` for headers that only need the declaration.\n\n### Version\n\n3.11.3, observed with clang-tidy 23 (`misc-include-cleaner`).\n\n### Workaround\n\nAdd `nlohmann/json_fwd\\.hpp` to `misc-include-cleaner.IgnoreHeaders`.",
+   "labels": [
+    "solution: proposed fix"
+   ],
+   "number": 5812,
+   "state": "closed",
+   "title": "Mark json_fwd.hpp as exported by json.hpp for include-what-you-use / clang-tidy misc-include-cleaner"
+  }
+ ],
+ "merge_commit_sha": "e839bbd1c0fe4eb3d3a10b33c738052126ab8107",
+ "merged_at": "2026-10-13T15:17:15Z",
+ "number": 5813,
+ "referenced_numbers": [
+  5812
+ ],
+ "repo": "nlohmann/json",
+ "review_comments": [],
+ "state": "closed",
+ "title": "Export client-facing headers from json.hpp for IWYU / include-cleaner, and check clients in CI",
+ "transport": "gh",
+ "user": {
+  "login": "nlohmann",
+  "type": "User"
+ }
+}

@@ -1,0 +1,125 @@
+{
+ "base_ref": "perf/out-of-line-throws",
+ "base_sha": "4569c02530a17324fd6dd697dee96864ae384a93",
+ "body": "Three API-neutral speedups found in a performance survey of the non-parse API.\n\n1. **Destroy fast path**: a freshly entered container whose children are all leaves is freed in one go (`all_children_leaves`); the walk stays non-recursive and allocation-free (tested with `ulimit -s 512` on 1M\u20132M deep nesting). Object of 100k ints: 41.8 \u2192 17.4 ns/member (std::map dtor itself: 15 ns); flat array of 1M doubles 2.1 \u2192 1.8 ns; documents unchanged.\n2. **`iter_impl` fast paths**: array, then object, are checked before the type switch in `++`, `--` (prefix and postfix), `*`, `->` (arrays and objects) and `==`; `<`, `+=` and `-` stay on the switch; the cold throw in `==` moved to a `NEVER_INLINE` member. Range-for over an array 2.5 \u2192 1.3 ns/element, `items()` over an array 2.2 \u2192 1.0, range-for over an object 4.9 \u2192 4.1.\n3. **`diff()`**: one `find` per source key (storing `vector<const basic_json*>`), target pass skipped when no keys were added, \"add\" operations built lazily, children compared with `==` before their path is built; same in the iterative (deep) path. `diff(a, a + 1% changes)`: citm 1.09 \u2192 0.70 ms, twitter 0.92 \u2192 0.41 ms; `diff({}, citm)` 3.18 \u2192 1.62 ms.\n\nReverse range iteration (`rbegin()`..`rend()`, Apple clang -O2 -DNDEBUG, best of 15): over a 1M-element array develop 3.5 ns/element, PR before this update 1.9, after 1.9 (the `--` fast path adds nothing measurable there, the reverse iterator was already well inlined); over a 200k-member object develop 8.2, before 6.2, after 6.5 (within noise).\n\nTests added: reverse iteration (`--`, `rbegin`/`rend`) and object `->` for `json` and `ordered_json`, comparing iterators of different containers (unit-iterators1); `diff()` round trips with reordered keys and nested add/remove/replace for both types (unit-json_patch); destruction of empty, mixed and 5000-deep containers for both types (unit-constructor2). Run with `-fsanitize=address,undefined`, also with `-DJSON_DIAGNOSTICS=1` for diagnostics.\n\nVerification: differential fuzz of `diff` (40k random pairs, `json` and `ordered_json`, keys with `~` and `/`, reordered keys, deep nesting through the iterative path) is byte-identical to develop and `patch(diff)` round-trips. Unit tests iterators1/2, items, class_iterator, class_const_iterator, json_patch, regression2, class_parser, allocator, ordered_json/ordered_map, custom-object-key-type, diagnostics, merge_patch pass, also with `-DJSON_DIAGNOSTICS=1`.\n\n## Breaking changes\nNone. No public interface, ABI or layout change; `diff()` output is identical.\n\n\ud83e\udd16 Generated with [Claude Code](https://claude.com/claude-code)\n",
+ "comments": [
+  {
+   "body": "Written by Claude Code on behalf of @nlohmann. Pushed f4fd1e12e: `operator--` (prefix; postfix goes through it) and object `operator->` now have array/object fast paths like `++`; `<`, `+=`, `-` and the throws are untouched. Fixed the `free_container` comment (the container is empty *or* holds only leaves) and added a weaker assert for that. New tests in unit-iterators1 (reverse iteration, object `->`, cross-container comparison), unit-json_patch (diff round trips, reordered `ordered_json`) and unit-constructor2 (destruction, 5000-deep) pass under ASan/UBSan, also with JSON_DIAGNOSTICS. Reverse iteration over 1M array elements: develop 3.5 ns, previous head 1.9, now 1.9 (no further gain measurable).",
+   "created_at": "2026-10-15T06:10:59Z",
+   "user": {
+    "login": "nlohmann",
+    "type": "User"
+   }
+  }
+ ],
+ "created_at": "2026-10-14T20:19:17Z",
+ "fetched_at": "2026-11-17T20:09:37Z",
+ "head_sha": "8aeb14e682118445e8eb39eb366f8e903af008f7",
+ "labels": [
+  "\ud83d\ude80 ready to merge",
+  "performance"
+ ],
+ "linked_issues": [],
+ "merge_commit_sha": "4f115126414cbe60380d142659d308a53fa66d79",
+ "merged_at": "2026-10-15T18:01:33Z",
+ "number": 5835,
+ "referenced_numbers": [],
+ "repo": "nlohmann/json",
+ "review_comments": [
+  {
+   "body": "Why duplicate the code from the switch here?  Was this supposed to be a move?  If so, why?",
+   "created_at": "2026-10-15T06:05:34Z",
+   "diff_hunk": "@@ -294,6 +299,18 @@ class iter_impl // NOLINT(cppcoreguidelines-special-member-functions,hicpp-speci\n     {\n         JSON_ASSERT(m_object != nullptr);\n \n+        if (JSON_HEDLEY_LIKELY(m_object->m_data.m_type == value_t::array))",
+   "line": 297,
+   "path": "include/nlohmann/detail/iterators/iter_impl.hpp",
+   "user": {
+    "login": "gregmarr",
+    "type": "User"
+   }
+  },
+  {
+   "body": "Why duplicate the code from the switch here?  Was this supposed to be a move?  If so, why?",
+   "created_at": "2026-10-15T06:05:40Z",
+   "diff_hunk": "@@ -338,6 +355,12 @@ class iter_impl // NOLINT(cppcoreguidelines-special-member-functions,hicpp-speci\n     {\n         JSON_ASSERT(m_object != nullptr);\n \n+        if (JSON_HEDLEY_LIKELY(m_object->m_data.m_type == value_t::array))",
+   "line": 326,
+   "path": "include/nlohmann/detail/iterators/iter_impl.hpp",
+   "user": {
+    "login": "gregmarr",
+    "type": "User"
+   }
+  },
+  {
+   "body": "Why duplicate the code from the switch here?  Was this supposed to be a move?  If so, why?",
+   "created_at": "2026-10-15T06:05:47Z",
+   "diff_hunk": "@@ -391,6 +414,18 @@ class iter_impl // NOLINT(cppcoreguidelines-special-member-functions,hicpp-speci\n     {\n         JSON_ASSERT(m_object != nullptr);\n \n+        if (JSON_HEDLEY_LIKELY(m_object->m_data.m_type == value_t::array))",
+   "line": 366,
+   "path": "include/nlohmann/detail/iterators/iter_impl.hpp",
+   "user": {
+    "login": "gregmarr",
+    "type": "User"
+   }
+  },
+  {
+   "body": "Why duplicate the code from the switch here?  Was this supposed to be a move?  If so, why?",
+   "created_at": "2026-10-15T06:06:06Z",
+   "diff_hunk": "@@ -493,6 +528,16 @@ class iter_impl // NOLINT(cppcoreguidelines-special-member-functions,hicpp-speci\n             return true;\n         }\n \n+        if (JSON_HEDLEY_LIKELY(m_object->m_data.m_type == value_t::array))",
+   "line": 438,
+   "path": "include/nlohmann/detail/iterators/iter_impl.hpp",
+   "user": {
+    "login": "gregmarr",
+    "type": "User"
+   }
+  },
+  {
+   "body": "Written by Claude Code on behalf of @nlohmann. You're right, the duplication was unintended: it is now a move (commit 7cc6f3223). The array/object branches sit in front of the switch so the hot path inlines (range-for over an array 2.5 \u2192 1.3 ns/element); the switch bodies for those cases are gone, and what remained only handled primitives, so it is now plain code. No behaviour change.",
+   "created_at": "2026-10-15T06:15:00Z",
+   "diff_hunk": "@@ -294,6 +299,18 @@ class iter_impl // NOLINT(cppcoreguidelines-special-member-functions,hicpp-speci\n     {\n         JSON_ASSERT(m_object != nullptr);\n \n+        if (JSON_HEDLEY_LIKELY(m_object->m_data.m_type == value_t::array))",
+   "line": 297,
+   "path": "include/nlohmann/detail/iterators/iter_impl.hpp",
+   "user": {
+    "login": "nlohmann",
+    "type": "User"
+   }
+  },
+  {
+   "body": "Written by Claude Code on behalf of @nlohmann. You're right, the duplication was unintended: it is now a move (commit 7cc6f3223). The array/object branches sit in front of the switch so the hot path inlines (range-for over an array 2.5 \u2192 1.3 ns/element); the switch bodies for those cases are gone, and what remained only handled primitives, so it is now plain code. No behaviour change.",
+   "created_at": "2026-10-15T06:15:01Z",
+   "diff_hunk": "@@ -338,6 +355,12 @@ class iter_impl // NOLINT(cppcoreguidelines-special-member-functions,hicpp-speci\n     {\n         JSON_ASSERT(m_object != nullptr);\n \n+        if (JSON_HEDLEY_LIKELY(m_object->m_data.m_type == value_t::array))",
+   "line": 326,
+   "path": "include/nlohmann/detail/iterators/iter_impl.hpp",
+   "user": {
+    "login": "nlohmann",
+    "type": "User"
+   }
+  },
+  {
+   "body": "Written by Claude Code on behalf of @nlohmann. You're right, the duplication was unintended: it is now a move (commit 7cc6f3223). The array/object branches sit in front of the switch so the hot path inlines (range-for over an array 2.5 \u2192 1.3 ns/element); the switch bodies for those cases are gone, and what remained only handled primitives, so it is now plain code. No behaviour change.",
+   "created_at": "2026-10-15T06:15:03Z",
+   "diff_hunk": "@@ -391,6 +414,18 @@ class iter_impl // NOLINT(cppcoreguidelines-special-member-functions,hicpp-speci\n     {\n         JSON_ASSERT(m_object != nullptr);\n \n+        if (JSON_HEDLEY_LIKELY(m_object->m_data.m_type == value_t::array))",
+   "line": 366,
+   "path": "include/nlohmann/detail/iterators/iter_impl.hpp",
+   "user": {
+    "login": "nlohmann",
+    "type": "User"
+   }
+  },
+  {
+   "body": "Written by Claude Code on behalf of @nlohmann. You're right, the duplication was unintended: it is now a move (commit 7cc6f3223). The array/object branches sit in front of the switch so the hot path inlines (range-for over an array 2.5 \u2192 1.3 ns/element); the switch bodies for those cases are gone, and what remained only handled primitives, so it is now plain code. No behaviour change.",
+   "created_at": "2026-10-15T06:15:05Z",
+   "diff_hunk": "@@ -493,6 +528,16 @@ class iter_impl // NOLINT(cppcoreguidelines-special-member-functions,hicpp-speci\n             return true;\n         }\n \n+        if (JSON_HEDLEY_LIKELY(m_object->m_data.m_type == value_t::array))",
+   "line": 438,
+   "path": "include/nlohmann/detail/iterators/iter_impl.hpp",
+   "user": {
+    "login": "nlohmann",
+    "type": "User"
+   }
+  }
+ ],
+ "state": "closed",
+ "title": "Speed up container destruction, iterator access and diff()",
+ "transport": "gh",
+ "user": {
+  "login": "nlohmann",
+  "type": "User"
+ }
+}

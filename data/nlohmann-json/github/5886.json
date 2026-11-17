@@ -1,0 +1,75 @@
+{
+ "base_ref": "develop",
+ "base_sha": "2dc1e548563823ff103a383894b735c51963db76",
+ "body": "A follow-up to #5861.\n\nInstructions, macOS / Linux GCC 13 / Linux Clang 18:\n\n| commit | change |\n|---|---|\n| Resume patch pointers from the previous operation and read operation members in one pass | patch canada 85.8 -> 67.7M / 67.4 -> 42.6M / 70.0 -> 43.6M |\n| Scan reference tokens and array indices in place in `resolve_plain()` | patch -10 % (Linux) |\n| Skip the token copy for array indices and the prefix look-up for a first child 0 in `unflatten()` | canada -14 ... -16 % |\n| Reserve the storage of an `ordered_json` in `flatten()` once | citm -37 %, twitter -34 % |\n| Add the members of a diff operation without looking them up | -4 % / -1 % / -9 % |\n| Keep the target values of a diffed object of up to 16 members on the stack | citm -7 % |\n| Write the path of an array element in `flatten()` with a single resize | canada -4.3 % |\n| Search once for a new object member in `unflatten()` and `j[json_pointer]` | twitter -6 % / -13 % |\n| Reserve room for two elements in the arrays `unflatten()` creates | canada -13 % |\n\nThe first commit also adds an `is_dash()` helper. GCC turned `reference_token == \"-\"` into a `strlen` and `memcmp` call: `contains()` was 15 % slower before the helper and is now unchanged.\n\n## Numbers\n\nmacOS timing vs develop:\n\n| benchmark | ratio |\n|---|---|\n| FlattenOrdered | 0.63 |\n| Patch | 0.82 |\n| Unflatten | 0.85 |\n| Diff | 0.91 |\n\nNo benchmark is slower than +0.6 % (noise).\n\n## Validation\n\n- Differential check against develop, byte-identical, in plain, `JSON_DIAGNOSTICS` and `JSON_DIAGNOSTIC_POSITIONS` builds:\n  - the corpus, as `json` and `ordered_json`;\n  - 60,000 random rounds of documents, patches and pointers, valid and invalid;\n  - exception ids and messages.\n- 46 unit test runs with ASan/UBSan, in C++11 and C++20.\n- All commits build on their own, and each commit's `single_include` is a fresh `make amalgamate`.\n\n## Public API\n\nNo breaking changes.\n\nWritten by Claude Code on behalf of @nlohmann.\n\n\ud83e\udd16 Generated with [Claude Code](https://claude.com/claude-code)\n",
+ "comments": [],
+ "created_at": "2026-10-22T07:36:24Z",
+ "fetched_at": "2026-11-17T20:09:06Z",
+ "head_sha": "d96ec00d534be138f4ffe7a3a8edcf54fc148845",
+ "labels": [
+  "L",
+  "\ud83d\ude80 ready to merge",
+  "performance"
+ ],
+ "linked_issues": [],
+ "merge_commit_sha": "86d5c56c545edd07dc933c3ace49b71adeeb2cec",
+ "merged_at": "2026-10-23T04:48:13Z",
+ "number": 5886,
+ "referenced_numbers": [
+  5861
+ ],
+ "repo": "nlohmann/json",
+ "review_comments": [
+  {
+   "body": "## Flawfinder / Does not check for buffer overflows when copying to destination (CWE-120).\n\nbuffer/memcpy:Does not check for buffer overflows when copying to destination (CWE-120).\n\n[Show more details](https://github.com/nlohmann/json/security/code-scanning/960)",
+   "created_at": "2026-10-22T09:47:35Z",
+   "diff_hunk": "@@ -1407,8 +1570,20 @@\n \n                 // iterate array and use index as a reference string\n                 ++stack.back().index;\n-                path.push_back('/');\n-                append_index(path, i);\n+                std::array<char, 24> digits{};\n+                std::size_t pos = digits.size();\n+                std::size_t rest = i;\n+                do\n+                {\n+                    digits[--pos] = static_cast<char>('0' + rest % 10);\n+                    rest /= 10;\n+                }\n+                while (rest != 0);\n+                const std::size_t count = digits.size() - pos;\n+                path.resize(path_length + 1 + count);\n+                char* const out = &path[path_length];\n+                out[0] = '/';\n+                std::memcpy(out + 1, digits.data() + pos, count);",
+   "line": 1586,
+   "path": "include/nlohmann/detail/json_pointer.hpp",
+   "user": {
+    "login": "github-advanced-security[bot]",
+    "type": "Bot"
+   }
+  },
+  {
+   "body": "## Flawfinder / Does not check for buffer overflows when copying to destination (CWE-120).\n\nbuffer/memcpy:Does not check for buffer overflows when copying to destination (CWE-120).\n\n[Show more details](https://github.com/nlohmann/json/security/code-scanning/961)",
+   "created_at": "2026-10-22T09:47:35Z",
+   "diff_hunk": "@@ -23757,8 +23920,20 @@ class json_pointer\n \n                 // iterate array and use index as a reference string\n                 ++stack.back().index;\n-                path.push_back('/');\n-                append_index(path, i);\n+                std::array<char, 24> digits{};\n+                std::size_t pos = digits.size();\n+                std::size_t rest = i;\n+                do\n+                {\n+                    digits[--pos] = static_cast<char>('0' + rest % 10);\n+                    rest /= 10;\n+                }\n+                while (rest != 0);\n+                const std::size_t count = digits.size() - pos;\n+                path.resize(path_length + 1 + count);\n+                char* const out = &path[path_length];\n+                out[0] = '/';\n+                std::memcpy(out + 1, digits.data() + pos, count);",
+   "line": 23937,
+   "path": "single_include/nlohmann/json.hpp",
+   "user": {
+    "login": "github-advanced-security[bot]",
+    "type": "Bot"
+   }
+  },
+  {
+   "body": "No change: false positive. `path` is resized to `path_length + 1 + count` right before the copy, so the `count` digits always fit.\n\n_\ud83e\udd16 Addressed by [Claude Code](https://claude.com/claude-code)_",
+   "created_at": "2026-10-22T09:53:29Z",
+   "diff_hunk": "@@ -1407,8 +1570,20 @@\n \n                 // iterate array and use index as a reference string\n                 ++stack.back().index;\n-                path.push_back('/');\n-                append_index(path, i);\n+                std::array<char, 24> digits{};\n+                std::size_t pos = digits.size();\n+                std::size_t rest = i;\n+                do\n+                {\n+                    digits[--pos] = static_cast<char>('0' + rest % 10);\n+                    rest /= 10;\n+                }\n+                while (rest != 0);\n+                const std::size_t count = digits.size() - pos;\n+                path.resize(path_length + 1 + count);\n+                char* const out = &path[path_length];\n+                out[0] = '/';\n+                std::memcpy(out + 1, digits.data() + pos, count);",
+   "line": 1586,
+   "path": "include/nlohmann/detail/json_pointer.hpp",
+   "user": {
+    "login": "nlohmann",
+    "type": "User"
+   }
+  },
+  {
+   "body": "No change: false positive. `path` is resized to `path_length + 1 + count` right before the copy, so the `count` digits always fit.\n\n_\ud83e\udd16 Addressed by [Claude Code](https://claude.com/claude-code)_",
+   "created_at": "2026-10-22T09:53:31Z",
+   "diff_hunk": "@@ -23757,8 +23920,20 @@ class json_pointer\n \n                 // iterate array and use index as a reference string\n                 ++stack.back().index;\n-                path.push_back('/');\n-                append_index(path, i);\n+                std::array<char, 24> digits{};\n+                std::size_t pos = digits.size();\n+                std::size_t rest = i;\n+                do\n+                {\n+                    digits[--pos] = static_cast<char>('0' + rest % 10);\n+                    rest /= 10;\n+                }\n+                while (rest != 0);\n+                const std::size_t count = digits.size() - pos;\n+                path.resize(path_length + 1 + count);\n+                char* const out = &path[path_length];\n+                out[0] = '/';\n+                std::memcpy(out + 1, digits.data() + pos, count);",
+   "line": 23937,
+   "path": "single_include/nlohmann/json.hpp",
+   "user": {
+    "login": "nlohmann",
+    "type": "User"
+   }
+  }
+ ],
+ "state": "closed",
+ "title": "Speed up flatten(), unflatten(), diff() and patch() further",
+ "transport": "gh",
+ "user": {
+  "login": "nlohmann",
+  "type": "User"
+ }
+}

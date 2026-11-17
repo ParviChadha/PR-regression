@@ -1,0 +1,140 @@
+{
+ "base_ref": "binary-review/msgpack",
+ "base_sha": "49e9eaac4fbe2f8eceed633a05c9628f6ade3bf8",
+ "body": "## Summary\n- The `$` type marker of an optimized container was only checked when an element was read, so `[$x#i0`, `{$x#i0` and `[$E#i0` parsed as empty containers although `[$x#i1 \u2026` is rejected and the specification requires a legal marker after `$` (py-ubjson rejects it too). `get_ubjson_size_type` now validates the marker right after `$`: UBJSON allows `Z N T F i U I l L d D H C S [ {`; BJData `B U i u I m l M L h d D C` (existing exclusions unchanged). The function is shared, so BJData is fixed too.\n- UBJSON docs corrected and completed: `N` vs `Z`, `$` requires `#`, NaN/Infinity, the `H` row, `use_type` semantics, long `Z/T/F` arrays, exception lists, duplicate keys.\n\n## Breaking changes\nNo API or ABI change. Input that was accepted is now rejected with `parse_error.112`: an optimized `[` or `{` container with a `$` marker that is not legal for the format and count 0 (`5B 24 78 23 69 00`, `7B 24 78 23 69 00`, `[$E#i0`; in UBJSON also the BJData-only markers `B u m M h`). They used to return `[]`/`{}`. Valid input is unaffected (differential fuzz of ~2M inputs against the previous code: no valid input changed). `[$#` now reports 112 instead of 110.\n\n## Stack\nThis PR is part of a stack of six PRs from a review of the binary formats against their specifications and other implementations (CBOR \u2192 MessagePack \u2192 UBJSON \u2192 BSON \u2192 BJData \u2192 BON8). Please merge in that order.\n\n\ud83e\udd16 Generated with [Claude Code](https://claude.com/claude-code)\n",
+ "comments": [],
+ "created_at": "2026-10-25T16:59:12Z",
+ "fetched_at": "2026-11-17T20:08:50Z",
+ "head_sha": "d3d39a9c106b51a5e0d2fda79a54e15a21f30b70",
+ "labels": [
+  "documentation",
+  "aspect: binary formats",
+  "L",
+  "tests"
+ ],
+ "linked_issues": [],
+ "merge_commit_sha": "0c3570d44a95f096b2c5131c0b952899084261c9",
+ "merged_at": "2026-10-26T17:25:49Z",
+ "number": 5929,
+ "referenced_numbers": [],
+ "repo": "nlohmann/json",
+ "review_comments": [
+  {
+   "body": "## Flawfinder / Check when opening files - can an attacker redirect it (via symlinks), force the opening of special file type (e.g., device files), move things around to create a race condition, control its ancestors, or change its contents? (CWE-362).\n\nmisc/open:Check when opening files - can an attacker redirect it (via symlinks), force the opening of special file type (e.g., device files), move things around to create a race condition, control its ancestors, or change its contents? (CWE-362).\n\n[Show more details](https://github.com/nlohmann/json/security/code-scanning/1068)",
+   "created_at": "2026-10-26T00:09:32Z",
+   "diff_hunk": "@@ -4622,3 +4622,60 @@\n         }\n     }\n }\n+\n+TEST_CASE(\"BJData optimized container type marker is validated for count 0\")\n+{\n+    // the '$' type marker must be a legal marker even if no element follows\n+    SECTION(\"invalid marker\")\n+    {\n+        // 'Z', 'T', 'F', 'N', 'S', 'H', '[' and '{' are excluded in BJData\n+        for (const char marker :\n+                {'x', 'E', 'Z', 'T', 'F', 'N', 'S', 'H', '[', '{'\n+                })\n+        {\n+            for (const char open :",
+   "line": 4636,
+   "path": "tests/src/unit-bjdata.cpp",
+   "user": {
+    "login": "github-advanced-security[bot]",
+    "type": "Bot"
+   }
+  },
+  {
+   "body": "## Flawfinder / Check when opening files - can an attacker redirect it (via symlinks), force the opening of special file type (e.g., device files), move things around to create a race condition, control its ancestors, or change its contents? (CWE-362).\n\nmisc/open:Check when opening files - can an attacker redirect it (via symlinks), force the opening of special file type (e.g., device files), move things around to create a race condition, control its ancestors, or change its contents? (CWE-362).\n\n[Show more details](https://github.com/nlohmann/json/security/code-scanning/1069)",
+   "created_at": "2026-10-26T00:09:33Z",
+   "diff_hunk": "@@ -4622,3 +4622,60 @@\n         }\n     }\n }\n+\n+TEST_CASE(\"BJData optimized container type marker is validated for count 0\")\n+{\n+    // the '$' type marker must be a legal marker even if no element follows\n+    SECTION(\"invalid marker\")\n+    {\n+        // 'Z', 'T', 'F', 'N', 'S', 'H', '[' and '{' are excluded in BJData\n+        for (const char marker :\n+                {'x', 'E', 'Z', 'T', 'F', 'N', 'S', 'H', '[', '{'\n+                })\n+        {\n+            for (const char open :\n+                    {'[', '{'\n+                    })\n+            {\n+                for (const std::uint8_t count :\n+                        {\n+                            0, 1\n+                        })\n+                {\n+                    CAPTURE(marker)\n+                    CAPTURE(open)",
+   "line": 4646,
+   "path": "tests/src/unit-bjdata.cpp",
+   "user": {
+    "login": "github-advanced-security[bot]",
+    "type": "Bot"
+   }
+  },
+  {
+   "body": "## Flawfinder / Check when opening files - can an attacker redirect it (via symlinks), force the opening of special file type (e.g., device files), move things around to create a race condition, control its ancestors, or change its contents? (CWE-362).\n\nmisc/open:Check when opening files - can an attacker redirect it (via symlinks), force the opening of special file type (e.g., device files), move things around to create a race condition, control its ancestors, or change its contents? (CWE-362).\n\n[Show more details](https://github.com/nlohmann/json/security/code-scanning/1070)",
+   "created_at": "2026-10-26T00:09:33Z",
+   "diff_hunk": "@@ -4622,3 +4622,60 @@\n         }\n     }\n }\n+\n+TEST_CASE(\"BJData optimized container type marker is validated for count 0\")\n+{\n+    // the '$' type marker must be a legal marker even if no element follows\n+    SECTION(\"invalid marker\")\n+    {\n+        // 'Z', 'T', 'F', 'N', 'S', 'H', '[' and '{' are excluded in BJData\n+        for (const char marker :\n+                {'x', 'E', 'Z', 'T', 'F', 'N', 'S', 'H', '[', '{'\n+                })\n+        {\n+            for (const char open :\n+                    {'[', '{'\n+                    })\n+            {\n+                for (const std::uint8_t count :\n+                        {\n+                            0, 1\n+                        })\n+                {\n+                    CAPTURE(marker)\n+                    CAPTURE(open)\n+                    CAPTURE(count)\n+                    const std::vector<std::uint8_t> v = {static_cast<std::uint8_t>(open), '$', static_cast<std::uint8_t>(marker), '#', 'i', count};",
+   "line": 4648,
+   "path": "tests/src/unit-bjdata.cpp",
+   "user": {
+    "login": "github-advanced-security[bot]",
+    "type": "Bot"
+   }
+  },
+  {
+   "body": "## Flawfinder / Check when opening files - can an attacker redirect it (via symlinks), force the opening of special file type (e.g., device files), move things around to create a race condition, control its ancestors, or change its contents? (CWE-362).\n\nmisc/open:Check when opening files - can an attacker redirect it (via symlinks), force the opening of special file type (e.g., device files), move things around to create a race condition, control its ancestors, or change its contents? (CWE-362).\n\n[Show more details](https://github.com/nlohmann/json/security/code-scanning/1065)",
+   "created_at": "2026-10-26T00:09:33Z",
+   "diff_hunk": "@@ -3348,3 +3348,55 @@\n         }\n     }\n }\n+\n+TEST_CASE(\"UBJSON optimized container type marker is validated for count 0\")\n+{\n+    // the '$' type marker must be a legal marker even if no element follows\n+    SECTION(\"invalid marker\")\n+    {\n+        for (const char marker :\n+                {'x', 'E', 'B', 'u', 'm', 'M', 'h'\n+                })\n+        {\n+            for (const char open :",
+   "line": 3361,
+   "path": "tests/src/unit-ubjson.cpp",
+   "user": {
+    "login": "github-advanced-security[bot]",
+    "type": "Bot"
+   }
+  },
+  {
+   "body": "## Flawfinder / Check when opening files - can an attacker redirect it (via symlinks), force the opening of special file type (e.g., device files), move things around to create a race condition, control its ancestors, or change its contents? (CWE-362).\n\nmisc/open:Check when opening files - can an attacker redirect it (via symlinks), force the opening of special file type (e.g., device files), move things around to create a race condition, control its ancestors, or change its contents? (CWE-362).\n\n[Show more details](https://github.com/nlohmann/json/security/code-scanning/1066)",
+   "created_at": "2026-10-26T00:09:33Z",
+   "diff_hunk": "@@ -3348,3 +3348,55 @@\n         }\n     }\n }\n+\n+TEST_CASE(\"UBJSON optimized container type marker is validated for count 0\")\n+{\n+    // the '$' type marker must be a legal marker even if no element follows\n+    SECTION(\"invalid marker\")\n+    {\n+        for (const char marker :\n+                {'x', 'E', 'B', 'u', 'm', 'M', 'h'\n+                })\n+        {\n+            for (const char open :\n+                    {'[', '{'\n+                    })\n+            {\n+                for (const std::uint8_t count :\n+                        {\n+                            0, 1\n+                        })\n+                {\n+                    CAPTURE(marker)\n+                    CAPTURE(open)",
+   "line": 3371,
+   "path": "tests/src/unit-ubjson.cpp",
+   "user": {
+    "login": "github-advanced-security[bot]",
+    "type": "Bot"
+   }
+  },
+  {
+   "body": "## Flawfinder / Check when opening files - can an attacker redirect it (via symlinks), force the opening of special file type (e.g., device files), move things around to create a race condition, control its ancestors, or change its contents? (CWE-362).\n\nmisc/open:Check when opening files - can an attacker redirect it (via symlinks), force the opening of special file type (e.g., device files), move things around to create a race condition, control its ancestors, or change its contents? (CWE-362).\n\n[Show more details](https://github.com/nlohmann/json/security/code-scanning/1067)",
+   "created_at": "2026-10-26T00:09:33Z",
+   "diff_hunk": "@@ -3348,3 +3348,55 @@\n         }\n     }\n }\n+\n+TEST_CASE(\"UBJSON optimized container type marker is validated for count 0\")\n+{\n+    // the '$' type marker must be a legal marker even if no element follows\n+    SECTION(\"invalid marker\")\n+    {\n+        for (const char marker :\n+                {'x', 'E', 'B', 'u', 'm', 'M', 'h'\n+                })\n+        {\n+            for (const char open :\n+                    {'[', '{'\n+                    })\n+            {\n+                for (const std::uint8_t count :\n+                        {\n+                            0, 1\n+                        })\n+                {\n+                    CAPTURE(marker)\n+                    CAPTURE(open)\n+                    CAPTURE(count)\n+                    const std::vector<std::uint8_t> v = {static_cast<std::uint8_t>(open), '$', static_cast<std::uint8_t>(marker), '#', 'i', count};",
+   "line": 3373,
+   "path": "tests/src/unit-ubjson.cpp",
+   "user": {
+    "login": "github-advanced-security[bot]",
+    "type": "Bot"
+   }
+  },
+  {
+   "body": "## Flawfinder / Check when opening files - can an attacker redirect it (via symlinks), force the opening of special file type (e.g., device files), move things around to create a race condition, control its ancestors, or change its contents? (CWE-362).\n\nmisc/open:Check when opening files - can an attacker redirect it (via symlinks), force the opening of special file type (e.g., device files), move things around to create a race condition, control its ancestors, or change its contents? (CWE-362).\n\n[Show more details](https://github.com/nlohmann/json/security/code-scanning/1073)",
+   "created_at": "2026-10-26T08:04:39Z",
+   "diff_hunk": "@@ -4622,3 +4622,60 @@\n         }\n     }\n }\n+\n+TEST_CASE(\"BJData optimized container type marker is validated for count 0\")\n+{\n+    // the '$' type marker must be a legal marker even if no element follows\n+    SECTION(\"invalid marker\")\n+    {\n+        // 'Z', 'T', 'F', 'N', 'S', 'H', '[' and '{' are excluded in BJData\n+        for (const char marker :\n+                {'x', 'E', 'Z', 'T', 'F', 'N', 'S', 'H', '[', '{'\n+                })\n+        {\n+            for (const char open :",
+   "line": 4636,
+   "path": "tests/src/unit-bjdata.cpp",
+   "user": {
+    "login": "github-advanced-security[bot]",
+    "type": "Bot"
+   }
+  },
+  {
+   "body": "## Flawfinder / Check when opening files - can an attacker redirect it (via symlinks), force the opening of special file type (e.g., device files), move things around to create a race condition, control its ancestors, or change its contents? (CWE-362).\n\nmisc/open:Check when opening files - can an attacker redirect it (via symlinks), force the opening of special file type (e.g., device files), move things around to create a race condition, control its ancestors, or change its contents? (CWE-362).\n\n[Show more details](https://github.com/nlohmann/json/security/code-scanning/1074)",
+   "created_at": "2026-10-26T08:04:39Z",
+   "diff_hunk": "@@ -4622,3 +4622,60 @@\n         }\n     }\n }\n+\n+TEST_CASE(\"BJData optimized container type marker is validated for count 0\")\n+{\n+    // the '$' type marker must be a legal marker even if no element follows\n+    SECTION(\"invalid marker\")\n+    {\n+        // 'Z', 'T', 'F', 'N', 'S', 'H', '[' and '{' are excluded in BJData\n+        for (const char marker :\n+                {'x', 'E', 'Z', 'T', 'F', 'N', 'S', 'H', '[', '{'\n+                })\n+        {\n+            for (const char open :\n+                    {'[', '{'\n+                    })\n+            {\n+                for (const int count :\n+                        {\n+                            0, 1\n+                        })\n+                {\n+                    CAPTURE(marker)\n+                    CAPTURE(open)\n+                    CAPTURE(count)\n+                    const std::vector<std::uint8_t> v = {static_cast<std::uint8_t>(open), '$', static_cast<std::uint8_t>(marker), '#', 'i', static_cast<std::uint8_t>(count)};",
+   "line": 4648,
+   "path": "tests/src/unit-bjdata.cpp",
+   "user": {
+    "login": "github-advanced-security[bot]",
+    "type": "Bot"
+   }
+  },
+  {
+   "body": "## Flawfinder / Check when opening files - can an attacker redirect it (via symlinks), force the opening of special file type (e.g., device files), move things around to create a race condition, control its ancestors, or change its contents? (CWE-362).\n\nmisc/open:Check when opening files - can an attacker redirect it (via symlinks), force the opening of special file type (e.g., device files), move things around to create a race condition, control its ancestors, or change its contents? (CWE-362).\n\n[Show more details](https://github.com/nlohmann/json/security/code-scanning/1071)",
+   "created_at": "2026-10-26T08:04:39Z",
+   "diff_hunk": "@@ -3348,3 +3348,55 @@\n         }\n     }\n }\n+\n+TEST_CASE(\"UBJSON optimized container type marker is validated for count 0\")\n+{\n+    // the '$' type marker must be a legal marker even if no element follows\n+    SECTION(\"invalid marker\")\n+    {\n+        for (const char marker :\n+                {'x', 'E', 'B', 'u', 'm', 'M', 'h'\n+                })\n+        {\n+            for (const char open :",
+   "line": 3361,
+   "path": "tests/src/unit-ubjson.cpp",
+   "user": {
+    "login": "github-advanced-security[bot]",
+    "type": "Bot"
+   }
+  },
+  {
+   "body": "## Flawfinder / Check when opening files - can an attacker redirect it (via symlinks), force the opening of special file type (e.g., device files), move things around to create a race condition, control its ancestors, or change its contents? (CWE-362).\n\nmisc/open:Check when opening files - can an attacker redirect it (via symlinks), force the opening of special file type (e.g., device files), move things around to create a race condition, control its ancestors, or change its contents? (CWE-362).\n\n[Show more details](https://github.com/nlohmann/json/security/code-scanning/1072)",
+   "created_at": "2026-10-26T08:04:39Z",
+   "diff_hunk": "@@ -3348,3 +3348,55 @@\n         }\n     }\n }\n+\n+TEST_CASE(\"UBJSON optimized container type marker is validated for count 0\")\n+{\n+    // the '$' type marker must be a legal marker even if no element follows\n+    SECTION(\"invalid marker\")\n+    {\n+        for (const char marker :\n+                {'x', 'E', 'B', 'u', 'm', 'M', 'h'\n+                })\n+        {\n+            for (const char open :\n+                    {'[', '{'\n+                    })\n+            {\n+                for (const int count :\n+                        {\n+                            0, 1\n+                        })\n+                {\n+                    CAPTURE(marker)\n+                    CAPTURE(open)\n+                    CAPTURE(count)\n+                    const std::vector<std::uint8_t> v = {static_cast<std::uint8_t>(open), '$', static_cast<std::uint8_t>(marker), '#', 'i', static_cast<std::uint8_t>(count)};",
+   "line": 3373,
+   "path": "tests/src/unit-ubjson.cpp",
+   "user": {
+    "login": "github-advanced-security[bot]",
+    "type": "Bot"
+   }
+  }
+ ],
+ "state": "closed",
+ "title": "Validate the UBJSON/BJData container type marker for count 0; fix UBJSON docs",
+ "transport": "gh",
+ "user": {
+  "login": "nlohmann",
+  "type": "User"
+ }
+}

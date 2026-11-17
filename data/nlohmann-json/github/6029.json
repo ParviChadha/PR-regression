@@ -1,0 +1,121 @@
+{
+ "base_ref": "develop",
+ "base_sha": "a78e2a6b10ab987d92491d26a157c604c84ba207",
+ "body": "## Summary\n\nBefore C++20, a pair of iterators of a contiguous container cannot be told from any other random-access iterator. So `json::parse(s.begin(), s.end())` on a `std::string` or a `std::vector<char>` was read one character at a time, without the bulk scans of strings, numbers and indentation. The container itself gets those scans: the container overload of `input_adapter()` already maps it to a pointer range.\n\nThe iterators of `std::string` and of a `std::vector` of 1-byte integral elements (not `bool`) are now matched exactly and mapped to the pointer range they cover. The same applies to `accept()`, `sax_parse()` and the binary readers such as `from_cbor(first, last)`. An empty range is not dereferenced. The character type stays the same, so the results and error positions do not change.\n\nThis is a new partial specialization of the existing `iterator_input_adapter_factory`, selected for these iterator types, so `input_adapter(first, last)` picks it up without any change at the call sites.\n\n## Measurements\n\nApple M1 Max, C++17:\n\n| | `twitter.json` | `canada.json` |\n|---|---|---|\n| `parse(s.begin(), s.end())` | 2.0\u00d7 | 1.7\u00d7 |\n| `parse(v.cbegin(), v.cend())`, `std::vector<std::uint8_t>` | 2.0\u00d7 | 1.8\u00d7 |\n| `accept(s.cbegin(), s.cend())` | 2.7\u00d7 | 3.1\u00d7 |\n| `from_cbor(v.begin(), v.end())` | \u22128% | \u221223% |\n\n## Tests\n\nA new test case in `unit-deserialization.cpp` compares iterator pairs of `std::string` and `std::vector<char>` / `<unsigned char>` / `<signed char>` (also `const_iterator`) with the byte path (`std::list` iterators). It checks values, exception messages including positions, and `accept()`, also for the empty range. It passes in C++11 and C++20 with ASan and UBSan.\n\n## Breaking changes\n\nNo breaking changes. The public API and all results are unchanged. Only the internal adapter type that these iterator pairs are read through changes.\n\n\ud83e\udd16 Generated with [Claude Code](https://claude.com/claude-code)\n\n",
+ "comments": [
+  {
+   "body": "## \ud83d\udd34 Amalgamation check failed! \ud83d\udd34\nThe source code has not been amalgamated and/or formatted correctly, or `BUILD.bazel`, `nlohmann_json.natvis`, or the macro_builder tables in `macro_scope.hpp` are out of date. `make amalgamate BUILD.bazel natvis` fixes all but the tables (see `tools/macro_builder/README.md`).\n\n\ud83d\udcce A ready-to-apply patch is attached to the [failed workflow run](https://github.com/nlohmann/json/actions/runs/42354834885) as the `amalgamation-patch` artifact. Download it, then apply it locally from the repository root with:\n\n```shell\ngit apply amalgamation.patch\n```\n\nThis does not require installing astyle yourself.",
+   "created_at": "2026-11-07T08:36:58Z",
+   "user": {
+    "login": "github-actions[bot]",
+    "type": "Bot"
+   }
+  },
+  {
+   "body": "## \ud83d\udd34 Amalgamation check failed! \ud83d\udd34\nThe source code has not been amalgamated and/or formatted correctly, or `BUILD.bazel`, `nlohmann_json.natvis`, or the macro_builder tables in `macro_scope.hpp` are out of date. `make amalgamate BUILD.bazel natvis` fixes all but the tables (see `tools/macro_builder/README.md`).\n\n\ud83d\udcce A ready-to-apply patch is attached to the [failed workflow run](https://github.com/nlohmann/json/actions/runs/42356199718) as the `amalgamation-patch` artifact. Download it, then apply it locally from the repository root with:\n\n```shell\ngit apply amalgamation.patch\n```\n\nThis does not require installing astyle yourself.",
+   "created_at": "2026-11-07T09:08:59Z",
+   "user": {
+    "login": "github-actions[bot]",
+    "type": "Bot"
+   }
+  },
+  {
+   "body": "@gregmarr Good point, thanks. I added to the description that this is a new partial specialization of `iterator_input_adapter_factory`, and why nothing calls it directly.\n\n*(Written by Claude Code on behalf of @nlohmann.)*",
+   "created_at": "2026-11-07T09:18:05Z",
+   "user": {
+    "login": "nlohmann",
+    "type": "User"
+   }
+  }
+ ],
+ "created_at": "2026-11-06T05:58:53Z",
+ "fetched_at": "2026-11-17T20:07:35Z",
+ "head_sha": "d83f35a69ed60ea3339b352d385519715cf14dd8",
+ "labels": [
+  "aspect: binary formats",
+  "L",
+  "tests",
+  "\ud83d\ude80 ready to merge"
+ ],
+ "linked_issues": [],
+ "merge_commit_sha": "8d591bf7201b67e97d9cf33aed9e88f18bbe2eac",
+ "merged_at": "2026-11-10T21:30:32Z",
+ "number": 6029,
+ "referenced_numbers": [],
+ "repo": "nlohmann/json",
+ "review_comments": [
+  {
+   "body": "Astyle here and next function\n\nThen multiple times below in unedited code, so maybe a new PR for cleaning up template formatting issues across the repo.\n",
+   "created_at": "2026-11-06T06:07:20Z",
+   "diff_hunk": "@@ -1173,6 +1173,55 @@ struct iterator_input_adapter_factory<IteratorType, SentinelType, enable_if_t<is\n     }\n };\n \n+/*!\n+@brief whether @a IteratorType is an iterator of std::string or of a\n+       std::vector of 1-byte elements\n+\n+Their elements are contiguous, but before C++20 that cannot be detected from\n+the iterator type (std::contiguous_iterator), so an iterator pair of them would\n+be read one character at a time through the iterators. They are read as the\n+pointer range they are instead, as the containers themselves are (see the\n+container overload of input_adapter()). The types are matched exactly, so no\n+other iterator can be mistaken for one. (std::basic_string is only matched for\n+char: other character types need std::char_traits specializations that the\n+standard library need not have.)\n+*/\n+template < typename IteratorType, typename CharType, bool IsByte = sizeof(CharType) == 1 && std::is_integral<CharType>::value && !std::is_same<CharType, bool>::value >",
+   "line": 1189,
+   "path": "include/nlohmann/detail/input/input_adapters.hpp",
+   "user": {
+    "login": "gregmarr",
+    "type": "User"
+   }
+  },
+  {
+   "body": "reserve?",
+   "created_at": "2026-11-06T16:59:37Z",
+   "diff_hunk": "@@ -1428,6 +1428,18 @@ std::string outcome_of(Iterator first, Iterator last)\n     }\n }\n \n+/// the bytes of @a text as a vector of @a T (explicit casts: no implicit char conversion)\n+template<typename T>\n+std::vector<T> bytes_as(const std::string& text)\n+{\n+    std::vector<T> result;",
+   "line": 1435,
+   "path": "tests/src/unit-deserialization.cpp",
+   "user": {
+    "login": "gregmarr",
+    "type": "User"
+   }
+  },
+  {
+   "body": "Doesn't this `<IteratorType, IteratorType` mean that they have to be the same type, and if so, why specify them twice?",
+   "created_at": "2026-11-06T20:44:58Z",
+   "diff_hunk": "@@ -1173,6 +1173,55 @@ struct iterator_input_adapter_factory<IteratorType, SentinelType, enable_if_t<is\n     }\n };\n \n+/*!\n+@brief whether @a IteratorType is an iterator of std::string or of a\n+       std::vector of 1-byte elements\n+\n+Their elements are contiguous, but before C++20 that cannot be detected from\n+the iterator type (std::contiguous_iterator), so an iterator pair of them would\n+be read one character at a time through the iterators. They are read as the\n+pointer range they are instead, as the containers themselves are (see the\n+container overload of input_adapter()). The types are matched exactly, so no\n+other iterator can be mistaken for one. (std::basic_string is only matched for\n+char: other character types need std::char_traits specializations that the\n+standard library need not have.)\n+*/\n+template < typename IteratorType, typename CharType, bool IsByte = sizeof(CharType) == 1 && std::is_integral<CharType>::value && !std::is_same<CharType, bool>::value >\n+struct is_std_contiguous_byte_iterator_impl : std::false_type {};\n+\n+// (the containers are only named for byte types)\n+template<typename IteratorType, typename CharType>\n+struct is_std_contiguous_byte_iterator_impl<IteratorType, CharType, true>\n+    : std::integral_constant < bool, !std::is_pointer<IteratorType>::value\n+  && (std::is_same<IteratorType, typename std::vector<CharType>::iterator>::value\n+      || std::is_same<IteratorType, typename std::vector<CharType>::const_iterator>::value\n+      || std::is_same<IteratorType, std::string::iterator>::value\n+      || std::is_same<IteratorType, std::string::const_iterator>::value) > {};\n+\n+template<typename IteratorType>\n+struct is_std_contiguous_byte_iterator\n+    : is_std_contiguous_byte_iterator_impl<IteratorType, typename std::remove_cv<typename std::iterator_traits<IteratorType>::value_type>::type> {};\n+\n+template<typename IteratorType>\n+struct iterator_input_adapter_factory<IteratorType, IteratorType, enable_if_t<is_std_contiguous_byte_iterator<IteratorType>::value>>",
+   "line": 1390,
+   "path": "include/nlohmann/detail/input/input_adapters.hpp",
+   "user": {
+    "login": "gregmarr",
+    "type": "User"
+   }
+  },
+  {
+   "body": "This was from before I figured out it was a partial specialization.",
+   "created_at": "2026-11-06T20:53:29Z",
+   "diff_hunk": "@@ -1173,6 +1173,55 @@ struct iterator_input_adapter_factory<IteratorType, SentinelType, enable_if_t<is\n     }\n };\n \n+/*!\n+@brief whether @a IteratorType is an iterator of std::string or of a\n+       std::vector of 1-byte elements\n+\n+Their elements are contiguous, but before C++20 that cannot be detected from\n+the iterator type (std::contiguous_iterator), so an iterator pair of them would\n+be read one character at a time through the iterators. They are read as the\n+pointer range they are instead, as the containers themselves are (see the\n+container overload of input_adapter()). The types are matched exactly, so no\n+other iterator can be mistaken for one. (std::basic_string is only matched for\n+char: other character types need std::char_traits specializations that the\n+standard library need not have.)\n+*/\n+template < typename IteratorType, typename CharType, bool IsByte = sizeof(CharType) == 1 && std::is_integral<CharType>::value && !std::is_same<CharType, bool>::value >\n+struct is_std_contiguous_byte_iterator_impl : std::false_type {};\n+\n+// (the containers are only named for byte types)\n+template<typename IteratorType, typename CharType>\n+struct is_std_contiguous_byte_iterator_impl<IteratorType, CharType, true>\n+    : std::integral_constant < bool, !std::is_pointer<IteratorType>::value\n+  && (std::is_same<IteratorType, typename std::vector<CharType>::iterator>::value\n+      || std::is_same<IteratorType, typename std::vector<CharType>::const_iterator>::value\n+      || std::is_same<IteratorType, std::string::iterator>::value\n+      || std::is_same<IteratorType, std::string::const_iterator>::value) > {};\n+\n+template<typename IteratorType>\n+struct is_std_contiguous_byte_iterator\n+    : is_std_contiguous_byte_iterator_impl<IteratorType, typename std::remove_cv<typename std::iterator_traits<IteratorType>::value_type>::type> {};\n+\n+template<typename IteratorType>\n+struct iterator_input_adapter_factory<IteratorType, IteratorType, enable_if_t<is_std_contiguous_byte_iterator<IteratorType>::value>>",
+   "line": 1390,
+   "path": "include/nlohmann/detail/input/input_adapters.hpp",
+   "user": {
+    "login": "gregmarr",
+    "type": "User"
+   }
+  },
+  {
+   "body": "Right, fixed in b45012fcf3. The byte check and the container match are now `static constexpr bool value` members instead of `integral_constant` arguments and a default template argument with `==` and `&&`. Those comparisons are what astyle spaced out. The old code below has the same astyle damage. I'll leave that for a separate cleanup PR, as you suggest, so this diff stays about iterators.\n\n*(Written by Claude Code on behalf of @nlohmann.)*",
+   "created_at": "2026-11-07T09:18:02Z",
+   "diff_hunk": "@@ -1173,6 +1173,55 @@ struct iterator_input_adapter_factory<IteratorType, SentinelType, enable_if_t<is\n     }\n };\n \n+/*!\n+@brief whether @a IteratorType is an iterator of std::string or of a\n+       std::vector of 1-byte elements\n+\n+Their elements are contiguous, but before C++20 that cannot be detected from\n+the iterator type (std::contiguous_iterator), so an iterator pair of them would\n+be read one character at a time through the iterators. They are read as the\n+pointer range they are instead, as the containers themselves are (see the\n+container overload of input_adapter()). The types are matched exactly, so no\n+other iterator can be mistaken for one. (std::basic_string is only matched for\n+char: other character types need std::char_traits specializations that the\n+standard library need not have.)\n+*/\n+template < typename IteratorType, typename CharType, bool IsByte = sizeof(CharType) == 1 && std::is_integral<CharType>::value && !std::is_same<CharType, bool>::value >",
+   "line": 1189,
+   "path": "include/nlohmann/detail/input/input_adapters.hpp",
+   "user": {
+    "login": "nlohmann",
+    "type": "User"
+   }
+  },
+  {
+   "body": "Done in b45012fcf3.\n\n*(Written by Claude Code on behalf of @nlohmann.)*",
+   "created_at": "2026-11-07T09:18:04Z",
+   "diff_hunk": "@@ -1428,6 +1428,18 @@ std::string outcome_of(Iterator first, Iterator last)\n     }\n }\n \n+/// the bytes of @a text as a vector of @a T (explicit casts: no implicit char conversion)\n+template<typename T>\n+std::vector<T> bytes_as(const std::string& text)\n+{\n+    std::vector<T> result;",
+   "line": 1435,
+   "path": "tests/src/unit-deserialization.cpp",
+   "user": {
+    "login": "nlohmann",
+    "type": "User"
+   }
+  }
+ ],
+ "state": "closed",
+ "title": "Read iterator pairs of std::string and std::vector as pointer ranges",
+ "transport": "gh",
+ "user": {
+  "login": "nlohmann",
+  "type": "User"
+ }
+}

@@ -1,0 +1,62 @@
+{
+ "base_ref": "develop",
+ "base_sha": "b54267d2a74c085ff2b05b01e369ecb7dd70cec6",
+ "body": "## Summary\n\n`binary_reader::get_bytes()` read every string into a zero-filled `resize()` and then copied the bytes over it, so each byte was written twice. The profile of `from_cbor()` showed `std::string::_M_replace_aux`, the zero fill, at 5% of the instructions.\n\nA string that the input holds in one block is now appended from it directly. \"In one block\" means that `bulk_remaining()` is at least the string's length, which covers contiguous input and the get area of a stream. The claimed length is checked against the input first, so a huge claimed length still allocates nothing it cannot fill. Other inputs and binary values keep the chunked loop.\n\n## Measurements\n\n`from_cbor()` and `from_msgpack()` of `twitter.json` and `citm_catalog.json` from a buffer:\n\n- Apple M1 Max: \u22125.5 to \u22129.1%,\n- x86-64, GCC 15: \u22126.8 to \u22128.6%,\n- x86-64, Clang 21: \u22122.7 to \u22123.5%.\n\n`canada.json`, which has few strings, is unchanged (same instruction counts). In the Google Benchmark suite on the M1 Max, `FromBinaryBuffer/cbor` and `/msgpack` of `twitter`, `citm_catalog` and `jeopardy` are 9\u201316% faster.\n\n## Tests\n\nAll binary-format tests (CBOR, MessagePack, BSON, UBJSON, BJData, BON8, the UTF-8 error handlers, custom binary types) pass with ASan and UBSan. `fuzzer-parse_cbor` ran 1.2 M executions and `fuzzer-parse_msgpack` 3 M, without a finding.\n\n## Breaking changes\n\nNo breaking changes. The public API and all results are unchanged.\n\n\ud83e\udd16 Generated with [Claude Code](https://claude.com/claude-code)\n",
+ "comments": [
+  {
+   "body": "## \ud83d\udd34 Amalgamation check failed! \ud83d\udd34\nThe source code has not been amalgamated and/or formatted correctly, or `BUILD.bazel`, `nlohmann_json.natvis`, or the macro_builder tables in `macro_scope.hpp` are out of date. `make amalgamate BUILD.bazel natvis` fixes all but the tables (see `tools/macro_builder/README.md`).\n\n\ud83d\udcce A ready-to-apply patch is attached to the [failed workflow run](https://github.com/nlohmann/json/actions/runs/42356202607) as the `amalgamation-patch` artifact. Download it, then apply it locally from the repository root with:\n\n```shell\ngit apply amalgamation.patch\n```\n\nThis does not require installing astyle yourself.",
+   "created_at": "2026-11-07T09:13:09Z",
+   "user": {
+    "login": "github-actions[bot]",
+    "type": "Bot"
+   }
+  }
+ ],
+ "created_at": "2026-11-06T05:58:50Z",
+ "fetched_at": "2026-11-17T20:07:41Z",
+ "head_sha": "402f670418d0627ad230d95cb461c6ca5384578a",
+ "labels": [
+  "aspect: binary formats",
+  "M",
+  "tests",
+  "\ud83d\ude80 ready to merge",
+  "performance"
+ ],
+ "linked_issues": [],
+ "merge_commit_sha": "951271127bacede4e1b3bfc272013a7440ac5b94",
+ "merged_at": "2026-11-07T09:10:50Z",
+ "number": 6028,
+ "referenced_numbers": [],
+ "repo": "nlohmann/json",
+ "review_comments": [
+  {
+   "body": "Astyle",
+   "created_at": "2026-11-06T06:01:06Z",
+   "diff_hunk": "@@ -4887,6 +4887,13 @@ class binary_reader\n                    const char* context,\n                    ContainerType& result)\n     {\n+        // a string that is in the block of input as a whole is appended from\n+        // it, without the zero-filling resize() below",
+   "line": 4891,
+   "path": "include/nlohmann/detail/input/binary_reader.hpp",
+   "user": {
+    "login": "gregmarr",
+    "type": "User"
+   }
+  },
+  {
+   "body": "Right: astyle reads the `&&` inside the template argument list as a comparison and spaces out the angle brackets. Fixed in `a33af0a51b`: the condition is now a local `constexpr bool from_block`, and the call passes `std::integral_constant<bool, from_block> {}`, which astyle leaves alone.\n\n*(Written by Claude Code on behalf of @nlohmann.)*",
+   "created_at": "2026-11-06T07:58:58Z",
+   "diff_hunk": "@@ -4887,6 +4887,13 @@ class binary_reader\n                    const char* context,\n                    ContainerType& result)\n     {\n+        // a string that is in the block of input as a whole is appended from\n+        // it, without the zero-filling resize() below",
+   "line": 4891,
+   "path": "include/nlohmann/detail/input/binary_reader.hpp",
+   "user": {
+    "login": "nlohmann",
+    "type": "User"
+   }
+  }
+ ],
+ "state": "closed",
+ "title": "Binary readers: append strings straight from contiguous input",
+ "transport": "gh",
+ "user": {
+  "login": "nlohmann",
+  "type": "User"
+ }
+}

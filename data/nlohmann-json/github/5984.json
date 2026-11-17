@@ -1,0 +1,32 @@
+{
+ "base_ref": "develop",
+ "base_sha": "ddc34f546a652cd098dd78225d80f1909b921871",
+ "body": "Follow-up to #5968, suggested by @gregmarr in https://github.com/nlohmann/json/pull/5968#discussion_r4428974879.\n\n## What\n\nWith `error_handler_t::strict`, the BSON reader must reject ill-formed UTF-8 in the names of an array's elements (`\"0\"`, `\"1\"`, ...), although these names are never passed on. So far they were copied into the key buffer, only so that `check_string_utf8` had a string to look at.\n\nThe new `check_bson_cstr` checks such a name in place on contiguous input (`valid_utf8_string` on the input bytes) and skips it without copying. If the scannable input has no `\\x00`-byte, or the name is ill-formed, it falls back to `get_bson_cstr`, which reads the name and reports the same error as before (same message, same byte position).\n\n`get_bson_cstr` itself is unchanged. A first version gave it a separate `validate` parameter instead. That pushed `get_bson_cstr_bulk` over clang's inlining threshold and made the **default** (`keep`) path 7.6 % slower on x86, so this PR uses a separate function for the strict case only.\n\n## Performance\n\nBSON document with an array of 1,000,000 int32 values; best of 15 runs; \"sax\" = `binary_reader` with a no-op SAX handler, \"dom\" = `from_bson`.\n\nLinux x86 (Haswell VPS, pinned core, builds with aligned functions/loops):\n\n| | clang 18 develop | clang 18 PR | GCC 13 develop | GCC 13 PR |\n|---|---|---|---|---|\n| sax, `strict` | 36.1 ms | 25.7 ms (**\u221229 %**) | 32.9 ms | 21.3 ms (**\u221236 %**) |\n| sax, `keep` | 17.4 ms | 17.4 ms (\u00b10 %) | 15.3 ms | 15.1 ms (\u22121 %) |\n| dom, `keep` | ~42 ms | ~43 ms (within DOM noise) | ~43 ms | ~43 ms (within DOM noise) |\n\nmacOS arm64 (Apple clang, GCC 16):\n\n| | clang develop | clang PR | GCC develop | GCC PR |\n|---|---|---|---|---|\n| sax, `strict` | 22.1 ms | 14.8 ms (**\u221233 %**) | 27.6 ms | 20.0 ms (**\u221228 %**) |\n| dom, `strict` | 26.2 ms | 18.3 ms (**\u221230 %**) | 26.0 ms | 21.8 ms (**\u221216 %**) |\n| sax, `keep` | 12.4 ms | 12.1 ms | 14.2 ms | 14.0 ms |\n| dom, `keep` | 16.1 ms | 15.7 ms | 15.1 ms | 15.2 ms |\n\nWith clang, the `keep` path runs the same number of instructions as develop. With GCC 16 on arm64, it runs about 9 % more instructions in the SAX benchmark, but the time is the same on both machines.\n\n## Tests\n\n- \"BSON array element names\": the ill-formed name is also rejected on non-contiguous input (`std::list`, read byte by byte); with `allow_exceptions = false` the parse result is discarded; well-formed names pass in strict mode.\n- \"BSON keys from contiguous and stream input\": every truncation of the document now also runs in strict mode, on contiguous and non-contiguous input, and must give the same value or error as in `keep` mode. This covers the fallback when the scannable input has no `\\x00`-byte.\n- Disabling the in-place check, or the byte-by-byte check, makes these tests fail.\n\n## Public API\n\nNo breaking changes. Only private members of `detail::binary_reader` change; results and error messages for every input and error handler stay the same.\n\n\ud83e\udd16 Generated with [Claude Code](https://claude.com/claude-code)\n",
+ "comments": [],
+ "created_at": "2026-11-01T18:02:37Z",
+ "fetched_at": "2026-11-17T20:08:15Z",
+ "head_sha": "12898e7d2cd5ae81d45377275154a8caf058d3d5",
+ "labels": [
+  "aspect: binary formats",
+  "L",
+  "tests",
+  "\ud83d\ude80 ready to merge",
+  "performance"
+ ],
+ "linked_issues": [],
+ "merge_commit_sha": "b2674a4a2fb6de549973208dc01c5c1864e2c1b9",
+ "merged_at": "2026-11-01T20:03:35Z",
+ "number": 5984,
+ "referenced_numbers": [
+  5968
+ ],
+ "repo": "nlohmann/json",
+ "review_comments": [],
+ "state": "closed",
+ "title": "BSON reader: check array element names in place in strict mode",
+ "transport": "gh",
+ "user": {
+  "login": "nlohmann",
+  "type": "User"
+ }
+}

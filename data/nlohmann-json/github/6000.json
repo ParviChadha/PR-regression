@@ -1,0 +1,84 @@
+{
+ "base_ref": "develop",
+ "base_sha": "b2674a4a2fb6de549973208dc01c5c1864e2c1b9",
+ "body": "Fixes #5995.\n\n## What\n\n`json_value::destroy_container()` and `destroy_walk()` (both `noexcept`, reached from `data::~data()`) held the containers they tear down in default-constructed `basic_json` stand-ins. Each one constructs a `CustomBaseClass` that belongs to no value: one per destroyed container, four per level in `destroy_walk()`. A base class whose default constructor allocates (a long `std::string` member, say) made destruction allocate again, and terminate when that allocation failed, which is what #5762 set out to prevent (#5135).\n\nThe stand-ins now are `data` (`m_type` and `m_value`, no base class). `struct data` is forward-declared before `union json_value`, and `take`, `has_no_children`, `all_children_leaves`, `walk_child`, `pop_walk_child`, `free_container`, `destroy_bounded` and `destroy_walk` take `data&`; real children are passed as `child.m_data` / `child.second.m_data`. The algorithm itself is unchanged. `take()` already moved only `m_data`, so `m_parent` under `JSON_DIAGNOSTICS` is handled as before.\n\n## Tests\n\n`unit-custom-base-class.cpp`, \"destroying a value does not construct the custom base class\": a counting base class checks that destroying a scalar, a small array/object document and a value nested 1000 levels deep (alternating arrays and objects, so `destroy_walk()` walks both) constructs no base object and destroys exactly one per value. Without the fix: 1 construction and one extra destruction per case.\n\nThe reproducer from the issue (allocating base class under a fail-at-k `operator new`) now ends with `no throw at k=12: done`, with and without `JSON_DIAGNOSTICS=1`; before, it terminated.\n\nNot addressed here (mentioned in the issue as related): the unconditional `noexcept` on `basic_json(basic_json&&)` with a base class whose move constructor can throw.\n\n## Public API\n\nNo breaking changes. Only private members of `json_value` change their parameter types.\n\n\ud83e\udd16 Generated with [Claude Code](https://claude.com/claude-code)\n",
+ "comments": [
+  {
+   "body": "### Performance check\n\n**No performance impact.** Destruction is hot (every DOM parse and copy ends in it), so I checked it on both compilers.\n\n- **Generated code** (clang, arm64): `json_value::destroy_bounded()`, the recursive part that destroys every normal document, is **instruction-for-instruction identical**. Only its signature changes (`data&` instead of `basic_json&`). With the default empty base class, `basic_json` and `data` have the same layout, so the stand-ins compile to the same code. Only `destroy_walk()` differs, in register allocation and one store. It runs only for nesting deeper than `recursion_depth_limit()`.\n- **Instruction counts** (each case includes destroying the result):\n\n| case | clang/arm64 PR/base | GCC/x86-64 (callgrind, exact) PR/base |\n|---|---:|---:|\n| parse twitter | 1.0011 | 1.00000 |\n| parse citm_catalog | 1.0011 | 1.00000 |\n| copy twitter | 1.0003 | 1.00000 |\n| copy citm_catalog | 1.0033 | 1.00000 |\n| copy canada | 0.9997 | 1.00000 |\n\n  GCC differs by at most 10 instructions per document. The clang rows are within the noise band, as expected for identical code. With a non-empty `CustomBaseClass` the PR saves the base-class construction per destroyed container, which is the point of #5995.\n\n<details><summary>Method</summary>\n\n- PR head vs. its base (merge base), both compiled into one binary (namespaces renamed per copy) with the same workload: DOM parse (string, stream, callback), copy/destroy, `==`/`<`, iteration, `dump()`, msgpack/UBJSON/BJData read and write, `json_document` parse/`dump()`/`==`/`get<std::int64_t>()` on twitter, citm_catalog, canada and small_signed_ints.\n- **Generated code**: both variants disassembled (Apple clang 21, `-O3`, arm64), names and addresses masked, compared function by function.\n- **Instruction counts**: Apple M1 Max, instructions retired per repetition (minimum of 3 runs, setup subtracted). Rows whose machine code is identical vary by about \u00b10.4 %, which is the noise floor. Where a hot path changes, also GCC 13.3 `-O3` on x86-64 under callgrind, which gives exact counts (built with `-falign-functions=64 -falign-loops=64` unless a row says otherwise).\n</details>\n\n---\n*Written by Claude Code on behalf of @nlohmann.*\n",
+   "created_at": "2026-11-02T08:24:47Z",
+   "user": {
+    "login": "nlohmann",
+    "type": "User"
+   }
+  }
+ ],
+ "created_at": "2026-11-01T21:49:33Z",
+ "fetched_at": "2026-11-17T20:08:10Z",
+ "head_sha": "110d38635a2568311aacff490a17ed694ca5b853",
+ "labels": [
+  "L",
+  "tests",
+  "\ud83d\ude80 ready to merge"
+ ],
+ "linked_issues": [
+  {
+   "body": "### Description\n\n#5762 made destruction allocation-free so that \"destroying a value never allocates and never calls `std::terminate` because an allocation failed\" (#5135). That holds for the default base class, but not for a `CustomBaseClass`: `json_value::destroy_container()` and `destroy_walk()` tear a container down through a stand-in declared as a full `basic_json` (`basic_json cur;`), and a default-constructed `basic_json` default-constructs the base class. So\n\n1. every destroyed array or object default-constructs and destroys one base object that belongs to no value (four per level in `destroy_walk()`, i.e. for values deeper than the recursion limit), and\n2. a base class whose default constructor allocates (a `std::string`, `std::vector` or `shared_ptr` member with a non-empty default) makes destruction allocate again inside the `noexcept` destructor; if that allocation fails, the process terminates, exactly what #5762 set out to prevent.\n\nThe documented requirement for `CustomBaseClass` is only \"default-constructible, non-`final`\" (`json_base_class_t.md`), so such a base is within contract. 3.12.0 terminated in the same situation for every base class (that was #5135); develop is better for non-allocating bases and unchanged for allocating ones.\n\n### Reproduction steps\n\n```sh\nclang++ -std=c++17 -I include repro.cpp -o repro && ./repro     # or g++; same with -DJSON_DIAGNOSTICS=1\n```\n\n### Expected vs. actual results\n\nExpected (and observed with `nlohmann::json`): `no throw at k=6: done`.\n\nActual with the base class below:\n\n```\n...\nk=11 threw bad_alloc, fine\nlibc++abi: terminating due to uncaught exception of type std::bad_alloc: std::bad_alloc\n```\n\n(exit 134; gcc/libstdc++: `terminate called after throwing an instance of 'std::bad_alloc'`). The copy succeeded; its destructor allocated the base class's string for the stand-in, and that allocation failed inside `data::~data() noexcept`.\n\nA counting base class (every constructor increments a counter) shows the stand-ins directly. Destroying a parsed `{\"a\":[1,2,3],\"b\":{\"c\":true}}` (8 values):\n\n| | default ctors | moves | dtors |\n|---|---|---|---|\n| develop ddc34f546a | 1 | 0 | 9 |\n| 3.12.0 | 0 | 14 | 22 |\n\n(3.12.0 moved every element into a temporary `std::vector`, which also allocated; #5762 replaced the moves with one default construction per container.)\n\n### Minimal code example\n\n```cpp\n#include <cstdio>\n#include <cstdlib>\n#include <new>\n#include <string>\n#include <nlohmann/json.hpp>\nstatic long counter = 0, fail_at = 0;\nvoid* operator new(std::size_t n)\n{\n    if (fail_at > 0 && ++counter == fail_at) { throw std::bad_alloc(); }\n    void* p = std::malloc(n ? n : 1); if (!p) { throw std::bad_alloc(); } return p;\n}\nvoid operator delete(void* p) noexcept { std::free(p); }\nvoid operator delete(void* p, std::size_t) noexcept { std::free(p); }\nstruct metadata { std::string note = \"a note that is too long for the small string buffer of std::string\"; };\nusing json = nlohmann::json::with_base_class_t<metadata>;\nint main()\n{\n    const json src = {{\"a\", 1}, {\"b\", {1, 2, 3}}};\n    for (long k = 1; k < 1000; ++k)\n    {\n        counter = 0; fail_at = k;\n        try { { json copy = src; } fail_at = 0; std::printf(\"no throw at k=%ld: done\\n\", k); return 0; }\n        catch (const std::bad_alloc&) { fail_at = 0; std::printf(\"k=%ld threw bad_alloc, fine\\n\", k); }\n    }\n}\n```\n\n### Error messages\n\n`libc++abi: terminating due to uncaught exception of type std::bad_alloc` from `data::~data()` \u2192 `json_value::destroy_owned()` \u2192 `destroy_container()` \u2192 `basic_json::basic_json(std::nullptr_t)` \u2192 `metadata::metadata()`.\n\n### Compiler and operating system\n\nApple clang 17 / libc++ (macOS 26) and gcc 16 / libstdc++ (Debian, Docker); plain and `JSON_DIAGNOSTICS=1`.\n\n### Library version\n\ndevelop at ddc34f546a (stand-in since #5762, 2026-10-06; the terminate itself also in 3.12.0 and earlier through the destructor's vector, #5135).\n\n### Validation\n\n- [x] The bug also occurs if the latest version from the [`develop`](https://github.com/nlohmann/json/tree/develop) branch is used.\n- [x] I can successfully [compile and run the unit tests](https://github.com/nlohmann/json#execute-unit-tests).\n\n### Root cause\n\n[`include/nlohmann/json.hpp:863-887`](https://github.com/nlohmann/json/blob/ddc34f546a/include/nlohmann/json.hpp#L863-L887) `destroy_container()` (`basic_json cur;` at line 880) and [`destroy_walk()`](https://github.com/nlohmann/json/blob/ddc34f546a/include/nlohmann/json.hpp#L949-L1005) (`basic_json cur/prev/gp/tmp;` at lines 951, 954, 979, 1002), both `noexcept`, reached from `data::~data() noexcept` (line 6233). The stand-in only needs `m_type` and `m_value`, but it is a complete `basic_json`, whose constructor default-constructs `json_base_class_t`.\n\n### Suggested fix\n\nUse `data` (the struct holding `m_type` and `m_value`, no base class) as the stand-in: forward-declare `struct data;` before `union json_value`, change `take`, `has_no_children`, `all_children_leaves`, `walk_child`, `pop_walk_child`, `free_container`, `destroy_bounded` and `destroy_walk` to take `data&` (pass `child.m_data` / `child.second.m_data` for real children, return `array->back().m_data` from `walk_child`), and replace the `basic_json` locals with `data` locals (`data cur; cur.m_type = t; swap(cur.m_value, *this);`). Verified on a header copy: the reproducer above finishes (also with `-std=c++11 -DJSON_DIAGNOSTICS=1`), and a counting base class sees zero default constructions in every destroy case, with destructor counts equal to the number of values.\n\nTests: a counting `CustomBaseClass` asserting no constructions during destruction, and an allocating base class under the fail-point allocator from `unit-allocator.cpp`.\n\nRelated, not part of this issue: `basic_json(basic_json&&) noexcept` (line 2665) moves the base class under an unconditional `noexcept`, while copy assignment and `swap()` condition theirs on the base class; a base whose move constructor can throw terminates there too.\n\n---\n*Found during an allocation-failure bug hunt on develop; written by Claude Code on behalf of @nlohmann.*\n",
+   "labels": [
+    "kind: bug",
+    "solution: proposed fix"
+   ],
+   "number": 5995,
+   "state": "closed",
+   "title": "~basic_json() default-constructs the CustomBaseClass for every destroyed container; an allocating base class can still terminate on std::bad_alloc (#5762 incomplete)"
+  },
+  {
+   "body": "Something in the C++11 object handling seems to be broken.\n",
+   "labels": [
+    "kind: bug"
+   ],
+   "number": 1,
+   "state": "closed",
+   "title": "Runtime error in Travis job"
+  }
+ ],
+ "merge_commit_sha": "66e2eeeec06fbca6e00e7fa36f8af52d0e7575c9",
+ "merged_at": "2026-11-02T16:48:03Z",
+ "number": 6000,
+ "referenced_numbers": [
+  5995,
+  5762,
+  5135
+ ],
+ "repo": "nlohmann/json",
+ "review_comments": [
+  {
+   "body": "This would allow someone to write `swap(json_value& a, json_value& b)` and intercept this call.  I don't see a reason to support this.  Using `std::swap()` would make sure that this is exactly as expected.",
+   "created_at": "2026-11-02T16:03:23Z",
+   "diff_hunk": "@@ -873,14 +878,16 @@ class basic_json // NOLINT(cppcoreguidelines-special-member-functions,hicpp-spec\n \n             // This json_value is not itself a basic_json, so the top-level\n             // container is first moved into a local stand-in (\"cur\"); a\n-            // default-constructed basic_json has a null pointer in its\n-            // m_value (see data::m_value's initializer), so swapping it\n-            // with *this leaves this union's own pointer null, and it is\n-            // never looked at or freed a second time.\n-            basic_json cur;\n-            cur.m_data.m_type = t;\n+            // default-constructed data has a null pointer in its m_value\n+            // (see data::m_value's initializer), so swapping it with *this\n+            // leaves this union's own pointer null, and it is never looked\n+            // at or freed a second time. The stand-ins are data, not\n+            // basic_json, so that destroying a value never constructs a\n+            // CustomBaseClass, whose constructor may allocate (#5995).\n+            data cur;\n+            cur.m_type = t;\n             using std::swap;\n-            swap(cur.m_data.m_value, *this);\n+            swap(cur.m_value, *this);",
+   "line": 890,
+   "path": "include/nlohmann/json.hpp",
+   "user": {
+    "login": "gregmarr",
+    "type": "User"
+   }
+  },
+  {
+   "body": "Right: nothing should be able to customize the swap of the internal `json_value`, and the unqualified call would pick up such an overload through ADL. Fixed in 110d38635a: it is now `std::swap(cur.m_value, *this)`. This resolved to `std::swap` before as well, so behaviour does not change.\n\n*(Written by Claude Code on behalf of @nlohmann.)*",
+   "created_at": "2026-11-02T16:15:29Z",
+   "diff_hunk": "@@ -873,14 +878,16 @@ class basic_json // NOLINT(cppcoreguidelines-special-member-functions,hicpp-spec\n \n             // This json_value is not itself a basic_json, so the top-level\n             // container is first moved into a local stand-in (\"cur\"); a\n-            // default-constructed basic_json has a null pointer in its\n-            // m_value (see data::m_value's initializer), so swapping it\n-            // with *this leaves this union's own pointer null, and it is\n-            // never looked at or freed a second time.\n-            basic_json cur;\n-            cur.m_data.m_type = t;\n+            // default-constructed data has a null pointer in its m_value\n+            // (see data::m_value's initializer), so swapping it with *this\n+            // leaves this union's own pointer null, and it is never looked\n+            // at or freed a second time. The stand-ins are data, not\n+            // basic_json, so that destroying a value never constructs a\n+            // CustomBaseClass, whose constructor may allocate (#5995).\n+            data cur;\n+            cur.m_type = t;\n             using std::swap;\n-            swap(cur.m_data.m_value, *this);\n+            swap(cur.m_value, *this);",
+   "line": 890,
+   "path": "include/nlohmann/json.hpp",
+   "user": {
+    "login": "nlohmann",
+    "type": "User"
+   }
+  }
+ ],
+ "state": "closed",
+ "title": "Do not construct the base class when destroying a container",
+ "transport": "gh",
+ "user": {
+  "login": "nlohmann",
+  "type": "User"
+ }
+}

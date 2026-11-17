@@ -1,0 +1,27 @@
+{
+ "base_ref": "develop",
+ "base_sha": "4da73dc5ff3dfe97832e10e3a25ab5e950586338",
+ "body": "#5840 moved the body of `operator<` into a new `less_general()`, but defined it unconditionally. Before, `operator<` existed only when `JSON_HAS_THREE_WAY_COMPARISON` is off. `less_general()` calls `operator<(value_t, value_t)`, which in C++20 is declared only for GCC (the workaround for GCC bug 105200). Explicit instantiation (`template class basic_json<>`) compiles every member, so clang-cl and MSVC fail in C++20 mode:\n\n```\ninclude/nlohmann/json.hpp(5527,51): error : use of undeclared 'operator<' [test-explicit_instantiation_cpp20.vcxproj]\ninclude/nlohmann/json.hpp(5527,51): error : use of undeclared 'operator<' [test-regression2_cpp20.vcxproj]\n```\n\n(from the Windows jobs on #5828, which merged develop)\n\nThis PR moves `less_general()` into the `#else` branch of the existing `#if JSON_HAS_THREE_WAY_COMPARISON` around `three_way_general()`. Its only caller, `operator<(const_reference, const_reference)`, is already in the non-three-way branch.\n\nVerified locally: with the GCC-only `operator<` in `value_t.hpp` disabled to mimic a non-GCC compiler, unit-explicit_instantiation fails to compile on develop's `single_include/nlohmann/json.hpp` and compiles with this change. unit-explicit_instantiation, unit-regression2 and unit-comparison are clean under the CI warning flags for GCC 16 and clang (C++11/C++20).\n\n## Public API\n\nNo breaking changes. `less_general()` is a private helper.\n\n---\n\nWritten by Claude Code on behalf of Niels Lohmann.\n\n\ud83e\udd16 Generated with [Claude Code](https://claude.com/claude-code)",
+ "comments": [],
+ "created_at": "2026-10-15T20:44:03Z",
+ "fetched_at": "2026-11-17T20:09:28Z",
+ "head_sha": "1bc51a1b829e52c225fe1685e01ee466926c4303",
+ "labels": [],
+ "linked_issues": [],
+ "merge_commit_sha": "5683f5e024549ee95cabf0298602ff142186408f",
+ "merged_at": "2026-10-15T20:45:57Z",
+ "number": 5859,
+ "referenced_numbers": [
+  5840,
+  5828
+ ],
+ "repo": "nlohmann/json",
+ "review_comments": [],
+ "state": "closed",
+ "title": "Define less_general() only without three-way comparison",
+ "transport": "gh",
+ "user": {
+  "login": "nlohmann",
+  "type": "User"
+ }
+}

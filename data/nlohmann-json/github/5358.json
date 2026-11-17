@@ -1,0 +1,60 @@
+{
+ "base_ref": "develop",
+ "base_sha": "2a56afc714d485870ae41cb1ac4fb0556f86726b",
+ "body": "> [!IMPORTANT]\n> **This is a draft to support the discussion in #5357 \u2014 not a change that is ready to merge.** It implements one of several possible answers so we have something concrete to talk about. See \"Open questions\" below.\n\nFixes #5357 (discussed in #5356, related to #4446).\n\n## Problem\n\nWhen `operator[](json_pointer)` traverses an intermediate level that does not exist yet, the `null` value has to be turned into either an array or an object. The rule in `json_pointer::get_unchecked()` was \"all characters are digits \u2192 array, otherwise object\".\n\nThat predicate is looser than what actually counts as an array index (RFC 6901, Sect. 4: a nonempty sequence of digits without a leading `0`). So tokens that can *never* be a valid array index still selected an array, and the subsequent index conversion then failed:\n\n```cpp\njson j;\nj[\"/a/b/01/d\"_json_pointer] = \"value\";\n// [json.exception.parse_error.106] array index '01' must not begin with '0'\n\njson j2;\nj2[\"/\"_json_pointer] = 1;\n// [json.exception.out_of_range.404] unresolved reference token ''\n```\n\nBoth `01` and `\"\"` are perfectly valid *object keys*, and both work if the level already exists as an object:\n\n```cpp\njson j;\nj[\"/a/b\"_json_pointer] = json::object();\nj[\"/a/b/01/d\"_json_pointer] = \"value\";  // OK: {\"a\":{\"b\":{\"01\":{\"d\":\"value\"}}}}\n```\n\nSo whether the pointer worked depended on whether the level had been created beforehand. `unflatten()` (which goes through `get_and_create()`, a different rule) already produced the object form for the same key.\n\n## Change\n\nTest the reference token against the RFC 6901 grammar for array indices instead of \"is all digits\". Tokens that cannot be an array index now create an object, which is what they would resolve to on an existing object.\n\n| pointer on `null` | before | after |\n|---|---|---|\n| `/0`, `/2`, `/-`, `/foo/0/0` | array | array (unchanged) |\n| `/one` | object | object (unchanged) |\n| `/01` | `parse_error.106` | `{\"01\": \u2026}` |\n| `/` (empty token) | `out_of_range.404` | `{\"\": \u2026}` |\n\n## Breaking changes\n\n**No breaking API changes.** No signature, type, or macro changes.\n\nBehavior changes only in cases that previously always threw: a pointer token matching `0[0-9]+` or the empty token, applied to a `null` value via the non-const `operator[]`. Any program that got a value out of such a pointer before still gets the same value; only programs relying on the `parse_error.106` / `out_of_range.404` exception in this specific situation would notice. Existing arrays are untouched \u2014 `j[\"/01\"_json_pointer]` on `{1,2,3}` still throws `parse_error.106`.\n\n## Open questions (why this is a draft)\n\n1. **Is \"no working program changes behavior\" a good enough bar?** The change is observable, and someone may be relying on the throw to reject leading-zero tokens.\n2. **`get_and_create()` (used by `unflatten()`) still uses a third rule**: only the token `\"0\"` starts an array, so `json{{\"/foo/1\", 1}}.unflatten()` yields `{\"foo\":{\"1\":1}}` (object) while `j[\"/foo/1\"_json_pointer]` yields an array. Aligning those two would be a genuine breaking change, so it is deliberately *not* part of this PR. Should it be a separate v4 item?\n3. **The empty-token part could be split out.** It is the same bug class, but it changes a `404` into a success, which is arguably a bigger surprise than the `01` case. Happy to drop it if we only want the reported issue fixed.\n4. **The original request in #5356 was a mode where all tokens are treated as strings.** This PR does not do that; it only removes cases where the heuristic picks a type that provably cannot work. A real \"always object\" mode would need new API surface and could be discussed separately.\n\n## Also in this PR\n\n- Tests in `unit-json_pointer.cpp` covering array-index tokens, non-index tokens, and that creating a level now gives the same result as reusing an existing one.\n- The `operator[]` documentation note about creating intermediate levels now states the rule in terms of valid array indices and mentions the `01` / empty-token cases.\n\n<sub>Drafted by Claude Code.</sub>\n",
+ "comments": [
+  {
+   "body": "This pull request has been marked as stale because it has had no activity for 30 days. While we won\u2019t close it automatically, we encourage you to update or comment if it is still relevant. Keeping pull requests active and up-to-date helps us review and merge changes more efficiently. Thank you for your contributions!",
+   "created_at": "2026-09-04T00:17:17Z",
+   "user": {
+    "login": "github-actions[bot]",
+    "type": "Bot"
+   }
+  },
+  {
+   "body": "Review finding\n\n**The docs note excludes the token `0`** (`docs/mkdocs/docs/api/basic_json/operator[].md`). It describes a valid array index as \"a nonempty sequence of digits without a leading `0`\". Read literally, that rules out `0` itself, which the code (`size() == 1 ||`), the `/foo/0/0/0` example in the next sentence, and the test `j[\"/0\"] -> [1]` all treat as an array index. Fixed in cda8d2b84 (docs only), following the RFC 6901 grammar (`\"0\"` or a digit sequence without a leading zero).\n\nChecked and fine: on null, `-` and `0` create arrays, while `01`, `00`, `\"\"`, `-1`, `+1`, `1a`, ` 1`, and `/a//b` create objects, matching an existing object and `unflatten`. Existing arrays still reject `01`, and `contains` on an array returns false for `01`/`-1`. The new tests fail without the fix, and `single_include` matches `include/`. The branch is 133 commits behind `develop` but merges without conflicts.\n\nFound on `develop` and not caused by this PR: on a null value, a huge all-digit token (`/99999999999999999999999`) throws `out_of_range.404`/`410` but leaves the value as `[]`, which breaks `operator[]`'s documented strong guarantee; and `json{1,2}.contains(\"/\"_json_pointer)` throws `out_of_range.404`.\n\n\u2014 posted by Claude Code on behalf of @nlohmann\n",
+   "created_at": "2026-09-27T16:41:35Z",
+   "user": {
+    "login": "nlohmann",
+    "type": "User"
+   }
+  }
+ ],
+ "created_at": "2026-08-03T19:48:03Z",
+ "fetched_at": "2026-11-17T20:08:53Z",
+ "head_sha": "d913df4e3848c74a6af4096055b224bad956a1ef",
+ "labels": [
+  "documentation",
+  "L",
+  "tests",
+  "\ud83d\ude80 ready to merge"
+ ],
+ "linked_issues": [
+  {
+   "body": "\n### Discussed in https://github.com/nlohmann/json/discussions/5356\n\n<div type='discussions-op-text'>\n\n<sup>Originally posted by **samcmill** August  3, 2026</sup>\nThe following code throws a `parse_error.106` exception due to the `01` token.  \r\n\r\n```\r\n#include <iostream>\r\n#include <nlohmann/json.hpp>\r\n\r\nusing json = nlohmann::json;\r\n\r\nint main() {\r\n    json obj = json::object();\r\n\r\n    auto ptr = json::json_pointer(\"/a/b/01/d\"); \r\n\r\n#ifdef INIT\r\n    obj[json::json_pointer(\"/a/b\")] = json::object();\r\n#endif\r\n\r\n    obj[ptr] = \"value\";\r\n\r\n    std::cout << obj << std::endl; // prints {\"a\":{\"b\":{\"01\":{\"d\":\"value\"}}}}\r\n}\r\n```\r\n\r\nHowever, if the first part of the JSON object up to `01` is pre-initialized, then the '01' token is treated as a string and the code runs successfully.  \r\n\r\n1. Is this expected behavior?  It seems unintuitive to me.  Regardless, I am currently taking advantage of this behavior by walking the json_pointer and pre-initializing to handle cases like this.\r\n2. Would it make sense to have a mode where all json_pointer tokens are always treated as strings?\r\n\r\nRelated: #4446 \r\n</div>",
+   "labels": [
+    "solution: proposed fix"
+   ],
+   "number": 5357,
+   "state": "closed",
+   "title": "Behavior differences in operator[] object creation with a json_pointer"
+  }
+ ],
+ "merge_commit_sha": "81d66291c5569a5ebc92f6e163e44b22f1f97499",
+ "merged_at": "2026-10-26T16:13:49Z",
+ "number": 5358,
+ "referenced_numbers": [
+  5357,
+  5356,
+  4446
+ ],
+ "repo": "nlohmann/json",
+ "review_comments": [],
+ "state": "closed",
+ "title": "Create objects for pointer tokens that cannot be array indices",
+ "transport": "gh",
+ "user": {
+  "login": "nlohmann",
+  "type": "User"
+ }
+}

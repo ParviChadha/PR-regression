@@ -1,0 +1,77 @@
+{
+ "base_ref": "develop",
+ "base_sha": "b2674a4a2fb6de549973208dc01c5c1864e2c1b9",
+ "body": "Fixes #5994.\n\n## What\n\n`output_buffer::grow()` in `detail/view/serializer.hpp` compared the output size with `m_out.capacity()` to decide how far a growth step may go and whether to `reserve()`. `capacity()` is not part of the StringType requirements, so `basic_json_view::dump()` did not compile with the tests' `alt_string`.\n\nThe buffer now remembers what it last passed to `reserve()` (`m_reserved`, initialized to the estimate). That is a lower bound of the real capacity, so the growth steps behave as before; at worst a `reserve()` is issued that the string would not have needed, which is then a no-op.\n\n## Docs\n\n`template_parameters.md`, StringType \"Required for other functionality\": `basic_json_view::dump` needs `reserve(n)` and `resize(n)` (one argument); `capacity()` is not required.\n\n## Tests\n\n`unit-alt-string.cpp`, new test case \"alternative string type with json_view\": a read-only document over `alt_json` (dump plain, indented, ensure_ascii, against `alt_json::dump()`; materialize; `contains`/`operator[]` with `alt_string` keys), a dump large enough for several growth steps, and an editable document (`set`, `push_back`, `save()`/`load()`). Without the fix, the file does not compile (`no member named 'capacity' in 'alt_string'`); with it, it passes under C++11 and C++17 (Apple clang).\n\n## Public API\n\nNo breaking changes.\n\n\ud83e\udd16 Generated with [Claude Code](https://claude.com/claude-code)\n",
+ "comments": [
+  {
+   "body": "### Performance check\n\n**No performance impact.** `output_buffer::grow()` now tracks the reserved size in a member instead of calling `capacity()`. `grow()` only runs when the size estimate is exceeded, so this is a cold path.\n\n- **Generated code** (clang, arm64): two functions differ. `output_buffer::grow()` is **one 16-byte block shorter**, because it no longer decodes libc++'s short-string capacity. The `dump()` entry stores the new member, which is one or two instructions per `dump()` call. Everything else is identical.\n- **Instruction counts**: all 38 rows are within \u00b10.4 %. The view `dump()` rows (twitter 1.0001, citm_catalog 1.0005, canada 1.0006, ensure_ascii twitter 1.0008) sit inside the noise band. The rows with identical code move by the same +0.05\u20130.1 %.\n- With the default `std::string`, growth is the same up to allocator rounding. `m_reserved` is the last size passed to `reserve()`, so it never exceeds `capacity()`. Doubling now starts from the requested size instead of the rounded capacity. If the caller passes a string that already has more capacity, the extra `reserve()` is a no-op, so the number of reallocations does not grow.\n\n<details><summary>Method</summary>\n\n- PR head vs. its base (merge base), both compiled into one binary (namespaces renamed per copy) with the same workload: DOM parse (string, stream, callback), copy/destroy, `==`/`<`, iteration, `dump()`, msgpack/UBJSON/BJData read and write, `json_document` parse/`dump()`/`==`/`get<std::int64_t>()` on twitter, citm_catalog, canada and small_signed_ints.\n- **Generated code**: both variants disassembled (Apple clang 21, `-O3`, arm64), names and addresses masked, compared function by function.\n- **Instruction counts**: Apple M1 Max, instructions retired per repetition (minimum of 3 runs, setup subtracted). Rows whose machine code is identical vary by about \u00b10.4 %, which is the noise floor. Where a hot path changes, also GCC 13.3 `-O3` on x86-64 under callgrind, which gives exact counts (built with `-falign-functions=64 -falign-loops=64` unless a row says otherwise).\n</details>\n\n---\n*Written by Claude Code on behalf of @nlohmann.*\n",
+   "created_at": "2026-11-02T08:24:49Z",
+   "user": {
+    "login": "nlohmann",
+    "type": "User"
+   }
+  },
+  {
+   "body": "https://www.cppreference.com/cpp/string/basic_string/reserve\r\n\r\n> (until C++20)\r\n> If new_cap is less than the current [capacity()](https://www.cppreference.com/cpp/string/basic_string/capacity), this is a non-binding shrink request.\r\n> If new_cap is less than the current [size()](https://www.cppreference.com/cpp/string/basic_string/size), this is a non-binding shrink-to-fit request equivalent to [shrink_to_fit()](https://www.cppreference.com/cpp/string/basic_string/shrink_to_fit)(since C++11).\r\n\r\nI don't know if any library actually implemented that shrink request.  I assume not, since it was changed to a no-op for C++20.",
+   "created_at": "2026-11-02T16:09:38Z",
+   "user": {
+    "login": "gregmarr",
+    "type": "User"
+   }
+  },
+  {
+   "body": "@gregmarr Right, before C++20 a `reserve(n)` below `capacity()` is allowed to act as a shrink request, so \"a no-op\" in the description is stronger than the standard promises. I checked the two libraries I can run: libc++ (C++11 and C++17) and libstdc++ 16 (C++11, C++17 and C++20) leave the capacity alone in all of these cases (`reserve` below the capacity, and after a `resize`), so I don't expect any implementation to shrink either; MSVC's STL I could not test.\n\nIt could only matter when the caller's string already has a capacity above `m_reserved`. There, a library that did shrink would reallocate to a size that is still at least what `grow()` needs, so the result stays correct and only costs one copy. The `out.reserve(estimate)` in `start()` has had the same exposure all along, and the old `capacity()` check was the only thing that avoided it in `grow()`. Avoiding it entirely would need a detected `capacity()`, which I think is more machinery than it is worth. Do you see it differently?\n\n*(Written by Claude Code on behalf of @nlohmann.)*",
+   "created_at": "2026-11-02T16:15:33Z",
+   "user": {
+    "login": "nlohmann",
+    "type": "User"
+   }
+  },
+  {
+   "body": "I think it's probably safe, I just wanted you to confirm for yourself that you also think it's safe.\r\n",
+   "created_at": "2026-11-02T16:31:27Z",
+   "user": {
+    "login": "gregmarr",
+    "type": "User"
+   }
+  }
+ ],
+ "created_at": "2026-11-01T21:49:29Z",
+ "fetched_at": "2026-11-17T20:08:08Z",
+ "head_sha": "36da0e2f78a87f4876e0c23c3486e44ab0805dc1",
+ "labels": [
+  "documentation",
+  "M",
+  "tests",
+  "\ud83d\ude80 ready to merge",
+  "aspect: json_view"
+ ],
+ "linked_issues": [
+  {
+   "body": "### Description\n\n`basic_json_view::dump()` (json_view, merged 2026-10-21) does not compile with a `StringType` that satisfies the documented StringType requirements but has no `capacity()` member. The library's own reference for the minimal `StringType` is the `alt_string` class in `tests/src/unit-alt-string.cpp`: `basic_json<std::map, std::vector, alt_string>` compiles and passes its unit test, but `basic_json_document<...>::parse(...)` followed by `root().dump()` fails with\n\n```\ninclude/nlohmann/detail/view/serializer.hpp:120:83: error: no member named 'capacity' in 'alt_string'\n```\n\n`capacity()` is the only missing piece: with a one-line `capacity()` added to `alt_string`, parse, dump (plain, indented, ensure_ascii), materialize, `get<alt_json>`, `find`/`at`/`operator[]`/`contains`/`count` with `alt_string` keys, `items()`, `shrink_to_fit()`, `memory_usage()`, and the editable document's `set`/`push_back`/`save()`/`load()` all compile and run correctly.\n\nThe DOM never calls `capacity()` on `string_t`; the StringType section of `docs/mkdocs/docs/features/types/template_parameters.md` does not list it (it lists `reserve(n)` only for \"JSON Pointer, flatten, diff\", so the view's `reserve()` call is a second requirement the docs do not tie to dump; `alt_string` happens to have it). Nothing under `docs/mkdocs/docs/api/basic_json_view`, `basic_json_document` or `features/json_view.md` mentions StringType requirements, and no json_view test instantiates `alt_string`, which is why CI did not catch it.\n\n### Reproduction steps\n\n```sh\nclang++ -std=c++17 -I include -I tests/src view_alt.cpp   # alt_string copied from tests/src/unit-alt-string.cpp\n```\n\n### Expected vs. actual results\n\nExpected: json_view compiles with every `StringType` that `basic_json` accepts (or the extra requirement is documented in `template_parameters.md` and checked by a test).\n\nActual: compile error in `detail/view/serializer.hpp:120`.\n\n### Minimal code example\n\n```cpp\n#include <map>\n#include <vector>\n#include <nlohmann/json.hpp>\n#include <nlohmann/json_view.hpp>\n#include \"alt_string.hpp\"   // the class from tests/src/unit-alt-string.cpp\nusing alt_json = nlohmann::basic_json<std::map, std::vector, alt_string>;\nint main()\n{\n    auto d = nlohmann::basic_json_document<alt_json, nlohmann::view_mode::read_only>::parse(\"{\\\"a\\\":[1,\\\"x\\\"]}\");\n    alt_json m = d.root().materialize();   // fine\n    (void)d.root().dump();                 // error: no member named 'capacity' in 'alt_string'\n}\n```\n\n### Error messages\n\n```\ninclude/nlohmann/detail/view/serializer.hpp:120:83: error: no member named 'capacity' in 'alt_string'\n    const std::size_t size = (std::max)((std::min)(m_out.size() + step, m_out.capacity()), used + n + 256);\n```\ninstantiated from `output_buffer<alt_string>::grow` \u2190 `reserve` \u2190 `dump_text` \u2190 `dump_ascii` \u2190 `basic_json_view::dump` (`json_view.hpp:665`).\n\n### Compiler and operating system\n\nApple clang 17 (libc++) and gcc 16 (libstdc++); the error is compiler-independent.\n\n### Library version\n\ndevelop at ddc34f546a (json_view only; 3.12.0 has no json_view).\n\n### Validation\n\n- [x] The bug also occurs if the latest version from the [`develop`](https://github.com/nlohmann/json/tree/develop) branch is used.\n- [x] I can successfully [compile and run the unit tests](https://github.com/nlohmann/json#execute-unit-tests).\n\n### Root cause\n\n[`include/nlohmann/detail/view/serializer.hpp:119-123`](https://github.com/nlohmann/json/blob/ddc34f546a/include/nlohmann/detail/view/serializer.hpp#L119-L123): `output_buffer::grow()` compares `m_out.size() + step` with `m_out.capacity()` to decide how much to `reserve()`.\n\n### Suggested fix\n\nTrack the reserved size in `output_buffer` itself (`m_reserved`, set after each `reserve()`; the string may reserve more, so this is a lower bound that costs at most one extra `reserve()`), and use it instead of `m_out.capacity()`. Then add an `alt_string` instantiation of json_view (parse, dump, materialize, editable set/push_back, save/load) to the tests, so the view keeps to the same StringType contract as the DOM. If `capacity()` is meant to be required instead, add it to the StringType requirements in `template_parameters.md` and to the tests' `alt_string`.\n\n---\n*Found during a bug hunt on develop; written by Claude Code on behalf of @nlohmann.*\n",
+   "labels": [
+    "kind: bug",
+    "solution: proposed fix",
+    "aspect: json_view"
+   ],
+   "number": 5994,
+   "state": "closed",
+   "title": "json_view: dump() requires StringType::capacity(), which the documented StringType contract (the tests' alt_string) does not provide"
+  }
+ ],
+ "merge_commit_sha": "bdc737db6d1e973247f9b2d3e2e1d04e11de3e63",
+ "merged_at": "2026-11-02T16:48:16Z",
+ "number": 5999,
+ "referenced_numbers": [
+  5994
+ ],
+ "repo": "nlohmann/json",
+ "review_comments": [],
+ "state": "closed",
+ "title": "json_view: dump() without StringType::capacity()",
+ "transport": "gh",
+ "user": {
+  "login": "nlohmann",
+  "type": "User"
+ }
+}

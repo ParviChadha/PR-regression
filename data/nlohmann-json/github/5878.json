@@ -1,0 +1,27 @@
+{
+ "base_ref": "develop",
+ "base_sha": "3f8677d02870e1b2b7056d3ada3ed5e1f7b84ea5",
+ "body": "`dump()` now handles short strings of printable ASCII separately: strings of up to 32 bytes are checked against a 256-entry table of bytes that can be written unchanged, four bytes per step, and copied in one go if all bytes pass. Longer strings, and strings with any byte that needs escaping or UTF-8 handling, take the existing path through the vector scanner unchanged.\n\nThe idea comes from SQLite's `jsonAppendString()` (`src/json.c`), which writes strings with the same kind of table loop. For short strings, starting the vector scanner costs more than the scan itself. Most object keys and many values are this short: citm_catalog averages 8 bytes per string and jeopardy 14. 32 bytes was the best threshold on the M1. 16 bytes gained less, and 64 bytes or no limit lost again.\n\nGCC 16 and 13 stopped inlining `put_indent()` and `put_literal()` into the pretty-printing loops once `dump_escaped()` had grown, which made indented output up to 13% slower. Both are now always inlined, like `copy_leaf_value()`.\n\n## Performance\n\n`json::dump()` of the parsed file, against `develop`. B/A is the ratio of medians from interleaved A/B runs, 10 rounds each; below 1 is faster. `-` is compact output, `4` indents by 4, and `ascii` is compact output with `ensure_ascii`.\n\n| | twitter `-` / `4` / `ascii` | citm_catalog `-` / `4` / `ascii` | jeopardy `-` / `4` / `ascii` | canada (few strings) |\n|---|---|---|---|---|\n| Apple M1, Apple Clang | 0.958 / 0.954 / 0.959 | 0.859 / 0.904 / 0.847 | 0.894 / 0.879 / 0.886 | 0.994\u20131.001 |\n| Apple M1, GCC 16 | 0.910 / 0.919 / 0.925 | 0.837 / 0.908 / 0.840 | 0.886 / 0.904 / 0.882 | 1.000\u20131.007 |\n| x86-64 (Haswell VPS), Clang 18 | 0.896 / 0.886 / 0.951 | 0.859 / 0.912 / 0.852 | 0.917 / 0.954 / 0.940 | 0.97\u20131.03 (noise) |\n| x86-64 (Haswell VPS), GCC 13 | 0.886 / 0.879 / 0.915 | 0.816 / 0.804 / 0.759 | 0.855 / 0.875 / 0.864 | 0.96\u20130.99 (noise) |\n\nThe VPS had other load, so its spreads are about 10%; the direction is the same on every row. Parsing and `json_view` are not affected: all `parse`/`vparse`/`vdump` rows of the same runs are within \u00b11.5% on the M1.\n\n## Tests\n\nA new test case puts every ASCII character and a 2-byte character at every position of strings of 1 to 40 bytes. It compares `dump()` with the reference implementation of the existing UTF-8 tests, for all error handlers and both values of `ensure_ascii`, covering both sides of the 32-byte bound. As a check that the test can fail, marking `\"` as copyable in the table makes 4,551 assertions fail.\n\nAlso run locally: `unit-serialization` with ASan and UBSan; `unit-convenience`, `unit-unicode`, `unit-json_view_dump`, `unit-regression2`, `unit-alt-string`, `unit-ordered_json` and `unit-wstring`; GCC 16 and Clang 22 with the CI warning flags; and clang-tidy 22 on `unit-serialization.cpp`.\n\n## Public API\n\nNo breaking changes. The output of `dump()` is unchanged; only internal `detail::serializer` members change.\n\n---\n\nThis pull request was written by Claude Code.\n\n\ud83e\udd16 Generated with [Claude Code](https://claude.com/claude-code)\n",
+ "comments": [],
+ "created_at": "2026-10-21T16:49:47Z",
+ "fetched_at": "2026-11-17T20:09:14Z",
+ "head_sha": "328006ec939d5063e0c242762072ae14759d4da6",
+ "labels": [
+  "\ud83d\ude80 ready to merge",
+  "performance"
+ ],
+ "linked_issues": [],
+ "merge_commit_sha": "6aefd8c662fa0cf5a7599365514210caa4aa06dd",
+ "merged_at": "2026-10-21T18:01:29Z",
+ "number": 5878,
+ "referenced_numbers": [],
+ "repo": "nlohmann/json",
+ "review_comments": [],
+ "state": "closed",
+ "title": "Copy short printable-ASCII strings in dump() without starting the scanner",
+ "transport": "gh",
+ "user": {
+  "login": "nlohmann",
+  "type": "User"
+ }
+}

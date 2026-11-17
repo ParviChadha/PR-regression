@@ -1,0 +1,36 @@
+{
+ "base_ref": "perf/destroy-iterators-diff",
+ "base_sha": "8aeb14e682118445e8eb39eb366f8e903af008f7",
+ "body": "## Summary\nIn the binary reader, `get_to()`/`unexpect_eof()`, `last_byte_error()` and several size/type helpers built `parse_error`/`out_of_range` exceptions and temporary `std::string`s inline. That kept `get_to()` from being inlined into `get_number()` (0xd0-byte frame), so every multi-byte read cost two calls.\n\n- `report_eof()` (noinline) shared by `get_to()` and `unexpect_eof()`\n- `last_byte_error()`/`unexpected_byte()` take `const char*` contexts (no string temporaries at call sites); one `last_byte_error()` with an optional tail for \"\u2026; last byte: 0x\u2026\" messages (folded; no separate `_tail` helper or `const char*` overload)\n- out-of-line helpers for container size, number overflow, optimized-type and BSON errors; `container_too_large_error()` in `json_sax.hpp`\n\nMessages, exception ids, positions and the values passed to `sax->parse_error()` are unchanged. Parser/serializer/writer showed no stable gain and are not touched.\n\n## Numbers\nApple clang 21, -O2, min of 5 alternating runs vs. develop (4e294f4b1):\n\n| | citm | twitter | canada |\n|---|---|---|---|\n| from_ubjson | \u22127.5 % | \u22126.5 % | \u22120.9 % |\n| from_bjdata | \u22126.5 % | \u22125.9 % | \u22120.6 % |\n| from_bson | \u22124.9 % | \u22125.2 % | \u22124.9 % |\n| from_cbor | \u22122.5 % | \u22122.6 % | \u22121.6 % |\n| from_msgpack | \u22122.0 % | \u22121.9 % | \u22122.1 % |\n| from_bon8 | \u22123.1 % | \u22121.2 % | \u22121.0 % |\n\nRe-measured after folding `last_byte_error_tail` into `last_byte_error` (best of 30, 3 alternating rounds, % vs. develop; old = previous PR head 7054cebe6, new = 526b4c155):\n\n| | citm old/new | twitter old/new | canada old/new |\n|---|---|---|---|\n| from_cbor | \u22122.3 / \u22122.7 | \u22121.3 / +0.7 | \u22122.8 / \u22123.3 |\n| from_msgpack | \u22122.0 / \u22121.6 | \u22121.3 / \u22120.7 | \u22123.7 / \u22123.9 |\n| from_ubjson | \u22125.2 / \u22125.2 | \u22125.1 / \u22124.5 | \u22122.7 / \u22122.5 |\n| from_bson | \u22125.7 / \u22125.7 | \u22123.3 / \u22123.3 | \u22125.0 / \u22125.0 |\n\nThe gain is unchanged. The other single-use wrappers (BSON length/document-size/unsupported-type, optimized-type, container-size) stay: each builds a string (`concat`/`to_string`/hex) that would otherwise return to a hot function.\n\nWriters/parse/dump are within noise. GCC 16 (earlier measurement, not re-run here): from_cbor \u22124\u20136 %.\n\n## Tests\nunit-cbor, msgpack, ubjson, bjdata, bson, bon8, class_parser, deserialization, regression2, disabled_exceptions, diagnostics, msgpack-cpp17 pass locally; single_include regenerated.\n\n## Breaking changes\nNone. No public API change.\n\n\ud83e\udd16 Generated with [Claude Code](https://claude.com/claude-code)\n\n",
+ "comments": [
+  {
+   "body": "Written by Claude Code on behalf of @nlohmann.\n\nReview follow-up (526b4c155): `last_byte_error_tail` is folded into `last_byte_error` (optional `tail` argument, appended as `<detail><tail>; last byte: 0x<token>`), and the `const char*` overload is gone, so there is one helper instead of three. Error ids, messages and byte positions are unchanged: unit-cbor/msgpack/ubjson/bjdata/bson/bon8 pass against the full test data. I kept the BSON, optimized-type and container-size wrappers because each builds a string that would otherwise go back into a hot function. Re-measured with Apple clang -O2 against develop and the previous head: the speedups are unchanged (details in the description).",
+   "created_at": "2026-10-15T06:11:07Z",
+   "user": {
+    "login": "nlohmann",
+    "type": "User"
+   }
+  }
+ ],
+ "created_at": "2026-10-15T05:25:51Z",
+ "fetched_at": "2026-11-17T20:09:36Z",
+ "head_sha": "6e2e21969be52d20e60f21468901b7d6f4f5b71f",
+ "labels": [
+  "\ud83d\ude80 ready to merge",
+  "performance"
+ ],
+ "linked_issues": [],
+ "merge_commit_sha": "ed86019a2171af2e287bb779e1add920571a6f48",
+ "merged_at": "2026-10-15T18:01:34Z",
+ "number": 5839,
+ "referenced_numbers": [],
+ "repo": "nlohmann/json",
+ "review_comments": [],
+ "state": "closed",
+ "title": "Move binary reader error construction out of line",
+ "transport": "gh",
+ "user": {
+  "login": "nlohmann",
+  "type": "User"
+ }
+}

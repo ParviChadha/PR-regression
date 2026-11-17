@@ -1,0 +1,99 @@
+{
+ "base_ref": "claude/implement-5891-deff16",
+ "base_sha": "2852427b3f7c1c8609e285543a5fae42f31d3164",
+ "body": "Follow-up to #5901 for #5891: it adopts the `get_number_value()` shape of `from_json(ArithmeticType&)` that #5901 left out because it made `GetArray<std::array<int, 1000>>` 2.4x slower. This PR finds the cause and fixes it.\n\n## Why the shape mattered\n\n- **vector/deque speedup.** `from_json(int&)` is inlined into every per-element loop. With one switch over four cases (boolean included), clang places the `boolean` test inside the hot compare chain. With `get_number_value()` plus a cold boolean path, the three number types (`value_t` 5\u20137) form the main path and the boolean moves behind a single `type <= 4` branch. This makes the vector loop 31% faster and the deque loop 12% faster.\n- **std::array slowdown.** `get<std::array<T, N>>()` always takes the `identity_tag` overload (the `has_non_default_from_json` path), so it is never the `std::array<T, N>&` loop. That overload is the pack expansion `{ { j.at(Idx).template get<T>()... } }`. For N = 1000, clang emits one straight-line function of about 28,000 instructions: 1,000 inlined copies of the `at()` bounds and type checks plus the conversion. Its speed depends on how that ~110 KB body is inlined and laid out, not on the conversion itself. The pinned-alignment base build alone moves it from 657 to 957 ns, so any change to `from_json(int&)` shows up there 1,000 times.\n\n## Change\n\n- `from_json(ArithmeticType&)` uses `get_number_value()`, then accepts a boolean on a cold path. `get_arithmetic_value()` still rejects booleans.\n- New `from_json_std_array()`: it checks the size once and reads the inner array directly instead of calling `at(i)` per element. Both `std::array` paths use it:\n  - `from_json(j, std::array<T, N>&)` (`get_to`), for all `T`;\n  - `from_json(j, identity_tag<std::array<T, N>>)` (`get`), when `T` is trivial (`std::is_trivial`, or the two `is_trivially_*` traits in C++26, as in `binary_writer`). A trivial type can't tell default construction plus assignment from construction in place. Non-trivial and non-default-constructible element types keep the pack expansion.\n- Codegen with Apple clang 21 at `-O3` on a probe TU: `from_json(identity_tag<std::array<int, 1000>>)` drops from about 28,000 instructions (1,000 `throw_array_index_out_of_range` and 986 `throw_type_must_be` call sites) to 49.\n\nBehaviour is unchanged. Elements are still converted in order, so a type error in an earlier element is still reported before a missing element. A short array still throws `out_of_range.401` for the first missing index (via `j.at(size)`), and longer arrays and booleans convert as before. New tests in `unit-constructor1.cpp` cover these cases and also pass against the #5901 head.\n\n## Benchmarks\n\nApple M-series, Apple clang 21, `-O3 -flto`, Google Benchmark 1.10.0, `tests/benchmarks`. Base is the #5901 head (0e5a906cd). Each binary ran 4 rounds of 5 repetitions with random interleaving, and the two binaries alternated in random order per round. Values are medians of 20 runs, relative to base.\n\n| benchmark | base | `get_number_value` only | `std::array` loop only | this PR | this PR, alignment-pinned\u00b9 |\n|---|---:|---:|---:|---:|---:|\n| GetArray<std::vector<int>> | 1005 ns | \u221231.5% | \u22120.1% | **\u221231.5%** | **\u221231.7%** |\n| GetArray<std::deque<int>> | 1355 ns | \u221212.0% | +0.1% | **\u221211.6%** | **\u221212.2%** |\n| GetArray<std::array<int, 1000>> | 657 ns | **+138.6%** | +0.2% | \u22120.2% | **\u221231.7%** |\n| GetArray<std::set<int>> | 41.9 \u00b5s | +1.0% | +0.8% | +1.3% | +1.3%\u00b2 |\n| GetVectorInt/signed_ints | 3.50 ms | | | +1.4% | +0.4% |\n| GetVectorDouble/floats | 0.69 ms | | | +1.7% | +0.5% |\n| GetMap/citm_catalog | 2.52 ms | | | +1.9% | +0.5% |\n| ToJsonStrings/copy | 5.95 ms | | | +1.2% | +0.4% |\n| ToJsonStrings/move | 3.26 ms | | | +2.1% | +0.4% |\n| ParseString/canada | 5.61 ms | | | +1.7% | +1.1%\u00b2 |\n| ParseString/citm_catalog | 2.01 ms | | | +0.7% | +1.2%\u00b2 |\n| ParseString/twitter | 1.10 ms | | | +3.5% | +0.4% |\n| ParseString/floats | 31.9 ms | | | +3.6% | +0.1% |\n| ParseString/jeopardy | 133 ms | | | +2.5% | \u22120.8% |\n| ParseString/signed_ints | 33.1 ms | | | +0.8% | +0.1% |\n| ParseString/unsigned_ints | 31.4 ms | | | +0.7% | +0.6% |\n| ParseString/small_signed_ints | 23.3 ms | | | +1.6% | \u22120.2% |\n| ParseStringOrdered/canada | 5.62 ms | | | +0.3% | +2.4%\u00b2 |\n| ParseStringOrdered/citm_catalog | 2.25 ms | | | \u22120.8% | \u22121.1% |\n| ParseStringOrdered/twitter | 1.12 ms | | | +0.9% | \u22120.2% |\n| ParseStringOrdered/jeopardy | 137 ms | | | +0.6% | \u22120.3% |\n\n\u00b9 `-falign-functions=64 -mllvm -align-all-functions=6 -mllvm -align-all-nofallthru-blocks=6`, passed to the compiler and the LTO link (every function starts on a 64-byte boundary).\n\n\u00b2 Rows that are not touched by this change and stay above +1% only in wall-clock time. In the unpinned build, the parser and lexer functions are byte-for-byte the same size in both binaries and just shifted by 0x90 bytes. With pinned alignment, `/usr/bin/time -l` shows the same retired instructions and cycles for ParseString/canada and ParseStringOrdered/canada (cycles +0.1%). For GetArray<std::set<int>> the new code retires 0.3% fewer instructions at the same cycles.\n\n## Breaking changes\n\nNone. No public API or behaviour changes. The new helpers are in `nlohmann::detail`.\n\n\ud83e\udd16 Generated with [Claude Code](https://claude.com/claude-code)\n",
+ "comments": [],
+ "created_at": "2026-10-23T14:35:54Z",
+ "fetched_at": "2026-11-17T20:08:58Z",
+ "head_sha": "3b632e489a65cd110f3d2f20c81d2ac3b1ce3f8e",
+ "labels": [
+  "L",
+  "tests",
+  "\ud83d\ude80 ready to merge",
+  "performance"
+ ],
+ "linked_issues": [],
+ "merge_commit_sha": "3eae5680d6517038b9c5b37d45c5f15fbda1ac0a",
+ "merged_at": "2026-10-25T05:17:52Z",
+ "number": 5902,
+ "referenced_numbers": [
+  5901,
+  5891
+ ],
+ "repo": "nlohmann/json",
+ "review_comments": [
+  {
+   "body": "Can this astyle be fixed?  Don't see an obvious trigger.",
+   "created_at": "2026-10-23T22:20:51Z",
+   "diff_hunk": "@@ -347,6 +362,35 @@ std::array<T, sizeof...(Idx)> from_json_inplace_array_impl(const BasicJsonType&\n     return { { j.at(Idx).template get<T>()... } };\n }\n \n+// std::is_trivial is deprecated in C++26 (see binary_writer::to_char_type)\n+#ifdef JSON_HAS_CPP_26\n+    template<typename T>\n+    using is_trivial_element = conjunction<std::is_trivially_copyable<T>, std::is_trivially_default_constructible<T>>;\n+#else\n+    template<typename T>\n+    using is_trivial_element = std::is_trivial<T>;\n+#endif\n+\n+// the element type may not be default constructible: construct every element\n+// in place (a pack expansion that is unrolled N times)\n+template < typename BasicJsonType, typename T, std::size_t N >",
+   "line": 376,
+   "path": "include/nlohmann/detail/conversions/from_json.hpp",
+   "user": {
+    "login": "gregmarr",
+    "type": "User"
+   }
+  },
+  {
+   "body": "Yes. The trigger is our `--indent-preproc-block` option: astyle indents everything inside an `#ifdef` block at namespace level, so two aliases inside `#ifdef`/`#else` always get pushed in. `is_trivial_element` is now a struct, and the `#ifdef` only picks its base (`conjunction<std::is_trivially_copyable<T>, std::is_trivially_default_constructible<T>>` or `std::is_trivial<T>`), which astyle leaves at column 0. Fixed in `469e29334`.\n\n*(Written by Claude Code on behalf of @nlohmann.)*",
+   "created_at": "2026-10-24T05:24:40Z",
+   "diff_hunk": "@@ -347,6 +362,35 @@ std::array<T, sizeof...(Idx)> from_json_inplace_array_impl(const BasicJsonType&\n     return { { j.at(Idx).template get<T>()... } };\n }\n \n+// std::is_trivial is deprecated in C++26 (see binary_writer::to_char_type)\n+#ifdef JSON_HAS_CPP_26\n+    template<typename T>\n+    using is_trivial_element = conjunction<std::is_trivially_copyable<T>, std::is_trivially_default_constructible<T>>;\n+#else\n+    template<typename T>\n+    using is_trivial_element = std::is_trivial<T>;\n+#endif\n+\n+// the element type may not be default constructible: construct every element\n+// in place (a pack expansion that is unrolled N times)\n+template < typename BasicJsonType, typename T, std::size_t N >",
+   "line": 376,
+   "path": "include/nlohmann/detail/conversions/from_json.hpp",
+   "user": {
+    "login": "nlohmann",
+    "type": "User"
+   }
+  },
+  {
+   "body": "It was actually the next function that I was marking.\r\n`template < typename BasicJsonType, typename T, std::size_t N >`",
+   "created_at": "2026-10-24T16:22:31Z",
+   "diff_hunk": "@@ -347,6 +362,35 @@ std::array<T, sizeof...(Idx)> from_json_inplace_array_impl(const BasicJsonType&\n     return { { j.at(Idx).template get<T>()... } };\n }\n \n+// std::is_trivial is deprecated in C++26 (see binary_writer::to_char_type)\n+#ifdef JSON_HAS_CPP_26\n+    template<typename T>\n+    using is_trivial_element = conjunction<std::is_trivially_copyable<T>, std::is_trivially_default_constructible<T>>;\n+#else\n+    template<typename T>\n+    using is_trivial_element = std::is_trivial<T>;\n+#endif\n+\n+// the element type may not be default constructible: construct every element\n+// in place (a pack expansion that is unrolled N times)\n+template < typename BasicJsonType, typename T, std::size_t N >",
+   "line": 376,
+   "path": "include/nlohmann/detail/conversions/from_json.hpp",
+   "user": {
+    "login": "gregmarr",
+    "type": "User"
+   }
+  },
+  {
+   "body": "Right, I misread which function you meant. The trigger is astyle's default `--max-continuation-indent=40`: the `(` of `std::array<T, N> from_json_inplace_array(` was in column 41, so astyle falls back to a plain double indent for the continuation lines instead of aligning them. Fixed in `cf4e0164c` by renaming the function to `from_json_make_array`, which keeps the parenthesis within the limit, so both overloads now align normally.\n\n*(Written by Claude Code on behalf of @nlohmann.)*",
+   "created_at": "2026-10-24T16:35:52Z",
+   "diff_hunk": "@@ -347,6 +362,35 @@ std::array<T, sizeof...(Idx)> from_json_inplace_array_impl(const BasicJsonType&\n     return { { j.at(Idx).template get<T>()... } };\n }\n \n+// std::is_trivial is deprecated in C++26 (see binary_writer::to_char_type)\n+#ifdef JSON_HAS_CPP_26\n+    template<typename T>\n+    using is_trivial_element = conjunction<std::is_trivially_copyable<T>, std::is_trivially_default_constructible<T>>;\n+#else\n+    template<typename T>\n+    using is_trivial_element = std::is_trivial<T>;\n+#endif\n+\n+// the element type may not be default constructible: construct every element\n+// in place (a pack expansion that is unrolled N times)\n+template < typename BasicJsonType, typename T, std::size_t N >",
+   "line": 376,
+   "path": "include/nlohmann/detail/conversions/from_json.hpp",
+   "user": {
+    "login": "nlohmann",
+    "type": "User"
+   }
+  },
+  {
+   "body": "but the template line is still spaced out, does it need a manual fix now? ",
+   "created_at": "2026-10-24T16:48:12Z",
+   "diff_hunk": "@@ -347,6 +362,35 @@ std::array<T, sizeof...(Idx)> from_json_inplace_array_impl(const BasicJsonType&\n     return { { j.at(Idx).template get<T>()... } };\n }\n \n+// std::is_trivial is deprecated in C++26 (see binary_writer::to_char_type)\n+#ifdef JSON_HAS_CPP_26\n+    template<typename T>\n+    using is_trivial_element = conjunction<std::is_trivially_copyable<T>, std::is_trivially_default_constructible<T>>;\n+#else\n+    template<typename T>\n+    using is_trivial_element = std::is_trivial<T>;\n+#endif\n+\n+// the element type may not be default constructible: construct every element\n+// in place (a pack expansion that is unrolled N times)\n+template < typename BasicJsonType, typename T, std::size_t N >",
+   "line": 376,
+   "path": "include/nlohmann/detail/conversions/from_json.hpp",
+   "user": {
+    "login": "gregmarr",
+    "type": "User"
+   }
+  },
+  {
+   "body": "Yes, this needed a manual fix: astyle accepts both `template<...>` and `template < ... >` and does not add the spaces itself. I had copied the spaced form from the existing `from_json_inplace_array_impl` above. The two new overloads now use the compact form like the rest of the file, in `8085a8f5e`. I left the pre-existing spaced lines untouched to keep the diff small.\n\n*(Written by Claude Code on behalf of @nlohmann.)*",
+   "created_at": "2026-10-24T16:52:22Z",
+   "diff_hunk": "@@ -347,6 +362,35 @@ std::array<T, sizeof...(Idx)> from_json_inplace_array_impl(const BasicJsonType&\n     return { { j.at(Idx).template get<T>()... } };\n }\n \n+// std::is_trivial is deprecated in C++26 (see binary_writer::to_char_type)\n+#ifdef JSON_HAS_CPP_26\n+    template<typename T>\n+    using is_trivial_element = conjunction<std::is_trivially_copyable<T>, std::is_trivially_default_constructible<T>>;\n+#else\n+    template<typename T>\n+    using is_trivial_element = std::is_trivial<T>;\n+#endif\n+\n+// the element type may not be default constructible: construct every element\n+// in place (a pack expansion that is unrolled N times)\n+template < typename BasicJsonType, typename T, std::size_t N >",
+   "line": 376,
+   "path": "include/nlohmann/detail/conversions/from_json.hpp",
+   "user": {
+    "login": "nlohmann",
+    "type": "User"
+   }
+  }
+ ],
+ "state": "closed",
+ "title": "from_json: number-first dispatch for arithmetic types, loop for std::array",
+ "transport": "gh",
+ "user": {
+  "login": "nlohmann",
+  "type": "User"
+ }
+}

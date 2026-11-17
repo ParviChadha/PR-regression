@@ -1,0 +1,95 @@
+{
+ "base_ref": "develop",
+ "base_sha": "2dc1e548563823ff103a383894b735c51963db76",
+ "body": "Two changes to `json_pointer`. Instructions, macOS / Linux GCC 13 / Linux Clang 18:\n\n| commit | change |\n|---|---|\n| Split a JSON pointer in one scan and construct the tokens in place | parsing citm 42.3 -> 36.4M / -18 % / -16 %; twitter -9 ... -12 % |\n| Copy the tokens of a pointer without escapes straight into `to_string()` | citm 47.5 -> 30.6M / -23 % / -36 %; twitter -32 % / -18 % / -32 % |\n\n`at()`, `contains()`, `unflatten()` and `patch()` are unchanged (+-0.2 %).\n\n## Numbers\n\nmacOS timing vs develop: JsonPointerToString 0.71, JsonPointerParse 0.85.\n\n## Validation\n\n- Differential check against develop: random pointer strings for parse, `to_string()`, `back()`, `pop_back()`, `parent_pointer()`, `/`, `at()`, `contains()`, `value()` and `operator[]`. Exception ids and messages are identical.\n- Unit tests with ASan/UBSan, in C++11 and C++20.\n- All commits build on their own, and each commit's `single_include` is a fresh `make amalgamate`.\n\n## Public API\n\nNo breaking changes.\n\nWritten by Claude Code on behalf of @nlohmann.\n\n\ud83e\udd16 Generated with [Claude Code](https://claude.com/claude-code)\n",
+ "comments": [],
+ "created_at": "2026-10-22T07:36:26Z",
+ "fetched_at": "2026-11-17T20:09:01Z",
+ "head_sha": "75e067e3df11f0d6b782ecc791bce3cadce25c6b",
+ "labels": [
+  "L",
+  "\ud83d\ude80 ready to merge",
+  "performance"
+ ],
+ "linked_issues": [],
+ "merge_commit_sha": "0b924f53759548c09f0f5a2cbf750b00c8918657",
+ "merged_at": "2026-10-23T04:53:15Z",
+ "number": 5887,
+ "referenced_numbers": [],
+ "repo": "nlohmann/json",
+ "review_comments": [
+  {
+   "body": "## Flawfinder / Does not check for buffer overflows when copying to destination (CWE-120).\n\nbuffer/memcpy:Does not check for buffer overflows when copying to destination (CWE-120).\n\n[Show more details](https://github.com/nlohmann/json/security/code-scanning/962)",
+   "created_at": "2026-10-22T10:03:44Z",
+   "diff_hunk": "@@ -82,12 +82,35 @@\n     {\n         // one buffer: every token adds its escaped form (at least its length) and a slash\n         std::size_t length = 0;\n+        bool plain = true;\n         for (const auto& reference_token : reference_tokens)\n         {\n             length += reference_token.size() + 1;\n+            const char* const data = reference_token.data();\n+            for (std::size_t i = 0, size = reference_token.size(); plain && i < size; ++i)\n+            {\n+                plain = data[i] != '~' && data[i] != '/';\n+            }\n         }\n \n         string_t result;\n+        if (JSON_HEDLEY_LIKELY(plain))\n+        {\n+            // nothing to escape: the tokens are copied into the string\n+            result.resize(length);\n+            if (length != 0)\n+            {\n+                char* out = &result[0];\n+                for (const auto& reference_token : reference_tokens)\n+                {\n+                    *out++ = '/';\n+                    std::memcpy(out, reference_token.data(), reference_token.size());",
+   "line": 107,
+   "path": "include/nlohmann/detail/json_pointer.hpp",
+   "user": {
+    "login": "github-advanced-security[bot]",
+    "type": "Bot"
+   }
+  },
+  {
+   "body": "## Flawfinder / Does not check for buffer overflows when copying to destination (CWE-120).\n\nbuffer/memcpy:Does not check for buffer overflows when copying to destination (CWE-120).\n\n[Show more details](https://github.com/nlohmann/json/security/code-scanning/963)",
+   "created_at": "2026-10-22T10:03:44Z",
+   "diff_hunk": "@@ -22432,12 +22432,35 @@ class json_pointer\n     {\n         // one buffer: every token adds its escaped form (at least its length) and a slash\n         std::size_t length = 0;\n+        bool plain = true;\n         for (const auto& reference_token : reference_tokens)\n         {\n             length += reference_token.size() + 1;\n+            const char* const data = reference_token.data();\n+            for (std::size_t i = 0, size = reference_token.size(); plain && i < size; ++i)\n+            {\n+                plain = data[i] != '~' && data[i] != '/';\n+            }\n         }\n \n         string_t result;\n+        if (JSON_HEDLEY_LIKELY(plain))\n+        {\n+            // nothing to escape: the tokens are copied into the string\n+            result.resize(length);\n+            if (length != 0)\n+            {\n+                char* out = &result[0];\n+                for (const auto& reference_token : reference_tokens)\n+                {\n+                    *out++ = '/';\n+                    std::memcpy(out, reference_token.data(), reference_token.size());",
+   "line": 22457,
+   "path": "single_include/nlohmann/json.hpp",
+   "user": {
+    "login": "github-advanced-security[bot]",
+    "type": "Bot"
+   }
+  },
+  {
+   "body": "No change: false positive. `result` is first resized to the sum of all token sizes plus one slash each, so every token copied fits.\n\n_\ud83e\udd16 Addressed by [Claude Code](https://claude.com/claude-code)_",
+   "created_at": "2026-10-22T10:04:22Z",
+   "diff_hunk": "@@ -82,12 +82,35 @@\n     {\n         // one buffer: every token adds its escaped form (at least its length) and a slash\n         std::size_t length = 0;\n+        bool plain = true;\n         for (const auto& reference_token : reference_tokens)\n         {\n             length += reference_token.size() + 1;\n+            const char* const data = reference_token.data();\n+            for (std::size_t i = 0, size = reference_token.size(); plain && i < size; ++i)\n+            {\n+                plain = data[i] != '~' && data[i] != '/';\n+            }\n         }\n \n         string_t result;\n+        if (JSON_HEDLEY_LIKELY(plain))\n+        {\n+            // nothing to escape: the tokens are copied into the string\n+            result.resize(length);\n+            if (length != 0)\n+            {\n+                char* out = &result[0];\n+                for (const auto& reference_token : reference_tokens)\n+                {\n+                    *out++ = '/';\n+                    std::memcpy(out, reference_token.data(), reference_token.size());",
+   "line": 107,
+   "path": "include/nlohmann/detail/json_pointer.hpp",
+   "user": {
+    "login": "nlohmann",
+    "type": "User"
+   }
+  },
+  {
+   "body": "No change: false positive. `result` is first resized to the sum of all token sizes plus one slash each, so every token copied fits.\n\n_\ud83e\udd16 Addressed by [Claude Code](https://claude.com/claude-code)_",
+   "created_at": "2026-10-22T10:04:24Z",
+   "diff_hunk": "@@ -22432,12 +22432,35 @@ class json_pointer\n     {\n         // one buffer: every token adds its escaped form (at least its length) and a slash\n         std::size_t length = 0;\n+        bool plain = true;\n         for (const auto& reference_token : reference_tokens)\n         {\n             length += reference_token.size() + 1;\n+            const char* const data = reference_token.data();\n+            for (std::size_t i = 0, size = reference_token.size(); plain && i < size; ++i)\n+            {\n+                plain = data[i] != '~' && data[i] != '/';\n+            }\n         }\n \n         string_t result;\n+        if (JSON_HEDLEY_LIKELY(plain))\n+        {\n+            // nothing to escape: the tokens are copied into the string\n+            result.resize(length);\n+            if (length != 0)\n+            {\n+                char* out = &result[0];\n+                for (const auto& reference_token : reference_tokens)\n+                {\n+                    *out++ = '/';\n+                    std::memcpy(out, reference_token.data(), reference_token.size());",
+   "line": 22457,
+   "path": "single_include/nlohmann/json.hpp",
+   "user": {
+    "login": "nlohmann",
+    "type": "User"
+   }
+  },
+  {
+   "body": "Should there be an early return for `length == 0`?",
+   "created_at": "2026-10-22T18:49:32Z",
+   "diff_hunk": "@@ -82,12 +82,34 @@ class json_pointer\n     {\n         // one buffer: every token adds its escaped form (at least its length) and a slash\n         std::size_t length = 0;\n+        bool plain = true;\n         for (const auto& reference_token : reference_tokens)\n         {\n             length += reference_token.size() + 1;\n+            const char* const data = reference_token.data();\n+            for (std::size_t i = 0, size = reference_token.size(); plain && i < size; ++i)\n+            {\n+                plain = data[i] != '~' && data[i] != '/';\n+            }\n         }\n \n         string_t result;\n+        if (JSON_HEDLEY_LIKELY(plain))",
+   "line": 102,
+   "path": "include/nlohmann/detail/json_pointer.hpp",
+   "user": {
+    "login": "gregmarr",
+    "type": "User"
+   }
+  },
+  {
+   "body": "Right: an empty pointer now returns `string_t()` at the top of `to_string()`, before the scan loop, and the copy path no longer needs its `length != 0` guard. Fixed in `75e067e3d`.\n\n*(Written by Claude Code on behalf of @nlohmann.)*",
+   "created_at": "2026-10-22T20:46:15Z",
+   "diff_hunk": "@@ -82,12 +82,34 @@ class json_pointer\n     {\n         // one buffer: every token adds its escaped form (at least its length) and a slash\n         std::size_t length = 0;\n+        bool plain = true;\n         for (const auto& reference_token : reference_tokens)\n         {\n             length += reference_token.size() + 1;\n+            const char* const data = reference_token.data();\n+            for (std::size_t i = 0, size = reference_token.size(); plain && i < size; ++i)\n+            {\n+                plain = data[i] != '~' && data[i] != '/';\n+            }\n         }\n \n         string_t result;\n+        if (JSON_HEDLEY_LIKELY(plain))",
+   "line": 102,
+   "path": "include/nlohmann/detail/json_pointer.hpp",
+   "user": {
+    "login": "nlohmann",
+    "type": "User"
+   }
+  }
+ ],
+ "state": "closed",
+ "title": "Split and print JSON pointers in one pass",
+ "transport": "gh",
+ "user": {
+  "login": "nlohmann",
+  "type": "User"
+ }
+}

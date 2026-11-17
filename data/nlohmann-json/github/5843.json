@@ -1,0 +1,30 @@
+{
+ "base_ref": "develop",
+ "base_sha": "4e294f4b181435c89cc0fceb21ff2b5941d96fdc",
+ "body": "AppVeyor build [9193](https://ci.appveyor.com/project/nlohmann/json/builds/54896795) on `develop` fails since #5634 (Zmij double writer):\n\n- **VS2015 (all three jobs):** `zmij.hpp(187): warning C4554: '<<': check operator precedence` \u2014 a false positive on `(p.high << static_cast<unsigned>(64 - extra_shift)) | (p.low >> static_cast<unsigned>(extra_shift))` despite the parentheses; with `/W4 /WX` nothing builds. The shift amounts are now named `constexpr unsigned` constants, so the expression has no casts.\n- **VS2017, C++17 shard 1/2 (x86 and x64):** `test-to_chars_cpp17` fails 16 checks at `unit-to_chars.cpp:713`, all for two-digit outputs (`0.25`, `16.0`, `1.6e-322`, \u2026). The test built the one-digit-shorter candidates with `std::scientific << std::setprecision(digits.size() - 2)`; MSVC 2017's library ignores a precision of 0, so the \"shorter\" candidate was the value itself. The test now truncates the digits instead: the value lies within half a unit of the last printed digit, so the truncated digits and their successor are the closest shorter candidates (the existing `mid - 1, mid, mid + 1` loop keeps covering them). The now unused `<iomanip>`, `<sstream>`, `<locale>` includes are dropped.\n\nChecked locally with clang (C++11 and C++17, `-Wall -Wextra -Wconversion -Werror`): the to_chars test passes with the same 623,597 assertions. Neither MSVC version is available locally, so AppVeyor confirms the fix.\n\n## Public API\n\nNo breaking changes: the library change only renames internal shift amounts in `detail::zmij`; output is unchanged.\n\n---\nWritten by Claude Code.\n\n\ud83e\udd16 Generated with [Claude Code](https://claude.com/claude-code)",
+ "comments": [],
+ "created_at": "2026-10-15T07:21:46Z",
+ "fetched_at": "2026-11-17T20:09:30Z",
+ "head_sha": "9dc5ba1d22a46dc1c91a3436d87d6a8f2cc1bae9",
+ "labels": [
+  "M",
+  "tests",
+  "\ud83d\ude80 ready to merge"
+ ],
+ "linked_issues": [],
+ "merge_commit_sha": "b41228c227feb132b3816f0bc6fc86d62ed33944",
+ "merged_at": "2026-10-15T18:08:13Z",
+ "number": 5843,
+ "referenced_numbers": [
+  5634
+ ],
+ "repo": "nlohmann/json",
+ "review_comments": [],
+ "state": "closed",
+ "title": "Fix AppVeyor failures from the Zmij double writer",
+ "transport": "gh",
+ "user": {
+  "login": "nlohmann",
+  "type": "User"
+ }
+}

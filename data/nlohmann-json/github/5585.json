@@ -1,0 +1,256 @@
+{
+ "base_ref": "develop",
+ "base_sha": "162e13b86f1b9641c5a12b0bad8aea066df4c6a7",
+ "body": "## Bug\n\nSeveral functions set the type of a value before they create the string, array, object or binary value behind it. When that creation throws (for example `std::bad_alloc` from the allocator), the value is left with the new type but nothing behind it:\n\n| Where | Effect of a failed allocation (reproduced with the throwing test allocator) |\n|---|---|\n| `json::binary(\u2026)` (all four overloads) | the temporary's destructor fails `assert_invariant`, which **aborts debug builds** |\n| `operator[]`, `push_back`, `emplace_back`, `emplace` and `update` on a null value | the value becomes an array or object that doesn't exist; later accesses dereference a **null pointer** |\n| `to_json(j, \u2026)` into an existing value (string, binary, array, `std::vector<bool>`, `std::valarray`, ranges, object) | the old value is destroyed first, so `j` keeps a pointer to it; the value is then used and freed again (**heap-use-after-free** under ASan) |\n\nThe constructors themselves were never affected: a partially constructed value is cleaned up by `data`'s destructor, which tolerates the null pointer.\n\n## Fix\n\n- **`json.hpp`:** the value is created first and the type is set afterwards. The two statements are swapped at 15 places.\n- **`to_json.hpp`:** each external constructor first creates the new `json_value` (or the complete `array_t` for `std::vector<bool>`, `std::valarray` and ranges), then destroys the old value and takes the new one. A comment at the top of the file explains the order.\n\nA failed allocation now leaves the value unchanged.\n\n## Tests\n\nA new test case in `unit-allocator.cpp` makes the allocator fail for each of the paths above, and checks that the value is unchanged afterwards.\n\nAgainst `develop`, the three sections fail as follows:\n- an assertion abort;\n- a `CHECK(j.is_null())` failure, followed by a `type_error.305`;\n- an ASan heap-use-after-free.\n\nWith this change, the test passes under ASan and UBSan. I also ran the conversion, constructor, UDT, diagnostics and element-access suites against the amalgamated header.\n\n## Breaking changes\n\nNone. Behavior only differs after a failed allocation, where the value now stays unchanged instead of becoming invalid.\n\n\ud83e\udd16 Generated with [Claude Code](https://claude.com/claude-code)\n",
+ "comments": [
+  {
+   "body": "Review of the exception-safety fix. The fix itself looks complete. One gap in the test is fixed in 90078597c.\n\n**Scope check.** I went through every assignment to `m_type` in `include/`, on this branch and on a merge with current `develop`. No function outside a constructor still sets the type before the value is allocated. The constructors that do (iterator range, copy, `copy_iteratively`) are safe, because `data::~data` \u2192 `destroy()` skips a null pointer. `erase` only resets to null.\n\n**Finding (low): 9 of the 14 reordered `to_json` overloads were untested.** `tests/src/unit-allocator.cpp` checks each revert. I reverted each hunk of the fix separately, then ran the new test case under ASan/UBSan at C++11/17/20:\n\n- Every `json.hpp` hunk except the initializer-list constructor fails the test when reverted. That constructor was never affected. The `string_view` `operator[]` needs C++17.\n- Nine `to_json.hpp` hunks passed even with the old code back: `const string_t&`, compatible strings (`const char*`), `binary_t&&`, `const array_t&`, `array_t&&`, `std::valarray`, ranges views, `const object_t&` and `object_t&&`. The PR body lists `std::valarray` and ranges among the paths the test covers.\n\n90078597c adds a failing-allocation check for each of them. The ranges check is guarded like the one in `unit-regression3.cpp`. `binary_t&&` is only reached by `to_json` for a binary container other than `std::vector<std::uint8_t>`, so the test calls `external_constructor<value_t::binary>::construct` directly. With these checks, reverting any single `to_json.hpp` hunk makes the test fail with a heap-use-after-free.\n\nWhat I ran on 90078597c:\n- clang with ASan/UBSan at C++11 and C++20: 70 and 74 assertions pass.\n- CI's clang `-Weverything` flags at 11/17/20 and GCC 16 with `cmake/gcc_flags.cmake` at 11/20: no warnings.\n- astyle 3.4.13: no changes.\n\n\u2014 posted by Claude Code on behalf of @nlohmann\n",
+   "created_at": "2026-09-27T16:30:16Z",
+   "user": {
+    "login": "nlohmann",
+    "type": "User"
+   }
+  },
+  {
+   "body": "CI fix: AppVeyor VS 2015 Debug x86\n\n`test-allocator_cpp11` crashed with SIGSEGV in \"a failed allocation leaves the value unchanged\", section \"converting into an existing value\", on AppVeyor's Visual Studio 2015 Debug x86 job. All Release jobs passed. With iterator debugging, VS 2015's containers construct a proxy with the allocator in constructors that cannot report its failure, so the throwing test allocator crashes there. The section already had a guard for the `std::vector<bool>` check for this reason, but the other conversions in it hit the same problem.\n\nFixed in ba6bf32f6: the whole section is skipped for VS 2015 with iterator debugging, using the same condition as before, and the inner guard is gone. Every other toolchain still runs the section, including VS 2015 Release. Locally with clang, the file passes at C++11/17/20 (71/73/75 assertions). I have no VS 2015 here, so only the next AppVeyor run can confirm the fix.\n\nThe other failed AppVeyor job on this PR (VS2017 Release x86) hit the 60-minute job limit during the CMake integration tests. It is not related to this PR.\n\n\u2014 posted by Claude Code on behalf of @nlohmann\n",
+   "created_at": "2026-09-30T16:12:56Z",
+   "user": {
+    "login": "nlohmann",
+    "type": "User"
+   }
+  }
+ ],
+ "created_at": "2026-09-25T20:19:44Z",
+ "fetched_at": "2026-11-17T20:10:29Z",
+ "head_sha": "b2318575e1d4667e76bebb563e4eed8818e1346f",
+ "labels": [
+  "L",
+  "tests",
+  "CMake",
+  "\ud83d\ude80 ready to merge"
+ ],
+ "linked_issues": [],
+ "merge_commit_sha": "21a69230bdaabd05c9b8b1427302f35b11771caf",
+ "merged_at": "2026-10-06T20:59:34Z",
+ "number": 5585,
+ "referenced_numbers": [],
+ "repo": "nlohmann/json",
+ "review_comments": [
+  {
+   "body": "seems odd to me that several of these are const",
+   "created_at": "2026-09-25T21:16:48Z",
+   "diff_hunk": "@@ -159,19 +169,21 @@ struct external_constructor<value_t::array>\n     template<typename BasicJsonType>\n     static void construct(BasicJsonType& j, const typename BasicJsonType::array_t& arr)\n     {\n+        const typename BasicJsonType::json_value value(arr);\n         j.m_data.m_value.destroy(j.m_data.m_type);\n         j.m_data.m_type = value_t::array;\n-        j.m_data.m_value = arr;\n+        j.m_data.m_value = value;\n         j.set_parents();\n         j.assert_invariant();\n     }\n \n     template<typename BasicJsonType>\n     static void construct(BasicJsonType& j, typename BasicJsonType::array_t&& arr)\n     {\n+        const typename BasicJsonType::json_value value(std::move(arr));",
+   "line": 151,
+   "path": "include/nlohmann/detail/conversions/to_json.hpp",
+   "user": {
+    "login": "gregmarr",
+    "type": "User"
+   }
+  },
+  {
+   "body": "Should this just be created up front and then use `value.array.push_back()` rather than creating a vector and moving from it?",
+   "created_at": "2026-09-25T21:18:39Z",
+   "diff_hunk": "@@ -187,37 +199,42 @@ struct external_constructor<value_t::array>\n         using std::begin;\n         using std::end;\n \n+        typename BasicJsonType::json_value value;\n+        value.array = j.template create<typename BasicJsonType::array_t>(begin(arr), end(arr));\n         j.m_data.m_value.destroy(j.m_data.m_type);\n         j.m_data.m_type = value_t::array;\n-        j.m_data.m_value.array = j.template create<typename BasicJsonType::array_t>(begin(arr), end(arr));\n+        j.m_data.m_value = value;\n         j.set_parents();\n         j.assert_invariant();\n     }\n \n     template<typename BasicJsonType>\n     static void construct(BasicJsonType& j, const std::vector<bool>& arr)\n     {\n-        j.m_data.m_value.destroy(j.m_data.m_type);\n-        j.m_data.m_type = value_t::array;\n-        j.m_data.m_value = value_t::array;\n-        j.m_data.m_value.array->reserve(arr.size());\n+        typename BasicJsonType::array_t elements;\n+        elements.reserve(arr.size());\n         for (const bool x : arr)\n         {\n-            j.m_data.m_value.array->push_back(x);\n-            j.set_parent(j.m_data.m_value.array->back());\n+            elements.push_back(x);\n         }\n+        const typename BasicJsonType::json_value value(std::move(elements));",
+   "line": 220,
+   "path": "include/nlohmann/detail/conversions/to_json.hpp",
+   "user": {
+    "login": "gregmarr",
+    "type": "User"
+   }
+  },
+  {
+   "body": "See previous comment.",
+   "created_at": "2026-09-25T21:19:09Z",
+   "diff_hunk": "@@ -187,37 +199,42 @@ struct external_constructor<value_t::array>\n         using std::begin;\n         using std::end;\n \n+        typename BasicJsonType::json_value value;\n+        value.array = j.template create<typename BasicJsonType::array_t>(begin(arr), end(arr));\n         j.m_data.m_value.destroy(j.m_data.m_type);\n         j.m_data.m_type = value_t::array;\n-        j.m_data.m_value.array = j.template create<typename BasicJsonType::array_t>(begin(arr), end(arr));\n+        j.m_data.m_value = value;\n         j.set_parents();\n         j.assert_invariant();\n     }\n \n     template<typename BasicJsonType>\n     static void construct(BasicJsonType& j, const std::vector<bool>& arr)\n     {\n-        j.m_data.m_value.destroy(j.m_data.m_type);\n-        j.m_data.m_type = value_t::array;\n-        j.m_data.m_value = value_t::array;\n-        j.m_data.m_value.array->reserve(arr.size());\n+        typename BasicJsonType::array_t elements;\n+        elements.reserve(arr.size());\n         for (const bool x : arr)\n         {\n-            j.m_data.m_value.array->push_back(x);\n-            j.set_parent(j.m_data.m_value.array->back());\n+            elements.push_back(x);\n         }\n+        const typename BasicJsonType::json_value value(std::move(elements));\n+        j.m_data.m_value.destroy(j.m_data.m_type);\n+        j.m_data.m_type = value_t::array;\n+        j.m_data.m_value = value;\n+        j.set_parents();\n         j.assert_invariant();\n     }\n \n     template<typename BasicJsonType, typename T,\n              enable_if_t<std::is_convertible<T, BasicJsonType>::value, int> = 0>\n     static void construct(BasicJsonType& j, const std::valarray<T>& arr)\n     {\n+        typename BasicJsonType::array_t elements(arr.size());\n+        std::copy(std::begin(arr), std::end(arr), elements.begin());\n+        const typename BasicJsonType::json_value value(std::move(elements));",
+   "line": 234,
+   "path": "include/nlohmann/detail/conversions/to_json.hpp",
+   "user": {
+    "login": "gregmarr",
+    "type": "User"
+   }
+  },
+  {
+   "body": "See previous comment.",
+   "created_at": "2026-09-25T21:19:27Z",
+   "diff_hunk": "@@ -229,14 +246,16 @@ struct external_constructor<value_t::array>\n              enable_if_t<is_compatible_range_view<std::remove_cvref_t<CompatibleArrayType>>::value, int> = 0>\n     static void construct(BasicJsonType& j, CompatibleArrayType && arr)\n     {\n-        j.m_data.m_value.destroy(j.m_data.m_type);\n-        j.m_data.m_type = value_t::array;\n-        j.m_data.m_value = value_t::array;\n+        typename BasicJsonType::array_t elements;\n         for (auto&& x : std::forward<CompatibleArrayType>(arr))\n         {\n-            j.m_data.m_value.array->push_back(x);\n-            j.set_parent(j.m_data.m_value.array->back());\n+            elements.push_back(x);\n         }\n+        const typename BasicJsonType::json_value value(std::move(elements));",
+   "line": 197,
+   "path": "include/nlohmann/detail/conversions/to_json.hpp",
+   "user": {
+    "login": "gregmarr",
+    "type": "User"
+   }
+  },
+  {
+   "body": "The `const`s follow clang-tidy's `misc-const-correctness` (enabled in our `.clang-tidy`): every local that is fully initialized in its declaration is `const`. The three that aren't have to assign `value.string`/`.array`/`.object` after declaring the `json_value`, since `create<\u2026>(begin, end)` has no matching `json_value` constructor.\n\nOn creating the array up front: `json_value` is a union without a destructor, so if a `push_back` (or an element's conversion) throws after `value.array` was created, nothing frees it. The local `array_t` owns the elements until the very last step, and moving it into the new value is O(1) \u2014 it moves the vector's buffer, not the elements. The alternative that stays leak-free would be a temporary `basic_json` holding an empty array, filled and then swapped into `j`, which isn't shorter. Happy to switch if you prefer that.\n\n*(Written by Claude Code.)*",
+   "created_at": "2026-09-26T05:44:09Z",
+   "diff_hunk": "@@ -159,19 +169,21 @@ struct external_constructor<value_t::array>\n     template<typename BasicJsonType>\n     static void construct(BasicJsonType& j, const typename BasicJsonType::array_t& arr)\n     {\n+        const typename BasicJsonType::json_value value(arr);\n         j.m_data.m_value.destroy(j.m_data.m_type);\n         j.m_data.m_type = value_t::array;\n-        j.m_data.m_value = arr;\n+        j.m_data.m_value = value;\n         j.set_parents();\n         j.assert_invariant();\n     }\n \n     template<typename BasicJsonType>\n     static void construct(BasicJsonType& j, typename BasicJsonType::array_t&& arr)\n     {\n+        const typename BasicJsonType::json_value value(std::move(arr));",
+   "line": 151,
+   "path": "include/nlohmann/detail/conversions/to_json.hpp",
+   "user": {
+    "login": "nlohmann",
+    "type": "User"
+   }
+  },
+  {
+   "body": "That seems like a reasonable reason for the local temporary.  I'm surprised that you are able to assign a const whatever to `j.m_data.m_value` since that is not `const`.",
+   "created_at": "2026-09-26T21:38:01Z",
+   "diff_hunk": "@@ -159,19 +169,21 @@ struct external_constructor<value_t::array>\n     template<typename BasicJsonType>\n     static void construct(BasicJsonType& j, const typename BasicJsonType::array_t& arr)\n     {\n+        const typename BasicJsonType::json_value value(arr);\n         j.m_data.m_value.destroy(j.m_data.m_type);\n         j.m_data.m_type = value_t::array;\n-        j.m_data.m_value = arr;\n+        j.m_data.m_value = value;\n         j.set_parents();\n         j.assert_invariant();\n     }\n \n     template<typename BasicJsonType>\n     static void construct(BasicJsonType& j, typename BasicJsonType::array_t&& arr)\n     {\n+        const typename BasicJsonType::json_value value(std::move(arr));",
+   "line": 151,
+   "path": "include/nlohmann/detail/conversions/to_json.hpp",
+   "user": {
+    "login": "gregmarr",
+    "type": "User"
+   }
+  },
+  {
+   "body": "Answered elsewhere",
+   "created_at": "2026-09-26T22:47:14Z",
+   "diff_hunk": "@@ -187,37 +199,42 @@ struct external_constructor<value_t::array>\n         using std::begin;\n         using std::end;\n \n+        typename BasicJsonType::json_value value;\n+        value.array = j.template create<typename BasicJsonType::array_t>(begin(arr), end(arr));\n         j.m_data.m_value.destroy(j.m_data.m_type);\n         j.m_data.m_type = value_t::array;\n-        j.m_data.m_value.array = j.template create<typename BasicJsonType::array_t>(begin(arr), end(arr));\n+        j.m_data.m_value = value;\n         j.set_parents();\n         j.assert_invariant();\n     }\n \n     template<typename BasicJsonType>\n     static void construct(BasicJsonType& j, const std::vector<bool>& arr)\n     {\n-        j.m_data.m_value.destroy(j.m_data.m_type);\n-        j.m_data.m_type = value_t::array;\n-        j.m_data.m_value = value_t::array;\n-        j.m_data.m_value.array->reserve(arr.size());\n+        typename BasicJsonType::array_t elements;\n+        elements.reserve(arr.size());\n         for (const bool x : arr)\n         {\n-            j.m_data.m_value.array->push_back(x);\n-            j.set_parent(j.m_data.m_value.array->back());\n+            elements.push_back(x);\n         }\n+        const typename BasicJsonType::json_value value(std::move(elements));",
+   "line": 220,
+   "path": "include/nlohmann/detail/conversions/to_json.hpp",
+   "user": {
+    "login": "gregmarr",
+    "type": "User"
+   }
+  },
+  {
+   "body": "Answered elsewhere",
+   "created_at": "2026-09-26T22:47:19Z",
+   "diff_hunk": "@@ -187,37 +199,42 @@ struct external_constructor<value_t::array>\n         using std::begin;\n         using std::end;\n \n+        typename BasicJsonType::json_value value;\n+        value.array = j.template create<typename BasicJsonType::array_t>(begin(arr), end(arr));\n         j.m_data.m_value.destroy(j.m_data.m_type);\n         j.m_data.m_type = value_t::array;\n-        j.m_data.m_value.array = j.template create<typename BasicJsonType::array_t>(begin(arr), end(arr));\n+        j.m_data.m_value = value;\n         j.set_parents();\n         j.assert_invariant();\n     }\n \n     template<typename BasicJsonType>\n     static void construct(BasicJsonType& j, const std::vector<bool>& arr)\n     {\n-        j.m_data.m_value.destroy(j.m_data.m_type);\n-        j.m_data.m_type = value_t::array;\n-        j.m_data.m_value = value_t::array;\n-        j.m_data.m_value.array->reserve(arr.size());\n+        typename BasicJsonType::array_t elements;\n+        elements.reserve(arr.size());\n         for (const bool x : arr)\n         {\n-            j.m_data.m_value.array->push_back(x);\n-            j.set_parent(j.m_data.m_value.array->back());\n+            elements.push_back(x);\n         }\n+        const typename BasicJsonType::json_value value(std::move(elements));\n+        j.m_data.m_value.destroy(j.m_data.m_type);\n+        j.m_data.m_type = value_t::array;\n+        j.m_data.m_value = value;\n+        j.set_parents();\n         j.assert_invariant();\n     }\n \n     template<typename BasicJsonType, typename T,\n              enable_if_t<std::is_convertible<T, BasicJsonType>::value, int> = 0>\n     static void construct(BasicJsonType& j, const std::valarray<T>& arr)\n     {\n+        typename BasicJsonType::array_t elements(arr.size());\n+        std::copy(std::begin(arr), std::end(arr), elements.begin());\n+        const typename BasicJsonType::json_value value(std::move(elements));",
+   "line": 234,
+   "path": "include/nlohmann/detail/conversions/to_json.hpp",
+   "user": {
+    "login": "gregmarr",
+    "type": "User"
+   }
+  },
+  {
+   "body": "Answered elsewhere",
+   "created_at": "2026-09-26T22:47:23Z",
+   "diff_hunk": "@@ -229,14 +246,16 @@ struct external_constructor<value_t::array>\n              enable_if_t<is_compatible_range_view<std::remove_cvref_t<CompatibleArrayType>>::value, int> = 0>\n     static void construct(BasicJsonType& j, CompatibleArrayType && arr)\n     {\n-        j.m_data.m_value.destroy(j.m_data.m_type);\n-        j.m_data.m_type = value_t::array;\n-        j.m_data.m_value = value_t::array;\n+        typename BasicJsonType::array_t elements;\n         for (auto&& x : std::forward<CompatibleArrayType>(arr))\n         {\n-            j.m_data.m_value.array->push_back(x);\n-            j.set_parent(j.m_data.m_value.array->back());\n+            elements.push_back(x);\n         }\n+        const typename BasicJsonType::json_value value(std::move(elements));",
+   "line": 197,
+   "path": "include/nlohmann/detail/conversions/to_json.hpp",
+   "user": {
+    "login": "gregmarr",
+    "type": "User"
+   }
+  },
+  {
+   "body": "Assigning from a const source is fine here: `json_value` is a union of scalars and pointers, so its implicit copy assignment takes `const json_value&` and just copies the active member. The `const` only makes the local's pointer member itself const (`array_t* const`), not the pointed-to array, so after the assignment `j.m_data.m_value.array` is an ordinary non-const pointer to the freshly created array. As the union has no destructor, the local going out of scope doesn't free anything, and `j` becomes the sole owner.\n\n*(Written by Claude Code.)*\n",
+   "created_at": "2026-09-27T12:10:59Z",
+   "diff_hunk": "@@ -159,19 +169,21 @@ struct external_constructor<value_t::array>\n     template<typename BasicJsonType>\n     static void construct(BasicJsonType& j, const typename BasicJsonType::array_t& arr)\n     {\n+        const typename BasicJsonType::json_value value(arr);\n         j.m_data.m_value.destroy(j.m_data.m_type);\n         j.m_data.m_type = value_t::array;\n-        j.m_data.m_value = arr;\n+        j.m_data.m_value = value;\n         j.set_parents();\n         j.assert_invariant();\n     }\n \n     template<typename BasicJsonType>\n     static void construct(BasicJsonType& j, typename BasicJsonType::array_t&& arr)\n     {\n+        const typename BasicJsonType::json_value value(std::move(arr));",
+   "line": 151,
+   "path": "include/nlohmann/detail/conversions/to_json.hpp",
+   "user": {
+    "login": "nlohmann",
+    "type": "User"
+   }
+  },
+  {
+   "body": "Makes sense that this is a member-wise copy, so the `const` is okay.",
+   "created_at": "2026-09-28T15:36:40Z",
+   "diff_hunk": "@@ -159,19 +169,21 @@ struct external_constructor<value_t::array>\n     template<typename BasicJsonType>\n     static void construct(BasicJsonType& j, const typename BasicJsonType::array_t& arr)\n     {\n+        const typename BasicJsonType::json_value value(arr);\n         j.m_data.m_value.destroy(j.m_data.m_type);\n         j.m_data.m_type = value_t::array;\n-        j.m_data.m_value = arr;\n+        j.m_data.m_value = value;\n         j.set_parents();\n         j.assert_invariant();\n     }\n \n     template<typename BasicJsonType>\n     static void construct(BasicJsonType& j, typename BasicJsonType::array_t&& arr)\n     {\n+        const typename BasicJsonType::json_value value(std::move(arr));",
+   "line": 151,
+   "path": "include/nlohmann/detail/conversions/to_json.hpp",
+   "user": {
+    "login": "gregmarr",
+    "type": "User"
+   }
+  },
+  {
+   "body": "Every function is the same group of lines:\n1. create the new value\n2. destroy the current value\n3. update the type to the new value's type\n4. assign the new value\n5. set_parents (if a container)\n6. assert_invariant\n\nSteps 2 through 6 looks like a helper function.\nAlso 3 and 4 seem like they should be in the opposite order, so that we don't assign the type while `m_value` is `nullptr`, and so it matches the changes made in the rest of the PR.",
+   "created_at": "2026-10-06T19:02:34Z",
+   "diff_hunk": "@@ -160,19 +169,21 @@ struct external_constructor<value_t::array>\n     template<typename BasicJsonType>\n     static void construct(BasicJsonType& j, const typename BasicJsonType::array_t& arr)\n     {\n+        const typename BasicJsonType::json_value value(arr);\n         j.m_data.m_value.destroy(j.m_data.m_type);\n         j.m_data.m_type = value_t::array;\n-        j.m_data.m_value = arr;\n+        j.m_data.m_value = value;\n         j.set_parents();\n         j.assert_invariant();",
+   "line": 177,
+   "path": "include/nlohmann/detail/conversions/to_json.hpp",
+   "user": {
+    "login": "gregmarr",
+    "type": "User"
+   }
+  },
+  {
+   "body": "Is it okay to use the `array_t`'s range constructor, or is that not one of the functions that's required of an `array_t` type?",
+   "created_at": "2026-10-06T19:03:44Z",
+   "diff_hunk": "@@ -188,37 +199,41 @@ struct external_constructor<value_t::array>\n         using std::begin;\n         using std::end;\n \n+        auto* created = j.template create<typename BasicJsonType::array_t>(begin(arr), end(arr));\n         j.m_data.m_value.destroy(j.m_data.m_type);\n         j.m_data.m_type = value_t::array;\n-        j.m_data.m_value.array = j.template create<typename BasicJsonType::array_t>(begin(arr), end(arr));\n+        j.m_data.m_value.array = created;\n         j.set_parents();\n         j.assert_invariant();\n     }\n \n     template<typename BasicJsonType>\n     static void construct(BasicJsonType& j, const std::vector<bool>& arr)\n     {\n-        j.m_data.m_value.destroy(j.m_data.m_type);\n-        j.m_data.m_type = value_t::array;\n-        j.m_data.m_value = value_t::array;\n-        j.m_data.m_value.array->reserve(arr.size());\n+        typename BasicJsonType::array_t elements;\n+        elements.reserve(arr.size());\n         for (const bool x : arr)\n         {\n-            j.m_data.m_value.array->push_back(x);\n-            j.set_parent(j.m_data.m_value.array->back());\n+            elements.push_back(x);\n         }",
+   "line": 218,
+   "path": "include/nlohmann/detail/conversions/to_json.hpp",
+   "user": {
+    "login": "gregmarr",
+    "type": "User"
+   }
+  },
+  {
+   "body": "Is it okay to use the array_t's range constructor, or is that not one of the functions that's required of an array_t type?",
+   "created_at": "2026-10-06T19:05:42Z",
+   "diff_hunk": "@@ -188,37 +199,41 @@ struct external_constructor<value_t::array>\n         using std::begin;\n         using std::end;\n \n+        auto* created = j.template create<typename BasicJsonType::array_t>(begin(arr), end(arr));\n         j.m_data.m_value.destroy(j.m_data.m_type);\n         j.m_data.m_type = value_t::array;\n-        j.m_data.m_value.array = j.template create<typename BasicJsonType::array_t>(begin(arr), end(arr));\n+        j.m_data.m_value.array = created;\n         j.set_parents();\n         j.assert_invariant();\n     }\n \n     template<typename BasicJsonType>\n     static void construct(BasicJsonType& j, const std::vector<bool>& arr)\n     {\n-        j.m_data.m_value.destroy(j.m_data.m_type);\n-        j.m_data.m_type = value_t::array;\n-        j.m_data.m_value = value_t::array;\n-        j.m_data.m_value.array->reserve(arr.size());\n+        typename BasicJsonType::array_t elements;\n+        elements.reserve(arr.size());\n         for (const bool x : arr)\n         {\n-            j.m_data.m_value.array->push_back(x);\n-            j.set_parent(j.m_data.m_value.array->back());\n+            elements.push_back(x);\n         }\n+        const typename BasicJsonType::json_value value(std::move(elements));\n+        j.m_data.m_value.destroy(j.m_data.m_type);\n+        j.m_data.m_type = value_t::array;\n+        j.m_data.m_value = value;\n+        j.set_parents();\n         j.assert_invariant();\n     }\n \n     template<typename BasicJsonType, typename T,\n              enable_if_t<std::is_convertible<T, BasicJsonType>::value, int> = 0>\n     static void construct(BasicJsonType& j, const std::valarray<T>& arr)\n     {\n+        typename BasicJsonType::array_t elements(arr.size());\n+        std::copy(std::begin(arr), std::end(arr), elements.begin());",
+   "line": 232,
+   "path": "include/nlohmann/detail/conversions/to_json.hpp",
+   "user": {
+    "login": "gregmarr",
+    "type": "User"
+   }
+  },
+  {
+   "body": "Is it okay to use the array_t's range constructor, or is that not one of the functions that's required of an array_t type?",
+   "created_at": "2026-10-06T19:06:04Z",
+   "diff_hunk": "@@ -228,13 +243,15 @@ struct external_constructor<value_t::array>\n              enable_if_t<is_compatible_range_view<std::remove_cvref_t<CompatibleArrayType>>::value, int> = 0>\n     static void construct(BasicJsonType& j, CompatibleArrayType && arr)\n     {\n-        j.m_data.m_value.destroy(j.m_data.m_type);\n-        j.m_data.m_type = value_t::array;\n-        j.m_data.m_value = value_t::array;\n+        typename BasicJsonType::array_t elements;",
+   "line": 192,
+   "path": "include/nlohmann/detail/conversions/to_json.hpp",
+   "user": {
+    "login": "gregmarr",
+    "type": "User"
+   }
+  },
+  {
+   "body": "Good point, done in b2318575e. All `construct()` overloads now create the value and pass it to a new private `basic_json::replace_value(t, value)`. That helper destroys the old value, stores the new one, sets the type, then calls `set_parents()` and `assert_invariant()`. The value is now stored before the type, as in the rest of the PR. To also cover the overloads that hold a raw `create<\u2026>()` pointer, `json_value` got explicit constructors from `string_t*`, `object_t*` and `array_t*`.\n\n*(Written by Claude Code.)*\n",
+   "created_at": "2026-10-06T20:48:23Z",
+   "diff_hunk": "@@ -160,19 +169,21 @@ struct external_constructor<value_t::array>\n     template<typename BasicJsonType>\n     static void construct(BasicJsonType& j, const typename BasicJsonType::array_t& arr)\n     {\n+        const typename BasicJsonType::json_value value(arr);\n         j.m_data.m_value.destroy(j.m_data.m_type);\n         j.m_data.m_type = value_t::array;\n-        j.m_data.m_value = arr;\n+        j.m_data.m_value = value;\n         j.set_parents();\n         j.assert_invariant();",
+   "line": 177,
+   "path": "include/nlohmann/detail/conversions/to_json.hpp",
+   "user": {
+    "login": "nlohmann",
+    "type": "User"
+   }
+  },
+  {
+   "body": "Yes. The range constructor is already required of `array_t`: the `CompatibleArrayType` overload, `basic_json(first, last)` and the initializer-list constructor all use `create<array_t>(first, last)`. The `std::vector<bool>` and `std::valarray` overloads now use it too (b2318575e). For `valarray` this also avoids default-constructing `size()` nulls only to overwrite them.\n\n*(Written by Claude Code.)*\n",
+   "created_at": "2026-10-06T20:48:25Z",
+   "diff_hunk": "@@ -188,37 +199,41 @@ struct external_constructor<value_t::array>\n         using std::begin;\n         using std::end;\n \n+        auto* created = j.template create<typename BasicJsonType::array_t>(begin(arr), end(arr));\n         j.m_data.m_value.destroy(j.m_data.m_type);\n         j.m_data.m_type = value_t::array;\n-        j.m_data.m_value.array = j.template create<typename BasicJsonType::array_t>(begin(arr), end(arr));\n+        j.m_data.m_value.array = created;\n         j.set_parents();\n         j.assert_invariant();\n     }\n \n     template<typename BasicJsonType>\n     static void construct(BasicJsonType& j, const std::vector<bool>& arr)\n     {\n-        j.m_data.m_value.destroy(j.m_data.m_type);\n-        j.m_data.m_type = value_t::array;\n-        j.m_data.m_value = value_t::array;\n-        j.m_data.m_value.array->reserve(arr.size());\n+        typename BasicJsonType::array_t elements;\n+        elements.reserve(arr.size());\n         for (const bool x : arr)\n         {\n-            j.m_data.m_value.array->push_back(x);\n-            j.set_parent(j.m_data.m_value.array->back());\n+            elements.push_back(x);\n         }",
+   "line": 218,
+   "path": "include/nlohmann/detail/conversions/to_json.hpp",
+   "user": {
+    "login": "nlohmann",
+    "type": "User"
+   }
+  },
+  {
+   "body": "Yes. The range constructor is already required of `array_t`: the `CompatibleArrayType` overload, `basic_json(first, last)` and the initializer-list constructor all use `create<array_t>(first, last)`. The `std::vector<bool>` and `std::valarray` overloads now use it too (b2318575e). For `valarray` this also avoids default-constructing `size()` nulls only to overwrite them.\n\n*(Written by Claude Code.)*\n",
+   "created_at": "2026-10-06T20:48:26Z",
+   "diff_hunk": "@@ -188,37 +199,41 @@ struct external_constructor<value_t::array>\n         using std::begin;\n         using std::end;\n \n+        auto* created = j.template create<typename BasicJsonType::array_t>(begin(arr), end(arr));\n         j.m_data.m_value.destroy(j.m_data.m_type);\n         j.m_data.m_type = value_t::array;\n-        j.m_data.m_value.array = j.template create<typename BasicJsonType::array_t>(begin(arr), end(arr));\n+        j.m_data.m_value.array = created;\n         j.set_parents();\n         j.assert_invariant();\n     }\n \n     template<typename BasicJsonType>\n     static void construct(BasicJsonType& j, const std::vector<bool>& arr)\n     {\n-        j.m_data.m_value.destroy(j.m_data.m_type);\n-        j.m_data.m_type = value_t::array;\n-        j.m_data.m_value = value_t::array;\n-        j.m_data.m_value.array->reserve(arr.size());\n+        typename BasicJsonType::array_t elements;\n+        elements.reserve(arr.size());\n         for (const bool x : arr)\n         {\n-            j.m_data.m_value.array->push_back(x);\n-            j.set_parent(j.m_data.m_value.array->back());\n+            elements.push_back(x);\n         }\n+        const typename BasicJsonType::json_value value(std::move(elements));\n+        j.m_data.m_value.destroy(j.m_data.m_type);\n+        j.m_data.m_type = value_t::array;\n+        j.m_data.m_value = value;\n+        j.set_parents();\n         j.assert_invariant();\n     }\n \n     template<typename BasicJsonType, typename T,\n              enable_if_t<std::is_convertible<T, BasicJsonType>::value, int> = 0>\n     static void construct(BasicJsonType& j, const std::valarray<T>& arr)\n     {\n+        typename BasicJsonType::array_t elements(arr.size());\n+        std::copy(std::begin(arr), std::end(arr), elements.begin());",
+   "line": 232,
+   "path": "include/nlohmann/detail/conversions/to_json.hpp",
+   "user": {
+    "login": "nlohmann",
+    "type": "User"
+   }
+  },
+  {
+   "body": "Here the loop stays. A C++20 view's `begin()` and `end()` can have different types, and a view may only be iterable once, so an iterator-pair constructor can't take it in general. I added a comment saying so.\n\n*(Written by Claude Code.)*\n",
+   "created_at": "2026-10-06T20:48:27Z",
+   "diff_hunk": "@@ -228,13 +243,15 @@ struct external_constructor<value_t::array>\n              enable_if_t<is_compatible_range_view<std::remove_cvref_t<CompatibleArrayType>>::value, int> = 0>\n     static void construct(BasicJsonType& j, CompatibleArrayType && arr)\n     {\n-        j.m_data.m_value.destroy(j.m_data.m_type);\n-        j.m_data.m_type = value_t::array;\n-        j.m_data.m_value = value_t::array;\n+        typename BasicJsonType::array_t elements;",
+   "line": 192,
+   "path": "include/nlohmann/detail/conversions/to_json.hpp",
+   "user": {
+    "login": "nlohmann",
+    "type": "User"
+   }
+  }
+ ],
+ "state": "closed",
+ "title": "Create a value before giving it its type",
+ "transport": "gh",
+ "user": {
+  "login": "nlohmann",
+  "type": "User"
+ }
+}

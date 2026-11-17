@@ -1,0 +1,35 @@
+{
+ "base_ref": "develop",
+ "base_sha": "2913e9643383b8078b9f6d5572401081047ea28e",
+ "body": "Fixes a module export error with GCC 15.2 when nlohmann/json is included in the global module fragment of a C++ module and exported (-std=c++23).\n\ndetail::UTF8_ACCEPT and detail::UTF8_REJECT in detail/string_utils.hpp are `static constexpr` at namespace scope, so they have internal linkage.\n\n```\nstring_utils.hpp:199:13: error: 'template<class StringType> bool\nnlohmann::json_abi_v3_12_0::detail::is_valid_utf8(const StringType&, std::size_t)'\nexposes TU-local entity 'nlohmann::json_abi_v3_12_0::detail::UTF8_ACCEPT'\nstring_utils.hpp:111:31: note: 'nlohmann::json_abi_v3_12_0::detail::UTF8_ACCEPT'\ndeclared with internal linkage\n  111 | static constexpr std::uint8_t UTF8_ACCEPT = 0;\n```\n\nChange: use JSON_INLINE_VARIABLE, which already exists for static_const::value:\n\n    JSON_INLINE_VARIABLE constexpr std::uint8_t UTF8_ACCEPT = 0;\n    JSON_INLINE_VARIABLE constexpr std::uint8_t UTF8_REJECT = 1;\n\nIn C++17 and later this is `inline constexpr` (external linkage, one definition), which works with modules. Before C++17 the macro expands to nothing, so the declaration stays plain `constexpr` (still internal linkage there, as before). No behavior change for C++11/14.\n\n\n- [x] The changes are described in detail, both the what and why.\n- [ ] If applicable, an [existing issue](https://github.com/nlohmann/json/issues) is referenced.\n- [ ] If applicable, a fixed [OSS-Fuzz](https://issues.oss-fuzz.com) issue is referenced as `OSS-Fuzz: <id>` (see [fuzz testing](https://github.com/nlohmann/json/blob/develop/tests/fuzzing.md#handling-oss-fuzz-reports)).\n- [ ] The [Code coverage](https://coveralls.io/github/nlohmann/json) remained at 100%. A test case for every new line of code.\n- [ ] If applicable, the [documentation](https://json.nlohmann.me) is updated.\n- [x] The source code is amalgamated by running `make amalgamate`.\n\nRead the [Contribution Guidelines](https://github.com/nlohmann/json/blob/develop/.github/CONTRIBUTING.md) for detailed information.",
+ "comments": [
+  {
+   "body": "Thanks!",
+   "created_at": "2026-10-09T21:38:47Z",
+   "user": {
+    "login": "nlohmann",
+    "type": "User"
+   }
+  }
+ ],
+ "created_at": "2026-10-09T18:59:58Z",
+ "fetched_at": "2026-11-17T20:10:01Z",
+ "head_sha": "1d8fb50ac528a35bbd7f9f82409f8b91eb68b3dc",
+ "labels": [
+  "S"
+ ],
+ "linked_issues": [],
+ "merge_commit_sha": "84ee12a67cbee9b10109f6b3e4a834922f5e0ae5",
+ "merged_at": "2026-10-09T21:38:42Z",
+ "number": 5797,
+ "referenced_numbers": [],
+ "repo": "nlohmann/json",
+ "review_comments": [],
+ "state": "closed",
+ "title": "Make UTF8_ACCEPT/UTF8_REJECT inline variables to avoid TU-local exposure in modules",
+ "transport": "gh",
+ "user": {
+  "login": "basdedas",
+  "type": "User"
+ }
+}

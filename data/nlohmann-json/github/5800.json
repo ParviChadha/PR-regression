@@ -1,0 +1,29 @@
+{
+ "base_ref": "develop",
+ "base_sha": "07ec1a4e318606620cb672cb4a613646afd510c2",
+ "body": "Two low-priority findings from a standards-conformance read-through of the library.\n\n## JSON pointer: same error for `/a/x` and `/a/xy`\n\nWhen a JSON pointer indexes into an array, each reference token must be a number. Before this change, a non-numeric token was reported differently depending only on its length:\n\n| Token | Before | After |\n|---|---|---|\n| `/a/xy` | `parse_error.109` \"array index 'xy' is not a number\" | unchanged |\n| `/a/x` | `out_of_range.404` \"unresolved reference token 'x'\" | `parse_error.109` \"array index 'x' is not a number\" |\n| `/a/-` | `out_of_range.404` | unchanged |\n| `/a/` (empty token) | `out_of_range.404` | unchanged |\n\nThe cause is that `parse_array_index` only ran the \"begins with a digit\" check for tokens longer than one character (since v3.8.0, bfc003cad). The check now covers one-character tokens too. It leaves out `-`, which RFC 6901 defines as \"past the end of the array\" (`patch.md`/`patch_inplace.md` document 404 for removing it), and the empty token.\n\nThe `unflatten.md` example for 404 used `'x'`, so it now uses `'-'`, and the wording names the cases that still give 404.\n\nDocs: the version history of `at`, `operator[]`, `value`, `patch`, `patch_inplace`, and `unflatten` now records the change for 3.13.0. `exceptions.md` says which array indices throw `parse_error.109` and which `out_of_range.404`, and notes the pre-3.13.0 behavior.\n\n## `ordered_map::erase`: comment only\n\n`erase(first, last)` destroys a `std::pair<const Key, T>` and placement-news a new one in the same storage. Before C++20, `[basic.life]/8` did not count such a new object (its type has a const member) as transparently replacing the old one, so access through the vector's existing pointers was formally UB without `std::launder`. `std::launder` doesn't exist before C++17 anyway. C++20 dropped that condition (P1971R0, NB comment US 041), and compilers have always treated the pattern as intended. A comment now records this; the code is unchanged.\n\n## Public API\n\nNo signatures change and the ABI is unaffected, but there are behavior changes, **only for one-character array reference tokens that are neither a digit nor `-`**:\n\n- `at()`, `operator[]`, `patch()`/`patch_inplace()`, and `unflatten()` throw `parse_error.109` instead of `out_of_range.404`. Code that catches `json::out_of_range` for this case stops catching it; catching `json::exception` still works.\n- `value(json_pointer, default)` on an array with such a token used to return the default and now throws `parse_error.109`, as it already did for longer tokens like `/foo`.\n- `contains()` does not change; it still returns `false`.\n\nThe `ordered_map` change is a comment only and breaks nothing.\n\n## Tests\n\n- `unit-json_pointer.cpp`: `/x` and `/+` with `operator[]`/`at()` (const and non-const), `contains()`, and `unflatten()`; `-` in `unflatten()` still gives 404.\n- `unit-element_access2.cpp`: `value(\"/x\", default)` throws 109.\n- `unit-json_patch.cpp`: `remove` of `/a/-` (404), `/a/x`, and `/a/xy` (both 109).\n\nI ran these locally in C++11/17/20, with `JSON_DIAGNOSTICS` and with `JSON_DIAGNOSTIC_POSITIONS`, together with `unit-alt-string`, `unit-disabled_exceptions`, `unit-ordered_map`, and `unit-ordered_json`.\n\n\ud83e\udd16 Generated with [Claude Code](https://claude.com/claude-code)\n\n",
+ "comments": [],
+ "created_at": "2026-10-10T10:42:23Z",
+ "fetched_at": "2026-11-17T20:10:00Z",
+ "head_sha": "412d82f6c71bd47f7c528d74addc6e35328bf580",
+ "labels": [
+  "documentation",
+  "L",
+  "tests",
+  "\ud83d\ude80 ready to merge"
+ ],
+ "linked_issues": [],
+ "merge_commit_sha": "2cca04ae6f1a63ed65843a466b95d70f218885f5",
+ "merged_at": "2026-10-11T06:21:41Z",
+ "number": 5800,
+ "referenced_numbers": [],
+ "repo": "nlohmann/json",
+ "review_comments": [],
+ "state": "closed",
+ "title": "Report one-character non-numeric array indices like longer ones",
+ "transport": "gh",
+ "user": {
+  "login": "nlohmann",
+  "type": "User"
+ }
+}

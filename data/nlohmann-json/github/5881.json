@@ -1,0 +1,26 @@
+{
+ "base_ref": "develop",
+ "base_sha": "533cbfee5117383584654c6290dc91c39b52b107",
+ "body": "develop (533cbfee5) fails `ci_clang_tidy`: #5876 added `JSON_LITTLE_ENDIAN_TARGET` and `JSON_BIG_ENDIAN_TARGET` to `macro_scope.hpp`, and clang-tidy's `cppcoreguidelines-macro-to-enum` / `modernize-macro-to-enum` reject them (reported in `unit-type_traits.cpp`, the TU that sees the headers as non-system includes). The other `ci_static_analysis_clang` jobs were only cancelled by fail-fast.\n\nThe macros select code in `#if`, so they must stay macros. This adds the same per-line `NOLINT` that `simd_scan.hpp` already uses and regenerates `single_include`.\n\nVerified locally with clang-tidy 22.1.8 (silkeh/clang:22): all 169 test TUs are clean with the change; without it, `unit-type_traits.cpp` reproduces the three CI errors.\n\n## Public API\n\nNo breaking changes: comments only.\n\n\ud83e\udd16 Generated with [Claude Code](https://claude.com/claude-code)",
+ "comments": [],
+ "created_at": "2026-10-22T06:39:40Z",
+ "fetched_at": "2026-11-17T20:09:09Z",
+ "head_sha": "768f8d0b36785fe19cdbb4d00fa4ee0db5c697ee",
+ "labels": [],
+ "linked_issues": [],
+ "merge_commit_sha": "9855db81f317dd5dafc06e3c14ba198851802657",
+ "merged_at": "2026-10-22T06:40:06Z",
+ "number": 5881,
+ "referenced_numbers": [
+  5876
+ ],
+ "repo": "nlohmann/json",
+ "review_comments": [],
+ "state": "closed",
+ "title": "Fix clang-tidy on develop: silence macro-to-enum for the endianness macros",
+ "transport": "gh",
+ "user": {
+  "login": "nlohmann",
+  "type": "User"
+ }
+}

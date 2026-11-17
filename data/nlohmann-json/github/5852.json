@@ -1,0 +1,30 @@
+{
+ "base_ref": "perf/lexer-number-scan",
+ "base_sha": "2dfda27f28690dee69988acaa6b5fc059e3f252f",
+ "body": "## Summary\n\nAfter the previous PR, the biggest remaining cost of parsing floats was copying the token text into `token_buffer`: an out-of-line `std::string::append` per float, about 10 % of parsing `canada.json`. The only reader of that text is the string argument of `json_sax::number_float()`. The library's own handlers ignore it: `json_sax_dom_parser`, `json_sax_dom_callback_parser` and `json_sax_acceptor`.\n\nThis PR copies the text only when it is asked for:\n\n- **Lazy copy:** for contiguous input, the fast path keeps a pointer to the token in the input, and `get_string()` copies it on first use.\n- **Built-in handlers:** the parser passes them an empty string instead of calling `get_string()`. They are marked by the new internal trait `sax_ignores_number_text`. So `json::parse()` and `json::accept()` never copy float text.\n- **Everyone else still sees the exact text:**\n  - user SAX handlers, including classes derived from `json_sax_dom_parser`, which the trait does not match;\n  - `JSON_DIAGNOSTIC_POSITIONS`, which reads `get_string().size()`.\n- **Keys and strings** never have pending text and use the unchecked `get_string_token()`. This avoids a 2\u20133 % cost on string-heavy input that a check in `get_string()` caused.\n- **Stream windows (#5828):** input read through a window into a `std::istream` or `FILE*` copies the text right away, because the next read may refill the window.\n\nStacked on the previous PR.\n\n## Performance\n\nChange of the best-of-runs time against the previous PR (the first: against #5828), negative is faster. *accept* is `json::accept()` (no allocations), *parse* is `json::parse()`. Apple M1 Max: Apple Clang 21 and Homebrew GCC 16; x86-64 (Haswell VM): GCC 13, and Clang 18 with `-falign-loops=64 -falign-functions=64` on both sides (without it, code placement alone moves Clang's numbers by up to \u00b15 % between builds). Improvements of 3 % or more are bold.\n\n| file | M1 Clang accept | M1 Clang parse | M1 GCC 16 accept | M1 GCC 16 parse | x86 GCC accept | x86 Clang accept |\n|---|--:|--:|--:|--:|--:|--:|\n| `canada.json` | **\u221217.1 %** | **\u221210.5 %** | **\u221216.4 %** | **\u22129.4 %** | **\u221221.0 %** | **\u221213.1 %** |\n| `citm_catalog.json` | +3.0 % | \u22120.9 % | +1.1 % | \u22121.7 % | **\u22123.3 %** | **\u22124.2 %** |\n| `twitter.json` | +2.9 % | +0.4 % | +2.4 % | \u22121.7 % | **\u22125.1 %** | +1.3 % |\n| `numbers.json` | **\u221223.1 %** | **\u221221.8 %** | **\u221222.0 %** | **\u221223.2 %** | **\u221218.8 %** | **\u221217.9 %** |\n| `long_strings.json` | \u22120.5 % | +0.7 % | +0.2 % | \u22120.3 % | \u22122.2 % | \u22120.7 % |\n| `twitterescaped.json` | +2.7 % | \u22120.6 % | +1.6 % | +0.5 % | **\u22125.0 %** | +1.5 % |\n| `mesh.json` | **\u221213.1 %** | **\u22128.4 %** | **\u221215.2 %** | **\u221213.0 %** | **\u221215.5 %** | **\u22129.7 %** |\n\nThe library's own handlers no longer touch the float text, so `json::parse()` and `json::accept()` gain on float-heavy input. User SAX handlers still get the text and run as before. On M1, `accept()` of twitter.json is about 2.5\u20133 % slower with both compilers (it stays with aligned code; `parse()` is unaffected), most likely from clearing the pending pointer at every token. The next PR makes twitter.json 10\u201322 % faster.\n\n## Tests\n\n- **New test case \"text of float tokens\"** in `unit-class_parser.cpp`:\n  - checks the exact text a user SAX handler receives, for contiguous, byte, stream and non-contiguous input;\n  - checks the trait for the three built-in handlers and that a user handler is not matched.\n- **Mutation check:** if `get_string()` does not copy the pending text, this test fails.\n- **Configurations:** the parser and diagnostic-positions tests pass with and without `JSON_DIAGNOSTIC_POSITIONS`.\n- **Differential check against #5828's head** (string, `std::istream`, `FILE*`; M1 and x86-64): identical, including the float text in the SAX event stream.\n- **Full test suite:** passes under ASan/UBSan on macOS and Linux x86-64.\n\n## Breaking changes\n\nNone.\n\n- **Public API:** unchanged, and SAX handlers written by users receive the same text as before.\n- **Internals:**\n  - the built-in handlers' `number_float()` receives an empty string, which they ignore;\n  - the lexer keeps a pointer into the caller's buffer between `scan()` and `get_string()`. Contiguous input already has to outlive the parse.\n  - New internal names: `detail::sax_ignores_number_text`, `lexer::get_string_token()`, `lexer::get_ignored_number_text()`.\n\n\ud83e\udd16 Generated with [Claude Code](https://claude.com/claude-code)\n",
+ "comments": [],
+ "created_at": "2026-10-15T17:44:22Z",
+ "fetched_at": "2026-11-17T20:09:18Z",
+ "head_sha": "d7e0f2759f049416b2632fa730a4a6f3f4295cfc",
+ "labels": [
+  "L",
+  "tests",
+  "performance"
+ ],
+ "linked_issues": [],
+ "merge_commit_sha": "5e13f834c16ddcfa12b10495cf48d6087d665343",
+ "merged_at": "2026-10-21T10:26:48Z",
+ "number": 5852,
+ "referenced_numbers": [
+  5828
+ ],
+ "repo": "nlohmann/json",
+ "review_comments": [],
+ "state": "closed",
+ "title": "Copy the text of float tokens only when a SAX handler asks for it",
+ "transport": "gh",
+ "user": {
+  "login": "nlohmann",
+  "type": "User"
+ }
+}

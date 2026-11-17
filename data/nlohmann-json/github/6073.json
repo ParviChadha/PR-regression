@@ -1,0 +1,30 @@
+{
+ "base_ref": "develop",
+ "base_sha": "017a3ce0011545104c319ae41be318ec61750553",
+ "body": "Passing a plain function or function pointer as parser callback, as in `json::parse(std::string(\"[1,2]\"), cb)`, no longer compiles in C++11, C++14 and C++17 on current `develop` (3.12.0 compiles it, and so does C++20). This is a source break of existing code that was introduced by the iterator+sentinel overloads added for 3.13.0 and has not been released yet.\n\n## Cause\n\nThe sentinel overloads of `parse`, `accept`, `sax_parse` and the `from_*` functions are constrained by `detail::can_compare_ne`, i.e. whether `first != last` is well-formed. The callback's parameter types make `basic_json` an associated class, so argument-dependent lookup finds the friend `operator!=(const_reference, ScalarType)`: the container converts to `basic_json` and the function pointer is a scalar. The sentinel overload was thereby selected for `(container, function)` and failed hard in its body. C++20 does not declare these friends, which is why it compiled there.\n\nAffected inputs: `std::string` (lvalue, const, rvalue), `std::string_view`, `std::vector<char>`, `std::vector<std::uint8_t>`, `std::deque<char>`, `std::u16string` and user containers found through `begin`/`end`. Lambdas, `std::function`, `parser_callback_t` objects, `nullptr`, `const char*`, arrays, streams, `FILE*` and iterator pairs were not affected.\n\n## Fix\n\n`can_compare_ne` now excludes function pointers and functions as the sentinel type, since a callback is never a sentinel. The shared constraint guards all sentinel overloads, so they are fixed together. I deliberately did not check `std::iterator_traits<IteratorType>`: that would instantiate `iterator_traits` for every two-argument call, which is a hard error on standard libraries with a non-SFINAE-friendly `iterator_traits` (see #1341).\n\n## Tests\n\nA new test case in `unit-class_parser.cpp` (built by the C++11 job) calls `json::parse` with a namespace-scope function (`cb` and `&cb`) and `std::string` (lvalue and rvalue), `std::vector<std::uint8_t>` and `std::vector<char>`, an iterator pair plus callback, and checks the trait directly for the other overloads. It fails to compile on `develop` and passes with the fix.\n\nI also ran a broader matrix (lambdas, `std::function`, `std::ref`, `parser_callback_t`, callable structs, streams, `FILE*`, custom sentinel types, and in C++20 `counted_iterator` + `default_sentinel`, `subrange`, `take_while`, `transform` and `move_iterator` views) with clang 21 and g++ 16 in C++11, 14, 17, 20 and 23, from `include/` and `single_include/`: no failures. The affected suites also pass under ASan and UBSan.\n\n## Breaking changes\n\nNo breaking changes. This restores the 3.12.0 behaviour for code that compiled there. The only types newly excluded as the second argument of the sentinel overloads are functions and function pointers, which are never valid sentinels.\n",
+ "comments": [],
+ "created_at": "2026-11-11T15:32:04Z",
+ "fetched_at": "2026-11-17T20:07:33Z",
+ "head_sha": "af23f07f8cdf504e19c212aea7b794607bf4eff4",
+ "labels": [
+  "M",
+  "tests",
+  "\ud83d\ude80 ready to merge"
+ ],
+ "linked_issues": [],
+ "merge_commit_sha": "be08f424560fb5e4751cff0938a5289b4068d1a4",
+ "merged_at": "2026-11-11T21:31:20Z",
+ "number": 6073,
+ "referenced_numbers": [
+  1341
+ ],
+ "repo": "nlohmann/json",
+ "review_comments": [],
+ "state": "closed",
+ "title": "Fix parse(container, function) for plain functions as callback",
+ "transport": "gh",
+ "user": {
+  "login": "nlohmann",
+  "type": "User"
+ }
+}

@@ -1,0 +1,190 @@
+{
+ "base_ref": "develop",
+ "base_sha": "0490778fc30c7887db704f278941612587b0e0b7",
+ "body": "Reject NUL bytes inside length-delimited UBJSON/BJData high-precision (`H`) number payloads. `H i 3 1 NUL x` used to be accepted as the unsigned integer `1`, because the lexer stops at the NUL and never sees the rest of the payload. It now produces `parse_error.115`.\r\n\r\nThe payload read loop returns the error as soon as it reads a NUL, so the byte offset points at the NUL and the payload is not lexed. The message follows the other binary reader errors: `invalid number text; last byte: 0x00`. A payload that is cut off after a NUL reports the NUL rather than end of input.\r\n\r\nRegression cases in both format suites cover hidden bytes after a NUL, a trailing NUL, a truncated payload containing a NUL, a nested array, non-throwing parsing, and a valid number. `single_include/nlohmann/json.hpp` carries the same change.\r\n\r\nFixes #5753.\r\n\r\nValidation on Windows x86_64, MinGW GCC 15.1.0, C++11:\r\n\r\n- The new cases fail without the fix, because the malformed payloads are accepted.\r\n- The UBJSON and BJData suites pass with both `include/` and `single_include/`, and with `JSON_STRICT_NUL_HANDLING=1`.\r\n- Coverage was not measured locally.\r\n\r\n- [x] The changes are described in detail, both the what and why.\r\n- [x] An existing issue is referenced.\r\n- [ ] Code coverage remained at 100% (not measured locally; awaiting CI).\r\n- [x] Source code is amalgamated.\r\n\r\nOSS-Fuzz and documentation checklist items are not applicable to this change.\r\n",
+ "comments": [
+  {
+   "body": "Your most recent commit did not contain the DCO signoff.",
+   "created_at": "2026-10-04T18:54:24Z",
+   "user": {
+    "login": "gregmarr",
+    "type": "User"
+   }
+  },
+  {
+   "body": "The GCC/C++26 failure is the existing CBOR narrowing warning at binary_reader.hpp:668, already covered by #5764. I checked that get_cbor_negative_integer() is unchanged from this PR's base (4f69be8). The other five GCC standard jobs were cancelled by fail-fast. I'll keep this PR focused on the NUL fix and pick up the develop fix if a branch update is needed.",
+   "created_at": "2026-10-05T08:54:13Z",
+   "user": {
+    "login": "fhgffy",
+    "type": "User"
+   }
+  },
+  {
+   "body": "Sorry about the CI noise. PR #5764 hopefully fixes this. I'll check back on this PR once #5764 is green.",
+   "created_at": "2026-10-05T08:57:10Z",
+   "user": {
+    "login": "nlohmann",
+    "type": "User"
+   }
+  },
+  {
+   "body": "The [sanitizer job](https://github.com/nlohmann/json/actions/runs/37229375914/job/111523198491) has a separate failure: 137/138 tests passed, with `test-std-format_cpp20` stopping at libstdc++ 14's `format:3906` when `-1` is converted to `size_t`. This matches [GCC bug 119429](https://gcc.gnu.org/pipermail/gcc-bugs/2025-March/906275.html), whose reproducer uses only `std::print`. I checked that `unit-std-format.cpp` and the sanitizer flags are unchanged from this PR's base. It may need separate toolchain handling from the CBOR and documentation fixes in #5764.",
+   "created_at": "2026-10-05T10:01:43Z",
+   "user": {
+    "login": "fhgffy",
+    "type": "User"
+   }
+  },
+  {
+   "body": "Thanks for tracking this down! Your analysis is right: libstdc++ 14's `<format>` has `_Scanner(basic_string_view<_CharT>, size_t __nargs = -1)`, so with `-fsanitize=integer`, every `std::format` call fails as `implicit-integer-sign-change` ([GCC bug 119429](https://gcc.gnu.org/bugzilla/show_bug.cgi?id=119429)). develop fails the same way, so this has nothing to do with your change.\n\n#5764 now also fixes this. It adds `cmake/clang_sanitizer_ignorelist.txt`, which `ci_test_clang_sanitizer` passes via `-fsanitize-ignorelist`. The list excludes only that check, and only for libstdc++'s `<format>` header, so sign changes in the library and the tests are still reported. Once #5764 is merged, updating this branch from develop should make the sanitizer job pass.\n\n(This comment was written by Claude Code on my behalf.)\n",
+   "created_at": "2026-10-05T10:43:27Z",
+   "user": {
+    "login": "nlohmann",
+    "type": "User"
+   }
+  },
+  {
+   "body": "The develop branch is green now. Please rebase a last time and we're should be good to go!",
+   "created_at": "2026-10-06T05:32:01Z",
+   "user": {
+    "login": "nlohmann",
+    "type": "User"
+   }
+  },
+  {
+   "body": "Rebased onto develop at 0490778 and pushed bdb821a. The UBJSON/BJData suites pass locally with split and single headers, with both NUL settings. I also reran the allocator and regression2 suites; both pass. The new GitHub Actions runs are waiting for approval.",
+   "created_at": "2026-10-06T06:19:52Z",
+   "user": {
+    "login": "fhgffy",
+    "type": "User"
+   }
+  },
+  {
+   "body": "The `rbegin()` failures are covered by #5767. There is also a separate [`-Werror=switch-enum` failure](https://github.com/nlohmann/json/actions/runs/37423005387/job/112136840467) in `has_no_children()` at `json.hpp:630`: the switch only explicitly handles the `array` and `object` enumerators. That switch is still unchanged in #5767.\n\nI reproduced this with MinGW GCC 15.1/C++11 on unmodified sources from develop at `0490778`; the same syntax-only compile passes at `5379e04`, before #5762:\n\n```sh\ng++ -std=c++11 -Wswitch-enum -Werror=switch-enum -Iinclude -fsyntax-only tests/abi/diag/diag_off.cpp\n```\n\nThe split `json.hpp` and `diag_off.cpp` are identical between this PR and its base, so this also needs a develop fix.\n",
+   "created_at": "2026-10-06T17:15:34Z",
+   "user": {
+    "login": "fhgffy",
+    "type": "User"
+   }
+  },
+  {
+   "body": "Opened #5770 for the remaining `switch-enum` failure. It adds the missing enum labels to the existing branch and synchronizes the single header. The ABI diagnostic builds now pass locally with `-Wswitch-enum -Werror=switch-enum` in both header modes.",
+   "created_at": "2026-10-06T17:33:25Z",
+   "user": {
+    "login": "fhgffy",
+    "type": "User"
+   }
+  },
+  {
+   "body": "Thanks!",
+   "created_at": "2026-10-06T20:30:59Z",
+   "user": {
+    "login": "nlohmann",
+    "type": "User"
+   }
+  }
+ ],
+ "created_at": "2026-10-04T17:14:20Z",
+ "fetched_at": "2026-11-17T20:10:33Z",
+ "head_sha": "bdb821a1d12dc7197417554d26ccad42ceaabfa2",
+ "labels": [
+  "aspect: binary formats",
+  "M",
+  "tests",
+  "\ud83d\ude80 ready to merge"
+ ],
+ "linked_issues": [
+  {
+   "body": "### Description\n\nUBJSON and BJData high-precision (`H`) numbers have a length-delimited text payload. With the default NUL handling, the reader accepts a valid numeric prefix followed by a NUL and arbitrary bytes inside that payload.\n\nFor example, `48 69 03 31 00 78` (`H`, `i`, length 3, `1`, NUL, `x`) is accepted as the unsigned integer `1` by both `from_ubjson` and `from_bjdata`.\n\n### Expected vs. actual results\n\nExpected: reject the malformed high-precision number, as for other invalid number text (parse_error.115). The [UBJSON specification](https://ubjson.org/type-reference/value-types/#high-precision-numbers-larger-than-64-bit) requires high-precision values to follow JSON's number syntax. A NUL is not a number character or whitespace, and the payload length is explicit.\n\nActual: the JSON lexer reports end_of_input at the NUL; `get_ubjson_high_precision_number()` checks that token but does not distinguish a NUL from the real end of the bounded payload. Bytes following the NUL are consumed by the binary reader and silently ignored by the number lexer. This also makes these binary inputs behave differently with JSON_STRICT_NUL_HANDLING enabled, despite that macro being documented as affecting only JSON text.\n\n### Minimal code example\n\n```cpp\n#include <nlohmann/json.hpp>\n#include <iostream>\n#include <vector>\n\nint main()\n{\n    const std::vector<std::uint8_t> input = {'H', 'i', 3, '1', 0, 'x'};\n    std::cout << nlohmann::json::from_ubjson(input) << '\\n';\n    std::cout << nlohmann::json::from_bjdata(input) << '\\n';\n}\n```\n\nBoth calls print `1`.\n\n### Compiler and operating system\n\nMinGW GCC 15.1.0, Windows x86_64, `g++ -std=c++11 -I include repro.cpp`.\n\n### Library version\n\nUnmodified `develop` at `6d0867a85f0148ae184f457ec6755f9d4e184132`. The same token-only check is present on `master` at `55f93686c01528224f448c19128836e7df245f72` (source inspection; not run there).\n\nI intend to submit a small check in the shared high-precision reader, with regression coverage for both formats, NUL at the last payload byte, bytes hidden after NUL, nested inputs, valid numbers, and unchanged JSON text behavior. Searches for the symptom and inspection of related PRs did not reveal an existing fix for this boundary. Investigation and patch preparation use AI assistance.",
+   "labels": [
+    "solution: proposed fix",
+    "aspect: binary formats"
+   ],
+   "number": 5753,
+   "state": "closed",
+   "title": "UBJSON/BJData high-precision numbers accept a NUL-terminated prefix inside their payload"
+  }
+ ],
+ "merge_commit_sha": "69874e4544f2a129069ebef8d47eee40ef8c1483",
+ "merged_at": "2026-10-06T20:30:53Z",
+ "number": 5760,
+ "referenced_numbers": [
+  5753
+ ],
+ "repo": "nlohmann/json",
+ "review_comments": [
+  {
+   "body": "Would it be better performance-wise to catch this before pushing it into `number_vector`?\n\n```\n        for (std::size_t i = 0; i < size; ++i)\n        {\n            get();\n            if (JSON_HEDLEY_UNLIKELY(!unexpect_eof(\"number\")))\n            {\n                return false;\n            }\n            if (JSON_HEDLEY_UNLIKELY(current == '\\0')\n            {\n              return sax->parse_error(chars_read, ...\n            }\n            number_vector.push_back(static_cast<char>(current));\n        }\n```",
+   "created_at": "2026-10-04T17:35:47Z",
+   "diff_hunk": "@@ -3266,6 +3266,13 @@ class binary_reader\n                                     exception_message(concat(\"invalid number text: \", number_lexer.get_token_string()), \"high-precision number\"), nullptr));\n         }\n \n+        // 2026-10-05: A NUL must not terminate a length-delimited number payload; preserve the lexer diagnostic.",
+   "line": 3269,
+   "path": "include/nlohmann/detail/input/binary_reader.hpp",
+   "user": {
+    "login": "gregmarr",
+    "type": "User"
+   }
+  },
+  {
+   "body": "Moved NUL detection into the read loop in e9b4643, so there's no separate payload scan. I kept error reporting after the full read to preserve the byte offset and lexer message; truncated payloads still report EOF (110). Added a truncated-NUL case to both suites. The UBJSON/BJData tests pass with both NUL macro settings.",
+   "created_at": "2026-10-04T17:56:36Z",
+   "diff_hunk": "@@ -3266,6 +3266,13 @@ class binary_reader\n                                     exception_message(concat(\"invalid number text: \", number_lexer.get_token_string()), \"high-precision number\"), nullptr));\n         }\n \n+        // 2026-10-05: A NUL must not terminate a length-delimited number payload; preserve the lexer diagnostic.",
+   "line": 3269,
+   "path": "include/nlohmann/detail/input/binary_reader.hpp",
+   "user": {
+    "login": "fhgffy",
+    "type": "User"
+   }
+  },
+  {
+   "body": "> I kept error reporting after the full read to preserve the byte offset and lexer message; truncated payloads still report EOF (110). Added a truncated-NUL case to both suites. The UBJSON/BJData tests pass with both NUL macro settings.\n\nIt's up to @nlohmann, but I don't see the utility in preserving the lexer message.  It causes extra work before reporting the error, and could change the error from NUL to EOF.  I think the byte offset should be the exact location of the NUL byte.",
+   "created_at": "2026-10-04T18:53:00Z",
+   "diff_hunk": "@@ -3266,8 +3269,8 @@ class binary_reader\n                                     exception_message(concat(\"invalid number text: \", number_lexer.get_token_string()), \"high-precision number\"), nullptr));\n         }\n \n-        // 2026-10-05\uff1a\u957f\u5ea6\u9650\u5b9a\u7684\u6570\u5b57\u8f7d\u8377\u4e0d\u80fd\u628a NUL \u5f53\u4f5c\u771f\u5b9e\u7ed3\u5c3e\uff0c\u6cbf\u7528\u8bcd\u6cd5\u5668\u7684\u9519\u8bef\u6587\u672c\u3002\n-        if (JSON_HEDLEY_UNLIKELY(std::find(number_vector.begin(), number_vector.end(), '\\0') != number_vector.end()))\n+        // Reject NULs after a complete read to preserve EOF errors and lexer diagnostics.\n+        if (JSON_HEDLEY_UNLIKELY(contains_nul))",
+   "line": 3273,
+   "path": "include/nlohmann/detail/input/binary_reader.hpp",
+   "user": {
+    "login": "gregmarr",
+    "type": "User"
+   }
+  },
+  {
+   "body": "Agreed. In fecb084 the read loop returns the parse error as soon as it reads the NUL, so the byte offset is the NUL's position and the payload is no longer lexed first. The message follows the other binary reader errors: `invalid number text; last byte: 0x00`. A payload cut off after a NUL now reports that NUL (115) instead of end of input. The tests cover that case alongside the trailing and nested ones.\r\n\r\nThe UBJSON and BJData tests pass with both the split and amalgamated headers, and with `JSON_STRICT_NUL_HANDLING=1`. The previous commit was missing its sign-off, which is now added.\r\n",
+   "created_at": "2026-10-04T19:43:47Z",
+   "diff_hunk": "@@ -3266,8 +3269,8 @@ class binary_reader\n                                     exception_message(concat(\"invalid number text: \", number_lexer.get_token_string()), \"high-precision number\"), nullptr));\n         }\n \n-        // 2026-10-05\uff1a\u957f\u5ea6\u9650\u5b9a\u7684\u6570\u5b57\u8f7d\u8377\u4e0d\u80fd\u628a NUL \u5f53\u4f5c\u771f\u5b9e\u7ed3\u5c3e\uff0c\u6cbf\u7528\u8bcd\u6cd5\u5668\u7684\u9519\u8bef\u6587\u672c\u3002\n-        if (JSON_HEDLEY_UNLIKELY(std::find(number_vector.begin(), number_vector.end(), '\\0') != number_vector.end()))\n+        // Reject NULs after a complete read to preserve EOF errors and lexer diagnostics.\n+        if (JSON_HEDLEY_UNLIKELY(contains_nul))",
+   "line": 3273,
+   "path": "include/nlohmann/detail/input/binary_reader.hpp",
+   "user": {
+    "login": "fhgffy",
+    "type": "User"
+   }
+  },
+  {
+   "body": "You know that the last byte is 0 because that's why you're throwing the error.  No need to get it and convert it to a string.",
+   "created_at": "2026-10-05T16:31:23Z",
+   "diff_hunk": "@@ -3248,6 +3248,13 @@ class binary_reader\n             {\n                 return false;\n             }\n+            // the lexer would stop at a NUL and accept the digits before it\n+            if (JSON_HEDLEY_UNLIKELY(current == '\\0'))\n+            {\n+                auto last_token = get_token_string();\n+                return sax->parse_error(chars_read, last_token, parse_error::create(115, chars_read,\n+                                        exception_message(concat(\"invalid number text; last byte: 0x\", last_token), \"high-precision number\"), nullptr));",
+   "line": 3256,
+   "path": "include/nlohmann/detail/input/binary_reader.hpp",
+   "user": {
+    "login": "gregmarr",
+    "type": "User"
+   }
+  },
+  {
+   "body": "Changed in f2c82f7: the SAX token is now `\"00\"` and the error text is fixed, so this branch no longer calls `get_token_string()` or `concat()`. The error message and byte offsets are unchanged. The UBJSON/BJData suites pass with split and single headers, with both NUL macro settings.",
+   "created_at": "2026-10-05T17:11:05Z",
+   "diff_hunk": "@@ -3248,6 +3248,13 @@ class binary_reader\n             {\n                 return false;\n             }\n+            // the lexer would stop at a NUL and accept the digits before it\n+            if (JSON_HEDLEY_UNLIKELY(current == '\\0'))\n+            {\n+                auto last_token = get_token_string();\n+                return sax->parse_error(chars_read, last_token, parse_error::create(115, chars_read,\n+                                        exception_message(concat(\"invalid number text; last byte: 0x\", last_token), \"high-precision number\"), nullptr));",
+   "line": 3256,
+   "path": "include/nlohmann/detail/input/binary_reader.hpp",
+   "user": {
+    "login": "fhgffy",
+    "type": "User"
+   }
+  }
+ ],
+ "state": "closed",
+ "title": "Fix NUL bytes in UBJSON/BJData high-precision numbers",
+ "transport": "gh",
+ "user": {
+  "login": "fhgffy",
+  "type": "User"
+ }
+}

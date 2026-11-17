@@ -1,0 +1,30 @@
+{
+ "base_ref": "develop",
+ "base_sha": "755bb16d7a80436646380b5f871b93c6a443a3b7",
+ "body": "## What\n\nAfter the first `\\uXXXX` escape of a string, `builder::slow_string()` now decodes the escapes that follow it directly,\nwhile the next six bytes are `\\u` and four hex digits that are not a surrogate, instead of going round its main loop for\neach of them. Python's `json.dumps` writes non-ASCII text like that by default (`\"\u3042\u3044\u3046\"`).\n\nA surrogate, a bad digit, or fewer than six bytes leave the position at the backslash: the main loop handles them as before\nand reports the same error at the same position. 15 lines in `builder.hpp`, nothing else changes.\n\n## Performance\n\n`json_document::parse()`, A/B in one binary (this branch against `origin/develop`), 6 code layouts, 20 pairs each,\ntime after / before. Target: `twitterescaped.json` (simdjson-data, 549 KB, 33,036 escapes, 31,798 of them `\\uXXXX`).\n\n| row | Apple M1 Max, Apple clang 21 | x86-64 Haswell, GCC 16.2 | x86-64 Haswell, Clang 23 |\n|---|---|---|---|\n| **twitterescaped** | **0.896** | **0.913** | **0.909** |\n| twitter, citm_catalog, canada, gsoc-2018, apache_builds | 0.995-1.003 | 0.994-1.009 | 0.977-1.009 |\n| instruments, tree-pretty, github_events, random, update-center | 0.996-1.002 | 0.999-1.005 | 0.983-1.024 (1) |\n| semanticscholar-corpus, twitter_timeline | 0.996, 0.988 | 1.015, 0.987 | 0.978, 1.019 |\n| fuzz (60,000 generated strings, valid and malformed) | 1.001 | 0.996 | 1.011 |\n\n(1) The `instruments` row of the Clang run is left out of the range: it shows 1.16 with a layout spread of 0.99-1.27, because the\nproduction machine was busy and most pairs of that row were discarded by the idle gate (the same row is 0.996 in an earlier run of the same code\nand 0.997-1.001 on the Mac and with GCC).\n\nThe gain is about 10 % on text that is dominated by `\\u` escapes and nothing elsewhere. A profile of `twitterescaped` before the\nchange put about 45 % of the instructions in `slow_string()` and its hex decoding.\n\n## Tests\n\nNew test case `json_view builder: chains of unicode escapes` in `unit-json_view_builder.cpp`: chains of every length from 1 to 40\nof escapes that give one, two and three bytes of UTF-8 (upper and lower case hex), followed by the end of the string, text,\nanother escape, UTF-8, a surrogate pair, a lone surrogate, a bad digit, a cut; a bad digit at every position of the last six\nescapes; the text cut in every place of the last three escapes; a chain of 3,000 escapes. In keys and in values, against\n`json::parse()`, with and without a terminating NUL. Checked against a deliberately broken loop (surrogate check\nremoved: 3 test cases fail).\n\nRun locally: all `unit-json_view*.cpp` with clang++ `-std=c++11` and the builder test with g++ 16 `-std=c++17` and with\n`JSON_DIAGNOSTIC_POSITIONS`; `make amalgamate` run, `single_include` regenerated. The full CI matrix has not run.\n\n## Breaking API\n\nNo breaking changes. Internal decoding loop only; no public signature, behaviour, error message or error position changes\n(the tests compare all of them with `json::parse()`), and no change to the ABI.\n",
+ "comments": [],
+ "created_at": "2026-10-30T21:19:46Z",
+ "fetched_at": "2026-11-17T20:08:32Z",
+ "head_sha": "999004f31b43b018d447b5d70aa9ff0fc70bb0fc",
+ "labels": [
+  "M",
+  "tests",
+  "\ud83d\ude80 ready to merge",
+  "performance",
+  "aspect: json_view"
+ ],
+ "linked_issues": [],
+ "merge_commit_sha": "4fe670b5f4ce045a31bf108dca389755cb3b3563",
+ "merged_at": "2026-10-31T12:54:03Z",
+ "number": 5969,
+ "referenced_numbers": [],
+ "repo": "nlohmann/json",
+ "review_comments": [],
+ "state": "closed",
+ "title": "json_view: decode chains of unicode escapes in a loop",
+ "transport": "gh",
+ "user": {
+  "login": "nlohmann",
+  "type": "User"
+ }
+}

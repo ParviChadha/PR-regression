@@ -1,0 +1,34 @@
+{
+ "base_ref": "develop",
+ "base_sha": "94fe31eb9b94debcae52bc0d493a2232c11dbeaf",
+ "body": "Fixes the red CI on develop. Several unrelated breakages landed together:\n\n- **`unit-json_view_edit_values`** (\"pointers below a null value\") threw `parse_error.106` for `/a/01`: since #5358, `basic_json::operator[](json_pointer)` creates an object for tokens that cannot be array indices, but `editable_document::set()` still treated every all-digit token (including `01` and the empty token) as an array index. It now uses the same RFC 6901 test.\n- **`unit-bson.cpp`** (#5930): `-Weffc++` on `recorder::events`; now initialized in its declaration.\n- **`unit-json_view_from_json.cpp`** (#5922): clang `-Wexit-time-destructors` (enum tables) and `-Wfloat-equal` (`same()`) suppressed for the file.\n- **`unit-pointer_access.cpp`**: Infer `NULLPTR_DEREFERENCE` after `get_ptr()`; `@infer-ignore` added.\n- **`json_view.hpp`**: include-what-you-use wanted `detail/conversions/from_json.hpp` and `detail/meta/type_traits.hpp`; added `IWYU pragma: no_include` (like the neighbouring lines) so the amalgamation does not inline json internals.\n- **`unit-json_pointer.cpp`**: re-indented the unflatten test that the astyle check flagged (#5358).\n\n## Breaks the public API?\n\nNo. Only pointers that threw before now create an object, matching `basic_json`; the rest is test and comment changes.\n\n\ud83e\udd16 Generated with [Claude Code](https://claude.com/claude-code)\n",
+ "comments": [],
+ "created_at": "2026-10-26T21:21:22Z",
+ "fetched_at": "2026-11-17T20:08:41Z",
+ "head_sha": "8a4d4435593319202d4f12239be461e04af4a0b6",
+ "labels": [
+  "aspect: binary formats",
+  "M",
+  "tests",
+  "\ud83d\ude80 ready to merge",
+  "aspect: json_view"
+ ],
+ "linked_issues": [],
+ "merge_commit_sha": "2bb2feeef41cb751cd63b6a72a8fc14b154f545a",
+ "merged_at": "2026-10-27T06:27:34Z",
+ "number": 5942,
+ "referenced_numbers": [
+  5358,
+  5930,
+  5922
+ ],
+ "repo": "nlohmann/json",
+ "review_comments": [],
+ "state": "closed",
+ "title": "Fix the red CI on develop (json_view pointer tokens, bson, from_json tests, Infer, IWYU)",
+ "transport": "gh",
+ "user": {
+  "login": "nlohmann",
+  "type": "User"
+ }
+}

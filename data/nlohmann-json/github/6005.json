@@ -1,0 +1,51 @@
+{
+ "base_ref": "remove-dead-checks/text-input",
+ "base_sha": "02cdc7d9547da34cdc18f862fa2c5e302d77cd8f",
+ "body": "## Summary\n\nRemoves runtime checks in `basic_json` and the serializer that the surrounding code already guarantees, so they can never fire. Each condition was shown dead by branch coverage and by a build that aborts on the removed side (see below).\n\nThis PR is stacked on #5997 (which removed the surrogate-pair branch of the serializer's `ensure_ascii` path) and on the lexer/parser PR of this series.\n\n- `json.hpp`, `copy_object_level()`: `src_it != src_object.cend()`. `dst` was built from exactly `src_object.size()` unique keys, and `src_it` advances at most once per member of `dst`.\n- `json.hpp`, the general comparison operators (`equal_general`, `less_general`, `three_way_general`, built by `JSON_IMPLEMENT_OPERATOR`): the five same-type scalar cases (null, boolean, integer, unsigned, float). Every operator runs `JSON_IMPLEMENT_SCALAR_FAST` first, which returns for exactly these cases, and `equal_structured()` only calls `equal_general()` after `equal_leaf()` declined, which it never does for them. The cases now assert and return the unordered result. In the same macro, `compares_unordered(lhs, rhs)` in the mixed-type branch is reduced to its discarded half: it is reached only after all six number-pair branches returned, and a float with a non-number operand is never \"unordered\" there.\n- `serializer.hpp`, `ensure_ascii`: the reset of `bytes` under `error_handler_t::keep` in the `UTF8_ACCEPT` case. Every well-formed multi-byte character is escaped by `write_u_escapes()` before `decode()` sees it, so `decode()` only ever accepts DEL (0x7F) here, a single byte of which nothing was buffered. Both facts are now asserts.\n- ~~`iter_impl.hpp`, `iter_impl(pointer)`: the if/else chain assigned value-initialized iterators to the value-initialized `m_it`.~~ **Dropped** (commit 7196bc5b22): the chain is dead for correctness, but removing it made iteration slower with GCC 13. A recursive range-for over a parsed document took 0.5\u20132.7 % longer on x86-64; callgrind counted +1.9 % instructions on twitter.json and +0.95 % on canada.json. Clang generates identical code either way. The constructor is back as it was, with a comment saying why it stays. Measurements are in the performance comment below.\n- `JSON_IMPLEMENT_OPERATOR` loses its `null_result` parameter, which only the removed scalar cases used (review follow-up). `JSON_IMPLEMENT_SCALAR_CASES` keeps it, since `JSON_IMPLEMENT_SCALAR_FAST` still uses it.\n\nNet: 23 insertions, 22 deletions in `include/` (including the comment that keeps `iter_impl` as it was); no test changes.\n\n## How the checks were found and verified\n\n1. Branch coverage of the whole test suite (clang `-fprofile-instr-generate`) plus 24,380 mutated JSON and binary inputs through the `tests/src/fuzzer-*.cpp` drivers listed the branch sides never taken in `include/nlohmann/`.\n2. Each candidate was read for the invariant that makes it dead and the line that establishes it (the commit message names them).\n3. A copy of the tree with `abort()` on the supposedly dead side of every check was run through the full test suite under ASan/UBSan, the fuzz corpora and dedicated drivers: no trap fired. (One claim was disproved this way and is not part of these PRs.)\n4. With the checks removed, the full test suite passes under ASan/UBSan, and a wide translation unit compiles without a new warning under the CI clang flag set (C++11 and C++17, with and without `JSON_DIAGNOSTICS` / `JSON_DIAGNOSTIC_POSITIONS`).\n\nThe full list of findings, including checks that are dead only in the shipped configurations and were left in place, is in a separate report; this PR covers the high-confidence items of its area only.\n\nIn addition, a serializer driver dumped all 1-byte, 2-byte and boundary 4-byte strings (23.2M dumps) in both `ensure_ascii` modes with every error handler against the trap build.\n\n## Breaking changes\n\nNo breaking changes. The removed checks are internal; the comparison operators and `dump()` behave as before for every value, and the public comparison fast path is untouched.\n\n\ud83e\udd16 Generated with [Claude Code](https://claude.com/claude-code)\n\n\n",
+ "comments": [
+  {
+   "body": "### Performance check\n\n**Copy, comparison and `dump()` are neutral. Iteration gets slightly slower with GCC**, which comes from the `iter_impl` constructor change.\n\n- **Generated code** (clang, arm64): `copy_object_level()` loses its cold block. `equal_general()`/`less_general()` get 1\u20133 blocks shorter, and `compares_unordered()` disappears. The `serializer` grows by 3 blocks with the `keep` branch gone (layout only, see the `dump()` rows). The `iter_impl` change produces **identical code** in every caller on clang: the type-dependent initialization was already folded away.\n- **GCC is different.** Without the `if`/`else if` chain in `iter_impl(pointer)`, GCC 13 builds the loop of a plain recursive walk (`for (const auto& e : j)`) differently, and it executes more instructions. Presumably GCC had jump-threaded the type test into the following `set_begin()`/`set_end()` switch; I did not verify that.\n\n| case | clang/arm64 instr PR/base | GCC/x86-64 instr (callgrind, exact) PR/base | GCC time, VPS (geomean of layouts) |\n|---|---:|---:|---:|\n| iterate twitter (recursive range-for) | 0.9988 | **1.0191** | 1.006\u20131.012 |\n| iterate canada | 1.0006 | **1.0095** | 1.024\u20131.027 |\n| copy twitter | 1.0000 | 1.00000 | |\n| copy citm_catalog | 1.0019 | 1.00000 | |\n| `==` twitter | 0.9941 | 1.00000 | |\n| `==` citm_catalog | 1.0001 | 1.00000 | |\n| `<` canada | 0.9964 | 1.00000 | |\n| `dump()` twitter | 1.0010 | 1.00000 | |\n| `dump()` twitter, ensure_ascii | 0.9979 | 0.99851 | |\n\n  The GCC instruction counts above are from a build without forced loop alignment. With `-falign-loops=64` the iteration rows show +7.2 %/+0.9 %, but most of that is alignment `nop`s on the executed path. The VPS timings run 30 pairs per layout; the iterate canada intervals are above 1 in 3 of 4 layouts.\n\n**Suggestion:** keep the `iter_impl(pointer)` part out of this PR (or restore the type-dependent initialization). It is the only change here with a measurable cost. It saves nothing on clang and costs 0.5\u20132.7 % of iteration time on GCC. The other removals are fine.\n\n<details><summary>Method</summary>\n\n- PR head vs. its base (merge base), both compiled into one binary (namespaces renamed per copy) with the same workload: DOM parse (string, stream, callback), copy/destroy, `==`/`<`, iteration, `dump()`, msgpack/UBJSON/BJData read and write, `json_document` parse/`dump()`/`==`/`get<std::int64_t>()` on twitter, citm_catalog, canada and small_signed_ints.\n- **Generated code**: both variants disassembled (Apple clang 21, `-O3`, arm64), names and addresses masked, compared function by function.\n- **Instruction counts**: Apple M1 Max, instructions retired per repetition (minimum of 3 runs, setup subtracted). Rows whose machine code is identical vary by about \u00b10.4 %, which is the noise floor. Where a hot path changes, also GCC 13.3 `-O3` on x86-64 under callgrind, which gives exact counts (built with `-falign-functions=64 -falign-loops=64` unless a row says otherwise).\n</details>\n\n---\n*Written by Claude Code on behalf of @nlohmann.*\n",
+   "created_at": "2026-11-02T08:24:42Z",
+   "user": {
+    "login": "nlohmann",
+    "type": "User"
+   }
+  },
+  {
+   "body": "There are 5 bullets in the description, but only one change in the files.  Were these others postponed, or done in a different PR in the stack? ",
+   "created_at": "2026-11-02T17:11:58Z",
+   "user": {
+    "login": "gregmarr",
+    "type": "User"
+   }
+  },
+  {
+   "body": "@gregmarr Good catch: neither. They were lost. A stack rebase just before the merge dropped the PR's two main commits and kept only the last one (removing the `null_result` parameter), so #6005 landed on `develop` as that commit alone.\n\nThat commit depended on the dropped ones, so `develop` briefly failed to compile any comparison operator (`use of undeclared identifier 'null_result'`). #6012 restored both commits unchanged (the dead-check removals, and the `iter_impl` constructor kept as is for GCC 13 performance), and `develop` builds again. #6004 and #6006 landed complete; I compared their patches with the reviewed heads.\n\n*(Written by Claude Code on behalf of @nlohmann.)*",
+   "created_at": "2026-11-02T17:55:03Z",
+   "user": {
+    "login": "nlohmann",
+    "type": "User"
+   }
+  }
+ ],
+ "created_at": "2026-11-02T06:21:00Z",
+ "fetched_at": "2026-11-17T20:07:59Z",
+ "head_sha": "768b10c846d49c8e7c042b8b17df004ccaaf2600",
+ "labels": [],
+ "linked_issues": [],
+ "merge_commit_sha": "596028c46099801a9b8c99bd06fceae6288222cc",
+ "merged_at": "2026-11-02T16:54:43Z",
+ "number": 6005,
+ "referenced_numbers": [
+  5997
+ ],
+ "repo": "nlohmann/json",
+ "review_comments": [],
+ "state": "closed",
+ "title": "basic_json, iterators, serializer: remove checks that invariants make dead",
+ "transport": "gh",
+ "user": {
+  "login": "nlohmann",
+  "type": "User"
+ }
+}

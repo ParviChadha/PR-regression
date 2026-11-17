@@ -1,0 +1,408 @@
+{
+ "base_ref": "develop",
+ "base_sha": "ace1030107b6db9f94e4b03b06c4de55b9debbcd",
+ "body": "The binary writers (CBOR, MessagePack, UBJSON, BJData, BSON, BON8) do much less work per value:\n\n- They write into space reserved from the sink.\n- The adapter sink passes writes on in blocks.\n- Runs of numbers in arrays are encoded without a call per element.\n- A string and its head are written in one reservation.\n- Objects whose values are scalars are written without a call per member.\n- Errors are thrown, and high-precision numbers written, out of line.\n\nEach of the 24 commit messages has its own numbers. The architecture page now describes the sinks.\n\nThe range checks of #5805 (128-bit integers) are kept in every new loop, and the last commit adds tests for them.\n\n## Numbers\n\n- **Linux callgrind, 48 rows (formats x corpora):** instructions geomean 0.53 (GCC 13) / 0.62 (Clang 18); no row slower.\n- **macOS timing:** ToCbor geomean 0.74 (best 0.40), BinaryToCbor 0.80.\n- Writing to a `std::vector` is 0.16 ... 0.87x develop; writing to a string or an ostream is 0.26 ... 0.39x.\n\n## Validation\n\n- Byte-identical output vs develop for:\n  - all formats, options, output targets and error handlers;\n  - exceptions, 128-bit integers and `JSON_DIAGNOSTICS`.\n- 26 unit test runs with ASan/UBSan (C++11 and C++20).\n- All commits build on their own, and each commit's `single_include` is a fresh `make amalgamate`.\n\n## Public API\n\nNo breaking changes: the output and the exceptions are unchanged.\n\nWritten by Claude Code on behalf of @nlohmann.\n\n\ud83e\udd16 Generated with [Claude Code](https://claude.com/claude-code)\n",
+ "comments": [],
+ "created_at": "2026-10-22T07:36:22Z",
+ "fetched_at": "2026-11-17T20:09:03Z",
+ "head_sha": "e95f164bfccdc2bd27b95c0d4e06f8cc3c1e15cc",
+ "labels": [
+  "documentation",
+  "aspect: binary formats",
+  "L",
+  "tests",
+  "\ud83d\ude80 ready to merge",
+  "performance"
+ ],
+ "linked_issues": [],
+ "merge_commit_sha": "6fa14d8f9566d4a09973e1b3888669a230047ce5",
+ "merged_at": "2026-10-23T04:52:59Z",
+ "number": 5885,
+ "referenced_numbers": [
+  5805
+ ],
+ "repo": "nlohmann/json",
+ "review_comments": [
+  {
+   "body": "## Flawfinder / Does not check for buffer overflows when copying to destination (CWE-120).\n\nbuffer/memcpy:Does not check for buffer overflows when copying to destination (CWE-120).\n\n[Show more details](https://github.com/nlohmann/json/security/code-scanning/919)",
+   "created_at": "2026-10-22T09:43:37Z",
+   "diff_hunk": "@@ -55,6 +55,66 @@\n /// output_vector_sink also appends writes of at least this size with insert()\n constexpr std::size_t max_reserve_size = 256;\n \n+/// @brief copy @a length characters, at most 32, without a call of memcpy()\n+///\n+/// Short strings are the typical payload of a binary value, and a call of\n+/// memcpy() costs more than copying them. A copy of 16 to 32 characters is two\n+/// possibly overlapping 16-byte copies, one of 8 to 15 two 8-byte copies, and\n+/// so on down to a single character; each is a fixed-size load and store.\n+/// Nothing outside of [src, src + length) is read or written.\n+template<typename CharType>\n+inline void copy_short(CharType* dst, const CharType* src, const std::size_t length, std::true_type /*is_byte*/) noexcept\n+{\n+    JSON_ASSERT(length <= 32);\n+    if (length >= 16)\n+    {\n+        std::array<char, 16> first; // NOLINT(cppcoreguidelines-pro-type-member-init,hicpp-member-init): written before read\n+        std::array<char, 16> last; // NOLINT(cppcoreguidelines-pro-type-member-init,hicpp-member-init): written before read\n+        std::memcpy(first.data(), src, 16);",
+   "line": 73,
+   "path": "include/nlohmann/detail/output/output_adapters.hpp",
+   "user": {
+    "login": "github-advanced-security[bot]",
+    "type": "Bot"
+   }
+  },
+  {
+   "body": "## Flawfinder / Does not check for buffer overflows when copying to destination (CWE-120).\n\nbuffer/memcpy:Does not check for buffer overflows when copying to destination (CWE-120).\n\n[Show more details](https://github.com/nlohmann/json/security/code-scanning/920)",
+   "created_at": "2026-10-22T09:43:37Z",
+   "diff_hunk": "@@ -55,6 +55,66 @@\n /// output_vector_sink also appends writes of at least this size with insert()\n constexpr std::size_t max_reserve_size = 256;\n \n+/// @brief copy @a length characters, at most 32, without a call of memcpy()\n+///\n+/// Short strings are the typical payload of a binary value, and a call of\n+/// memcpy() costs more than copying them. A copy of 16 to 32 characters is two\n+/// possibly overlapping 16-byte copies, one of 8 to 15 two 8-byte copies, and\n+/// so on down to a single character; each is a fixed-size load and store.\n+/// Nothing outside of [src, src + length) is read or written.\n+template<typename CharType>\n+inline void copy_short(CharType* dst, const CharType* src, const std::size_t length, std::true_type /*is_byte*/) noexcept\n+{\n+    JSON_ASSERT(length <= 32);\n+    if (length >= 16)\n+    {\n+        std::array<char, 16> first; // NOLINT(cppcoreguidelines-pro-type-member-init,hicpp-member-init): written before read\n+        std::array<char, 16> last; // NOLINT(cppcoreguidelines-pro-type-member-init,hicpp-member-init): written before read\n+        std::memcpy(first.data(), src, 16);\n+        std::memcpy(last.data(), src + (length - 16), 16);",
+   "line": 74,
+   "path": "include/nlohmann/detail/output/output_adapters.hpp",
+   "user": {
+    "login": "github-advanced-security[bot]",
+    "type": "Bot"
+   }
+  },
+  {
+   "body": "## Flawfinder / Does not check for buffer overflows when copying to destination (CWE-120).\n\nbuffer/memcpy:Does not check for buffer overflows when copying to destination (CWE-120).\n\n[Show more details](https://github.com/nlohmann/json/security/code-scanning/921)",
+   "created_at": "2026-10-22T09:43:37Z",
+   "diff_hunk": "@@ -55,6 +55,66 @@\n /// output_vector_sink also appends writes of at least this size with insert()\n constexpr std::size_t max_reserve_size = 256;\n \n+/// @brief copy @a length characters, at most 32, without a call of memcpy()\n+///\n+/// Short strings are the typical payload of a binary value, and a call of\n+/// memcpy() costs more than copying them. A copy of 16 to 32 characters is two\n+/// possibly overlapping 16-byte copies, one of 8 to 15 two 8-byte copies, and\n+/// so on down to a single character; each is a fixed-size load and store.\n+/// Nothing outside of [src, src + length) is read or written.\n+template<typename CharType>\n+inline void copy_short(CharType* dst, const CharType* src, const std::size_t length, std::true_type /*is_byte*/) noexcept\n+{\n+    JSON_ASSERT(length <= 32);\n+    if (length >= 16)\n+    {\n+        std::array<char, 16> first; // NOLINT(cppcoreguidelines-pro-type-member-init,hicpp-member-init): written before read\n+        std::array<char, 16> last; // NOLINT(cppcoreguidelines-pro-type-member-init,hicpp-member-init): written before read\n+        std::memcpy(first.data(), src, 16);\n+        std::memcpy(last.data(), src + (length - 16), 16);\n+        std::memcpy(dst, first.data(), 16);",
+   "line": 75,
+   "path": "include/nlohmann/detail/output/output_adapters.hpp",
+   "user": {
+    "login": "github-advanced-security[bot]",
+    "type": "Bot"
+   }
+  },
+  {
+   "body": "## Flawfinder / Does not check for buffer overflows when copying to destination (CWE-120).\n\nbuffer/memcpy:Does not check for buffer overflows when copying to destination (CWE-120).\n\n[Show more details](https://github.com/nlohmann/json/security/code-scanning/922)",
+   "created_at": "2026-10-22T09:43:37Z",
+   "diff_hunk": "@@ -55,6 +55,66 @@\n /// output_vector_sink also appends writes of at least this size with insert()\n constexpr std::size_t max_reserve_size = 256;\n \n+/// @brief copy @a length characters, at most 32, without a call of memcpy()\n+///\n+/// Short strings are the typical payload of a binary value, and a call of\n+/// memcpy() costs more than copying them. A copy of 16 to 32 characters is two\n+/// possibly overlapping 16-byte copies, one of 8 to 15 two 8-byte copies, and\n+/// so on down to a single character; each is a fixed-size load and store.\n+/// Nothing outside of [src, src + length) is read or written.\n+template<typename CharType>\n+inline void copy_short(CharType* dst, const CharType* src, const std::size_t length, std::true_type /*is_byte*/) noexcept\n+{\n+    JSON_ASSERT(length <= 32);\n+    if (length >= 16)\n+    {\n+        std::array<char, 16> first; // NOLINT(cppcoreguidelines-pro-type-member-init,hicpp-member-init): written before read\n+        std::array<char, 16> last; // NOLINT(cppcoreguidelines-pro-type-member-init,hicpp-member-init): written before read\n+        std::memcpy(first.data(), src, 16);\n+        std::memcpy(last.data(), src + (length - 16), 16);\n+        std::memcpy(dst, first.data(), 16);\n+        std::memcpy(dst + (length - 16), last.data(), 16);",
+   "line": 76,
+   "path": "include/nlohmann/detail/output/output_adapters.hpp",
+   "user": {
+    "login": "github-advanced-security[bot]",
+    "type": "Bot"
+   }
+  },
+  {
+   "body": "## Flawfinder / Does not check for buffer overflows when copying to destination (CWE-120).\n\nbuffer/memcpy:Does not check for buffer overflows when copying to destination (CWE-120).\n\n[Show more details](https://github.com/nlohmann/json/security/code-scanning/923)",
+   "created_at": "2026-10-22T09:43:37Z",
+   "diff_hunk": "@@ -55,6 +55,66 @@\n /// output_vector_sink also appends writes of at least this size with insert()\n constexpr std::size_t max_reserve_size = 256;\n \n+/// @brief copy @a length characters, at most 32, without a call of memcpy()\n+///\n+/// Short strings are the typical payload of a binary value, and a call of\n+/// memcpy() costs more than copying them. A copy of 16 to 32 characters is two\n+/// possibly overlapping 16-byte copies, one of 8 to 15 two 8-byte copies, and\n+/// so on down to a single character; each is a fixed-size load and store.\n+/// Nothing outside of [src, src + length) is read or written.\n+template<typename CharType>\n+inline void copy_short(CharType* dst, const CharType* src, const std::size_t length, std::true_type /*is_byte*/) noexcept\n+{\n+    JSON_ASSERT(length <= 32);\n+    if (length >= 16)\n+    {\n+        std::array<char, 16> first; // NOLINT(cppcoreguidelines-pro-type-member-init,hicpp-member-init): written before read\n+        std::array<char, 16> last; // NOLINT(cppcoreguidelines-pro-type-member-init,hicpp-member-init): written before read\n+        std::memcpy(first.data(), src, 16);\n+        std::memcpy(last.data(), src + (length - 16), 16);\n+        std::memcpy(dst, first.data(), 16);\n+        std::memcpy(dst + (length - 16), last.data(), 16);\n+    }\n+    else if (length >= 8)\n+    {\n+        std::array<char, 8> first; // NOLINT(cppcoreguidelines-pro-type-member-init,hicpp-member-init): written before read\n+        std::array<char, 8> last; // NOLINT(cppcoreguidelines-pro-type-member-init,hicpp-member-init): written before read\n+        std::memcpy(first.data(), src, 8);",
+   "line": 82,
+   "path": "include/nlohmann/detail/output/output_adapters.hpp",
+   "user": {
+    "login": "github-advanced-security[bot]",
+    "type": "Bot"
+   }
+  },
+  {
+   "body": "## Flawfinder / Does not check for buffer overflows when copying to destination (CWE-120).\n\nbuffer/memcpy:Does not check for buffer overflows when copying to destination (CWE-120).\n\n[Show more details](https://github.com/nlohmann/json/security/code-scanning/924)",
+   "created_at": "2026-10-22T09:43:37Z",
+   "diff_hunk": "@@ -55,6 +55,66 @@\n /// output_vector_sink also appends writes of at least this size with insert()\n constexpr std::size_t max_reserve_size = 256;\n \n+/// @brief copy @a length characters, at most 32, without a call of memcpy()\n+///\n+/// Short strings are the typical payload of a binary value, and a call of\n+/// memcpy() costs more than copying them. A copy of 16 to 32 characters is two\n+/// possibly overlapping 16-byte copies, one of 8 to 15 two 8-byte copies, and\n+/// so on down to a single character; each is a fixed-size load and store.\n+/// Nothing outside of [src, src + length) is read or written.\n+template<typename CharType>\n+inline void copy_short(CharType* dst, const CharType* src, const std::size_t length, std::true_type /*is_byte*/) noexcept\n+{\n+    JSON_ASSERT(length <= 32);\n+    if (length >= 16)\n+    {\n+        std::array<char, 16> first; // NOLINT(cppcoreguidelines-pro-type-member-init,hicpp-member-init): written before read\n+        std::array<char, 16> last; // NOLINT(cppcoreguidelines-pro-type-member-init,hicpp-member-init): written before read\n+        std::memcpy(first.data(), src, 16);\n+        std::memcpy(last.data(), src + (length - 16), 16);\n+        std::memcpy(dst, first.data(), 16);\n+        std::memcpy(dst + (length - 16), last.data(), 16);\n+    }\n+    else if (length >= 8)\n+    {\n+        std::array<char, 8> first; // NOLINT(cppcoreguidelines-pro-type-member-init,hicpp-member-init): written before read\n+        std::array<char, 8> last; // NOLINT(cppcoreguidelines-pro-type-member-init,hicpp-member-init): written before read\n+        std::memcpy(first.data(), src, 8);\n+        std::memcpy(last.data(), src + (length - 8), 8);",
+   "line": 83,
+   "path": "include/nlohmann/detail/output/output_adapters.hpp",
+   "user": {
+    "login": "github-advanced-security[bot]",
+    "type": "Bot"
+   }
+  },
+  {
+   "body": "## Flawfinder / Does not check for buffer overflows when copying to destination (CWE-120).\n\nbuffer/memcpy:Does not check for buffer overflows when copying to destination (CWE-120).\n\n[Show more details](https://github.com/nlohmann/json/security/code-scanning/925)",
+   "created_at": "2026-10-22T09:43:38Z",
+   "diff_hunk": "@@ -55,6 +55,66 @@\n /// output_vector_sink also appends writes of at least this size with insert()\n constexpr std::size_t max_reserve_size = 256;\n \n+/// @brief copy @a length characters, at most 32, without a call of memcpy()\n+///\n+/// Short strings are the typical payload of a binary value, and a call of\n+/// memcpy() costs more than copying them. A copy of 16 to 32 characters is two\n+/// possibly overlapping 16-byte copies, one of 8 to 15 two 8-byte copies, and\n+/// so on down to a single character; each is a fixed-size load and store.\n+/// Nothing outside of [src, src + length) is read or written.\n+template<typename CharType>\n+inline void copy_short(CharType* dst, const CharType* src, const std::size_t length, std::true_type /*is_byte*/) noexcept\n+{\n+    JSON_ASSERT(length <= 32);\n+    if (length >= 16)\n+    {\n+        std::array<char, 16> first; // NOLINT(cppcoreguidelines-pro-type-member-init,hicpp-member-init): written before read\n+        std::array<char, 16> last; // NOLINT(cppcoreguidelines-pro-type-member-init,hicpp-member-init): written before read\n+        std::memcpy(first.data(), src, 16);\n+        std::memcpy(last.data(), src + (length - 16), 16);\n+        std::memcpy(dst, first.data(), 16);\n+        std::memcpy(dst + (length - 16), last.data(), 16);\n+    }\n+    else if (length >= 8)\n+    {\n+        std::array<char, 8> first; // NOLINT(cppcoreguidelines-pro-type-member-init,hicpp-member-init): written before read\n+        std::array<char, 8> last; // NOLINT(cppcoreguidelines-pro-type-member-init,hicpp-member-init): written before read\n+        std::memcpy(first.data(), src, 8);\n+        std::memcpy(last.data(), src + (length - 8), 8);\n+        std::memcpy(dst, first.data(), 8);",
+   "line": 84,
+   "path": "include/nlohmann/detail/output/output_adapters.hpp",
+   "user": {
+    "login": "github-advanced-security[bot]",
+    "type": "Bot"
+   }
+  },
+  {
+   "body": "## Flawfinder / Does not check for buffer overflows when copying to destination (CWE-120).\n\nbuffer/memcpy:Does not check for buffer overflows when copying to destination (CWE-120).\n\n[Show more details](https://github.com/nlohmann/json/security/code-scanning/926)",
+   "created_at": "2026-10-22T09:43:38Z",
+   "diff_hunk": "@@ -55,6 +55,66 @@\n /// output_vector_sink also appends writes of at least this size with insert()\n constexpr std::size_t max_reserve_size = 256;\n \n+/// @brief copy @a length characters, at most 32, without a call of memcpy()\n+///\n+/// Short strings are the typical payload of a binary value, and a call of\n+/// memcpy() costs more than copying them. A copy of 16 to 32 characters is two\n+/// possibly overlapping 16-byte copies, one of 8 to 15 two 8-byte copies, and\n+/// so on down to a single character; each is a fixed-size load and store.\n+/// Nothing outside of [src, src + length) is read or written.\n+template<typename CharType>\n+inline void copy_short(CharType* dst, const CharType* src, const std::size_t length, std::true_type /*is_byte*/) noexcept\n+{\n+    JSON_ASSERT(length <= 32);\n+    if (length >= 16)\n+    {\n+        std::array<char, 16> first; // NOLINT(cppcoreguidelines-pro-type-member-init,hicpp-member-init): written before read\n+        std::array<char, 16> last; // NOLINT(cppcoreguidelines-pro-type-member-init,hicpp-member-init): written before read\n+        std::memcpy(first.data(), src, 16);\n+        std::memcpy(last.data(), src + (length - 16), 16);\n+        std::memcpy(dst, first.data(), 16);\n+        std::memcpy(dst + (length - 16), last.data(), 16);\n+    }\n+    else if (length >= 8)\n+    {\n+        std::array<char, 8> first; // NOLINT(cppcoreguidelines-pro-type-member-init,hicpp-member-init): written before read\n+        std::array<char, 8> last; // NOLINT(cppcoreguidelines-pro-type-member-init,hicpp-member-init): written before read\n+        std::memcpy(first.data(), src, 8);\n+        std::memcpy(last.data(), src + (length - 8), 8);\n+        std::memcpy(dst, first.data(), 8);\n+        std::memcpy(dst + (length - 8), last.data(), 8);",
+   "line": 85,
+   "path": "include/nlohmann/detail/output/output_adapters.hpp",
+   "user": {
+    "login": "github-advanced-security[bot]",
+    "type": "Bot"
+   }
+  },
+  {
+   "body": "## Flawfinder / Does not check for buffer overflows when copying to destination (CWE-120).\n\nbuffer/memcpy:Does not check for buffer overflows when copying to destination (CWE-120).\n\n[Show more details](https://github.com/nlohmann/json/security/code-scanning/927)",
+   "created_at": "2026-10-22T09:43:38Z",
+   "diff_hunk": "@@ -55,6 +55,66 @@\n /// output_vector_sink also appends writes of at least this size with insert()\n constexpr std::size_t max_reserve_size = 256;\n \n+/// @brief copy @a length characters, at most 32, without a call of memcpy()\n+///\n+/// Short strings are the typical payload of a binary value, and a call of\n+/// memcpy() costs more than copying them. A copy of 16 to 32 characters is two\n+/// possibly overlapping 16-byte copies, one of 8 to 15 two 8-byte copies, and\n+/// so on down to a single character; each is a fixed-size load and store.\n+/// Nothing outside of [src, src + length) is read or written.\n+template<typename CharType>\n+inline void copy_short(CharType* dst, const CharType* src, const std::size_t length, std::true_type /*is_byte*/) noexcept\n+{\n+    JSON_ASSERT(length <= 32);\n+    if (length >= 16)\n+    {\n+        std::array<char, 16> first; // NOLINT(cppcoreguidelines-pro-type-member-init,hicpp-member-init): written before read\n+        std::array<char, 16> last; // NOLINT(cppcoreguidelines-pro-type-member-init,hicpp-member-init): written before read\n+        std::memcpy(first.data(), src, 16);\n+        std::memcpy(last.data(), src + (length - 16), 16);\n+        std::memcpy(dst, first.data(), 16);\n+        std::memcpy(dst + (length - 16), last.data(), 16);\n+    }\n+    else if (length >= 8)\n+    {\n+        std::array<char, 8> first; // NOLINT(cppcoreguidelines-pro-type-member-init,hicpp-member-init): written before read\n+        std::array<char, 8> last; // NOLINT(cppcoreguidelines-pro-type-member-init,hicpp-member-init): written before read\n+        std::memcpy(first.data(), src, 8);\n+        std::memcpy(last.data(), src + (length - 8), 8);\n+        std::memcpy(dst, first.data(), 8);\n+        std::memcpy(dst + (length - 8), last.data(), 8);\n+    }\n+    else if (length >= 4)\n+    {\n+        std::array<char, 4> first; // NOLINT(cppcoreguidelines-pro-type-member-init,hicpp-member-init): written before read\n+        std::array<char, 4> last; // NOLINT(cppcoreguidelines-pro-type-member-init,hicpp-member-init): written before read\n+        std::memcpy(first.data(), src, 4);",
+   "line": 91,
+   "path": "include/nlohmann/detail/output/output_adapters.hpp",
+   "user": {
+    "login": "github-advanced-security[bot]",
+    "type": "Bot"
+   }
+  },
+  {
+   "body": "## Flawfinder / Does not check for buffer overflows when copying to destination (CWE-120).\n\nbuffer/memcpy:Does not check for buffer overflows when copying to destination (CWE-120).\n\n[Show more details](https://github.com/nlohmann/json/security/code-scanning/928)",
+   "created_at": "2026-10-22T09:43:38Z",
+   "diff_hunk": "@@ -55,6 +55,66 @@\n /// output_vector_sink also appends writes of at least this size with insert()\n constexpr std::size_t max_reserve_size = 256;\n \n+/// @brief copy @a length characters, at most 32, without a call of memcpy()\n+///\n+/// Short strings are the typical payload of a binary value, and a call of\n+/// memcpy() costs more than copying them. A copy of 16 to 32 characters is two\n+/// possibly overlapping 16-byte copies, one of 8 to 15 two 8-byte copies, and\n+/// so on down to a single character; each is a fixed-size load and store.\n+/// Nothing outside of [src, src + length) is read or written.\n+template<typename CharType>\n+inline void copy_short(CharType* dst, const CharType* src, const std::size_t length, std::true_type /*is_byte*/) noexcept\n+{\n+    JSON_ASSERT(length <= 32);\n+    if (length >= 16)\n+    {\n+        std::array<char, 16> first; // NOLINT(cppcoreguidelines-pro-type-member-init,hicpp-member-init): written before read\n+        std::array<char, 16> last; // NOLINT(cppcoreguidelines-pro-type-member-init,hicpp-member-init): written before read\n+        std::memcpy(first.data(), src, 16);\n+        std::memcpy(last.data(), src + (length - 16), 16);\n+        std::memcpy(dst, first.data(), 16);\n+        std::memcpy(dst + (length - 16), last.data(), 16);\n+    }\n+    else if (length >= 8)\n+    {\n+        std::array<char, 8> first; // NOLINT(cppcoreguidelines-pro-type-member-init,hicpp-member-init): written before read\n+        std::array<char, 8> last; // NOLINT(cppcoreguidelines-pro-type-member-init,hicpp-member-init): written before read\n+        std::memcpy(first.data(), src, 8);\n+        std::memcpy(last.data(), src + (length - 8), 8);\n+        std::memcpy(dst, first.data(), 8);\n+        std::memcpy(dst + (length - 8), last.data(), 8);\n+    }\n+    else if (length >= 4)\n+    {\n+        std::array<char, 4> first; // NOLINT(cppcoreguidelines-pro-type-member-init,hicpp-member-init): written before read\n+        std::array<char, 4> last; // NOLINT(cppcoreguidelines-pro-type-member-init,hicpp-member-init): written before read\n+        std::memcpy(first.data(), src, 4);\n+        std::memcpy(last.data(), src + (length - 4), 4);",
+   "line": 92,
+   "path": "include/nlohmann/detail/output/output_adapters.hpp",
+   "user": {
+    "login": "github-advanced-security[bot]",
+    "type": "Bot"
+   }
+  },
+  {
+   "body": "## Flawfinder / Does not check for buffer overflows when copying to destination (CWE-120).\n\nbuffer/memcpy:Does not check for buffer overflows when copying to destination (CWE-120).\n\n[Show more details](https://github.com/nlohmann/json/security/code-scanning/929)",
+   "created_at": "2026-10-22T09:43:38Z",
+   "diff_hunk": "@@ -55,6 +55,66 @@\n /// output_vector_sink also appends writes of at least this size with insert()\n constexpr std::size_t max_reserve_size = 256;\n \n+/// @brief copy @a length characters, at most 32, without a call of memcpy()\n+///\n+/// Short strings are the typical payload of a binary value, and a call of\n+/// memcpy() costs more than copying them. A copy of 16 to 32 characters is two\n+/// possibly overlapping 16-byte copies, one of 8 to 15 two 8-byte copies, and\n+/// so on down to a single character; each is a fixed-size load and store.\n+/// Nothing outside of [src, src + length) is read or written.\n+template<typename CharType>\n+inline void copy_short(CharType* dst, const CharType* src, const std::size_t length, std::true_type /*is_byte*/) noexcept\n+{\n+    JSON_ASSERT(length <= 32);\n+    if (length >= 16)\n+    {\n+        std::array<char, 16> first; // NOLINT(cppcoreguidelines-pro-type-member-init,hicpp-member-init): written before read\n+        std::array<char, 16> last; // NOLINT(cppcoreguidelines-pro-type-member-init,hicpp-member-init): written before read\n+        std::memcpy(first.data(), src, 16);\n+        std::memcpy(last.data(), src + (length - 16), 16);\n+        std::memcpy(dst, first.data(), 16);\n+        std::memcpy(dst + (length - 16), last.data(), 16);\n+    }\n+    else if (length >= 8)\n+    {\n+        std::array<char, 8> first; // NOLINT(cppcoreguidelines-pro-type-member-init,hicpp-member-init): written before read\n+        std::array<char, 8> last; // NOLINT(cppcoreguidelines-pro-type-member-init,hicpp-member-init): written before read\n+        std::memcpy(first.data(), src, 8);\n+        std::memcpy(last.data(), src + (length - 8), 8);\n+        std::memcpy(dst, first.data(), 8);\n+        std::memcpy(dst + (length - 8), last.data(), 8);\n+    }\n+    else if (length >= 4)\n+    {\n+        std::array<char, 4> first; // NOLINT(cppcoreguidelines-pro-type-member-init,hicpp-member-init): written before read\n+        std::array<char, 4> last; // NOLINT(cppcoreguidelines-pro-type-member-init,hicpp-member-init): written before read\n+        std::memcpy(first.data(), src, 4);\n+        std::memcpy(last.data(), src + (length - 4), 4);\n+        std::memcpy(dst, first.data(), 4);",
+   "line": 93,
+   "path": "include/nlohmann/detail/output/output_adapters.hpp",
+   "user": {
+    "login": "github-advanced-security[bot]",
+    "type": "Bot"
+   }
+  },
+  {
+   "body": "## Flawfinder / Does not check for buffer overflows when copying to destination (CWE-120).\n\nbuffer/memcpy:Does not check for buffer overflows when copying to destination (CWE-120).\n\n[Show more details](https://github.com/nlohmann/json/security/code-scanning/930)",
+   "created_at": "2026-10-22T09:43:38Z",
+   "diff_hunk": "@@ -55,6 +55,66 @@\n /// output_vector_sink also appends writes of at least this size with insert()\n constexpr std::size_t max_reserve_size = 256;\n \n+/// @brief copy @a length characters, at most 32, without a call of memcpy()\n+///\n+/// Short strings are the typical payload of a binary value, and a call of\n+/// memcpy() costs more than copying them. A copy of 16 to 32 characters is two\n+/// possibly overlapping 16-byte copies, one of 8 to 15 two 8-byte copies, and\n+/// so on down to a single character; each is a fixed-size load and store.\n+/// Nothing outside of [src, src + length) is read or written.\n+template<typename CharType>\n+inline void copy_short(CharType* dst, const CharType* src, const std::size_t length, std::true_type /*is_byte*/) noexcept\n+{\n+    JSON_ASSERT(length <= 32);\n+    if (length >= 16)\n+    {\n+        std::array<char, 16> first; // NOLINT(cppcoreguidelines-pro-type-member-init,hicpp-member-init): written before read\n+        std::array<char, 16> last; // NOLINT(cppcoreguidelines-pro-type-member-init,hicpp-member-init): written before read\n+        std::memcpy(first.data(), src, 16);\n+        std::memcpy(last.data(), src + (length - 16), 16);\n+        std::memcpy(dst, first.data(), 16);\n+        std::memcpy(dst + (length - 16), last.data(), 16);\n+    }\n+    else if (length >= 8)\n+    {\n+        std::array<char, 8> first; // NOLINT(cppcoreguidelines-pro-type-member-init,hicpp-member-init): written before read\n+        std::array<char, 8> last; // NOLINT(cppcoreguidelines-pro-type-member-init,hicpp-member-init): written before read\n+        std::memcpy(first.data(), src, 8);\n+        std::memcpy(last.data(), src + (length - 8), 8);\n+        std::memcpy(dst, first.data(), 8);\n+        std::memcpy(dst + (length - 8), last.data(), 8);\n+    }\n+    else if (length >= 4)\n+    {\n+        std::array<char, 4> first; // NOLINT(cppcoreguidelines-pro-type-member-init,hicpp-member-init): written before read\n+        std::array<char, 4> last; // NOLINT(cppcoreguidelines-pro-type-member-init,hicpp-member-init): written before read\n+        std::memcpy(first.data(), src, 4);\n+        std::memcpy(last.data(), src + (length - 4), 4);\n+        std::memcpy(dst, first.data(), 4);\n+        std::memcpy(dst + (length - 4), last.data(), 4);",
+   "line": 94,
+   "path": "include/nlohmann/detail/output/output_adapters.hpp",
+   "user": {
+    "login": "github-advanced-security[bot]",
+    "type": "Bot"
+   }
+  },
+  {
+   "body": "## Flawfinder / Does not check for buffer overflows when copying to destination (CWE-120).\n\nbuffer/memcpy:Does not check for buffer overflows when copying to destination (CWE-120).\n\n[Show more details](https://github.com/nlohmann/json/security/code-scanning/931)",
+   "created_at": "2026-10-22T09:43:38Z",
+   "diff_hunk": "@@ -55,6 +55,66 @@\n /// output_vector_sink also appends writes of at least this size with insert()\n constexpr std::size_t max_reserve_size = 256;\n \n+/// @brief copy @a length characters, at most 32, without a call of memcpy()\n+///\n+/// Short strings are the typical payload of a binary value, and a call of\n+/// memcpy() costs more than copying them. A copy of 16 to 32 characters is two\n+/// possibly overlapping 16-byte copies, one of 8 to 15 two 8-byte copies, and\n+/// so on down to a single character; each is a fixed-size load and store.\n+/// Nothing outside of [src, src + length) is read or written.\n+template<typename CharType>\n+inline void copy_short(CharType* dst, const CharType* src, const std::size_t length, std::true_type /*is_byte*/) noexcept\n+{\n+    JSON_ASSERT(length <= 32);\n+    if (length >= 16)\n+    {\n+        std::array<char, 16> first; // NOLINT(cppcoreguidelines-pro-type-member-init,hicpp-member-init): written before read\n+        std::array<char, 16> last; // NOLINT(cppcoreguidelines-pro-type-member-init,hicpp-member-init): written before read\n+        std::memcpy(first.data(), src, 16);\n+        std::memcpy(last.data(), src + (length - 16), 16);\n+        std::memcpy(dst, first.data(), 16);\n+        std::memcpy(dst + (length - 16), last.data(), 16);\n+    }\n+    else if (length >= 8)\n+    {\n+        std::array<char, 8> first; // NOLINT(cppcoreguidelines-pro-type-member-init,hicpp-member-init): written before read\n+        std::array<char, 8> last; // NOLINT(cppcoreguidelines-pro-type-member-init,hicpp-member-init): written before read\n+        std::memcpy(first.data(), src, 8);\n+        std::memcpy(last.data(), src + (length - 8), 8);\n+        std::memcpy(dst, first.data(), 8);\n+        std::memcpy(dst + (length - 8), last.data(), 8);\n+    }\n+    else if (length >= 4)\n+    {\n+        std::array<char, 4> first; // NOLINT(cppcoreguidelines-pro-type-member-init,hicpp-member-init): written before read\n+        std::array<char, 4> last; // NOLINT(cppcoreguidelines-pro-type-member-init,hicpp-member-init): written before read\n+        std::memcpy(first.data(), src, 4);\n+        std::memcpy(last.data(), src + (length - 4), 4);\n+        std::memcpy(dst, first.data(), 4);\n+        std::memcpy(dst + (length - 4), last.data(), 4);\n+    }\n+    else if (length != 0)\n+    {\n+        // 1 to 3: the first, the middle, and the last character\n+        const CharType a = src[0];\n+        const CharType b = src[length >> 1];\n+        const CharType c = src[length - 1];\n+        dst[0] = a;\n+        dst[length >> 1] = b;\n+        dst[length - 1] = c;\n+    }\n+}\n+\n+/// @brief copy @a length characters, of a character type wider than a byte\n+template<typename CharType>\n+inline void copy_short(CharType* dst, const CharType* src, const std::size_t length, std::false_type /*is_byte*/) noexcept\n+{\n+    std::memcpy(dst, src, length * sizeof(CharType));",
+   "line": 112,
+   "path": "include/nlohmann/detail/output/output_adapters.hpp",
+   "user": {
+    "login": "github-advanced-security[bot]",
+    "type": "Bot"
+   }
+  },
+  {
+   "body": "## Flawfinder / Does not check for buffer overflows when copying to destination (CWE-120).\n\nbuffer/memcpy:Does not check for buffer overflows when copying to destination (CWE-120).\n\n[Show more details](https://github.com/nlohmann/json/security/code-scanning/932)",
+   "created_at": "2026-10-22T09:43:38Z",
+   "diff_hunk": "@@ -126,10 +186,15 @@\n             }\n             grow(length);\n         }\n-        if (length != 0)\n+        if (length <= 32)\n+        {\n+            copy_short(cursor, s, length, std::integral_constant<bool, sizeof(CharType) == 1>());\n+            cursor += length;\n+        }\n+        else\n         {\n-            std::memcpy(v->data() + position, s, length * sizeof(CharType));\n-            position += length;\n+            std::memcpy(cursor, s, length * sizeof(CharType));",
+   "line": 196,
+   "path": "include/nlohmann/detail/output/output_adapters.hpp",
+   "user": {
+    "login": "github-advanced-security[bot]",
+    "type": "Bot"
+   }
+  },
+  {
+   "body": "## Flawfinder / Does not check for buffer overflows when copying to destination (CWE-120).\n\nbuffer/memcpy:Does not check for buffer overflows when copying to destination (CWE-120).\n\n[Show more details](https://github.com/nlohmann/json/security/code-scanning/933)",
+   "created_at": "2026-10-22T09:43:38Z",
+   "diff_hunk": "@@ -290,36 +386,121 @@\n         JSON_ASSERT(oa);\n     }\n \n+    output_adapter_sink(const output_adapter_sink&) = delete;\n+    output_adapter_sink& operator=(const output_adapter_sink&) = delete;\n+    output_adapter_sink& operator=(output_adapter_sink&&) = delete;\n+\n+    output_adapter_sink(output_adapter_sink&& other) noexcept\n+        : oa(std::move(other.oa)), used(other.used)\n+    {\n+        std::memcpy(buffer.data(), other.buffer.data(), other.used * sizeof(CharType));",
+   "line": 396,
+   "path": "include/nlohmann/detail/output/output_adapters.hpp",
+   "user": {
+    "login": "github-advanced-security[bot]",
+    "type": "Bot"
+   }
+  },
+  {
+   "body": "## Flawfinder / Does not check for buffer overflows when copying to destination (CWE-120).\n\nbuffer/memcpy:Does not check for buffer overflows when copying to destination (CWE-120).\n\n[Show more details](https://github.com/nlohmann/json/security/code-scanning/934)",
+   "created_at": "2026-10-22T09:43:38Z",
+   "diff_hunk": "@@ -290,36 +386,121 @@\n         JSON_ASSERT(oa);\n     }\n \n+    output_adapter_sink(const output_adapter_sink&) = delete;\n+    output_adapter_sink& operator=(const output_adapter_sink&) = delete;\n+    output_adapter_sink& operator=(output_adapter_sink&&) = delete;\n+\n+    output_adapter_sink(output_adapter_sink&& other) noexcept\n+        : oa(std::move(other.oa)), used(other.used)\n+    {\n+        std::memcpy(buffer.data(), other.buffer.data(), other.used * sizeof(CharType));\n+        other.used = 0;\n+    }\n+\n+    ~output_adapter_sink()\n+    {\n+        // a normal return has flushed already, so this is for a write that threw\n+        if (used != 0)\n+        {\n+            JSON_TRY\n+            {\n+                flush();\n+            }\n+            JSON_CATCH(...)\n+            {\n+                // nothing can be done about an adapter that throws here\n+            }\n+        }\n+    }\n+\n+    JSON_HEDLEY_ALWAYS_INLINE\n     void write_character(CharType c)\n     {\n-        oa->write_character(c);\n+        if (JSON_HEDLEY_UNLIKELY(used == buffer_size))\n+        {\n+            flush();\n+        }\n+        buffer[used++] = c;\n     }\n \n     // no JSON_HEDLEY_NON_NULL: forwards (null, 0) for empty payloads, exactly as\n     // the type-erased path already did before this sink existed\n+    JSON_HEDLEY_ALWAYS_INLINE\n     void write_characters(const CharType* s, std::size_t length)\n     {\n-        oa->write_characters(s, length);\n+        if (JSON_HEDLEY_UNLIKELY(buffer_size - used < length))\n+        {\n+            write_large(s, length);\n+            return;\n+        }\n+        if (length <= 32)\n+        {\n+            copy_short(buffer.data() + used, s, length, std::integral_constant<bool, sizeof(CharType) == 1>());\n+            used += length;\n+        }\n+        else\n+        {\n+            std::memcpy(buffer.data() + used, s, length * sizeof(CharType));",
+   "line": 443,
+   "path": "include/nlohmann/detail/output/output_adapters.hpp",
+   "user": {
+    "login": "github-advanced-security[bot]",
+    "type": "Bot"
+   }
+  },
+  {
+   "body": "## Flawfinder / Does not check for buffer overflows when copying to destination (CWE-120).\n\nbuffer/memcpy:Does not check for buffer overflows when copying to destination (CWE-120).\n\n[Show more details](https://github.com/nlohmann/json/security/code-scanning/935)",
+   "created_at": "2026-10-22T09:43:38Z",
+   "diff_hunk": "@@ -290,36 +386,121 @@\n         JSON_ASSERT(oa);\n     }\n \n+    output_adapter_sink(const output_adapter_sink&) = delete;\n+    output_adapter_sink& operator=(const output_adapter_sink&) = delete;\n+    output_adapter_sink& operator=(output_adapter_sink&&) = delete;\n+\n+    output_adapter_sink(output_adapter_sink&& other) noexcept\n+        : oa(std::move(other.oa)), used(other.used)\n+    {\n+        std::memcpy(buffer.data(), other.buffer.data(), other.used * sizeof(CharType));\n+        other.used = 0;\n+    }\n+\n+    ~output_adapter_sink()\n+    {\n+        // a normal return has flushed already, so this is for a write that threw\n+        if (used != 0)\n+        {\n+            JSON_TRY\n+            {\n+                flush();\n+            }\n+            JSON_CATCH(...)\n+            {\n+                // nothing can be done about an adapter that throws here\n+            }\n+        }\n+    }\n+\n+    JSON_HEDLEY_ALWAYS_INLINE\n     void write_character(CharType c)\n     {\n-        oa->write_character(c);\n+        if (JSON_HEDLEY_UNLIKELY(used == buffer_size))\n+        {\n+            flush();\n+        }\n+        buffer[used++] = c;\n     }\n \n     // no JSON_HEDLEY_NON_NULL: forwards (null, 0) for empty payloads, exactly as\n     // the type-erased path already did before this sink existed\n+    JSON_HEDLEY_ALWAYS_INLINE\n     void write_characters(const CharType* s, std::size_t length)\n     {\n-        oa->write_characters(s, length);\n+        if (JSON_HEDLEY_UNLIKELY(buffer_size - used < length))\n+        {\n+            write_large(s, length);\n+            return;\n+        }\n+        if (length <= 32)\n+        {\n+            copy_short(buffer.data() + used, s, length, std::integral_constant<bool, sizeof(CharType) == 1>());\n+            used += length;\n+        }\n+        else\n+        {\n+            std::memcpy(buffer.data() + used, s, length * sizeof(CharType));\n+            used += length;\n+        }\n     }\n \n     /// space for writing up to @a length characters (see\n     /// output_vector_sink::reserve)\n-    CharType* reserve(const std::size_t length) noexcept\n+    JSON_HEDLEY_ALWAYS_INLINE\n+    CharType* reserve(const std::size_t length)\n     {\n         JSON_ASSERT(length <= max_reserve_size);\n-        static_cast<void>(length);\n-        return reserved.data();\n+        if (JSON_HEDLEY_UNLIKELY(buffer_size - used < length))\n+        {\n+            flush();\n+        }\n+        return buffer.data() + used;\n     }\n \n-    /// write the first @a length characters written to the space from reserve()\n-    void commit(const std::size_t length)\n+    /// keep the first @a length characters written to the space from reserve()\n+    JSON_HEDLEY_ALWAYS_INLINE\n+    void commit(const std::size_t length) noexcept\n     {\n-        oa->write_characters(reserved.data(), length);\n+        used += length;\n+    }\n+\n+    /// pass everything written so far on to the adapter\n+    void flush()\n+    {\n+        if (used != 0)\n+        {\n+            // reset first: the characters count as written even if the adapter throws\n+            const std::size_t length = used;\n+            used = 0;\n+            oa->write_characters(buffer.data(), length);\n+        }\n     }\n \n   private:\n+    /// a write that does not fit the space left in the buffer\n+    JSON_HEDLEY_NEVER_INLINE\n+    void write_large(const CharType* s, const std::size_t length)\n+    {\n+        flush();\n+        if (length >= buffer_size)\n+        {\n+            oa->write_characters(s, length);\n+        }\n+        else\n+        {\n+            std::memcpy(buffer.data(), s, length * sizeof(CharType));",
+   "line": 492,
+   "path": "include/nlohmann/detail/output/output_adapters.hpp",
+   "user": {
+    "login": "github-advanced-security[bot]",
+    "type": "Bot"
+   }
+  },
+  {
+   "body": "No change: false positive. `copy_short()` copies fixed 4/8/16-byte blocks that stay within [src, src + length) and [dst, dst + length), as the branch conditions (length \u2265 4/8/16, \u2264 32, asserted) guarantee; the caller has checked that `length` fits the destination.\n\n_\ud83e\udd16 Addressed by [Claude Code](https://claude.com/claude-code)_",
+   "created_at": "2026-10-22T09:52:33Z",
+   "diff_hunk": "@@ -55,6 +55,66 @@\n /// output_vector_sink also appends writes of at least this size with insert()\n constexpr std::size_t max_reserve_size = 256;\n \n+/// @brief copy @a length characters, at most 32, without a call of memcpy()\n+///\n+/// Short strings are the typical payload of a binary value, and a call of\n+/// memcpy() costs more than copying them. A copy of 16 to 32 characters is two\n+/// possibly overlapping 16-byte copies, one of 8 to 15 two 8-byte copies, and\n+/// so on down to a single character; each is a fixed-size load and store.\n+/// Nothing outside of [src, src + length) is read or written.\n+template<typename CharType>\n+inline void copy_short(CharType* dst, const CharType* src, const std::size_t length, std::true_type /*is_byte*/) noexcept\n+{\n+    JSON_ASSERT(length <= 32);\n+    if (length >= 16)\n+    {\n+        std::array<char, 16> first; // NOLINT(cppcoreguidelines-pro-type-member-init,hicpp-member-init): written before read\n+        std::array<char, 16> last; // NOLINT(cppcoreguidelines-pro-type-member-init,hicpp-member-init): written before read\n+        std::memcpy(first.data(), src, 16);",
+   "line": 73,
+   "path": "include/nlohmann/detail/output/output_adapters.hpp",
+   "user": {
+    "login": "nlohmann",
+    "type": "User"
+   }
+  },
+  {
+   "body": "No change: false positive. `copy_short()` copies fixed 4/8/16-byte blocks that stay within [src, src + length) and [dst, dst + length), as the branch conditions (length \u2265 4/8/16, \u2264 32, asserted) guarantee; the caller has checked that `length` fits the destination.\n\n_\ud83e\udd16 Addressed by [Claude Code](https://claude.com/claude-code)_",
+   "created_at": "2026-10-22T09:52:35Z",
+   "diff_hunk": "@@ -55,6 +55,66 @@\n /// output_vector_sink also appends writes of at least this size with insert()\n constexpr std::size_t max_reserve_size = 256;\n \n+/// @brief copy @a length characters, at most 32, without a call of memcpy()\n+///\n+/// Short strings are the typical payload of a binary value, and a call of\n+/// memcpy() costs more than copying them. A copy of 16 to 32 characters is two\n+/// possibly overlapping 16-byte copies, one of 8 to 15 two 8-byte copies, and\n+/// so on down to a single character; each is a fixed-size load and store.\n+/// Nothing outside of [src, src + length) is read or written.\n+template<typename CharType>\n+inline void copy_short(CharType* dst, const CharType* src, const std::size_t length, std::true_type /*is_byte*/) noexcept\n+{\n+    JSON_ASSERT(length <= 32);\n+    if (length >= 16)\n+    {\n+        std::array<char, 16> first; // NOLINT(cppcoreguidelines-pro-type-member-init,hicpp-member-init): written before read\n+        std::array<char, 16> last; // NOLINT(cppcoreguidelines-pro-type-member-init,hicpp-member-init): written before read\n+        std::memcpy(first.data(), src, 16);\n+        std::memcpy(last.data(), src + (length - 16), 16);",
+   "line": 74,
+   "path": "include/nlohmann/detail/output/output_adapters.hpp",
+   "user": {
+    "login": "nlohmann",
+    "type": "User"
+   }
+  },
+  {
+   "body": "No change: false positive. `copy_short()` copies fixed 4/8/16-byte blocks that stay within [src, src + length) and [dst, dst + length), as the branch conditions (length \u2265 4/8/16, \u2264 32, asserted) guarantee; the caller has checked that `length` fits the destination.\n\n_\ud83e\udd16 Addressed by [Claude Code](https://claude.com/claude-code)_",
+   "created_at": "2026-10-22T09:52:37Z",
+   "diff_hunk": "@@ -55,6 +55,66 @@\n /// output_vector_sink also appends writes of at least this size with insert()\n constexpr std::size_t max_reserve_size = 256;\n \n+/// @brief copy @a length characters, at most 32, without a call of memcpy()\n+///\n+/// Short strings are the typical payload of a binary value, and a call of\n+/// memcpy() costs more than copying them. A copy of 16 to 32 characters is two\n+/// possibly overlapping 16-byte copies, one of 8 to 15 two 8-byte copies, and\n+/// so on down to a single character; each is a fixed-size load and store.\n+/// Nothing outside of [src, src + length) is read or written.\n+template<typename CharType>\n+inline void copy_short(CharType* dst, const CharType* src, const std::size_t length, std::true_type /*is_byte*/) noexcept\n+{\n+    JSON_ASSERT(length <= 32);\n+    if (length >= 16)\n+    {\n+        std::array<char, 16> first; // NOLINT(cppcoreguidelines-pro-type-member-init,hicpp-member-init): written before read\n+        std::array<char, 16> last; // NOLINT(cppcoreguidelines-pro-type-member-init,hicpp-member-init): written before read\n+        std::memcpy(first.data(), src, 16);\n+        std::memcpy(last.data(), src + (length - 16), 16);\n+        std::memcpy(dst, first.data(), 16);",
+   "line": 75,
+   "path": "include/nlohmann/detail/output/output_adapters.hpp",
+   "user": {
+    "login": "nlohmann",
+    "type": "User"
+   }
+  },
+  {
+   "body": "No change: false positive. `copy_short()` copies fixed 4/8/16-byte blocks that stay within [src, src + length) and [dst, dst + length), as the branch conditions (length \u2265 4/8/16, \u2264 32, asserted) guarantee; the caller has checked that `length` fits the destination.\n\n_\ud83e\udd16 Addressed by [Claude Code](https://claude.com/claude-code)_",
+   "created_at": "2026-10-22T09:52:40Z",
+   "diff_hunk": "@@ -55,6 +55,66 @@\n /// output_vector_sink also appends writes of at least this size with insert()\n constexpr std::size_t max_reserve_size = 256;\n \n+/// @brief copy @a length characters, at most 32, without a call of memcpy()\n+///\n+/// Short strings are the typical payload of a binary value, and a call of\n+/// memcpy() costs more than copying them. A copy of 16 to 32 characters is two\n+/// possibly overlapping 16-byte copies, one of 8 to 15 two 8-byte copies, and\n+/// so on down to a single character; each is a fixed-size load and store.\n+/// Nothing outside of [src, src + length) is read or written.\n+template<typename CharType>\n+inline void copy_short(CharType* dst, const CharType* src, const std::size_t length, std::true_type /*is_byte*/) noexcept\n+{\n+    JSON_ASSERT(length <= 32);\n+    if (length >= 16)\n+    {\n+        std::array<char, 16> first; // NOLINT(cppcoreguidelines-pro-type-member-init,hicpp-member-init): written before read\n+        std::array<char, 16> last; // NOLINT(cppcoreguidelines-pro-type-member-init,hicpp-member-init): written before read\n+        std::memcpy(first.data(), src, 16);\n+        std::memcpy(last.data(), src + (length - 16), 16);\n+        std::memcpy(dst, first.data(), 16);\n+        std::memcpy(dst + (length - 16), last.data(), 16);",
+   "line": 76,
+   "path": "include/nlohmann/detail/output/output_adapters.hpp",
+   "user": {
+    "login": "nlohmann",
+    "type": "User"
+   }
+  },
+  {
+   "body": "No change: false positive. `copy_short()` copies fixed 4/8/16-byte blocks that stay within [src, src + length) and [dst, dst + length), as the branch conditions (length \u2265 4/8/16, \u2264 32, asserted) guarantee; the caller has checked that `length` fits the destination.\n\n_\ud83e\udd16 Addressed by [Claude Code](https://claude.com/claude-code)_",
+   "created_at": "2026-10-22T09:52:42Z",
+   "diff_hunk": "@@ -55,6 +55,66 @@\n /// output_vector_sink also appends writes of at least this size with insert()\n constexpr std::size_t max_reserve_size = 256;\n \n+/// @brief copy @a length characters, at most 32, without a call of memcpy()\n+///\n+/// Short strings are the typical payload of a binary value, and a call of\n+/// memcpy() costs more than copying them. A copy of 16 to 32 characters is two\n+/// possibly overlapping 16-byte copies, one of 8 to 15 two 8-byte copies, and\n+/// so on down to a single character; each is a fixed-size load and store.\n+/// Nothing outside of [src, src + length) is read or written.\n+template<typename CharType>\n+inline void copy_short(CharType* dst, const CharType* src, const std::size_t length, std::true_type /*is_byte*/) noexcept\n+{\n+    JSON_ASSERT(length <= 32);\n+    if (length >= 16)\n+    {\n+        std::array<char, 16> first; // NOLINT(cppcoreguidelines-pro-type-member-init,hicpp-member-init): written before read\n+        std::array<char, 16> last; // NOLINT(cppcoreguidelines-pro-type-member-init,hicpp-member-init): written before read\n+        std::memcpy(first.data(), src, 16);\n+        std::memcpy(last.data(), src + (length - 16), 16);\n+        std::memcpy(dst, first.data(), 16);\n+        std::memcpy(dst + (length - 16), last.data(), 16);\n+    }\n+    else if (length >= 8)\n+    {\n+        std::array<char, 8> first; // NOLINT(cppcoreguidelines-pro-type-member-init,hicpp-member-init): written before read\n+        std::array<char, 8> last; // NOLINT(cppcoreguidelines-pro-type-member-init,hicpp-member-init): written before read\n+        std::memcpy(first.data(), src, 8);",
+   "line": 82,
+   "path": "include/nlohmann/detail/output/output_adapters.hpp",
+   "user": {
+    "login": "nlohmann",
+    "type": "User"
+   }
+  },
+  {
+   "body": "No change: false positive. `copy_short()` copies fixed 4/8/16-byte blocks that stay within [src, src + length) and [dst, dst + length), as the branch conditions (length \u2265 4/8/16, \u2264 32, asserted) guarantee; the caller has checked that `length` fits the destination.\n\n_\ud83e\udd16 Addressed by [Claude Code](https://claude.com/claude-code)_",
+   "created_at": "2026-10-22T09:52:44Z",
+   "diff_hunk": "@@ -55,6 +55,66 @@\n /// output_vector_sink also appends writes of at least this size with insert()\n constexpr std::size_t max_reserve_size = 256;\n \n+/// @brief copy @a length characters, at most 32, without a call of memcpy()\n+///\n+/// Short strings are the typical payload of a binary value, and a call of\n+/// memcpy() costs more than copying them. A copy of 16 to 32 characters is two\n+/// possibly overlapping 16-byte copies, one of 8 to 15 two 8-byte copies, and\n+/// so on down to a single character; each is a fixed-size load and store.\n+/// Nothing outside of [src, src + length) is read or written.\n+template<typename CharType>\n+inline void copy_short(CharType* dst, const CharType* src, const std::size_t length, std::true_type /*is_byte*/) noexcept\n+{\n+    JSON_ASSERT(length <= 32);\n+    if (length >= 16)\n+    {\n+        std::array<char, 16> first; // NOLINT(cppcoreguidelines-pro-type-member-init,hicpp-member-init): written before read\n+        std::array<char, 16> last; // NOLINT(cppcoreguidelines-pro-type-member-init,hicpp-member-init): written before read\n+        std::memcpy(first.data(), src, 16);\n+        std::memcpy(last.data(), src + (length - 16), 16);\n+        std::memcpy(dst, first.data(), 16);\n+        std::memcpy(dst + (length - 16), last.data(), 16);\n+    }\n+    else if (length >= 8)\n+    {\n+        std::array<char, 8> first; // NOLINT(cppcoreguidelines-pro-type-member-init,hicpp-member-init): written before read\n+        std::array<char, 8> last; // NOLINT(cppcoreguidelines-pro-type-member-init,hicpp-member-init): written before read\n+        std::memcpy(first.data(), src, 8);\n+        std::memcpy(last.data(), src + (length - 8), 8);",
+   "line": 83,
+   "path": "include/nlohmann/detail/output/output_adapters.hpp",
+   "user": {
+    "login": "nlohmann",
+    "type": "User"
+   }
+  },
+  {
+   "body": "No change: false positive. `copy_short()` copies fixed 4/8/16-byte blocks that stay within [src, src + length) and [dst, dst + length), as the branch conditions (length \u2265 4/8/16, \u2264 32, asserted) guarantee; the caller has checked that `length` fits the destination.\n\n_\ud83e\udd16 Addressed by [Claude Code](https://claude.com/claude-code)_",
+   "created_at": "2026-10-22T09:52:46Z",
+   "diff_hunk": "@@ -55,6 +55,66 @@\n /// output_vector_sink also appends writes of at least this size with insert()\n constexpr std::size_t max_reserve_size = 256;\n \n+/// @brief copy @a length characters, at most 32, without a call of memcpy()\n+///\n+/// Short strings are the typical payload of a binary value, and a call of\n+/// memcpy() costs more than copying them. A copy of 16 to 32 characters is two\n+/// possibly overlapping 16-byte copies, one of 8 to 15 two 8-byte copies, and\n+/// so on down to a single character; each is a fixed-size load and store.\n+/// Nothing outside of [src, src + length) is read or written.\n+template<typename CharType>\n+inline void copy_short(CharType* dst, const CharType* src, const std::size_t length, std::true_type /*is_byte*/) noexcept\n+{\n+    JSON_ASSERT(length <= 32);\n+    if (length >= 16)\n+    {\n+        std::array<char, 16> first; // NOLINT(cppcoreguidelines-pro-type-member-init,hicpp-member-init): written before read\n+        std::array<char, 16> last; // NOLINT(cppcoreguidelines-pro-type-member-init,hicpp-member-init): written before read\n+        std::memcpy(first.data(), src, 16);\n+        std::memcpy(last.data(), src + (length - 16), 16);\n+        std::memcpy(dst, first.data(), 16);\n+        std::memcpy(dst + (length - 16), last.data(), 16);\n+    }\n+    else if (length >= 8)\n+    {\n+        std::array<char, 8> first; // NOLINT(cppcoreguidelines-pro-type-member-init,hicpp-member-init): written before read\n+        std::array<char, 8> last; // NOLINT(cppcoreguidelines-pro-type-member-init,hicpp-member-init): written before read\n+        std::memcpy(first.data(), src, 8);\n+        std::memcpy(last.data(), src + (length - 8), 8);\n+        std::memcpy(dst, first.data(), 8);",
+   "line": 84,
+   "path": "include/nlohmann/detail/output/output_adapters.hpp",
+   "user": {
+    "login": "nlohmann",
+    "type": "User"
+   }
+  },
+  {
+   "body": "No change: false positive. `copy_short()` copies fixed 4/8/16-byte blocks that stay within [src, src + length) and [dst, dst + length), as the branch conditions (length \u2265 4/8/16, \u2264 32, asserted) guarantee; the caller has checked that `length` fits the destination.\n\n_\ud83e\udd16 Addressed by [Claude Code](https://claude.com/claude-code)_",
+   "created_at": "2026-10-22T09:52:48Z",
+   "diff_hunk": "@@ -55,6 +55,66 @@\n /// output_vector_sink also appends writes of at least this size with insert()\n constexpr std::size_t max_reserve_size = 256;\n \n+/// @brief copy @a length characters, at most 32, without a call of memcpy()\n+///\n+/// Short strings are the typical payload of a binary value, and a call of\n+/// memcpy() costs more than copying them. A copy of 16 to 32 characters is two\n+/// possibly overlapping 16-byte copies, one of 8 to 15 two 8-byte copies, and\n+/// so on down to a single character; each is a fixed-size load and store.\n+/// Nothing outside of [src, src + length) is read or written.\n+template<typename CharType>\n+inline void copy_short(CharType* dst, const CharType* src, const std::size_t length, std::true_type /*is_byte*/) noexcept\n+{\n+    JSON_ASSERT(length <= 32);\n+    if (length >= 16)\n+    {\n+        std::array<char, 16> first; // NOLINT(cppcoreguidelines-pro-type-member-init,hicpp-member-init): written before read\n+        std::array<char, 16> last; // NOLINT(cppcoreguidelines-pro-type-member-init,hicpp-member-init): written before read\n+        std::memcpy(first.data(), src, 16);\n+        std::memcpy(last.data(), src + (length - 16), 16);\n+        std::memcpy(dst, first.data(), 16);\n+        std::memcpy(dst + (length - 16), last.data(), 16);\n+    }\n+    else if (length >= 8)\n+    {\n+        std::array<char, 8> first; // NOLINT(cppcoreguidelines-pro-type-member-init,hicpp-member-init): written before read\n+        std::array<char, 8> last; // NOLINT(cppcoreguidelines-pro-type-member-init,hicpp-member-init): written before read\n+        std::memcpy(first.data(), src, 8);\n+        std::memcpy(last.data(), src + (length - 8), 8);\n+        std::memcpy(dst, first.data(), 8);\n+        std::memcpy(dst + (length - 8), last.data(), 8);",
+   "line": 85,
+   "path": "include/nlohmann/detail/output/output_adapters.hpp",
+   "user": {
+    "login": "nlohmann",
+    "type": "User"
+   }
+  },
+  {
+   "body": "No change: false positive. `copy_short()` copies fixed 4/8/16-byte blocks that stay within [src, src + length) and [dst, dst + length), as the branch conditions (length \u2265 4/8/16, \u2264 32, asserted) guarantee; the caller has checked that `length` fits the destination.\n\n_\ud83e\udd16 Addressed by [Claude Code](https://claude.com/claude-code)_",
+   "created_at": "2026-10-22T09:52:50Z",
+   "diff_hunk": "@@ -55,6 +55,66 @@\n /// output_vector_sink also appends writes of at least this size with insert()\n constexpr std::size_t max_reserve_size = 256;\n \n+/// @brief copy @a length characters, at most 32, without a call of memcpy()\n+///\n+/// Short strings are the typical payload of a binary value, and a call of\n+/// memcpy() costs more than copying them. A copy of 16 to 32 characters is two\n+/// possibly overlapping 16-byte copies, one of 8 to 15 two 8-byte copies, and\n+/// so on down to a single character; each is a fixed-size load and store.\n+/// Nothing outside of [src, src + length) is read or written.\n+template<typename CharType>\n+inline void copy_short(CharType* dst, const CharType* src, const std::size_t length, std::true_type /*is_byte*/) noexcept\n+{\n+    JSON_ASSERT(length <= 32);\n+    if (length >= 16)\n+    {\n+        std::array<char, 16> first; // NOLINT(cppcoreguidelines-pro-type-member-init,hicpp-member-init): written before read\n+        std::array<char, 16> last; // NOLINT(cppcoreguidelines-pro-type-member-init,hicpp-member-init): written before read\n+        std::memcpy(first.data(), src, 16);\n+        std::memcpy(last.data(), src + (length - 16), 16);\n+        std::memcpy(dst, first.data(), 16);\n+        std::memcpy(dst + (length - 16), last.data(), 16);\n+    }\n+    else if (length >= 8)\n+    {\n+        std::array<char, 8> first; // NOLINT(cppcoreguidelines-pro-type-member-init,hicpp-member-init): written before read\n+        std::array<char, 8> last; // NOLINT(cppcoreguidelines-pro-type-member-init,hicpp-member-init): written before read\n+        std::memcpy(first.data(), src, 8);\n+        std::memcpy(last.data(), src + (length - 8), 8);\n+        std::memcpy(dst, first.data(), 8);\n+        std::memcpy(dst + (length - 8), last.data(), 8);\n+    }\n+    else if (length >= 4)\n+    {\n+        std::array<char, 4> first; // NOLINT(cppcoreguidelines-pro-type-member-init,hicpp-member-init): written before read\n+        std::array<char, 4> last; // NOLINT(cppcoreguidelines-pro-type-member-init,hicpp-member-init): written before read\n+        std::memcpy(first.data(), src, 4);",
+   "line": 91,
+   "path": "include/nlohmann/detail/output/output_adapters.hpp",
+   "user": {
+    "login": "nlohmann",
+    "type": "User"
+   }
+  },
+  {
+   "body": "No change: false positive. `copy_short()` copies fixed 4/8/16-byte blocks that stay within [src, src + length) and [dst, dst + length), as the branch conditions (length \u2265 4/8/16, \u2264 32, asserted) guarantee; the caller has checked that `length` fits the destination.\n\n_\ud83e\udd16 Addressed by [Claude Code](https://claude.com/claude-code)_",
+   "created_at": "2026-10-22T09:52:52Z",
+   "diff_hunk": "@@ -55,6 +55,66 @@\n /// output_vector_sink also appends writes of at least this size with insert()\n constexpr std::size_t max_reserve_size = 256;\n \n+/// @brief copy @a length characters, at most 32, without a call of memcpy()\n+///\n+/// Short strings are the typical payload of a binary value, and a call of\n+/// memcpy() costs more than copying them. A copy of 16 to 32 characters is two\n+/// possibly overlapping 16-byte copies, one of 8 to 15 two 8-byte copies, and\n+/// so on down to a single character; each is a fixed-size load and store.\n+/// Nothing outside of [src, src + length) is read or written.\n+template<typename CharType>\n+inline void copy_short(CharType* dst, const CharType* src, const std::size_t length, std::true_type /*is_byte*/) noexcept\n+{\n+    JSON_ASSERT(length <= 32);\n+    if (length >= 16)\n+    {\n+        std::array<char, 16> first; // NOLINT(cppcoreguidelines-pro-type-member-init,hicpp-member-init): written before read\n+        std::array<char, 16> last; // NOLINT(cppcoreguidelines-pro-type-member-init,hicpp-member-init): written before read\n+        std::memcpy(first.data(), src, 16);\n+        std::memcpy(last.data(), src + (length - 16), 16);\n+        std::memcpy(dst, first.data(), 16);\n+        std::memcpy(dst + (length - 16), last.data(), 16);\n+    }\n+    else if (length >= 8)\n+    {\n+        std::array<char, 8> first; // NOLINT(cppcoreguidelines-pro-type-member-init,hicpp-member-init): written before read\n+        std::array<char, 8> last; // NOLINT(cppcoreguidelines-pro-type-member-init,hicpp-member-init): written before read\n+        std::memcpy(first.data(), src, 8);\n+        std::memcpy(last.data(), src + (length - 8), 8);\n+        std::memcpy(dst, first.data(), 8);\n+        std::memcpy(dst + (length - 8), last.data(), 8);\n+    }\n+    else if (length >= 4)\n+    {\n+        std::array<char, 4> first; // NOLINT(cppcoreguidelines-pro-type-member-init,hicpp-member-init): written before read\n+        std::array<char, 4> last; // NOLINT(cppcoreguidelines-pro-type-member-init,hicpp-member-init): written before read\n+        std::memcpy(first.data(), src, 4);\n+        std::memcpy(last.data(), src + (length - 4), 4);",
+   "line": 92,
+   "path": "include/nlohmann/detail/output/output_adapters.hpp",
+   "user": {
+    "login": "nlohmann",
+    "type": "User"
+   }
+  },
+  {
+   "body": "No change: false positive. `copy_short()` copies fixed 4/8/16-byte blocks that stay within [src, src + length) and [dst, dst + length), as the branch conditions (length \u2265 4/8/16, \u2264 32, asserted) guarantee; the caller has checked that `length` fits the destination.\n\n_\ud83e\udd16 Addressed by [Claude Code](https://claude.com/claude-code)_",
+   "created_at": "2026-10-22T09:52:54Z",
+   "diff_hunk": "@@ -55,6 +55,66 @@\n /// output_vector_sink also appends writes of at least this size with insert()\n constexpr std::size_t max_reserve_size = 256;\n \n+/// @brief copy @a length characters, at most 32, without a call of memcpy()\n+///\n+/// Short strings are the typical payload of a binary value, and a call of\n+/// memcpy() costs more than copying them. A copy of 16 to 32 characters is two\n+/// possibly overlapping 16-byte copies, one of 8 to 15 two 8-byte copies, and\n+/// so on down to a single character; each is a fixed-size load and store.\n+/// Nothing outside of [src, src + length) is read or written.\n+template<typename CharType>\n+inline void copy_short(CharType* dst, const CharType* src, const std::size_t length, std::true_type /*is_byte*/) noexcept\n+{\n+    JSON_ASSERT(length <= 32);\n+    if (length >= 16)\n+    {\n+        std::array<char, 16> first; // NOLINT(cppcoreguidelines-pro-type-member-init,hicpp-member-init): written before read\n+        std::array<char, 16> last; // NOLINT(cppcoreguidelines-pro-type-member-init,hicpp-member-init): written before read\n+        std::memcpy(first.data(), src, 16);\n+        std::memcpy(last.data(), src + (length - 16), 16);\n+        std::memcpy(dst, first.data(), 16);\n+        std::memcpy(dst + (length - 16), last.data(), 16);\n+    }\n+    else if (length >= 8)\n+    {\n+        std::array<char, 8> first; // NOLINT(cppcoreguidelines-pro-type-member-init,hicpp-member-init): written before read\n+        std::array<char, 8> last; // NOLINT(cppcoreguidelines-pro-type-member-init,hicpp-member-init): written before read\n+        std::memcpy(first.data(), src, 8);\n+        std::memcpy(last.data(), src + (length - 8), 8);\n+        std::memcpy(dst, first.data(), 8);\n+        std::memcpy(dst + (length - 8), last.data(), 8);\n+    }\n+    else if (length >= 4)\n+    {\n+        std::array<char, 4> first; // NOLINT(cppcoreguidelines-pro-type-member-init,hicpp-member-init): written before read\n+        std::array<char, 4> last; // NOLINT(cppcoreguidelines-pro-type-member-init,hicpp-member-init): written before read\n+        std::memcpy(first.data(), src, 4);\n+        std::memcpy(last.data(), src + (length - 4), 4);\n+        std::memcpy(dst, first.data(), 4);",
+   "line": 93,
+   "path": "include/nlohmann/detail/output/output_adapters.hpp",
+   "user": {
+    "login": "nlohmann",
+    "type": "User"
+   }
+  },
+  {
+   "body": "No change: false positive. `copy_short()` copies fixed 4/8/16-byte blocks that stay within [src, src + length) and [dst, dst + length), as the branch conditions (length \u2265 4/8/16, \u2264 32, asserted) guarantee; the caller has checked that `length` fits the destination.\n\n_\ud83e\udd16 Addressed by [Claude Code](https://claude.com/claude-code)_",
+   "created_at": "2026-10-22T09:52:56Z",
+   "diff_hunk": "@@ -55,6 +55,66 @@\n /// output_vector_sink also appends writes of at least this size with insert()\n constexpr std::size_t max_reserve_size = 256;\n \n+/// @brief copy @a length characters, at most 32, without a call of memcpy()\n+///\n+/// Short strings are the typical payload of a binary value, and a call of\n+/// memcpy() costs more than copying them. A copy of 16 to 32 characters is two\n+/// possibly overlapping 16-byte copies, one of 8 to 15 two 8-byte copies, and\n+/// so on down to a single character; each is a fixed-size load and store.\n+/// Nothing outside of [src, src + length) is read or written.\n+template<typename CharType>\n+inline void copy_short(CharType* dst, const CharType* src, const std::size_t length, std::true_type /*is_byte*/) noexcept\n+{\n+    JSON_ASSERT(length <= 32);\n+    if (length >= 16)\n+    {\n+        std::array<char, 16> first; // NOLINT(cppcoreguidelines-pro-type-member-init,hicpp-member-init): written before read\n+        std::array<char, 16> last; // NOLINT(cppcoreguidelines-pro-type-member-init,hicpp-member-init): written before read\n+        std::memcpy(first.data(), src, 16);\n+        std::memcpy(last.data(), src + (length - 16), 16);\n+        std::memcpy(dst, first.data(), 16);\n+        std::memcpy(dst + (length - 16), last.data(), 16);\n+    }\n+    else if (length >= 8)\n+    {\n+        std::array<char, 8> first; // NOLINT(cppcoreguidelines-pro-type-member-init,hicpp-member-init): written before read\n+        std::array<char, 8> last; // NOLINT(cppcoreguidelines-pro-type-member-init,hicpp-member-init): written before read\n+        std::memcpy(first.data(), src, 8);\n+        std::memcpy(last.data(), src + (length - 8), 8);\n+        std::memcpy(dst, first.data(), 8);\n+        std::memcpy(dst + (length - 8), last.data(), 8);\n+    }\n+    else if (length >= 4)\n+    {\n+        std::array<char, 4> first; // NOLINT(cppcoreguidelines-pro-type-member-init,hicpp-member-init): written before read\n+        std::array<char, 4> last; // NOLINT(cppcoreguidelines-pro-type-member-init,hicpp-member-init): written before read\n+        std::memcpy(first.data(), src, 4);\n+        std::memcpy(last.data(), src + (length - 4), 4);\n+        std::memcpy(dst, first.data(), 4);\n+        std::memcpy(dst + (length - 4), last.data(), 4);",
+   "line": 94,
+   "path": "include/nlohmann/detail/output/output_adapters.hpp",
+   "user": {
+    "login": "nlohmann",
+    "type": "User"
+   }
+  },
+  {
+   "body": "No change: false positive. The wide-character overload copies `length` characters, and both callers have checked that `length` fits the destination first.\n\n_\ud83e\udd16 Addressed by [Claude Code](https://claude.com/claude-code)_",
+   "created_at": "2026-10-22T09:52:58Z",
+   "diff_hunk": "@@ -55,6 +55,66 @@\n /// output_vector_sink also appends writes of at least this size with insert()\n constexpr std::size_t max_reserve_size = 256;\n \n+/// @brief copy @a length characters, at most 32, without a call of memcpy()\n+///\n+/// Short strings are the typical payload of a binary value, and a call of\n+/// memcpy() costs more than copying them. A copy of 16 to 32 characters is two\n+/// possibly overlapping 16-byte copies, one of 8 to 15 two 8-byte copies, and\n+/// so on down to a single character; each is a fixed-size load and store.\n+/// Nothing outside of [src, src + length) is read or written.\n+template<typename CharType>\n+inline void copy_short(CharType* dst, const CharType* src, const std::size_t length, std::true_type /*is_byte*/) noexcept\n+{\n+    JSON_ASSERT(length <= 32);\n+    if (length >= 16)\n+    {\n+        std::array<char, 16> first; // NOLINT(cppcoreguidelines-pro-type-member-init,hicpp-member-init): written before read\n+        std::array<char, 16> last; // NOLINT(cppcoreguidelines-pro-type-member-init,hicpp-member-init): written before read\n+        std::memcpy(first.data(), src, 16);\n+        std::memcpy(last.data(), src + (length - 16), 16);\n+        std::memcpy(dst, first.data(), 16);\n+        std::memcpy(dst + (length - 16), last.data(), 16);\n+    }\n+    else if (length >= 8)\n+    {\n+        std::array<char, 8> first; // NOLINT(cppcoreguidelines-pro-type-member-init,hicpp-member-init): written before read\n+        std::array<char, 8> last; // NOLINT(cppcoreguidelines-pro-type-member-init,hicpp-member-init): written before read\n+        std::memcpy(first.data(), src, 8);\n+        std::memcpy(last.data(), src + (length - 8), 8);\n+        std::memcpy(dst, first.data(), 8);\n+        std::memcpy(dst + (length - 8), last.data(), 8);\n+    }\n+    else if (length >= 4)\n+    {\n+        std::array<char, 4> first; // NOLINT(cppcoreguidelines-pro-type-member-init,hicpp-member-init): written before read\n+        std::array<char, 4> last; // NOLINT(cppcoreguidelines-pro-type-member-init,hicpp-member-init): written before read\n+        std::memcpy(first.data(), src, 4);\n+        std::memcpy(last.data(), src + (length - 4), 4);\n+        std::memcpy(dst, first.data(), 4);\n+        std::memcpy(dst + (length - 4), last.data(), 4);\n+    }\n+    else if (length != 0)\n+    {\n+        // 1 to 3: the first, the middle, and the last character\n+        const CharType a = src[0];\n+        const CharType b = src[length >> 1];\n+        const CharType c = src[length - 1];\n+        dst[0] = a;\n+        dst[length >> 1] = b;\n+        dst[length - 1] = c;\n+    }\n+}\n+\n+/// @brief copy @a length characters, of a character type wider than a byte\n+template<typename CharType>\n+inline void copy_short(CharType* dst, const CharType* src, const std::size_t length, std::false_type /*is_byte*/) noexcept\n+{\n+    std::memcpy(dst, src, length * sizeof(CharType));",
+   "line": 112,
+   "path": "include/nlohmann/detail/output/output_adapters.hpp",
+   "user": {
+    "login": "nlohmann",
+    "type": "User"
+   }
+  },
+  {
+   "body": "No change: false positive. `grow(length)` runs before the copy whenever the space left is less than `length`.\n\n_\ud83e\udd16 Addressed by [Claude Code](https://claude.com/claude-code)_",
+   "created_at": "2026-10-22T09:53:00Z",
+   "diff_hunk": "@@ -126,10 +186,15 @@\n             }\n             grow(length);\n         }\n-        if (length != 0)\n+        if (length <= 32)\n+        {\n+            copy_short(cursor, s, length, std::integral_constant<bool, sizeof(CharType) == 1>());\n+            cursor += length;\n+        }\n+        else\n         {\n-            std::memcpy(v->data() + position, s, length * sizeof(CharType));\n-            position += length;\n+            std::memcpy(cursor, s, length * sizeof(CharType));",
+   "line": 196,
+   "path": "include/nlohmann/detail/output/output_adapters.hpp",
+   "user": {
+    "login": "nlohmann",
+    "type": "User"
+   }
+  },
+  {
+   "body": "No change: false positive. The moved-from sink holds `used` \u2264 `buffer_size` characters, the size of this sink's buffer.\n\n_\ud83e\udd16 Addressed by [Claude Code](https://claude.com/claude-code)_",
+   "created_at": "2026-10-22T09:53:02Z",
+   "diff_hunk": "@@ -290,36 +386,121 @@\n         JSON_ASSERT(oa);\n     }\n \n+    output_adapter_sink(const output_adapter_sink&) = delete;\n+    output_adapter_sink& operator=(const output_adapter_sink&) = delete;\n+    output_adapter_sink& operator=(output_adapter_sink&&) = delete;\n+\n+    output_adapter_sink(output_adapter_sink&& other) noexcept\n+        : oa(std::move(other.oa)), used(other.used)\n+    {\n+        std::memcpy(buffer.data(), other.buffer.data(), other.used * sizeof(CharType));",
+   "line": 396,
+   "path": "include/nlohmann/detail/output/output_adapters.hpp",
+   "user": {
+    "login": "nlohmann",
+    "type": "User"
+   }
+  },
+  {
+   "body": "No change: false positive. The branch is taken only when `buffer_size - used >= length`; larger writes go to `write_large()`.\n\n_\ud83e\udd16 Addressed by [Claude Code](https://claude.com/claude-code)_",
+   "created_at": "2026-10-22T09:53:03Z",
+   "diff_hunk": "@@ -290,36 +386,121 @@\n         JSON_ASSERT(oa);\n     }\n \n+    output_adapter_sink(const output_adapter_sink&) = delete;\n+    output_adapter_sink& operator=(const output_adapter_sink&) = delete;\n+    output_adapter_sink& operator=(output_adapter_sink&&) = delete;\n+\n+    output_adapter_sink(output_adapter_sink&& other) noexcept\n+        : oa(std::move(other.oa)), used(other.used)\n+    {\n+        std::memcpy(buffer.data(), other.buffer.data(), other.used * sizeof(CharType));\n+        other.used = 0;\n+    }\n+\n+    ~output_adapter_sink()\n+    {\n+        // a normal return has flushed already, so this is for a write that threw\n+        if (used != 0)\n+        {\n+            JSON_TRY\n+            {\n+                flush();\n+            }\n+            JSON_CATCH(...)\n+            {\n+                // nothing can be done about an adapter that throws here\n+            }\n+        }\n+    }\n+\n+    JSON_HEDLEY_ALWAYS_INLINE\n     void write_character(CharType c)\n     {\n-        oa->write_character(c);\n+        if (JSON_HEDLEY_UNLIKELY(used == buffer_size))\n+        {\n+            flush();\n+        }\n+        buffer[used++] = c;\n     }\n \n     // no JSON_HEDLEY_NON_NULL: forwards (null, 0) for empty payloads, exactly as\n     // the type-erased path already did before this sink existed\n+    JSON_HEDLEY_ALWAYS_INLINE\n     void write_characters(const CharType* s, std::size_t length)\n     {\n-        oa->write_characters(s, length);\n+        if (JSON_HEDLEY_UNLIKELY(buffer_size - used < length))\n+        {\n+            write_large(s, length);\n+            return;\n+        }\n+        if (length <= 32)\n+        {\n+            copy_short(buffer.data() + used, s, length, std::integral_constant<bool, sizeof(CharType) == 1>());\n+            used += length;\n+        }\n+        else\n+        {\n+            std::memcpy(buffer.data() + used, s, length * sizeof(CharType));",
+   "line": 443,
+   "path": "include/nlohmann/detail/output/output_adapters.hpp",
+   "user": {
+    "login": "nlohmann",
+    "type": "User"
+   }
+  },
+  {
+   "body": "No change: false positive. After `flush()` the buffer is empty, and this branch is taken only when `length < buffer_size`.\n\n_\ud83e\udd16 Addressed by [Claude Code](https://claude.com/claude-code)_",
+   "created_at": "2026-10-22T09:53:05Z",
+   "diff_hunk": "@@ -290,36 +386,121 @@\n         JSON_ASSERT(oa);\n     }\n \n+    output_adapter_sink(const output_adapter_sink&) = delete;\n+    output_adapter_sink& operator=(const output_adapter_sink&) = delete;\n+    output_adapter_sink& operator=(output_adapter_sink&&) = delete;\n+\n+    output_adapter_sink(output_adapter_sink&& other) noexcept\n+        : oa(std::move(other.oa)), used(other.used)\n+    {\n+        std::memcpy(buffer.data(), other.buffer.data(), other.used * sizeof(CharType));\n+        other.used = 0;\n+    }\n+\n+    ~output_adapter_sink()\n+    {\n+        // a normal return has flushed already, so this is for a write that threw\n+        if (used != 0)\n+        {\n+            JSON_TRY\n+            {\n+                flush();\n+            }\n+            JSON_CATCH(...)\n+            {\n+                // nothing can be done about an adapter that throws here\n+            }\n+        }\n+    }\n+\n+    JSON_HEDLEY_ALWAYS_INLINE\n     void write_character(CharType c)\n     {\n-        oa->write_character(c);\n+        if (JSON_HEDLEY_UNLIKELY(used == buffer_size))\n+        {\n+            flush();\n+        }\n+        buffer[used++] = c;\n     }\n \n     // no JSON_HEDLEY_NON_NULL: forwards (null, 0) for empty payloads, exactly as\n     // the type-erased path already did before this sink existed\n+    JSON_HEDLEY_ALWAYS_INLINE\n     void write_characters(const CharType* s, std::size_t length)\n     {\n-        oa->write_characters(s, length);\n+        if (JSON_HEDLEY_UNLIKELY(buffer_size - used < length))\n+        {\n+            write_large(s, length);\n+            return;\n+        }\n+        if (length <= 32)\n+        {\n+            copy_short(buffer.data() + used, s, length, std::integral_constant<bool, sizeof(CharType) == 1>());\n+            used += length;\n+        }\n+        else\n+        {\n+            std::memcpy(buffer.data() + used, s, length * sizeof(CharType));\n+            used += length;\n+        }\n     }\n \n     /// space for writing up to @a length characters (see\n     /// output_vector_sink::reserve)\n-    CharType* reserve(const std::size_t length) noexcept\n+    JSON_HEDLEY_ALWAYS_INLINE\n+    CharType* reserve(const std::size_t length)\n     {\n         JSON_ASSERT(length <= max_reserve_size);\n-        static_cast<void>(length);\n-        return reserved.data();\n+        if (JSON_HEDLEY_UNLIKELY(buffer_size - used < length))\n+        {\n+            flush();\n+        }\n+        return buffer.data() + used;\n     }\n \n-    /// write the first @a length characters written to the space from reserve()\n-    void commit(const std::size_t length)\n+    /// keep the first @a length characters written to the space from reserve()\n+    JSON_HEDLEY_ALWAYS_INLINE\n+    void commit(const std::size_t length) noexcept\n     {\n-        oa->write_characters(reserved.data(), length);\n+        used += length;\n+    }\n+\n+    /// pass everything written so far on to the adapter\n+    void flush()\n+    {\n+        if (used != 0)\n+        {\n+            // reset first: the characters count as written even if the adapter throws\n+            const std::size_t length = used;\n+            used = 0;\n+            oa->write_characters(buffer.data(), length);\n+        }\n     }\n \n   private:\n+    /// a write that does not fit the space left in the buffer\n+    JSON_HEDLEY_NEVER_INLINE\n+    void write_large(const CharType* s, const std::size_t length)\n+    {\n+        flush();\n+        if (length >= buffer_size)\n+        {\n+            oa->write_characters(s, length);\n+        }\n+        else\n+        {\n+            std::memcpy(buffer.data(), s, length * sizeof(CharType));",
+   "line": 492,
+   "path": "include/nlohmann/detail/output/output_adapters.hpp",
+   "user": {
+    "login": "nlohmann",
+    "type": "User"
+   }
+  }
+ ],
+ "state": "closed",
+ "title": "Write binary formats through reserved sink space and number runs",
+ "transport": "gh",
+ "user": {
+  "login": "nlohmann",
+  "type": "User"
+ }
+}

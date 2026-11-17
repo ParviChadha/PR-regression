@@ -1,0 +1,107 @@
+{
+ "base_ref": "develop",
+ "base_sha": "3f8677d02870e1b2b7056d3ada3ed5e1f7b84ea5",
+ "body": "With `ensure_ascii`, the `json_view` dump wrote every string through the escaping path, which decodes UTF-8 byte by byte. It did so even for strings of the source that are plain ASCII. Without `ensure_ascii`, those strings are already copied verbatim.\n\nA string of the source without escape sequences has no quote, backslash or control character. `ensure_ascii` therefore leaves it unchanged exactly when no byte is `0x7F` or above. The dump now checks that eight bytes at a time (`is_ascii_without_delete()`: `(v | (v + 0x01\u202601)) & 0x80\u202680`, which flags bytes \u2265 0x80 and DEL) and copies such strings and keys the same way as without `ensure_ascii`. The compact walk (`dump_compact`), which used to serve only the dump without `ensure_ascii`, now serves `ensure_ascii` too. It does so through a separate out-of-line instantiation, so the walk without `ensure_ascii` keeps its speed.\n\nWith GCC, adding the check as one combined condition, `!enabled(Ascii) || \u2026`, changed the block layout of the walk without `ensure_ascii`, even though the condition is folded away there. That made it 4\u20136% slower in cycle counts. One `copied()` overload per `std::integral_constant` keeps its machine code identical to `develop`.\n\n## Alternative considered\n\nThe parser could record \"all ASCII\" in a free node flag, since the scanner branches on bytes \u2265 0x80 anyway. The dump would then not need to check anything. That made compact `ensure_ascii` output about twice as fast again: B/A 0.29\u20130.58 instead of 0.44\u20130.67. But it also needed a cached `memchr` for DEL per document and image changes, and it made `json_document::parse` of string-heavy input 1\u20132% slower with GCC (about 1.4 instructions per string). Parsing matters to every user, and `ensure_ascii` only to some, so this PR leaves the parser alone.\n\n## Performance\n\n`json_document::root().dump()` of the parsed (minified) file, against `develop`. B/A is the ratio of medians from interleaved A/B runs, 10\u201312 rounds each; below 1 is faster.\n\nWith `ensure_ascii`, compact / indent 4:\n\n| | twitter | citm_catalog | jeopardy | canada (floats) |\n|---|---|---|---|---|\n| Apple M1, Apple Clang | 0.668 / 0.909 | 0.435 / 0.914 | 0.558 / 0.857 | 0.943 / 1.003 |\n| Apple M1, GCC 16 | 0.653 / 0.914 | 0.485 / 0.936 | 0.574 / 0.869 | 0.912 / 1.001 |\n| x86-64 (Haswell VPS), Clang 18 | 0.713 / 0.840 | 0.500 / 0.849 | 0.783 / 0.821 | 0.979 / 1.006 |\n| x86-64 (Haswell VPS), GCC 13 | 0.629 / 0.818 | 0.416 / 0.805 | 0.761 / 0.823 | 0.977 / 1.013 |\n\nWithout `ensure_ascii` (compact and indent 4, all four files):\n\n- On the M1, every row is between 0.986 and 1.007.\n- On the VPS, every row is between 0.982 and 1.019. That machine had other load, with spreads of 5\u201317%.\n- Cycle counts on the M1 are within \u00b10.5%.\n\nParsing is not touched.\n\n## Tests\n\nTwo new sections in `unit-json_view_dump.cpp`:\n\n- **Mixed documents.** A document with plain, non-ASCII, escaped and long strings, as values and as keys, is compared with `ordered_json::dump()` for compact, indented and subtree dumps. The document is tested once with a DEL and once without, and also with strings that edits changed to and from ASCII.\n- **Every position.** DEL, `0x7E` and two 2-byte characters are placed at every position of strings of 1\u201320 bytes, as values and as keys, which covers the 8-byte steps and the tail loop. As a check that the test can fail, treating DEL as ASCII makes 423 assertions fail.\n\nAlso run locally:\n\n- all `unit-json_view*` tests with ASan and UBSan;\n- a differential test of 400,000 random documents (ASCII, DEL, escapes, 2/3/4-byte characters, surrogate escapes) against `ordered_json::dump(-1/2, ' ', true)`, with 0 mismatches;\n- GCC 16 and Clang 22 with the CI warning flags;\n- clang-tidy 22 on `unit-json_view_dump.cpp`.\n\n## Public API\n\nNo breaking changes. The output of `dump()` is unchanged.\n\nThe one corner case: a damaged image loaded with `image_check::bounds` can contain control characters in source strings. With `ensure_ascii`, these are now copied unchanged, as the dump without `ensure_ascii` already does for such images.\n\n---\n\nThis pull request was written by Claude Code.\n\n\ud83e\udd16 Generated with [Claude Code](https://claude.com/claude-code)\n",
+ "comments": [
+  {
+   "body": ">The parser could record \"all ASCII\" in a free node flag, since the scanner branches on bytes \u2265 0x80 anyway. The dump would then not need to check anything. That made compact ensure_ascii output about twice as fast again: B/A 0.29\u20130.58 instead of 0.44\u20130.67. But it also needed a cached memchr for DEL per document and image changes, and it made json_document::parse of string-heavy input 1\u20132% slower with GCC (about 1.4 instructions per string).\r\n\r\nCan you expand more on this \"needed a cached memchr for DEL per document and image changes\"?",
+   "created_at": "2026-10-21T17:23:57Z",
+   "user": {
+    "login": "gregmarr",
+    "type": "User"
+   }
+  },
+  {
+   "body": "Sure. The scanner only branches on bytes \u2265 0x80, so a node flag set from there means \"no byte \u2265 0x80\". But `ensure_ascii` also escapes DEL (0x7F), so a string with that flag still can't be copied as is if it contains a DEL. Checking for 0x7F in the scanner would add work to every parse, which is what I wanted to avoid. So the prototype searched the whole source once with `memchr(src, 0x7F, size)` on the first `ensure_ascii` dump, and cached the answer in `document_data`. It's an atomic because two threads can dump the same `const` document at once. The flag only lets the dump copy a string when the source has no DEL at all. The SWAR check in this PR has no such problem, because `v + 0x01\u2026` turns 0x7F into 0x80 and so catches DEL too.\n\n\"Image changes\" means the saved image (`save_image()` / `load()`). The flag takes a new node bit. `load()` validates node flags and would reject that bit, and the same document should save to the same bytes whether or not it has the flag. So `save_image()` had to clear the bit on every string node, which is one more per-node case in the save loop. The alternative was a format change so that `load()` accepts the bit.\n\nNeither part is large, but together with the 1\u20132% slower GCC parse, that was more than I wanted to add to the parser for an option only some users need.\n\n*(Written by Claude Code)*\n",
+   "created_at": "2026-10-21T17:36:52Z",
+   "user": {
+    "login": "nlohmann",
+    "type": "User"
+   }
+  },
+  {
+   "body": "Okay, so there is nothing in `parse` that already detects `DEL` that can be used to record that during parse, and the same for edits and `load()`?  \r\n\r\nSince `load/save` was just merged today, is \"a format change\" really an issue?",
+   "created_at": "2026-10-21T18:10:21Z",
+   "user": {
+    "login": "gregmarr",
+    "type": "User"
+   }
+  },
+  {
+   "body": "You're right on both counts: nothing on those paths looks at 0x7F, and since json_view hasn't been released, a format change costs nothing. That argument was weak.\n\nSo I prototyped it without that constraint: the scanner stops at DEL as well (`(int8)(b + 1) < 0x21` in the vector loop), the parser sets an \"all ASCII\" node flag, `load()` accepts it, and the dump uses the flag instead of the SWAR check. No `memchr`, no atomic. Results against current develop, as instruction counts:\n\n- compact `ensure_ascii` dump: 0.68\u20130.88\u00d7 (M1), 0.74\u20130.90\u00d7 (x86)\n- `json_document::parse`: +1\u20138% (M1), +5\u201313% (x86, GCC 13 and Clang 18), most on string-heavy files (jeopardy)\n\nOn x86, most of the cost is recording the flag at all, not the DEL check: a variant that flags only bytes \u2265 0x80 costs the same. My earlier 1\u20132% estimate predates the SIMD string scanner (#5853). Against it, the flag is relatively much more expensive. So the format wasn't the real obstacle, but the parse cost is, and I'd keep #5879 as is.\n\n*(Written by Claude Code)*\n",
+   "created_at": "2026-10-21T18:58:39Z",
+   "user": {
+    "login": "nlohmann",
+    "type": "User"
+   }
+  },
+  {
+   "body": "Just trying to understand the cost.  Was the cost because it was adding a new test that wasn't there before? Or was it adjusting an existing test to cover one more byte, but that somehow made it a lot more expensive?",
+   "created_at": "2026-10-21T19:02:50Z",
+   "user": {
+    "login": "gregmarr",
+    "type": "User"
+   }
+  },
+  {
+   "body": "Neither, really. Most of it is how the compilers lay out the loop, not the instructions the change adds. Per string or key, measured on jeopardy (3.04M of them):\n\n- **Flag only for bytes \u2265 0x80:** no new test. The scanner already branches to the UTF-8 path on those bytes, and the flag is a store in that branch plus passing the result to `push_node()`, which used to get a constant 0. That's +1.5 instructions on the M1 (Clang) but +11\u201313 on x86 (GCC 13, Clang 18). That's far more than a store and a select, so the compilers generate different code around the parse loop. I suspect register pressure, as we saw in #5853, but I haven't compared the x86 assembly.\n- **Including DEL** widens existing tests instead of adding new ones: one more add per 16 bytes in the vector compare (about +2 instructions per string on the M1), and the stop test `*p < 0x80` becomes `*p < 0x7F`, with DEL handled in the non-ASCII branch (about +4 more). On x86 it adds almost nothing on top of the flag.\n\nSo the expensive part on x86 is getting a per-string result out of the inlined scanner at all, not the extra byte.\n\n*(Written by Claude Code)*\n",
+   "created_at": "2026-10-21T19:27:04Z",
+   "user": {
+    "login": "nlohmann",
+    "type": "User"
+   }
+  },
+  {
+   "body": "Thanks, that's all very interesting.  Optimizers can definitely be black boxes.",
+   "created_at": "2026-10-21T19:37:20Z",
+   "user": {
+    "login": "gregmarr",
+    "type": "User"
+   }
+  }
+ ],
+ "created_at": "2026-10-21T17:05:31Z",
+ "fetched_at": "2026-11-17T20:09:12Z",
+ "head_sha": "6effb823de1bc5e56f50bbf034fe6194ef746074",
+ "labels": [
+  "\ud83d\ude80 ready to merge",
+  "performance"
+ ],
+ "linked_issues": [],
+ "merge_commit_sha": "7c26e99ac53dbe745a30c41d52ecd9fe42ab0059",
+ "merged_at": "2026-10-21T18:01:39Z",
+ "number": 5879,
+ "referenced_numbers": [],
+ "repo": "nlohmann/json",
+ "review_comments": [
+  {
+   "body": "That's crazy,",
+   "created_at": "2026-10-21T17:29:20Z",
+   "diff_hunk": "@@ -400,6 +432,41 @@ class view_serializer\n         m_out.put('\"');\n     }\n \n+    /// dump_compact() with ensure_ascii, out of line: the walk without it is\n+    /// faster when it is not merged with this one into dump()",
+   "line": 436,
+   "path": "include/nlohmann/detail/view/serializer.hpp",
+   "user": {
+    "login": "gregmarr",
+    "type": "User"
+   }
+  },
+  {
+   "body": "Yes, it surprised me too. When both walks are in one function, GCC lays out the blocks differently and stops inlining the small helpers in the hot loop, so the walk without `ensure_ascii` gets slower even though that branch is never taken. Keeping the `ensure_ascii` walk in its own function leaves the plain walk's code as it was.\n\n*(Written by Claude Code)*\n",
+   "created_at": "2026-10-21T17:36:53Z",
+   "diff_hunk": "@@ -400,6 +432,41 @@ class view_serializer\n         m_out.put('\"');\n     }\n \n+    /// dump_compact() with ensure_ascii, out of line: the walk without it is\n+    /// faster when it is not merged with this one into dump()",
+   "line": 436,
+   "path": "include/nlohmann/detail/view/serializer.hpp",
+   "user": {
+    "login": "nlohmann",
+    "type": "User"
+   }
+  }
+ ],
+ "state": "closed",
+ "title": "Copy ASCII strings in the json_view dump with ensure_ascii",
+ "transport": "gh",
+ "user": {
+  "login": "nlohmann",
+  "type": "User"
+ }
+}

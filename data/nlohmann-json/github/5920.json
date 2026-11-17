@@ -1,0 +1,34 @@
+{
+ "base_ref": "json-view/5869-1-view-mode",
+ "base_sha": "b228684bb3ea46ad67e84963cd7e4adcabcf4c73",
+ "body": "Part of the #5869 cleanup before 3.13.0, stacked on #5919.\n\n## What changes\n\nOn a big-endian target, `basic_json_document::save()` and `load()` no longer exist, instead of throwing `type_error.320` at runtime. The image format is little-endian only, so a call could never succeed there; now it fails at compile time, just like `set()` on a read-only document. Suggested by @gregmarr in #5632 ([comment](https://github.com/nlohmann/json/pull/5632#discussion_r4321789217), [clarification](https://github.com/nlohmann/json/pull/5632#discussion_r4331187395)).\n\n`save_image()`/`load_image()` and the members `save()`/`load()` are guarded by `#if NLOHMANN_VIEW_LITTLE_ENDIAN`. The members need the guard as well, since they call the functions with a non-dependent argument. `NLOHMANN_VIEW_LITTLE_ENDIAN` comes from the target's predefined macros, so it is the same in every translation unit of a build: no ODR risk.\n\n**Error 320 stays**, now only for \"cannot save a discarded json_document\". This corrects my reply on #5632, which said that `type_error.320` goes away: the discarded-document case still throws it.\n\n## Breaking changes\n\nNone for released versions: `save()`/`load()` are new in 3.13.0. Code on `develop` that called them on a big-endian target, and therefore always threw, no longer compiles.\n\n## Tests\n\n- The big-endian test case checks with a detection trait that `save()`/`load()` don't exist; the little-endian tests check that they do.\n- `unit-json_view_image.cpp` compiled for s390x (big-endian) in Docker; all `unit-json_view*` tests with ASan/UBSan.\n- Docs: `save`, `load`, `type_error.320`, and the json_view feature page say \"little-endian targets only\".\n\n\ud83e\udd16 Generated with [Claude Code](https://claude.com/claude-code)\n",
+ "comments": [],
+ "created_at": "2026-10-25T15:13:34Z",
+ "fetched_at": "2026-11-17T20:08:46Z",
+ "head_sha": "95d12597f68464f007e38b5588600a1acb9516bd",
+ "labels": [
+  "documentation",
+  "M",
+  "tests",
+  "\ud83d\ude80 ready to merge",
+  "aspect: json_view"
+ ],
+ "linked_issues": [],
+ "merge_commit_sha": "4cdfa6d0f486a76a211093918e5a26cc11f4640c",
+ "merged_at": "2026-10-26T19:13:34Z",
+ "number": 5920,
+ "referenced_numbers": [
+  5869,
+  5919,
+  5632
+ ],
+ "repo": "nlohmann/json",
+ "review_comments": [],
+ "state": "closed",
+ "title": "json_view: no save() and load() on big-endian targets",
+ "transport": "gh",
+ "user": {
+  "login": "nlohmann",
+  "type": "User"
+ }
+}

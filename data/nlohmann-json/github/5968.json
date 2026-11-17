@@ -1,0 +1,105 @@
+{
+ "base_ref": "develop",
+ "base_sha": "755bb16d7a80436646380b5f871b93c6a443a3b7",
+ "body": "## What\n\nTwo changes to the BSON reader (`binary_reader.hpp`). They speed up `from_bson()` and BSON `sax_parse()` and leave behaviour unchanged.\n\n- **Terminators 8 bytes at a time.** `get_bson_cstr_bulk()` (contiguous input) looked for the `0x00` that ends a key one byte at a time. It now calls the new `find_zero_byte()` in `string_scan.hpp`, which tests 8 bytes per step with the same SWAR zero-byte test the lexer's string scanners use (`(v - 0x01\u2026) & ~v & 0x80\u2026`, first hit via `count_trailing_zeros`).\n- **Array element names are skipped.** BSON names an array's elements `\"0\"`, `\"1\"`, \u2026 These names are never passed to the SAX parser, yet each one was copied into the key string and run through `check_string_utf8()`. They are now skipped without being copied. The exception is `error_handler_t::strict`, which still reads and checks them, so ill-formed UTF-8 in an element name is rejected exactly as before (same `parse_error.113`, same byte position). `replace`/`ignore` only ever sanitised a string that was then thrown away, so nothing observable changes for them.\n\nThis came out of a research session on whether the SIMD/SWAR techniques used for JSON text apply to the binary formats. BSON's NUL-terminated names are one of the few remaining byte scans in CBOR/BSON. More PRs (CBOR runs of scalars, strict-mode UTF-8, BSON writer size pass) may follow.\n\n## Measurements\n\nPaired A/B with my local harness (both variants in one binary, alternating samples, two link orders), A = `develop` (755bb16d7a), B = this PR, nativejson-benchmark files converted with `to_bson()`. The workload runs `from_bson()` and `sax_parse()` on each file.\n\nInstructions per parse (B/A):\n\n| case | Mac, Apple clang 21 | VPS x86-64, GCC 13 (callgrind) |\n|---|---|---|\n| SAX twitter | 0.908 | 0.918 |\n| SAX citm_catalog | 0.892 | 0.906 |\n| SAX canada | 0.684 | 0.749 |\n| `from_bson` twitter | 0.973 | 0.980 |\n| `from_bson` citm_catalog | 0.972 | 0.977 |\n| `from_bson` canada | 0.904 | 0.910 |\n| `from_bson` citm_catalog, `strict` | 0.994 | 0.999 |\n| `from_bson` citm_catalog, `std::istringstream` | 0.942 | 0.983 |\n\nTimings (Mac, geomean over both link orders, 64-byte function alignment) are within noise or better in every row: `from_bson` canada 0.856, citm 0.950, twitter 0.955; SAX citm 0.858, twitter 0.904. SAX canada with a non-virtual SAX handler is flat in time (1.006) despite \u221232 % instructions. With a `json_sax`-derived (virtual) handler it goes from 2.76 to 2.09 ms. No VPS timings were taken.\n\n## Tests\n\n- `BSON keys from contiguous and stream input` now also has keys of 1 to 17 bytes and arrays of 12 elements, so names end at every position in an 8-byte word. Every truncation of that document is still compared between contiguous and stream input.\n- New `BSON array element names`: an element name with an ill-formed byte and one longer than 8 bytes. `keep`/`replace`/`ignore` and stream input accept the document, and `strict` rejects it with the message and position it had before. Both test cases also pass against `develop`'s headers.\n- Full suite with ASan/UBSan (`ctest`, 184 tests) passes locally.\n\n## Breaking changes\n\nNone. No public API, ABI tag or output changes. The only internal signature changes are in private members of `binary_reader`, plus a new `detail::find_zero_byte()`.\n\n\ud83e\udd16 Generated with [Claude Code](https://claude.com/claude-code)\n",
+ "comments": [
+  {
+   "body": "Ugh, wasn't fast enough finding this review.",
+   "created_at": "2026-11-01T16:21:29Z",
+   "user": {
+    "login": "gregmarr",
+    "type": "User"
+   }
+  }
+ ],
+ "created_at": "2026-10-30T21:17:38Z",
+ "fetched_at": "2026-11-17T20:08:27Z",
+ "head_sha": "1c588321c5bc08ae87fff093a9b713993cf2e406",
+ "labels": [
+  "aspect: binary formats",
+  "L",
+  "tests",
+  "performance"
+ ],
+ "linked_issues": [],
+ "merge_commit_sha": "76001c6b4cef42b431ee4f72d50a1b55cb260284",
+ "merged_at": "2026-11-01T16:20:54Z",
+ "number": 5968,
+ "referenced_numbers": [],
+ "repo": "nlohmann/json",
+ "review_comments": [
+  {
+   "body": "Split store and validate?  strict only requires validate, not store, for array indices.",
+   "created_at": "2026-10-30T22:20:47Z",
+   "diff_hunk": "@@ -489,14 +491,18 @@ class binary_reader\n     @brief Parses a C-style string from the BSON input.\n     @param[in,out] result  A reference to the string variable where the read\n                             string is to be stored.\n+    @param[in] store  whether the characters are needed; if not (the names of\n+                      an array's elements), they are skipped and @a result may\n+                      be left unchanged, and they are not checked against\n+                      @ref error_handler\n     @return `true` if the \\\\x00-byte indicating the end of the string was\n              encountered before the EOF; false` indicates an unexpected EOF.\n     */\n-    bool get_bson_cstr(string_t& result)\n+    bool get_bson_cstr(string_t& result, const bool store = true)",
+   "line": 501,
+   "path": "include/nlohmann/detail/input/binary_reader.hpp",
+   "user": {
+    "login": "gregmarr",
+    "type": "User"
+   }
+  },
+  {
+   "body": "Is this not a function that existed already?",
+   "created_at": "2026-10-30T22:21:46Z",
+   "diff_hunk": "@@ -90,6 +90,34 @@ JSON_HEDLEY_ALWAYS_INLINE std::size_t find_string_special(const unsigned char* d\n     return n;\n }\n \n+// return the index of the first 0x00 byte in [data, data+n), or n if there is\n+// none; scans 8 bytes at a time (BSON's C-style strings)\n+JSON_HEDLEY_ALWAYS_INLINE std::size_t find_zero_byte(const unsigned char* data, std::size_t n) noexcept",
+   "line": 95,
+   "path": "include/nlohmann/detail/input/string_scan.hpp",
+   "user": {
+    "login": "gregmarr",
+    "type": "User"
+   }
+  },
+  {
+   "body": "Right: with `error_handler_t::strict`, the names of array elements are only checked, but the caller passes `store = true` so that `check_string_utf8` has a string to look at. The bulk path could check the bytes in place with `valid_utf8_string(data, length)` instead. I left it as is: it only matters in strict mode, the names are a few bytes (\"0\", \"1\", ...), and `key` keeps its capacity between elements, so the copy costs next to nothing. The doc comment of `store` is imprecise, though: in strict mode the names of array elements *are* checked, because they are stored.\n\n*(Written by Claude Code on behalf of @nlohmann.)*",
+   "created_at": "2026-11-01T16:57:15Z",
+   "diff_hunk": "@@ -489,14 +491,18 @@ class binary_reader\n     @brief Parses a C-style string from the BSON input.\n     @param[in,out] result  A reference to the string variable where the read\n                             string is to be stored.\n+    @param[in] store  whether the characters are needed; if not (the names of\n+                      an array's elements), they are skipped and @a result may\n+                      be left unchanged, and they are not checked against\n+                      @ref error_handler\n     @return `true` if the \\\\x00-byte indicating the end of the string was\n              encountered before the EOF; false` indicates an unexpected EOF.\n     */\n-    bool get_bson_cstr(string_t& result)\n+    bool get_bson_cstr(string_t& result, const bool store = true)",
+   "line": 501,
+   "path": "include/nlohmann/detail/input/binary_reader.hpp",
+   "user": {
+    "login": "nlohmann",
+    "type": "User"
+   }
+  },
+  {
+   "body": "No, `find_zero_byte` is new in this PR; nothing searched for a zero byte before. But the idiom inside it, `(x - ones) & ~x & high` for \"this word contains byte c\", now appears several times in `string_scan.hpp` (`swar_string_special`, `find_zero_byte`, `find_ascii_copyable_run`, `find_string_delimiter`). It could become a small helper in a later cleanup.\n\n*(Written by Claude Code on behalf of @nlohmann.)*",
+   "created_at": "2026-11-01T16:57:16Z",
+   "diff_hunk": "@@ -90,6 +90,34 @@ JSON_HEDLEY_ALWAYS_INLINE std::size_t find_string_special(const unsigned char* d\n     return n;\n }\n \n+// return the index of the first 0x00 byte in [data, data+n), or n if there is\n+// none; scans 8 bytes at a time (BSON's C-style strings)\n+JSON_HEDLEY_ALWAYS_INLINE std::size_t find_zero_byte(const unsigned char* data, std::size_t n) noexcept",
+   "line": 95,
+   "path": "include/nlohmann/detail/input/string_scan.hpp",
+   "user": {
+    "login": "nlohmann",
+    "type": "User"
+   }
+  },
+  {
+   "body": "I know that there have been some tests with larger arrays, so while it's not a lot individually, it could add up, and this is a performance series.  It would be a simple change to be `get_bson_cstr(string_t& result, const bool store, const bool validate)` and then pass `store` to `get_bson_cstr_bulk` and use `validate` instead of `store` before `check_string_utf8`.\n\nThen \n```\n            if (JSON_HEDLEY_UNLIKELY(!get_bson_cstr(key, is_object || error_handler == error_handler_t::strict)))\n```\nis\n```\n            if (JSON_HEDLEY_UNLIKELY(!get_bson_cstr(key, is_object, is_object || error_handler == error_handler_t::strict)))\n```\nNot a big deal either way, just sharing my original thought process.",
+   "created_at": "2026-11-01T17:28:39Z",
+   "diff_hunk": "@@ -489,14 +491,18 @@ class binary_reader\n     @brief Parses a C-style string from the BSON input.\n     @param[in,out] result  A reference to the string variable where the read\n                             string is to be stored.\n+    @param[in] store  whether the characters are needed; if not (the names of\n+                      an array's elements), they are skipped and @a result may\n+                      be left unchanged, and they are not checked against\n+                      @ref error_handler\n     @return `true` if the \\\\x00-byte indicating the end of the string was\n              encountered before the EOF; false` indicates an unexpected EOF.\n     */\n-    bool get_bson_cstr(string_t& result)\n+    bool get_bson_cstr(string_t& result, const bool store = true)",
+   "line": 501,
+   "path": "include/nlohmann/detail/input/binary_reader.hpp",
+   "user": {
+    "login": "gregmarr",
+    "type": "User"
+   }
+  },
+  {
+   "body": "You were right, and it adds up more than I thought. I measured strict mode on an array of 1M int32 values: skipping the copy and checking the name in place makes the reader 29\u201336 % faster on x86 (clang 18 / GCC 13) and 28\u201333 % faster on arm64.\n\nThe exact change you sketched can't work as is: if `store` is false, the bytes never reach `result`, so `check_string_utf8(result, \"key\")` would check an empty string. The check has to run on the input bytes (`valid_utf8_string(data, length)`). I also tried the extra `validate` parameter on `get_bson_cstr`, but that pushed `get_bson_cstr_bulk` over clang's inlining threshold and made the default `keep` path 7.6 % slower on x86. So #5984 adds a separate `check_bson_cstr` for the strict case and leaves `get_bson_cstr` unchanged.\n\n*(Written by Claude Code on behalf of @nlohmann.)*",
+   "created_at": "2026-11-01T18:03:30Z",
+   "diff_hunk": "@@ -489,14 +491,18 @@ class binary_reader\n     @brief Parses a C-style string from the BSON input.\n     @param[in,out] result  A reference to the string variable where the read\n                             string is to be stored.\n+    @param[in] store  whether the characters are needed; if not (the names of\n+                      an array's elements), they are skipped and @a result may\n+                      be left unchanged, and they are not checked against\n+                      @ref error_handler\n     @return `true` if the \\\\x00-byte indicating the end of the string was\n              encountered before the EOF; false` indicates an unexpected EOF.\n     */\n-    bool get_bson_cstr(string_t& result)\n+    bool get_bson_cstr(string_t& result, const bool store = true)",
+   "line": 501,
+   "path": "include/nlohmann/detail/input/binary_reader.hpp",
+   "user": {
+    "login": "nlohmann",
+    "type": "User"
+   }
+  }
+ ],
+ "state": "closed",
+ "title": "BSON reader: find C-string terminators 8 bytes at a time, skip array element names",
+ "transport": "gh",
+ "user": {
+  "login": "nlohmann",
+  "type": "User"
+ }
+}

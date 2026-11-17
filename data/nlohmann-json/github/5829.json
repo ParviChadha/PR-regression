@@ -1,0 +1,52 @@
+{
+ "base_ref": "develop",
+ "base_sha": "ccc005c012707999524606a186187b21b387e46b",
+ "body": "Supersedes the Dependabot bump of `cppcheck` from 1.5.1 to 1.5.2, whose [`ci_cppcheck` job failed](https://github.com/nlohmann/json/actions/runs/38466451463/job/115534385840). Wheel 1.5.2 ships Cppcheck 2.20.0, up from 2.17.1.\n\n## Changes\n\n- **Preprocessor errors** (`macro_scope.hpp:61`, `:196`: `failed to evaluate #if condition, undefined function-like macro invocation: __has_include( ... )` / `__has_attribute( ... )`): `default_defines.hpp` is a `clang -dM` dump of Hedley. It defines `JSON_HEDLEY_VERSION`, so Hedley's own fallbacks are skipped and macros like `JSON_HEDLEY_HAS_ATTRIBUTE(x)` expand to the compiler's `__has_attribute(x)`. Cppcheck 2.17 quietly evaluated such unknown invocations as 0. Cppcheck 2.20 reports a `syntaxError` instead. `cmake/ci.cmake` now generates `cppcheck_feature_tests.hpp` at configure time, which defines the eight `__has_*` operators the headers use as `0`, and passes it as a second `--include`. The file is written with CMake's `file()` because the custom target is not `VERBATIM`, and parentheses in `-D` arguments would reach `/bin/sh` unquoted.\n- **`bufferAccessOutOfBounds` false positive** (`number_parse.hpp:707`): in the `float` overload of `float_from_bits`, Cppcheck sizes `value` as the `double` overload's 8 bytes. A minimal repro confirms this. `sizeof(bits32)` avoids it without a suppression. Both sides are 4 bytes, which the `static_assert` guarantees.\n- Bumps `cmake/requirements/requirements-cppcheck.txt` to `cppcheck==1.5.2`.\n\n`make ci_cppcheck` passes locally with Cppcheck 2.20.0.\n\n## Public API\n\nNo breaking changes. The library change only swaps one `sizeof` operand for an equal one inside a `detail` function.\n\n---\nWritten by Claude Code.\n\n\ud83e\udd16 Generated with [Claude Code](https://claude.com/claude-code)\n",
+ "comments": [],
+ "created_at": "2026-10-14T15:58:24Z",
+ "fetched_at": "2026-11-17T20:09:33Z",
+ "head_sha": "dbf9f45455e4f759322ca4f24b72fb41fcfde84c",
+ "labels": [
+  "M",
+  "CMake",
+  "python",
+  "\ud83d\ude80 ready to merge"
+ ],
+ "linked_issues": [],
+ "merge_commit_sha": "91b9ee260283ef410bb9d3ea3c67c0685ca27a99",
+ "merged_at": "2026-10-15T18:04:47Z",
+ "number": 5829,
+ "referenced_numbers": [],
+ "repo": "nlohmann/json",
+ "review_comments": [
+  {
+   "body": "## Flawfinder / Does not check for buffer overflows when copying to destination (CWE-120).\n\nbuffer/memcpy:Does not check for buffer overflows when copying to destination (CWE-120).\n\n[Show more details](https://github.com/nlohmann/json/security/code-scanning/793)",
+   "created_at": "2026-10-15T07:09:20Z",
+   "diff_hunk": "@@ -704,7 +704,7 @@\n {\n     static_assert(sizeof(float) == sizeof(std::uint32_t), \"float must have 32 bits\");\n     const auto bits32 = static_cast<std::uint32_t>(bits);\n-    std::memcpy(&value, &bits32, sizeof(value));\n+    std::memcpy(&value, &bits32, sizeof(bits32));",
+   "line": 707,
+   "path": "include/nlohmann/detail/input/number_parse.hpp",
+   "user": {
+    "login": "github-advanced-security[bot]",
+    "type": "Bot"
+   }
+  },
+  {
+   "body": "## Flawfinder / Does not check for buffer overflows when copying to destination (CWE-120).\n\nbuffer/memcpy:Does not check for buffer overflows when copying to destination (CWE-120).\n\n[Show more details](https://github.com/nlohmann/json/security/code-scanning/794)",
+   "created_at": "2026-10-15T07:09:20Z",
+   "diff_hunk": "@@ -10151,7 +10151,7 @@\n {\n     static_assert(sizeof(float) == sizeof(std::uint32_t), \"float must have 32 bits\");\n     const auto bits32 = static_cast<std::uint32_t>(bits);\n-    std::memcpy(&value, &bits32, sizeof(value));\n+    std::memcpy(&value, &bits32, sizeof(bits32));",
+   "line": 10154,
+   "path": "single_include/nlohmann/json.hpp",
+   "user": {
+    "login": "github-advanced-security[bot]",
+    "type": "Bot"
+   }
+  }
+ ],
+ "state": "closed",
+ "title": "Update cppcheck to 1.5.2 (Cppcheck 2.20) and fix its new findings",
+ "transport": "gh",
+ "user": {
+  "login": "nlohmann",
+  "type": "User"
+ }
+}

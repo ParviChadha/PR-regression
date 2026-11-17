@@ -1,0 +1,32 @@
+{
+ "base_ref": "develop",
+ "base_sha": "07876e22920ccc6770af188f4eb2ba4febb98508",
+ "body": "## Summary\n\ndevelop fails to build in two places since this afternoon's merges. Every PR's CI is red because of it, since CI builds each PR merged with develop.\n\n**MSVC C4127 (all MSVC and clang-cl jobs, `ci_module_cpp20`).** #6006 folded the check for a digit after a minus sign in `json_view`'s `number()` into `else if (!negative || ...)`. MSVC 19.44 reports that as \"conditional expression is constant\", and `/WX` makes it an error:\n\n```\ninclude\\nlohmann\\detail\\view\\builder.hpp(1177,32): warning C4127: conditional expression is constant\n```\n\nThe check now sits in the `if (negative)` block, right after the sign is skipped. Numbers without a sign take exactly the same path as before. The error code (`number_after_minus`) and the position it reports are unchanged.\n\n**GCC `-Weffc++` (`ci_test_gcc`, the GCC compiler matrix, static analysis).** `locale_switching_token` in `unit-locale-cpp.cpp` (from #5997) held a `const char*`, so GCC asked for a copy constructor and copy assignment:\n\n```\ntests/src/unit-locale-cpp.cpp:504:8: error: 'struct {anonymous}::locale_switching_token' has pointer data members [-Werror=effc++]\n```\n\nThe locale name is now a `std::string`, so no copy members need adding.\n\nThe third failure on develop's last finished run (`unit-json_view_positions.cpp:573`, a removed value with a byte range in its exception) is already fixed by #6015.\n\n## Testing\n\n- GCC 16 (Docker), `-Werror -Weffc++`: reproduces the three errors on develop and is clean with this change.\n- MSVC 19.44 (the CI version) on Compiler Explorer, `/W4 /WX` and `/permissive- /std:c++latest /W4 /WX`: the old pattern triggers C4127, the new one compiles cleanly. This used a reduced copy of `number()`, not the whole header.\n- Locally (clang, macOS): `unit-json_view`, `unit-json_view_builder`, `unit-json_view_positions`, `unit-json_view_large`, `unit-locale-cpp` and `unit-class_lexer` pass.\n\n## Breaking changes\n\nNo breaking changes. Behaviour and the public API are unchanged; one test helper changes.\n\n\ud83e\udd16 Generated with [Claude Code](https://claude.com/claude-code)\n",
+ "comments": [],
+ "created_at": "2026-11-02T18:52:34Z",
+ "fetched_at": "2026-11-17T20:07:50Z",
+ "head_sha": "b44aeaac0af14956b24c740ffed95d25ad0705fd",
+ "labels": [
+  "M",
+  "tests",
+  "aspect: json_view"
+ ],
+ "linked_issues": [],
+ "merge_commit_sha": "baba5db36f1747556499d70067a60b56d8989c06",
+ "merged_at": "2026-11-02T19:07:01Z",
+ "number": 6016,
+ "referenced_numbers": [
+  6006,
+  5997,
+  6015
+ ],
+ "repo": "nlohmann/json",
+ "review_comments": [],
+ "state": "closed",
+ "title": "Fix the MSVC and GCC builds of develop (C4127, -Weffc++)",
+ "transport": "gh",
+ "user": {
+  "login": "nlohmann",
+  "type": "User"
+ }
+}

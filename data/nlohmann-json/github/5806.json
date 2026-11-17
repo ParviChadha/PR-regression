@@ -1,0 +1,55 @@
+{
+ "base_ref": "develop",
+ "base_sha": "11ef352511a5cdcf5ff39c51dca16999904ae788",
+ "body": "`to_bon8()` recursed once per nesting level. The BON8 reader does not recurse, so it accepts deeply nested input, for example about 24,000 nested one-element arrays. Writing that value back out then overflowed the stack. OSS-Fuzz [572238015](https://issues.oss-fuzz.com/issues/572238015) (`parse_bon8_fuzzer`) found this.\n\n#5781 already bounded the CBOR, MessagePack and UBJSON/BJData writers. BON8 (#2998) was merged before it and was not covered. This PR applies the same approach to BON8:\n\n- `write_bon8_value` takes a `depth`. Once `depth` reaches `recursion_depth_limit()`, it passes the rest of the value to `write_bon8_iterative`.\n- `write_bon8_iterative` and `write_bon8_value_or_push` keep the open containers on a heap stack, reusing `binary_container_frame`. When they leave a container with more than four elements, they write the `0xFE` closer.\n- The output does not change: byte-exact tests check depths around the bound.\n\nTests in `unit-large_json.cpp`: BON8 now joins the round-trip, meet-at-the-bound, byte-exact, deep-object and 100000-deep sections. New sections cover:\n- containers wider than four elements (`0xFE` closers, adjacent strings) past the bound;\n- discarded values past the bound (BON8 still writes nothing for them, as on the recursive path);\n- type_error.316 and out_of_range.407 thrown from below the bound;\n- the OSS-Fuzz regression itself.\n\nThe bug was in no release. It existed only on `develop` from #2998 (merged 2026-09-27) until this PR.\n\n### Breaking changes to the public API\n\nNone. Only private members of `detail::binary_writer` changed.\n\nWritten by Claude Code.\n\n\ud83e\udd16 Generated with [Claude Code](https://claude.com/claude-code)\n",
+ "comments": [],
+ "created_at": "2026-10-10T18:08:09Z",
+ "fetched_at": "2026-11-17T20:09:55Z",
+ "head_sha": "600f1f6a4bb84b0a390fb6114f3c10eb919dc1a6",
+ "labels": [
+  "aspect: binary formats",
+  "L",
+  "tests",
+  "\ud83d\ude80 ready to merge"
+ ],
+ "linked_issues": [],
+ "merge_commit_sha": "b38a2c9177bb6143b0352a55f79889a1ae6c0845",
+ "merged_at": "2026-10-11T06:24:35Z",
+ "number": 5806,
+ "referenced_numbers": [
+  5781,
+  2998
+ ],
+ "repo": "nlohmann/json",
+ "review_comments": [
+  {
+   "body": "a lot of duplicated or almost-duplicated code between these two clauses",
+   "created_at": "2026-10-10T21:02:02Z",
+   "diff_hunk": "@@ -2682,6 +2699,99 @@ class binary_writer\n         }\n     }\n \n+    /*!\n+    @brief write @a j with @ref write_bon8_value, or write its marker and push\n+           a frame for @ref write_bon8_iterative to continue with its elements\n+\n+    A scalar, and an empty array or object, are written out in full and not\n+    pushed.\n+\n+    @sa @ref write_cbor_value_or_push\n+    */\n+    void write_bon8_value_or_push(const BasicJsonType& j, bool& string_open, std::vector<binary_container_frame>& stack)\n+    {\n+        if (j.is_array())\n+        {\n+            const auto N = j.m_data.m_value.array->size();\n+            write_bon8_marker(static_cast<std::uint8_t>(N <= 4 ? 0x80 + N : 0x85), string_open);\n+            if (N != 0)\n+            {\n+                stack.emplace_back(&j);\n+            }\n+            return;\n+        }\n+\n+        if (j.is_object())\n+        {\n+            const auto N = j.m_data.m_value.object->size();\n+            write_bon8_marker(static_cast<std::uint8_t>(N <= 4 ? 0x86 + N : 0x8B), string_open);\n+            if (N != 0)\n+            {\n+                stack.emplace_back(&j);\n+            }\n+            return;\n+        }\n+\n+        write_bon8_value(j, string_open);\n+    }\n+\n+    /*!\n+    @brief write out @a root and everything below it without the call stack\n+\n+    A container with more than four elements is closed with 0xFE once its\n+    last element is written, as in @ref write_bon8_value.\n+\n+    @sa @ref write_cbor_iterative\n+    */\n+    void write_bon8_iterative(const BasicJsonType& root, bool& string_open)\n+    {\n+        // only a container with elements is ever pushed; see write_bon8_value_or_push\n+        std::vector<binary_container_frame> stack;\n+        write_bon8_value_or_push(root, string_open, stack);\n+\n+        while (!stack.empty())\n+        {\n+            const binary_container_frame current = stack.back();\n+\n+            if (current.value->is_array())",
+   "line": 2756,
+   "path": "include/nlohmann/detail/output/binary_writer.hpp",
+   "user": {
+    "login": "gregmarr",
+    "type": "User"
+   }
+  },
+  {
+   "body": "Agreed, fixed in 60687a4. `write_bon8_iterative` now does the end-of-container check, the `0xFE` closer and the push in one place, and only branches where arrays and objects really differ (which iterator to advance, and the key for objects). `write_bon8_value_or_push` likewise computes the marker as `base + min(N, 5)` for both. The output is unchanged; the byte-exact tests in `unit-large_json.cpp` pass.\n\nThe CBOR/MessagePack/UBJSON iterative loops from #5781 have the same array/object split; an `at_end()` helper on `binary_container_frame` could tidy all four, but I'd do that in a separate PR.\n\n---\n_Generated by [Claude Code](https://claude.ai/code)_",
+   "created_at": "2026-10-10T21:08:06Z",
+   "diff_hunk": "@@ -2682,6 +2699,99 @@ class binary_writer\n         }\n     }\n \n+    /*!\n+    @brief write @a j with @ref write_bon8_value, or write its marker and push\n+           a frame for @ref write_bon8_iterative to continue with its elements\n+\n+    A scalar, and an empty array or object, are written out in full and not\n+    pushed.\n+\n+    @sa @ref write_cbor_value_or_push\n+    */\n+    void write_bon8_value_or_push(const BasicJsonType& j, bool& string_open, std::vector<binary_container_frame>& stack)\n+    {\n+        if (j.is_array())\n+        {\n+            const auto N = j.m_data.m_value.array->size();\n+            write_bon8_marker(static_cast<std::uint8_t>(N <= 4 ? 0x80 + N : 0x85), string_open);\n+            if (N != 0)\n+            {\n+                stack.emplace_back(&j);\n+            }\n+            return;\n+        }\n+\n+        if (j.is_object())\n+        {\n+            const auto N = j.m_data.m_value.object->size();\n+            write_bon8_marker(static_cast<std::uint8_t>(N <= 4 ? 0x86 + N : 0x8B), string_open);\n+            if (N != 0)\n+            {\n+                stack.emplace_back(&j);\n+            }\n+            return;\n+        }\n+\n+        write_bon8_value(j, string_open);\n+    }\n+\n+    /*!\n+    @brief write out @a root and everything below it without the call stack\n+\n+    A container with more than four elements is closed with 0xFE once its\n+    last element is written, as in @ref write_bon8_value.\n+\n+    @sa @ref write_cbor_iterative\n+    */\n+    void write_bon8_iterative(const BasicJsonType& root, bool& string_open)\n+    {\n+        // only a container with elements is ever pushed; see write_bon8_value_or_push\n+        std::vector<binary_container_frame> stack;\n+        write_bon8_value_or_push(root, string_open, stack);\n+\n+        while (!stack.empty())\n+        {\n+            const binary_container_frame current = stack.back();\n+\n+            if (current.value->is_array())",
+   "line": 2756,
+   "path": "include/nlohmann/detail/output/binary_writer.hpp",
+   "user": {
+    "login": "nlohmann",
+    "type": "User"
+   }
+  }
+ ],
+ "state": "closed",
+ "title": "Stop the BON8 writer overflowing the stack on deep values",
+ "transport": "gh",
+ "user": {
+  "login": "nlohmann",
+  "type": "User"
+ }
+}

@@ -1,0 +1,58 @@
+{
+ "base_ref": "develop",
+ "base_sha": "b18b6fc7e6223075b4447d08323ba7e81728febe",
+ "body": "Fixes the red CI on `develop` (b18b6fc7e). Three independent causes, one commit each; all three came in with PRs that were merged without a CI run.\n\n## 1. macOS: `test-json_view_positions` (`macos-15 (16.2)`, `macos-26 (26.6)`, `xcode_standards (26)`; also Ubuntu coverage, arm64, clang 4/11, MSVC)\n\n```\nunit-json_view_positions.cpp:573: [json.exception.type_error.302] (bytes 1-4) type must be number, but is string\n  == [json.exception.type_error.302] type must be number, but is string\n```\n\n#5990 kept the byte range in exceptions about the root value and, for that, dropped the `found` flag of `value_path()` in `view::diagnostics()`. A root is found and has no tokens, but a view of a value that was erased from the document is not found: without the flag it got the bytes of its stale node. The test of #5974 documents the intended behaviour (not found: no path, and with it no bytes). `diagnostics()` returns an empty context again for a value that is not found; the root keeps its range.\n\n## 2. MSVC: `error C2220` / `warning C4127` at `builder.hpp(1177)` (all Debug Win32 jobs, `ci_module_cpp20`)\n\nThe `!negative ||` that #6006 put in front of the digit test of the number scan has a constant left operand (`negative` is a template argument). The plain test is restored; the branch behaves the same.\n\n## 3. Windows (clang-cl, msvc-arm64, vs2026 Debug): `test-allocator` crashes\n\n```\nunit-allocator.cpp(1132): FATAL ERROR: test case CRASHED: Terminate handler called\n  parse() survives a failing allocation at every point (#5985) / sax_parse into an existing value\n```\n\nWith `_ITERATOR_DEBUG_LEVEL > 0`, containers allocate inside noexcept functions, so a failing allocation terminates. The sweep test of #6000 is guarded for this; the one of #5991 now has the same guard.\n\n## Checked\n\nLocally with clang++: `unit-json_view_positions` fails 3 assertions before and passes all 17869 after (with both macros, either one, and neither); `unit-allocator` (also with `-D_ITERATOR_DEBUG_LEVEL=2`, where the sweep is skipped), `unit-json_view`, `unit-json_view_builder`, `unit-json_view_compare` and `unit-diagnostic-positions` pass; `make amalgamate` leaves no diff. **Not verified**: the MSVC warning and the Windows crash were not reproduced (no MSVC here); the changes follow the CI logs.\n\n## Breaking changes\n\nNo breaking changes: the first two restore the behaviour before #5990 and #6006; the third changes a test only.\n\n\ud83e\udd16 Generated with [Claude Code](https://claude.com/claude-code)\n",
+ "comments": [
+  {
+   "body": "@nlohmann did you lose commits again here?",
+   "created_at": "2026-11-02T23:41:38Z",
+   "user": {
+    "login": "gregmarr",
+    "type": "User"
+   }
+  },
+  {
+   "body": "Looks like 2. was pushed to #6016 ",
+   "created_at": "2026-11-02T23:43:11Z",
+   "user": {
+    "login": "gregmarr",
+    "type": "User"
+   }
+  },
+  {
+   "body": "Seems so...",
+   "created_at": "2026-11-03T05:39:47Z",
+   "user": {
+    "login": "nlohmann",
+    "type": "User"
+   }
+  }
+ ],
+ "created_at": "2026-11-02T18:10:20Z",
+ "fetched_at": "2026-11-17T20:07:52Z",
+ "head_sha": "3724295333fbb268a3cbeca5e0e1b91550bd8c3b",
+ "labels": [
+  "S"
+ ],
+ "linked_issues": [],
+ "merge_commit_sha": "07876e22920ccc6770af188f4eb2ba4febb98508",
+ "merged_at": "2026-11-02T18:11:07Z",
+ "number": 6015,
+ "referenced_numbers": [
+  5990,
+  5974,
+  6006,
+  5985,
+  6000,
+  5991
+ ],
+ "repo": "nlohmann/json",
+ "review_comments": [],
+ "state": "closed",
+ "title": "Fix the red CI on develop: json_view exception context, MSVC C4127 in the number scan, allocation sweep on Windows",
+ "transport": "gh",
+ "user": {
+  "login": "nlohmann",
+  "type": "User"
+ }
+}

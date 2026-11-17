@@ -1,0 +1,118 @@
+{
+ "base_ref": "develop",
+ "base_sha": "7461a199b5ca4d7e43d463c7acee9256f481b04d",
+ "body": "## What\n\nWhen the bulk scanner in `dump_escaped_impl()` stops at a control character, a quote or a backslash, that byte went through the UTF-8 decoder and a `switch` that wrote the escape byte by byte into `string_buffer`. The buffer was then copied into `write_buffer` at the next unescaped run.\n\nA byte below 0x60 at a character boundary is a complete code point, so it now skips the decoder. Its escape sequence comes from a 96-entry table with 8-byte rows: the sequence is padded with zeros, and the last byte holds its length. All 8 bytes are copied straight into `write_buffer` after one room check, and the position advances by the length. The idea comes from orjson's `QUOTE_TAB`. Most of the gain comes from skipping the `string_buffer` round trip, not from the table. A table-only variant that still went through `string_buffer` gained only 2\u20137 %.\n\nThe check sits inside the existing character-boundary block, so it runs once each time the scanner stops, not once per byte. A first version tested every byte and cost about 6 % on twitter.json with `ensure_ascii`, where every byte of a CJK character went through the extra comparison.\n\nThe `switch` in the decoder's accept branch lost its cases for characters below 0x60, which can no longer reach it. What is left is \"\\u-escape under `ensure_ascii`, else copy the byte\".\n\nChanges:\n- `detail/output/serializer.hpp`: the table (`ascii_escapes()`), the direct write in `dump_escaped_impl()`, and the smaller accept branch.\n- `tests/src/unit-serialization.cpp`: new test case and updated string-buffer boundary tests (see below).\n\n## Performance\n\nCompact `dump()`, `dump(-1, ' ', true)` (ensure_ascii) and `dump(2)`, in ms: `develop` \u2192 this PR. Each cell is the median of 3 rounds \u00d7 101 runs. The first four rows are the usual corpus files. The last three rows are synthetic and escape-heavy:\n- **json_in_json**: an array of 20 strings that each hold the compact dump of twitter.json (10 MB output, a quote every few bytes).\n- **win_paths**: 100k strings like `C:\\Users\\name\\AppData\\Local\\Temp\\file123.txt`.\n- **log_lines**: 100k strings like `line one\\n\\tline \"two\"\\r\\nend 123`.\n\n**Apple clang 21, M1 Max (arm64)**\n\n| document | compact | ensure_ascii | indent 2 |\n|---|---|---|---|\n| canada | 7.17 \u2192 7.22 (+1%) | 7.05 \u2192 7.06 (+0%) | 8.19 \u2192 8.28 (+1%) |\n| citm | 0.58 \u2192 0.58 (+1%) | 0.52 \u2192 0.54 (+3%) | 0.81 \u2192 0.81 (+0%) |\n| twitter | 0.48 \u2192 0.48 (-1%) | 0.56 \u2192 0.57 (+2%) | 0.53 \u2192 0.52 (-2%) |\n| twitterescaped | 0.48 \u2192 0.47 (-2%) | 0.56 \u2192 0.57 (+2%) | 0.53 \u2192 0.52 (-2%) |\n| json_in_json | 14.41 \u2192 11.92 (-17%) | 14.91 \u2192 13.36 (-10%) | 13.84 \u2192 11.26 (-19%) |\n| win_paths | 9.62 \u2192 8.24 (-14%) | 9.11 \u2192 7.40 (-19%) | 9.56 \u2192 7.91 (-17%) |\n| log_lines | 7.61 \u2192 5.88 (-23%) | 5.68 \u2192 4.60 (-19%) | 7.61 \u2192 5.82 (-24%) |\n\n**GCC 13.3, x86-64 (VPS)**\n\n| document | compact | ensure_ascii | indent 2 |\n|---|---|---|---|\n| canada | 13.63 \u2192 13.93 (+2%) | 13.31 \u2192 13.63 (+2%) | 16.43 \u2192 16.48 (+0%) |\n| citm | 1.36 \u2192 1.35 (-1%) | 1.27 \u2192 1.30 (+2%) | 1.92 \u2192 1.98 (+3%) |\n| twitter | 1.02 \u2192 1.02 (+0%) | 1.24 \u2192 1.33 (+7%) | 1.15 \u2192 1.14 (-1%) |\n| twitterescaped | 1.02 \u2192 1.02 (-0%) | 1.26 \u2192 1.24 (-1%) | 1.13 \u2192 1.12 (-1%) |\n| json_in_json | 32.90 \u2192 26.43 (-20%) | 38.69 \u2192 32.35 (-16%) | 30.90 \u2192 23.64 (-24%) |\n| win_paths | 20.37 \u2192 15.69 (-23%) | 20.91 \u2192 16.82 (-20%) | 20.14 \u2192 14.53 (-28%) |\n| log_lines | 14.32 \u2192 11.63 (-19%) | 12.52 \u2192 9.91 (-21%) | 15.73 \u2192 12.70 (-19%) |\n\n**clang 18.1, x86-64 (VPS)**\n\n| document | compact | ensure_ascii | indent 2 |\n|---|---|---|---|\n| canada | 16.73 \u2192 16.03 (-4%) | 16.63 \u2192 16.23 (-2%) | 18.96 \u2192 18.86 (-1%) |\n| citm | 1.16 \u2192 1.13 (-3%) | 1.07 \u2192 1.07 (-0%) | 1.47 \u2192 1.47 (+0%) |\n| twitter | 1.06 \u2192 1.04 (-1%) | 1.20 \u2192 1.19 (-0%) | 1.13 \u2192 1.11 (-2%) |\n| twitterescaped | 1.00 \u2192 1.05 (+5%) | 1.14 \u2192 1.19 (+4%) | 1.09 \u2192 1.12 (+3%) |\n| json_in_json | 31.76 \u2192 26.85 (-15%) | 32.23 \u2192 30.64 (-5%) | 30.22 \u2192 24.64 (-18%) |\n| win_paths | 19.25 \u2192 16.66 (-13%) | 16.98 \u2192 15.39 (-9%) | 17.82 \u2192 15.69 (-12%) |\n| log_lines | 13.06 \u2192 11.41 (-13%) | 10.36 \u2192 9.11 (-12%) | 12.75 \u2192 11.75 (-8%) |\n\nEscape-heavy strings get 5\u201328 % faster on every compiler and in every mode. Documents with few escapes are unchanged within noise. The VPS has some background load: `twitter` and `twitterescaped` produce the same output, yet their rows there differ by up to 8 points, so differences of a few percent mean nothing on x86. On the M1, I repeated twitter and citm with `ensure_ascii` 5 \u00d7 401 times. The result was a small but steady cost of +1.4 % (twitter, 573 \u2192 581 \u00b5s) and +1.5 % (citm, 516 \u2192 524 \u00b5s): one extra comparison per non-ASCII character that is `\\u`-escaped. Without `ensure_ascii`, both were 1 % faster.\n\nI also measured part (b) of the same idea, writing without a bounds check per `put_char`/`put_literal`. A ceiling hack that removed those checks entirely, with one 16-byte room check per element instead, made no measurable difference on canada/citm/twitter. So that part is not in this PR.\n\n## Tests\n\n- New test case `characters below 0x60 are escaped from a table straight into the write buffer`:\n  - every ASCII character (0x00\u20130x7F) at every position of strings of length 1\u201317, which crosses the scanner's 8-byte strides, compared against a separately written reference escaper with `ensure_ascii` off and on\n  - runs of escaped characters\n  - escapes straddling the end of the 1024-byte write buffer at every offset\n  - pending `\\u` escapes of non-ASCII characters in `string_buffer` that must be written before a table escape\n  - escapes after invalid UTF-8 for all four error handlers\n- The two `serialization boundary values for the string buffer` sections built their margins from runs of `\\n`. Simple escapes no longer reach `string_buffer`, so they use U+00E4 under `ensure_ascii` (6-byte `\\u00e4` steps; 83 characters leave the tightest 14-byte margin, and 84 trigger the flush) to keep covering the `< 13` guard.\n- Differential check against `develop`, run locally and not committed, with identical output and exception messages in all 4,879,360 cases. Inputs: 400k random strings from a pool of control characters, `\"`, `\\`, 0x7F, letters, and valid and invalid UTF-8 lead and continuation bytes, plus every byte 0x00\u20130xFF at every position of lengths 1\u201340. Each one ran with `ensure_ascii` off and on \u00d7 all four error handlers, also under ASan/UBSan with assertions enabled.\n- The benchmark outputs (all 7 documents, all 3 modes) hash identically to `develop` on all three compilers.\n- Full test suite with ASan/UBSan: 145/145 passed. The new test code is clean with clang's `-Weverything` (C++11 and C++20), with GCC 16's CI warning flags, and with clang-tidy.\n- New test case `invalid UTF-8 at every position is handled like the reference` (commit c403f9319). It compares `dump()` with a second, separately written reference serializer, which decodes UTF-8 strictly (Unicode Table 3-7). It runs all four error handlers with `ensure_ascii` off and on, and for `strict` it checks the exception id and message. It covers:\n  - 33 ill-formed patterns: stray continuation bytes, C0/C1/F5\u2013FF, overlong encodings, surrogates, code points above U+10FFFF, and sequences cut short by ASCII, a control character, `\"`, `\\`, DEL, a lead byte, or the end of the string\n  - every position of strings up to 40 bytes, filled with ASCII and with 2-, 3- and 4-byte characters\n  - strings whose escaped form crosses the 512-byte `string_buffer`\n  - repeated patterns at every offset of the end of that buffer\n\n  It takes about 0.8 s in an unoptimized build and finds no differences. Each of these temporary mutations made it fail:\n  - `< 13` \u2192 `< 1` in each of the three flush checks (accept, `replace`, `keep`)\n  - removing the `--i` re-read in the `ignore`/`replace` branch, and in the `keep` branch\n  - missing the last byte of an 8-byte word in `find_string_special` or `find_ascii_copyable_run`\n\n  The flush-check mutations are caught by the assertion in `write_u_escape`, so only in builds with assertions enabled.\n\nThe new test passes on `develop` too, so it also serves as a regression test for the escaper as it is now.\n\n## Breaking changes\n\nNone. Only the way escapes are written changed. The output is byte-identical, and all changes are in `detail`.\n\n\ud83e\udd16 Generated with [Claude Code](https://claude.com/claude-code)\n\n",
+ "comments": [],
+ "created_at": "2026-10-14T07:17:41Z",
+ "fetched_at": "2026-11-17T20:09:31Z",
+ "head_sha": "c403f93196ee617c8fa11e17e6eaf7a535f714b3",
+ "labels": [
+  "L",
+  "tests",
+  "\ud83d\ude80 ready to merge",
+  "performance"
+ ],
+ "linked_issues": [],
+ "merge_commit_sha": "dcb96e82fbadc8b8d22388db9805d09f2781fa62",
+ "merged_at": "2026-10-15T18:08:10Z",
+ "number": 5822,
+ "referenced_numbers": [],
+ "repo": "nlohmann/json",
+ "review_comments": [
+  {
+   "body": "## Flawfinder / Does not check for buffer overflows when copying to destination (CWE-120).\n\nbuffer/memcpy:Does not check for buffer overflows when copying to destination (CWE-120).\n\n[Show more details](https://github.com/nlohmann/json/security/code-scanning/778)",
+   "created_at": "2026-10-14T15:56:49Z",
+   "diff_hunk": "@@ -772,6 +772,33 @@\n                         break;\n                     }\n                 }\n+\n+                // A byte below 0x60 is a complete code point and needs no\n+                // UTF-8 decoding. The scanner stops only at a control\n+                // character, a quote, or a backslash in that range, so look up\n+                // its escape sequence and write all 8 bytes of the table entry\n+                // straight into the write buffer; only the length stored in the\n+                // last byte of the entry is kept.\n+                if (data[i] < 0x60)\n+                {\n+                    // emit any bytes still pending in string_buffer first to\n+                    // preserve output order\n+                    if (bytes != 0)\n+                    {\n+                        put_buffer(string_buffer, bytes);\n+                        bytes = 0;\n+                    }\n+                    const auto& escape = ascii_escapes()[data[i]];\n+                    if (JSON_HEDLEY_UNLIKELY(write_buffer.size() - write_buffer_pos < escape.size()))\n+                    {\n+                        flush();\n+                    }\n+                    std::memcpy(write_buffer.data() + write_buffer_pos, escape.data(), escape.size());",
+   "line": 796,
+   "path": "include/nlohmann/detail/output/serializer.hpp",
+   "user": {
+    "login": "github-advanced-security[bot]",
+    "type": "Bot"
+   }
+  },
+  {
+   "body": "## Flawfinder / Does not check for buffer overflows when copying to destination (CWE-120).\n\nbuffer/memcpy:Does not check for buffer overflows when copying to destination (CWE-120).\n\n[Show more details](https://github.com/nlohmann/json/security/code-scanning/779)",
+   "created_at": "2026-10-14T15:56:49Z",
+   "diff_hunk": "@@ -27087,6 +27087,33 @@ class serializer\n                         break;\n                     }\n                 }\n+\n+                // A byte below 0x60 is a complete code point and needs no\n+                // UTF-8 decoding. The scanner stops only at a control\n+                // character, a quote, or a backslash in that range, so look up\n+                // its escape sequence and write all 8 bytes of the table entry\n+                // straight into the write buffer; only the length stored in the\n+                // last byte of the entry is kept.\n+                if (data[i] < 0x60)\n+                {\n+                    // emit any bytes still pending in string_buffer first to\n+                    // preserve output order\n+                    if (bytes != 0)\n+                    {\n+                        put_buffer(string_buffer, bytes);\n+                        bytes = 0;\n+                    }\n+                    const auto& escape = ascii_escapes()[data[i]];\n+                    if (JSON_HEDLEY_UNLIKELY(write_buffer.size() - write_buffer_pos < escape.size()))\n+                    {\n+                        flush();\n+                    }\n+                    std::memcpy(write_buffer.data() + write_buffer_pos, escape.data(), escape.size());",
+   "line": 27111,
+   "path": "single_include/nlohmann/json.hpp",
+   "user": {
+    "login": "github-advanced-security[bot]",
+    "type": "Bot"
+   }
+  },
+  {
+   "body": "Why not take advantage of the stored size up front?\n\n```\n  std::size_t escape_size = static_cast<std::size_t>(escape[7]);\n  if (JSON_HEDLEY_UNLIKELY(write_buffer.size() - write_buffer_pos < escape_size))\n```\n\nThis allows you to put more bytes into the buffer without flushing, and copies fewer bytes.",
+   "created_at": "2026-10-14T16:37:32Z",
+   "diff_hunk": "@@ -772,6 +772,33 @@ class serializer\n                         break;\n                     }\n                 }\n+\n+                // A byte below 0x60 is a complete code point and needs no\n+                // UTF-8 decoding. The scanner stops only at a control\n+                // character, a quote, or a backslash in that range, so look up\n+                // its escape sequence and write all 8 bytes of the table entry\n+                // straight into the write buffer; only the length stored in the\n+                // last byte of the entry is kept.\n+                if (data[i] < 0x60)\n+                {\n+                    // emit any bytes still pending in string_buffer first to\n+                    // preserve output order\n+                    if (bytes != 0)\n+                    {\n+                        put_buffer(string_buffer, bytes);\n+                        bytes = 0;\n+                    }\n+                    const auto& escape = ascii_escapes()[data[i]];\n+                    if (JSON_HEDLEY_UNLIKELY(write_buffer.size() - write_buffer_pos < escape.size()))",
+   "line": 792,
+   "path": "include/nlohmann/detail/output/serializer.hpp",
+   "user": {
+    "login": "gregmarr",
+    "type": "User"
+   }
+  },
+  {
+   "body": "Have you considered putting the size first and then you don't need to pad with trailing zeros in the initializers when you're not using all the bytes?",
+   "created_at": "2026-10-14T16:40:24Z",
+   "diff_hunk": "@@ -1253,6 +1227,121 @@ class serializer\n         }\n     }\n \n+    /*!\n+    @brief the JSON form of each character below 0x60\n+\n+    Entry c holds the escape sequence of character c - the short form for\n+    \\\\b, \\\\t, \\\\n, \\\\f, \\\\r, \\\\\" and \\\\\\\\, \\\\u00xx for the other control characters -\n+    or c itself if it needs no escaping, padded with zeros to 7 bytes. The last\n+    byte is the length of the sequence. The 8 bytes of an entry are copied at\n+    once, so writing an escape needs neither a branch nor a byte-wise loop.",
+   "line": 1237,
+   "path": "include/nlohmann/detail/output/serializer.hpp",
+   "user": {
+    "login": "gregmarr",
+    "type": "User"
+   }
+  },
+  {
+   "body": "The `memcpy` deliberately copies all 8 bytes: with a constant size it compiles to one 64-bit load/store, whereas a variable-size copy becomes a call or a branch cascade. So the room check has to cover 8 bytes, not `escape[7]` \u2014 checking only `escape[7]` while copying 8 could write past the end of `write_buffer`. One could add 7 bytes of slack to the buffer and check the real length, but that only saves an occasional flush a few bytes early once per 1 KiB, which doesn't change the output and isn't measurable. I'd keep it as is.\n\n*(Written by Claude Code.)*",
+   "created_at": "2026-10-14T17:32:12Z",
+   "diff_hunk": "@@ -772,6 +772,33 @@ class serializer\n                         break;\n                     }\n                 }\n+\n+                // A byte below 0x60 is a complete code point and needs no\n+                // UTF-8 decoding. The scanner stops only at a control\n+                // character, a quote, or a backslash in that range, so look up\n+                // its escape sequence and write all 8 bytes of the table entry\n+                // straight into the write buffer; only the length stored in the\n+                // last byte of the entry is kept.\n+                if (data[i] < 0x60)\n+                {\n+                    // emit any bytes still pending in string_buffer first to\n+                    // preserve output order\n+                    if (bytes != 0)\n+                    {\n+                        put_buffer(string_buffer, bytes);\n+                        bytes = 0;\n+                    }\n+                    const auto& escape = ascii_escapes()[data[i]];\n+                    if (JSON_HEDLEY_UNLIKELY(write_buffer.size() - write_buffer_pos < escape.size()))",
+   "line": 792,
+   "path": "include/nlohmann/detail/output/serializer.hpp",
+   "user": {
+    "login": "nlohmann",
+    "type": "User"
+   }
+  },
+  {
+   "body": "Then the sequence starts at offset 1, and an 8-byte copy from `data() + 1` would read into the next entry (and past the array for 0x5F). The options are a 7-byte copy (two stores instead of one) or 9-byte entries (losing alignment). The trailing zeros are only how the table looks in the source and cost nothing at runtime, so I'd rather keep the single aligned store.\n\n*(Written by Claude Code.)*",
+   "created_at": "2026-10-14T17:32:13Z",
+   "diff_hunk": "@@ -1253,6 +1227,121 @@ class serializer\n         }\n     }\n \n+    /*!\n+    @brief the JSON form of each character below 0x60\n+\n+    Entry c holds the escape sequence of character c - the short form for\n+    \\\\b, \\\\t, \\\\n, \\\\f, \\\\r, \\\\\" and \\\\\\\\, \\\\u00xx for the other control characters -\n+    or c itself if it needs no escaping, padded with zeros to 7 bytes. The last\n+    byte is the length of the sequence. The 8 bytes of an entry are copied at\n+    once, so writing an escape needs neither a branch nor a byte-wise loop.",
+   "line": 1237,
+   "path": "include/nlohmann/detail/output/serializer.hpp",
+   "user": {
+    "login": "nlohmann",
+    "type": "User"
+   }
+  },
+  {
+   "body": "> with a constant size it compiles to one 64-bit load/store,\r\n\r\nAh, that makes sense, thanks.",
+   "created_at": "2026-10-14T18:34:58Z",
+   "diff_hunk": "@@ -772,6 +772,33 @@ class serializer\n                         break;\n                     }\n                 }\n+\n+                // A byte below 0x60 is a complete code point and needs no\n+                // UTF-8 decoding. The scanner stops only at a control\n+                // character, a quote, or a backslash in that range, so look up\n+                // its escape sequence and write all 8 bytes of the table entry\n+                // straight into the write buffer; only the length stored in the\n+                // last byte of the entry is kept.\n+                if (data[i] < 0x60)\n+                {\n+                    // emit any bytes still pending in string_buffer first to\n+                    // preserve output order\n+                    if (bytes != 0)\n+                    {\n+                        put_buffer(string_buffer, bytes);\n+                        bytes = 0;\n+                    }\n+                    const auto& escape = ascii_escapes()[data[i]];\n+                    if (JSON_HEDLEY_UNLIKELY(write_buffer.size() - write_buffer_pos < escape.size()))",
+   "line": 792,
+   "path": "include/nlohmann/detail/output/serializer.hpp",
+   "user": {
+    "login": "gregmarr",
+    "type": "User"
+   }
+  },
+  {
+   "body": "With the information about this being a single load/store, that all makes sense.\r\n",
+   "created_at": "2026-10-14T18:35:31Z",
+   "diff_hunk": "@@ -1253,6 +1227,121 @@ class serializer\n         }\n     }\n \n+    /*!\n+    @brief the JSON form of each character below 0x60\n+\n+    Entry c holds the escape sequence of character c - the short form for\n+    \\\\b, \\\\t, \\\\n, \\\\f, \\\\r, \\\\\" and \\\\\\\\, \\\\u00xx for the other control characters -\n+    or c itself if it needs no escaping, padded with zeros to 7 bytes. The last\n+    byte is the length of the sequence. The 8 bytes of an entry are copied at\n+    once, so writing an escape needs neither a branch nor a byte-wise loop.",
+   "line": 1237,
+   "path": "include/nlohmann/detail/output/serializer.hpp",
+   "user": {
+    "login": "gregmarr",
+    "type": "User"
+   }
+  }
+ ],
+ "state": "closed",
+ "title": "Escape characters below 0x60 from a table straight into the write buffer",
+ "transport": "gh",
+ "user": {
+  "login": "nlohmann",
+  "type": "User"
+ }
+}

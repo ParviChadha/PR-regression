@@ -1,0 +1,46 @@
+{
+ "base_ref": "develop",
+ "base_sha": "e32051125faf95dc64d49a129959b6742b9ffee9",
+ "body": "## Summary\n\nThe UBJSON/BJData reader marks a container whose count is not known by `npos`, which is `SIZE_MAX`. A count of exactly that value was stored unchanged and then treated as \"no count\", so this BJData input parsed as `[1]`:\n\n```\n[ # M ff ff ff ff ff ff ff ff i 01 ]\n```\n\nA count of 2^64-2 throws `out_of_range.408` (\"excessive array size\"), and CBOR already rejects a definite length equal to its unknown-size sentinel. Where `size_t` is 32 bits, the same holds for 'm' and 'L' counts of 2^32-1, in UBJSON too.\n\nThe counts of the 'm', 'M' and signed markers now go through `store_ubjson_count()`, which rejects `npos` with \"integer value overflow\", the message a count beyond `size_t` already gets:\n\n```\n[json.exception.out_of_range.408] syntax error while parsing BJData size: integer value overflow\n```\n\nOne existing expectation changed: an ND-array whose first dimension is 2^64-1 (`vMX` in `unit-bjdata.cpp`) now gets this message on 64-bit platforms too, where it was \"excessive ndarray size caused overflow\" from the later product check; 32-bit platforms already reported \"integer value overflow\" for it. The `#if` around that check is gone.\n\n### MessagePack (from review)\n\nWhere `size_t` is 32 bits, a MessagePack array 32 or map 32 (`0xDD`/`0xDF`) length of `0xFFFFFFFF` also equals `unknown_size()`. It was passed straight to `start_array()`/`start_object()`, which then skipped their `max_size()` check: the input was still rejected, but with \"unexpected end of input\", and a custom SAX handler was told the size was unknown. Both now go through the CBOR length check, renamed from `get_cbor_container_size()` to `get_container_size()`, and get the CBOR message:\n\n```\n[json.exception.out_of_range.408] syntax error while parsing MessagePack size: excessive array size\n```\n\nThe remaining 32-bit size slots were checked and need nothing: CBOR's 32-bit lengths already used that check, UBJSON 'l' is signed (at most 2^31-1), BSON has no element counts, and string/binary lengths have no sentinel value.\n\nTests: `unit-bjdata.cpp` (count equal to `SIZE_MAX` for 'M', and for 'm' and 'L' where `size_t` is 32 bits; 2^64-2 still reports an excessive size), `unit-ubjson.cpp` ('L' = 2^32-1 where `size_t` is 32 bits) and `unit-32bit.cpp` (MessagePack array 32 and map 32 of `0xFFFFFFFF`, next to the CBOR case). Locally the msgpack, cbor, ubjson, bjdata and regression2 tests pass on 64-bit; the 32-bit cases only run in CI's 32-bit job.\n\nFound by a review of runtime checks in the binary readers (the `first != npos` guards next to the count are what made the sentinel collision visible).\n\n## Breaking changes\n\nNo breaking changes to the API. One crafted BJData/UBJSON input that was accepted as `[1]` now throws `out_of_range.408`, as a count of 2^64-2 already did; on 32-bit platforms a MessagePack array/map 32 of `0xFFFFFFFF` now throws `out_of_range.408` instead of `parse_error.110`. No valid document is affected (no container can hold `SIZE_MAX` elements).\n\n\ud83e\udd16 Generated with [Claude Code](https://claude.com/claude-code)\n",
+ "comments": [
+  {
+   "body": "### Performance check\n\n**No measurable impact.** `store_ubjson_count()` adds one compare against `npos` per optimized container count.\n\n- **Generated code** (clang, arm64): two functions differ, the two `get_ubjson_size_value()` instantiations (pointer and stream adapter). Each grows by one 16-byte block for the compare and the error branch. Everything else is identical.\n- **Instruction counts**:\n\n| case | base instr/rep | PR instr/rep | PR/base |\n|---|---:|---:|---:|\n| `from_ubjson` canada | 106.05 M | 105.83 M | 0.9979 |\n| `from_ubjson` canada, size+type optimized | 76.25 M | 76.05 M | 0.9973 |\n| `from_bjdata` canada | 106.05 M | 105.73 M | 0.9970 |\n| `from_bjdata` canada, size+type optimized | 76.87 M | 76.76 M | 0.9986 |\n| `from_bjdata` citm_catalog, size+type optimized | 38.08 M | 38.01 M | 0.9982 |\n\n  All rows are within noise. The extra compare runs once per container, not per element, so it cannot show up.\n\n<details><summary>Method</summary>\n\n- PR head vs. its base (merge base), both compiled into one binary (namespaces renamed per copy) with the same workload: DOM parse (string, stream, callback), copy/destroy, `==`/`<`, iteration, `dump()`, msgpack/UBJSON/BJData read and write, `json_document` parse/`dump()`/`==`/`get<std::int64_t>()` on twitter, citm_catalog, canada and small_signed_ints.\n- **Generated code**: both variants disassembled (Apple clang 21, `-O3`, arm64), names and addresses masked, compared function by function.\n- **Instruction counts**: Apple M1 Max, instructions retired per repetition (minimum of 3 runs, setup subtracted). Rows whose machine code is identical vary by about \u00b10.4 %, which is the noise floor. Where a hot path changes, also GCC 13.3 `-O3` on x86-64 under callgrind, which gives exact counts (built with `-falign-functions=64 -falign-loops=64` unless a row says otherwise).\n</details>\n\n---\n*Written by Claude Code on behalf of @nlohmann.*\n",
+   "created_at": "2026-11-02T08:24:44Z",
+   "user": {
+    "login": "nlohmann",
+    "type": "User"
+   }
+  },
+  {
+   "body": "@gregmarr Yes, one: MessagePack. Array 32 and map 32 (`0xDD`/`0xDF`) read a `uint32_t` length and passed it straight on, so with a 32-bit `size_t` a length of `0xFFFFFFFF` became `start_array(unknown_size())`. That skipped the `max_size()` check and ended in a misleading \"unexpected end of input\" instead of an excessive-size error, and a custom SAX handler was told the size was unknown. It was never accepted as valid, unlike the UBJSON case. Fixed in `da6d21ae24`: both now go through the CBOR length check, renamed `get_container_size()`, which rejects a length equal to `unknown_size()`. `unit-32bit.cpp` has a test next to the CBOR one.\n\nThe other places are already covered. CBOR's 32-bit lengths (`0x9A`/`0xBA`) already went through that check. BJData `m`/`M` counts are handled by this PR, and the ndarray dimension product already rejects an exact `npos`. UBJSON `l` is signed and tops out at 2^31-1. BSON has no element counts, only int32 byte lengths. String and binary lengths (MessagePack str/bin 32, BSON) have no sentinel value.\n\n*(Written by Claude Code on behalf of @nlohmann.)*",
+   "created_at": "2026-11-02T17:26:30Z",
+   "user": {
+    "login": "nlohmann",
+    "type": "User"
+   }
+  }
+ ],
+ "created_at": "2026-11-02T06:11:39Z",
+ "fetched_at": "2026-11-17T20:07:47Z",
+ "head_sha": "1f54a9fee6f764bf8b67b52a67c03a801ac17a2b",
+ "labels": [
+  "aspect: binary formats",
+  "L",
+  "tests",
+  "\ud83d\ude80 ready to merge"
+ ],
+ "linked_issues": [],
+ "merge_commit_sha": "efc437ef6e25d0e5617c4b6385a095cb383a5a2b",
+ "merged_at": "2026-11-04T16:13:17Z",
+ "number": 6002,
+ "referenced_numbers": [],
+ "repo": "nlohmann/json",
+ "review_comments": [],
+ "state": "closed",
+ "title": "UBJSON/BJData/MessagePack reader: reject a container count equal to SIZE_MAX",
+ "transport": "gh",
+ "user": {
+  "login": "nlohmann",
+  "type": "User"
+ }
+}

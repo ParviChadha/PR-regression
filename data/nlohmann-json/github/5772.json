@@ -1,0 +1,146 @@
+{
+ "base_ref": "develop",
+ "base_sha": "367336c83d47e26c3a36b8a58ef829ad43b3c217",
+ "body": "Closes #5400.\nCloses #5256.\n\n`std::hash<basic_json>` gave different hashes to numbers that compare equal (`json(0)`, `json(0U)`, `json(0.0)`), so a `std::unordered_set<json>` could hold all three. That breaks the requirement that `a == b` implies `hash(a) == hash(b)`.\n\nThis continues #5447 by @afonsojanu, who closed it on 10-05 to start fresh. Their three commits are cherry-picked unchanged (authorship kept), so the credit for the fix is theirs. It also supersedes my earlier attempt #5262.\n\n### Changes\n\n- **Fix (@afonsojanu):** `hash()` hashes every number as its `number_float_t` value under one shared type tag. Since #5459, `operator==` compares numbers by exact mathematical value. Two equal numbers therefore have the same value and convert to the same `number_float_t`, so they hash equally, including at the range ends. The tests now check this consistency, including through an `unordered_set`. The docs no longer describe the old behavior as intended.\n- **Follow-up:**\n  - Maps `-0.0` to `0.0` before hashing, because `-0.0 == 0` and `std::hash` is not required to treat them alike.\n  - Updates the code comment to say exact comparison instead of \"converts before comparing\".\n  - Tests `-0.0`, `INT64_MIN`, 2^63 as unsigned, and `INT64_MAX` stored as unsigned.\n  - Adds `hash(0.0)` to the docs example, regenerates its output, adds a version-history note, and re-amalgamates.\n\nUnequal but nearby large integers (for example 2^53 and 2^53+1) now share a hash. That is allowed, and such collisions are rare in practice.\n\n### Breaking changes\n\nThere is no API or ABI change. Hash *values* change for every number, and for every container that holds one. Code that relied on `0`, `0U` and `0.0` hashing differently, or that persisted hash values, will see different results. Hash values were never stable across platforms or versions.\n\nWritten by Claude Code on behalf of @nlohmann.\n\n\ud83e\udd16 Generated with [Claude Code](https://claude.com/claude-code)\n",
+ "comments": [],
+ "created_at": "2026-10-06T20:52:04Z",
+ "fetched_at": "2026-11-17T20:10:13Z",
+ "head_sha": "f1027d8f3821dec7f86e4a8004fce92c9a899783",
+ "labels": [
+  "documentation",
+  "L",
+  "tests",
+  "\ud83d\ude80 ready to merge"
+ ],
+ "linked_issues": [
+  {
+   "body": "### Description\n\n`std::hash<basic_json>` can produce **different** hash values for two `json` values that compare **equal** under `operator==`. The C++ standard requires of a `Hash` used with `std::unordered_map`/`unordered_set` that `a == b` implies `hash(a) == hash(b)`; this invariant is violated for numbers of different internal types.\n\n`operator==` converts between `number_integer`, `number_unsigned`, and `number_float` before comparing ([`include/nlohmann/json.hpp`](https://github.com/nlohmann/json/blob/develop/include/nlohmann/json.hpp), `JSON_IMPLEMENT_OPERATOR`), so `json(0) == json(0.0) == json(0u)` are all `true`. But `hash()` folds the `value_t` type tag into the result via `combine(type, h)` ([`include/nlohmann/detail/hash.hpp`](https://github.com/nlohmann/json/blob/develop/include/nlohmann/detail/hash.hpp)), giving each of the three a distinct hash.\n\nConsequently a `std::unordered_set<json>` can hold `json(0)`, `json(0.0)`, and `json(0u)` as three separate elements even though they are all equal \u2014 silent duplicate keys / lookup misses.\n\nThe documentation ([`std_hash.md`](https://github.com/nlohmann/json/blob/develop/docs/mkdocs/docs/api/basic_json/std_hash.md)) currently describes this as intended (\"different hash values for `null`, `0`, `0U`, and `false`\"). But `0`, `0U`, and `0.0` are *equal* under `operator==`, so distinguishing them by hash is precisely the contract violation. Only `false` vs `0` is legitimately distinguishable (those are not equal \u2014 different `value_t` and no cross-conversion). This looks like a case where the documented intent itself encodes the bug.\n\n### Reproduction steps\n\nHash `json(0)`, `json(0.0)`, `json(0u)`; observe they are `==` but hash differently and coexist in an `unordered_set`.\n\n### Expected vs. actual results\n\n- **Expected:** equal values hash equally; `unordered_set` of `{0, 0.0, 0u}` has size 1.\n- **Actual:** three distinct hashes; `unordered_set` size is 3.\n\n### Minimal code example\n\n```cpp\n#include <nlohmann/json.hpp>\n#include <unordered_set>\n#include <cstdio>\nusing json = nlohmann::json;\n\nint main()\n{\n    json a = 0, b = 0.0, c = 0u;\n    std::hash<json> H;\n    std::printf(\"a==b:%d a==c:%d  hashes: %zu %zu %zu\\n\",\n                (int)(a==b), (int)(a==c), H(a), H(b), H(c));\n    std::unordered_set<json> s; s.insert(a); s.insert(b); s.insert(c);\n    std::printf(\"unordered_set size (all == 0): %zu (expected 1)\\n\", s.size());\n}\n```\n\n### Error messages\n\n```\na==b:1 a==c:1  hashes: 2654436095 2654436221 2654436156\nunordered_set size (all == 0): 3 (expected 1)\n```\n\n### Discussion / possible fix\n\nMake `hash()` consistent with `operator==` for numbers, e.g. normalize numeric values to a canonical representation before hashing (so that any two numerically-equal values hash the same), or fold a single \"number\" category into the hash instead of the specific `value_t`. This is a semantics decision for the maintainer; the current behavior breaks the standard `Hash` requirement whenever numeric `json` values are used as keys in unordered containers.\n\n### Compiler and operating system\n\ng++ 13.3.0 (Ubuntu 24.04, x86-64)\n\n### Library version\n\n`develop` @ `01853ed6bcf9ebe88ec2e248ea757b86417b1487`\n\n### Validation\n\n- [x] The bug also occurs if the latest version from the `develop` branch is used.\n- [x] I can successfully compile and run the unit tests.",
+   "labels": [
+    "kind: bug",
+    "solution: proposed fix"
+   ],
+   "number": 5400,
+   "state": "closed",
+   "title": "std::hash<basic_json> is inconsistent with operator== for equal cross-type numbers (breaks unordered containers)"
+  },
+  {
+   "body": "### Description\n\nOn the implementation of `std::hash`, [the C++ specification](https://en.cppreference.com/cpp/utility/hash) states:\n\n> If `k1 == k2` is `true`, `h(k1) == h(k2)` is also `true`\n\nYet this is not the case for `json` values of the same numeric value but of signed and unsigned storage types. I can see this behaviour is documented [here](https://json.nlohmann.me/api/basic_json/std_hash/), but it violates the `std::hash` contract. While this behaviour is great for distinguishing between the other types, it feels unnatural for it to distinguish between signed and unsigned types.\n\n### Reproduction steps\n\n```C++\nusing namespace nlohmann;\n\nint main()\n{\n    const json a{42};\n    const json b{42u};\n\n    assert(a == b);\n    assert(std::hash<json>{}(a) == std::hash<json>{}(b));\n}\n```\n\n### Expected vs. actual results\n\nI would expect `assert(std::hash<json>{}(a) == std::hash<json>{}(b));` to succeed because `a == b` is `true`, but it actually fails.\n\nI believe the `hash<basic_json>` implementation should treat signed and unsigned integers the same. This is especially important because the storage type selected by the parser is not specified (currently, see #5255 ).\n\nIn all other aspects, signed and unsigned integers are treated the same: there is no distinction made in the JSON standard and they are silently cast between when calling `.at()` or `.get<>()`.\n\n### Minimal code example\n\n```C++\n// I'd like to be able to write code like this\n\nusing namespace nlohmann;\n\nint main()\n{\n    const json j = R\"({\"a\": 42})\"_json;\n    const std::unordered_map<json, std::string> m = {{42, \"hello\"}};\n    std::cout << m.at(j.at(\"a\")) << '\\n'; // throws std::out_of_range\n}\n```\n\n### Error messages\n\n```Shell\n\n```\n\n### Compiler and operating system\n\nGCC 12.2.0, Linux\n\n### Library version\n\n3.12.0\n\n### Validation\n\n- [ ] The bug also occurs if the latest version from the [`develop`](https://github.com/nlohmann/json/tree/develop) branch is used.\n- [ ] I can successfully [compile and run the unit tests](https://github.com/nlohmann/json#execute-unit-tests).",
+   "labels": [
+    "kind: bug",
+    "confirmed",
+    "solution: proposed fix"
+   ],
+   "number": 5256,
+   "state": "closed",
+   "title": "Int and uint compare equal but hashes do not"
+  }
+ ],
+ "merge_commit_sha": "a5f5d3059b47d9697b60ceeaa9bb4c28a0765655",
+ "merged_at": "2026-10-07T17:18:52Z",
+ "number": 5772,
+ "referenced_numbers": [
+  5400,
+  5256,
+  5447,
+  5262,
+  5459
+ ],
+ "repo": "nlohmann/json",
+ "review_comments": [
+  {
+   "body": "Would it be clearer to say `stored as signed integer, unsigned integer, or floating point`?",
+   "created_at": "2026-10-06T20:57:08Z",
+   "diff_hunk": "@@ -7,8 +7,9 @@ namespace std {\n ```\n \n Return a hash value for a JSON object. The hash function tries to rely on `std::hash` where possible. Furthermore, the\n-type of the JSON value is taken into account to have different hash values for `#!json null`, `#!cpp 0`, `#!cpp 0U`, and\n-`#!cpp false`, etc.\n+type of the JSON value is taken into account, so `#!json null`, `#!cpp false`, and numbers all hash differently from\n+each other. Numbers that compare equal under [`operator==`](operator_eq.md) always hash equally, regardless of\n+whether they are stored as `#!cpp 0`, `#!cpp 0U`, or `#!cpp 0.0`.",
+   "line": 12,
+   "path": "docs/mkdocs/docs/api/basic_json/std_hash.md",
+   "user": {
+    "login": "gregmarr",
+    "type": "User"
+   }
+  },
+  {
+   "body": "Expand the note here to explicitly say that these output values are for example only, and that they are not even guaranteed to be consistent across different compilers or compiler versions (in addition to platforms)?",
+   "created_at": "2026-10-06T21:00:19Z",
+   "diff_hunk": "",
+   "line": 30,
+   "path": "docs/mkdocs/docs/api/basic_json/std_hash.md",
+   "user": {
+    "login": "gregmarr",
+    "type": "User"
+   }
+  },
+  {
+   "body": "Is it too pedantic to say that they *may* hash differently from each other, because it is theoretically possible to have a number that hashes the same as null or false?",
+   "created_at": "2026-10-06T21:01:55Z",
+   "diff_hunk": "@@ -35,8 +35,10 @@ std::size_t hash_iteratively(const BasicJsonType& j);\n @brief hash a JSON value\n \n The hash function tries to rely on std::hash where possible. Furthermore, the\n-type of the JSON value is taken into account to have different hash values for\n-null, 0, 0U, and false, etc.\n+type of the JSON value is taken into account, so null, false, and numbers all\n+hash differently from each other, but any two numbers that compare equal",
+   "line": 39,
+   "path": "include/nlohmann/detail/hash.hpp",
+   "user": {
+    "login": "gregmarr",
+    "type": "User"
+   }
+  },
+  {
+   "body": "Should the docs say something like the following, or is that self-evident?\n\nWhile `hash(uval) == hash(number_float_t(uval))` because the hash is done by converting to `number_float_t`, it is not necessarily true that `hash(floatval) == hash(number_unsigned_t(floatval))` because the conversion from `number_float_t` to `number_unsigned_t` is not lossless.\n",
+   "created_at": "2026-10-06T21:07:28Z",
+   "diff_hunk": "@@ -113,21 +113,20 @@ std::size_t hash(const BasicJsonType& j, const std::size_t depth = 0)\n         }\n \n         case BasicJsonType::value_t::number_integer:\n-        {\n-            const auto h = std::hash<number_integer_t> {}(j.template get<number_integer_t>());\n-            return combine(type, h);\n-        }\n-\n         case BasicJsonType::value_t::number_unsigned:\n-        {\n-            const auto h = std::hash<number_unsigned_t> {}(j.template get<number_unsigned_t>());\n-            return combine(type, h);\n-        }\n-\n         case BasicJsonType::value_t::number_float:\n         {\n-            const auto h = std::hash<number_float_t> {}(j.template get<number_float_t>());\n-            return combine(type, h);\n+            // operator== compares numbers by their mathematical value across\n+            // number_integer, number_unsigned, and number_float, so equal\n+            // numbers of different internal types (0, 0U, 0.0) must hash the\n+            // same. Two equal numbers have the same value, which converts to\n+            // the same number_float_t, so all numbers share one type tag and\n+            // hash that converted value. Adding zero turns -0.0 (equal to 0)\n+            // into 0.0, as std::hash need not map both to the same hash.",
+   "line": 125,
+   "path": "include/nlohmann/detail/hash.hpp",
+   "user": {
+    "login": "gregmarr",
+    "type": "User"
+   }
+  },
+  {
+   "body": "Yes, that reads better. Changed in cf354aa4a to \"stored as signed integer, unsigned integer, or floating-point number\".\n\n*Written by Claude Code on behalf of @nlohmann.*",
+   "created_at": "2026-10-07T05:40:40Z",
+   "diff_hunk": "@@ -7,8 +7,9 @@ namespace std {\n ```\n \n Return a hash value for a JSON object. The hash function tries to rely on `std::hash` where possible. Furthermore, the\n-type of the JSON value is taken into account to have different hash values for `#!json null`, `#!cpp 0`, `#!cpp 0U`, and\n-`#!cpp false`, etc.\n+type of the JSON value is taken into account, so `#!json null`, `#!cpp false`, and numbers all hash differently from\n+each other. Numbers that compare equal under [`operator==`](operator_eq.md) always hash equally, regardless of\n+whether they are stored as `#!cpp 0`, `#!cpp 0U`, or `#!cpp 0.0`.",
+   "line": 12,
+   "path": "docs/mkdocs/docs/api/basic_json/std_hash.md",
+   "user": {
+    "login": "nlohmann",
+    "type": "User"
+   }
+  },
+  {
+   "body": "Done in cf354aa4a. The note now says the values are examples only: they depend on the platform, the compiler, and the compiler version, can change between library versions, and should not be persisted or relied on.\n\n*Written by Claude Code on behalf of @nlohmann.*",
+   "created_at": "2026-10-07T05:40:41Z",
+   "diff_hunk": "",
+   "line": 30,
+   "path": "docs/mkdocs/docs/api/basic_json/std_hash.md",
+   "user": {
+    "login": "nlohmann",
+    "type": "User"
+   }
+  },
+  {
+   "body": "Not too pedantic, it's correct. Changed to \"may hash differently\" in both the docs and the code comment (cf354aa4a).\n\n*Written by Claude Code on behalf of @nlohmann.*",
+   "created_at": "2026-10-07T05:40:43Z",
+   "diff_hunk": "@@ -35,8 +35,10 @@ std::size_t hash_iteratively(const BasicJsonType& j);\n @brief hash a JSON value\n \n The hash function tries to rely on std::hash where possible. Furthermore, the\n-type of the JSON value is taken into account to have different hash values for\n-null, 0, 0U, and false, etc.\n+type of the JSON value is taken into account, so null, false, and numbers all\n+hash differently from each other, but any two numbers that compare equal",
+   "line": 39,
+   "path": "include/nlohmann/detail/hash.hpp",
+   "user": {
+    "login": "nlohmann",
+    "type": "User"
+   }
+  },
+  {
+   "body": "I think it's worth stating. cf354aa4a adds a paragraph to the docs and a sentence to the code comment: converting an integer to `number_float_t` keeps its hash, but converting a float to an integer type loses information (`0.5` becomes `0`), so the result need not hash the same. It also notes that unequal numbers can share a hash, for example 2^53 and 2^53 + 1.\n\n*Written by Claude Code on behalf of @nlohmann.*",
+   "created_at": "2026-10-07T05:40:44Z",
+   "diff_hunk": "@@ -113,21 +113,20 @@ std::size_t hash(const BasicJsonType& j, const std::size_t depth = 0)\n         }\n \n         case BasicJsonType::value_t::number_integer:\n-        {\n-            const auto h = std::hash<number_integer_t> {}(j.template get<number_integer_t>());\n-            return combine(type, h);\n-        }\n-\n         case BasicJsonType::value_t::number_unsigned:\n-        {\n-            const auto h = std::hash<number_unsigned_t> {}(j.template get<number_unsigned_t>());\n-            return combine(type, h);\n-        }\n-\n         case BasicJsonType::value_t::number_float:\n         {\n-            const auto h = std::hash<number_float_t> {}(j.template get<number_float_t>());\n-            return combine(type, h);\n+            // operator== compares numbers by their mathematical value across\n+            // number_integer, number_unsigned, and number_float, so equal\n+            // numbers of different internal types (0, 0U, 0.0) must hash the\n+            // same. Two equal numbers have the same value, which converts to\n+            // the same number_float_t, so all numbers share one type tag and\n+            // hash that converted value. Adding zero turns -0.0 (equal to 0)\n+            // into 0.0, as std::hash need not map both to the same hash.",
+   "line": 125,
+   "path": "include/nlohmann/detail/hash.hpp",
+   "user": {
+    "login": "nlohmann",
+    "type": "User"
+   }
+  }
+ ],
+ "state": "closed",
+ "title": "Make std::hash<basic_json> consistent with operator== for numbers",
+ "transport": "gh",
+ "user": {
+  "login": "nlohmann",
+  "type": "User"
+ }
+}

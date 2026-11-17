@@ -1,0 +1,31 @@
+{
+ "base_ref": "develop",
+ "base_sha": "7fc8312c64fc6a507387b228fdc1e5ae122432d0",
+ "body": "## What\n\n`iter_impl`'s `operator*`, `operator->`, `operator++`, `operator--` and `operator==` test for an object before an array.\n\n## Why\n\n#5835 replaced the `switch` on the value type in these operators with an `if` chain that tests for an array first. Every step over an object then pays for a failed test and a taken branch. When the compiler inlines the iterator, as it does in a small loop over a document, walking a document of objects got slower than with 3.12.0. The suite didn't show it: in its large translation unit, 3.12.0's iterator calls aren't inlined, so 3.13.0 wins there anyway.\n\n## Numbers\n\nApple M1 Max, Apple clang 21, `-O3 -flto -DNDEBUG`. Cycles of one walk over every value (the suite's `count_values()` in a small program of its own, the median of 5 processes of 300 walks each, `/usr/bin/time -l`):\n\n| file | 3.12.0 | develop | this PR | vs. 3.12.0 |\n| --- | --: | --: | --: | --: |\n| `citm_catalog.json` | 562k | 580k | 464k | 1.21\u00d7 |\n| `twitter.json` | 169k | 186k | 163k | 1.04\u00d7 |\n| `canada.json` | 1,588k | 981k | 1,357k | 1.17\u00d7 |\n\n`canada.json` holds nothing but arrays and gives back part of the gain of #5835, but it stays faster than 3.12.0. The other orders I tried each left one of the files slower than 3.12.0 (cycles per walk, citm / twitter / canada):\n\n| variant | `citm_catalog.json` | `twitter.json` | `canada.json` |\n| --- | --: | --: | --: |\n| arrays first, no hints | 498k | 175k | 1,530k |\n| objects first, no hints | 515k | 180k | 1,300k |\n| `switch`, as in 3.12.0 | 502k | 169k | 1,523k |\n\nThe suite's `Iterate` rows (develop plus #6029, #6031 and #6033, with and without this change; median of 12 runs, speedup over 3.12.0):\n\n| benchmark | without | with |\n| --- | --: | --: |\n| `Iterate/citm_catalog` | 1.61\u00d7 | 1.92\u00d7 |\n| `Iterate/twitter` | 1.44\u00d7 | 1.53\u00d7 |\n| `Iterate/canada` | 2.80\u00d7 | 1.98\u00d7 |\n\nThe other rows that iterate or copy (`Copy*`, `DestroyOnly`, `Diff`, `Equal`, `Flatten`) stayed within \u00b13%.\n\n## Tests\n\nThe full unit test suite (189 tests) passes with ASan and UBSan on macOS (Apple clang). The change only reorders branches, so no new tests.\n\n## Breaking changes\n\nNone. The public API, the behavior and the ABI are unchanged; only the order of the type tests inside the iterator's operators changed.\n\n\ud83e\udd16 Generated with [Claude Code](https://claude.com/claude-code)\n",
+ "comments": [],
+ "created_at": "2026-11-07T22:44:48Z",
+ "fetched_at": "2026-11-17T20:07:38Z",
+ "head_sha": "1a2828f36c24215fc4e336bb79dfd975356c6f55",
+ "labels": [
+  "L"
+ ],
+ "linked_issues": [],
+ "merge_commit_sha": "7757de3a58e23534486bf4f16827ad26154cc9a4",
+ "merged_at": "2026-11-09T07:11:51Z",
+ "number": 6039,
+ "referenced_numbers": [
+  5835,
+  6029,
+  6031,
+  6033
+ ],
+ "repo": "nlohmann/json",
+ "review_comments": [],
+ "state": "closed",
+ "title": "Iterator: test for objects before arrays",
+ "transport": "gh",
+ "user": {
+  "login": "nlohmann",
+  "type": "User"
+ }
+}
