@@ -1,0 +1,38 @@
+# Target config for duckdb, read by pipeline/env.py (and scripts/*.sh via scripts/lib/cfg.py).
+name = "duckdb"
+upstream_url = "https://github.com/duckdb/duckdb"
+pinned_sha = "4c0adf6440aa4aa6cac81bfedae264cfe5324863"   # upstream main HEAD on 2026-11-17
+
+# build_mode "cmake": env.py builds the library at the parent commit, then incrementally at the merge commit,
+# in one persistent build volume (prh-duckdb-build) with ccache (prh-duckdb-ccache). Generated tests link the shared library.
+build_mode = "cmake"
+# Core engine only: no shell, no unittest runner, no sanitizers; icu/json/parquet skipped (long compiles, not core);
+# core_functions stays (most scalar/aggregate functions live there); no httplib/loadable-extension capabilities.
+# FORCE_ASSERT keeps D_ASSERT active in the Release build so an internal assertion failure shows up as a crash.
+cmake_args = [
+  "-DCMAKE_BUILD_TYPE=Release",
+  "-DBUILD_UNITTESTS=OFF",
+  "-DBUILD_SHELL=OFF",
+  "-DENABLE_SANITIZER=OFF",
+  "-DENABLE_UBSAN=OFF",
+  "-DFORCE_ASSERT=ON",
+  "-DSKIP_EXTENSIONS=icu;json;parquet",
+  "-DSTATICALLY_LINK_EXTENSIONS=core_functions",
+  "-DDUCKDB_CAPABILITIES=none",
+]
+build_target = "duckdb"                 # builds src/libduckdb.so (shared) in the build dir
+library = "src/libduckdb.so"            # relative to the build dir; copied to cache/worktrees/duckdb/<sha>/lib/
+# Source tree needed to configure and build, exported per commit (no test/, data/, benchmark/: ~100 MB instead of ~440 MB).
+export_paths = ["CMakeLists.txt", "DuckDBConfig.cmake.in", "DuckDBConfigVersion.cmake.in", "LICENSE",
+                "extension", "scripts", "src", "third_party", "tools", ".github/config"]
+include_dirs = ["src/include"]          # -I for generated tests, relative to each export (duckdb.hpp includes everything needed)
+# env.py --check compiles, links and runs this against old and new.
+smoke_source = '''
+#include "duckdb.hpp"
+int main() {
+    duckdb::DuckDB db(nullptr);
+    duckdb::Connection con(db);
+    auto r = con.Query("SELECT 42");
+    return (!r || r->HasError()) ? 1 : 0;
+}
+'''

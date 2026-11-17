@@ -33,3 +33,8 @@ sample_checked = 120                    # walk newest PRs until this many pass t
 collect_head = "abbc29963a3fa7652127a57a9e2a4494ec5b8a6e"   # develop, 2026-11-15: history sampled from here (reproducible)
 seed_prs = [4958, 5459]                 # known answers, always collected (see NOTES.md)
 
+# Used by pipeline/env.py. header-only: old/new environments are source exports of include_dirs only
+# (no library build); tests compile directly against them. Other modes (e.g. "cmake") come with QuantLib/duckdb.
+build_mode = "header-only"
+include_dirs = ["include"]              # roots passed as -I; relative to repo root
+smoke_header = "nlohmann/json.hpp"      # env.py --check compiles `#include <smoke_header>` against old and new

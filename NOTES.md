@@ -17,6 +17,7 @@ Fields used: `name`, `upstream_url`, `pinned_sha`, `test_data_url`, `test_data_s
 `cmake_args`, `coverage_cmake_args`, `ctest_args`, `test_paths`, `public_headers`, `coverage_scope`.
 Used by scripts: pinned_sha/upstream_url (fetch.sh), test_data_*/vendored_git (image.sh -> target Dockerfile build args), cmake_args/coverage_cmake_args (build.sh),
 ctest_args (test.sh), coverage_scope (coverage.sh). `test_paths` and `public_headers` are recorded but not yet consumed by any script.
+Added 2026-11-17 for `pipeline/env.py`: `build_mode` (only `header-only` implemented), `include_dirs`, `smoke_header`.
 
 ## Scripts (all take the target name; nothing nlohmann-specific)
 | script | purpose |
@@ -102,6 +103,73 @@ For PR `P` with parent `A` and merge commit `B` (full-history clone already in `
    `cmake/download_test_data.cmake` at that commit; `JSON_TEST_DATA_VERSION` may not be 3.2.0 and the vendored data/fmt tag may be wrong -> image would need per-commit data or a data cache keyed by version).
 4. Compare per-test results (`compare.py`) and coverage between A and B; record build failures as data, not errors.
 Risks: see final report.
+
+## pipeline/env.py (2026-11-17) — old/new environments, header-only targets
+- `python3 pipeline/env.py <t> --pr N | --merge SHA [--parent SHA] [--check] [--docker] [--std c++17]` prints JSON (parent, merge, old_dir, new_dir, include_dirs);
+  Python API `prepare()` / `compile_check()` for `run.py`. Needs `tomllib` (py>=3.11) or `tomli`.
+- Decision: exports via `git archive` of `include_dirs` into `cache/worktrees/<t>/<sha>/` (about 1 MB each) instead of `git worktree add`, so the upstream clone is only read
+  (`git worktree add` writes `repos/<t>/.git/worktrees`, which CLAUDE.md treats as editing upstream). Header-only means no build, no ccache; tests compile against `-I<export>/include`.
+  Exports are atomic (temp dir then rename, `.prh-ok` marker) and reused. Library targets will need a second build mode (and `.git` if their build reads it); not written.
+- Merge commit lookup for `--pr N`: `data/<t>/prs.jsonl` record (`number`, `merge_sha`, optional `parent_sha`; schema is a proposal for `collect.py`), else a squash-merge subject ending `(#N)`.
+  nlohmann/json squash-merges, so parent = the single parent; multi-parent merges need `--parent`.
+- Verified with the VM's g++ 11.4 (NOT the pinned GCC 14): json #4958 and #5459 both resolve and smoke-compile at old and new; rerun is 0.07 s; upstream clone untouched (HEAD = pinned SHA, clean).
+  On #4958: a type convertible to `std::string_view` used as `j[key]` compiles only on new (the PR's feature); `j.contains(key)` fails on both old and new (this is the regression #5689 later fixed).
+  Still to do: run `--check --docker` on the Mac in `prh-nlohmann-json` (docker path untested).
+
+## pipeline/run.py (2026-11-17) — compile, run, compare
+- `python3 pipeline/run.py <t> --pr N | --merge SHA [--parent SHA] [--docker] [--std c++17] [--runs 3] [--timeout 10] [--compile-timeout 180] [--jobs 4] [--tests-dir DIR]`.
+  Reads `data/<t>/tests/<key>/*.cpp` (key = PR number, or merge SHA[:12]), writes `results.json` beside them. Uses `env.prepare()` for the old/new exports.
+- One batch per version (old and new in parallel). `--docker`: one `docker run` per version (`prh-<t>-run-<old|new>-<pid>`, `--network none`, `--memory 3g`, `--pids-limit 1024`, exports,
+  tests and `pipeline/` mounted read-only); otherwise on the host. The same file is the worker in both modes (`--worker`, internal). Compile `g++ -std=<std> -O0 -I<export>/include`;
+  run each binary N times in a temp cwd with a file-size ulimit and a process-group kill on timeout.
+- Statuses: `same`, `output_diff`, `compile_diff` (compiles on one side only; `compile_failed_on` says which; fix.py must not repair it), `flaky` (reruns on the same version
+  disagree; dropped), `invalid` (compile fails on both, or times out on both; dropped, fix.py may repair compile errors). Compared: (timeout, exit code, sha256 of full stdout); stderr kept
+  for the first run only, not compared. Kept per test: first-run stdout up to 20 KB, compile stderr tail (4 KB) on failure.
+- Decision: compile failures are data, not errors (your call on 2026-11-17): a test that breaks on only one side is a candidate API change.
+- Verified on the host VM (g++ 11.4, not GCC 14) with hand-written probes in `data/nlohmann-json/tests/{4958,5459}/`: all five statuses occur as expected.
+  #4958: `j[Key{}]` -> compile_diff (fails on old); `j.contains(Key{})` -> invalid (fails on both); #5459: `int 2^53+1 == double 2^53` prints `1 0 0` old vs `0 0 1` new -> output_diff.
+  6.5 s for 5 tests, 0.7 s for 2. Docker path not yet run.
+
+## pipeline/coverage_loop.py (2026-11-17) — changed-line coverage + refine loop
+- `python3 pipeline/coverage_loop.py <t> --pr N | --merge SHA [--parent SHA] [--docker] [--std c++17] [--timeout 10] [--jobs 4] [--tests-dir DIR] [--context]`; reads the same
+  `data/<t>/tests/<key>/*.cpp` as run.py, writes `coverage.json` beside them. `--docker` uses the same `launch_worker` as run.py (factored out of `run_batch`; behavior unchanged).
+- Changed lines = lines added/modified in the NEW version under `include_dirs` (`git diff -U0 -w --ignore-blank-lines parent merge`). Only the new version is measured, so a deletion-only PR
+  has no changed lines (n/a). Tests compile with `-O0 --coverage` against the new export, run once, `gcov --json-format --stdout` on the .gcda, keep changed lines only.
+  Killed (timeout) or aborted runs write no .gcda, so they contribute no coverage.
+- Union over tests; each changed line ends up in exactly one bucket: `covered`, `uncovered` (executable, never ran), `macro` (body of a #define: gcov credits the expansion site, so not
+  measurable), `no_code` (code-like, no gcov data: uninstantiated template/declaration), `trivial` (blank, comment, brace, `template<...>`, preprocessor). Headline number
+  `exec_coverage = covered / (covered + uncovered)`; n/a when there are no executable changed lines. Counts for all buckets are in `summary`.
+- `loop(env, tests_dir, args, refine=fn, rounds=1)`: measure everything, then up to `rounds` rounds of `fn(context, remaining, tests_dir) -> [new test file names]`, re-measure only the new
+  tests, stop when the union covered count does not grow. No LLM calls in this file; generate.py supplies `fn`. `uncovered_context()` builds the prompt text (`>>` marks target lines,
+  with 3 lines of context). Refine triggers when any of uncovered/macro/no_code remains.
+- Verified (host VM, g++/gcov 11.4 not GCC 14): #5459 probes cover 15 of 20 executable changed lines (exec_coverage 0.75; 4 macro lines, 45 trivial); union checked line-by-line against
+  plain-text gcov (identical). Loop test with a stand-in refine: round 1 grew 15 -> 19 covered, round 2 did not grow and the loop stopped. NOT RUN lines matched what the probes actually pass in.
+- Finding: #4958 changes only a type-trait alias, which has no executable lines (4 no_code, 2 trivial), so changed-line coverage is n/a for it. The report should count only PRs with executable
+  changed lines when it quotes the coverage-loop numbers.
+- Limits: the changed-lines list goes to the worker as one argv string (fine for these PRs; very large diffs may need a file). Not yet run with `--docker`.
+
+## duckdb target + env.py "cmake" build mode (2026-11-17)
+- `targets/duckdb/{target.toml,Dockerfile}`; pinned upstream main HEAD `4c0adf6440aa4aa6cac81bfedae264cfe5324863` (#28938). Dockerfile is just `FROM prh-base` (nothing extra needed, no test data).
+  **repos/duckdb is NOT cloned yet**: the sandbox's network was too slow and its shell kills background jobs mid-clone. Run `scripts/fetch.sh duckdb` on the Mac. A partial clone I left is parked in
+  `repos/_to_delete/duckdb-partial-clone` (git-ignored; delete it, I cannot).
+- New target.toml fields (used by env.py): `build_mode = "cmake"`, `build_target`, `library`, `export_paths`, `smoke_source`; `cmake_args` and `include_dirs` as before.
+- Library build (read from the pinned CMakeLists, configure verified with GCC 13/CMake 3.28 in a throwaway tree): `-DCMAKE_BUILD_TYPE=Release -DBUILD_UNITTESTS=OFF -DBUILD_SHELL=OFF
+  -DENABLE_SANITIZER=OFF -DENABLE_UBSAN=OFF -DFORCE_ASSERT=ON -DSKIP_EXTENSIONS=icu;json;parquet -DSTATICALLY_LINK_EXTENSIONS=core_functions -DDUCKDB_CAPABILITIES=none`, target `duckdb`
+  -> `src/libduckdb.so` (SONAME plain `libduckdb.so`, so copying that one file is enough). Configure shows 353 build steps (unity build). Why: defaults link icu/json/parquet (long compiles) and ASan/UBSan
+  apply to Debug; FORCE_ASSERT keeps `D_ASSERT` live in Release so internal assertion failures show up as crashes. Consequence: tests needing icu (time zones), json or parquet cannot run;
+  PRs touching only those extensions should be filtered out. Version/commit hash is the constant `0123456789` for every build (no .git in the export), so `pragma_version()` is not a false difference.
+- Generated tests compile with `-I<export>/src/include` (duckdb.hpp compiles with only that; checked with GCC 13) and link `-L<export>/lib -lduckdb -Wl,-rpath,<export>/lib` AFTER the source.
+- Mechanics (env.py `build_libraries`): `git archive` of `export_paths` per commit (~103 MB each instead of ~440 MB) -> in ONE `docker run` on `prh-duckdb`, under `flock` on the build volume, for parent then merge:
+  `rsync -rlpgoD --checksum --delete` the export into `/build/src` (no `-t`: archive mtimes are commit dates, older than our objects, and ninja would think everything is up to date), re-run cmake configure
+  (picks up added/removed files), `cmake --build /build/obj --target duckdb --parallel ${JOBS:-4}`, copy the .so to `<export>/lib/`, touch `.prh-built`. ccache volume `prh-duckdb-ccache`.
+  JOBS defaults to 4 (unity TUs are memory-hungry; Docker has 8 GB). Disk: roughly one .so per commit under cache/ (git-ignored); delete old ones if space gets tight.
+- Verified (cloud sandbox, GCC 13, NOT the Mac container): the generated script run against a two-commit stand-in repo and the small target `duckdb_re2`: commit 1 built 24/24 steps; commit 2 (one file changed)
+  rebuilt 2/2 steps (that file + link) -> incremental logic works; markers and lib copy work. NOT yet run: the real duckdb build, `docker run` itself, `--check` linking/running the smoke program.
+- Other changes: `Env` gained `old_lib/new_lib/lib_name` + `link_flags()`; `prepare(..., docker=)`; `compile_check(..., run=True)` links and runs; run.py passes `--link-flag` and puts it after the source;
+  coverage_loop.py refuses cmake targets (needs a `--coverage` library build and per-test gcda handling: not written). `scripts/lib/cfg.py --optional` / `cfg_opt` and `scripts/image.sh` make the json-only
+  build args optional; `scripts/build.sh` now shell-quotes cmake args so `;` survives (checked offline: json args unchanged). json flow re-run after these edits: env --check, run.py (4958, 5459), coverage_loop (5459) all give the same results as before.
+- To do on the Mac, in order: `scripts/fetch.sh duckdb`; `scripts/image.sh duckdb`;
+  `JOBS=4 python3 pipeline/env.py duckdb --merge 4c0adf6440aa4aa6cac81bfedae264cfe5324863 --docker --check` (cold build of the parent, then incremental merge build; record both times here).
 
 ---
 

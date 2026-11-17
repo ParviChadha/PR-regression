@@ -12,6 +12,7 @@ use_target() {
 }
 
 cfg() { python3 -I "$ROOT/scripts/lib/cfg.py" "$T" "$1"; }          # one value / newline-separated list
+cfg_opt() { python3 -I "$ROOT/scripts/lib/cfg.py" "$T" "$1" --optional; }   # same, empty if the key is absent
 
 # Source is mounted read-only at /src; build.sh rsyncs it to /build/src (writable) for building/testing.
 # run_in_container [--no-network] -- cmd...   (source is mounted read-only; build + ccache in named volumes)
