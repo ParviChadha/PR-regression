@@ -1,0 +1,43 @@
+{
+ "base_ref": "develop",
+ "base_sha": "a78e2a6b10ab987d92491d26a157c604c84ba207",
+ "body": "## Problem\n\nOSS-Fuzz issue 583898810 (`json_view_image_fuzzer`, regressed with #5908): an image loaded with `image_check::bounds` makes `dump()` fail the assertion `digits != 0 && digits < 100000000000000000u` in `write_decimal()`.\n\nThe image's float node records no digit before the point and 17 after it, which no JSON number has. `convert_ahead()` only required at least 8 fraction digits, so it batched the token with q = -17. `locate_token()` then read `fives[17]` past the 17 entries of its table. What it read depends on the binary's memory layout: in the fuzzer's x86-64 build, the digits came out as 10^17 + 64 (18 digits), and `write_shortest()` passed 18 digits on to `write_decimal()`.\n\n## Change\n\n- The batch takes tokens with 8 to 16 fraction digits (`frac_digits - 8u <= 8u` instead of `frac_digits >= 8`). Every valid token of 16 or 17 digits has at least one digit before the point, so the batch handles the same tokens of valid documents as before; the comparison costs the same.\n- `locate_token()`'s documentation states its range as -16 <= q <= -1, matching its table.\n- A section in `unit-json_view_image.cpp` with a crafted token of this layout and the OSS-Fuzz input itself. Without the fix, it fails on arm64 with a bounds-checked libc++ (`_LIBCPP_HARDENING_MODE_DEBUG`) and on x86-64 with the `write_decimal()` assertion. No CI job checks container bounds, so the crafted case alone would not fail there.\n\nRandom damage to the testcase and to near-10^17 tokens (about 58M images, x86-64) found no other crash with the fix.\n\n## Tests run locally\n\n- the OSS-Fuzz testcase through `fuzzer-json_view_image.cpp` on x86-64: assertion before, passes after\n- all 22 json_view test targets (CMake Debug, arm64): pass\n- not run: the rest of the test suite and a benchmark (no measurable change expected)\n\n## Breaking changes\n\nNo breaking changes: the public API is untouched.\n\n\ud83e\udd16 Generated with [Claude Code](https://claude.com/claude-code)\n",
+ "comments": [],
+ "created_at": "2026-11-10T07:21:57Z",
+ "fetched_at": "2026-11-17T20:07:36Z",
+ "head_sha": "61a37849c93654d1568c13fb87212fa4fd39345b",
+ "labels": [
+  "M",
+  "tests",
+  "\ud83d\ude80 ready to merge",
+  "aspect: json_view"
+ ],
+ "linked_issues": [],
+ "merge_commit_sha": "5901d861ff3b864cdd98eb386322b5679986f462",
+ "merged_at": "2026-11-10T14:24:34Z",
+ "number": 6049,
+ "referenced_numbers": [
+  5908
+ ],
+ "repo": "nlohmann/json",
+ "review_comments": [
+  {
+   "body": "## Flawfinder / Does not check for buffer overflows when copying to destination (CWE-120).\n\nbuffer/memcpy:Does not check for buffer overflows when copying to destination (CWE-120).\n\n[Show more details](https://github.com/nlohmann/json/security/code-scanning/1166)",
+   "created_at": "2026-11-10T09:45:24Z",
+   "diff_hunk": "@@ -1165,6 +1165,44 @@\n         }\n     }\n \n+    SECTION(\"float tokens with 17 digits after the point and none before it\")\n+    {\n+        // No JSON number has this layout. dump() batches tokens of 16 or 17\n+        // digits, but only those with 8 to 16 fraction digits are in its\n+        // range: 17 read past the table of powers of five (caught by a\n+        // bounds-checked std::array), and on x86-64 wrote 18 digits\n+        // (the assertion of write_decimal()).\n+        const std::vector<std::uint8_t> img = json_document::parse(\"[1.2345678901234567]\" + std::string(40, ' ')).save();\n+        node n = node_at(img, 1);\n+        REQUIRE(n.len == 18);\n+        n.extra = 17u << 8u;\n+        std::vector<std::uint8_t> b = img;\n+        set_node(b, 1, n);\n+        std::memcpy(b.data() + text_at(img) + n.off, \".99999999999999999\", 18);",
+   "line": 1181,
+   "path": "tests/src/unit-json_view_image.cpp",
+   "user": {
+    "login": "github-advanced-security[bot]",
+    "type": "Bot"
+   }
+  }
+ ],
+ "state": "closed",
+ "title": "json_view: keep tokens without an integer digit out of the float batch",
+ "transport": "gh",
+ "user": {
+  "login": "nlohmann",
+  "type": "User"
+ }
+}

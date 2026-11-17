@@ -1,0 +1,264 @@
+{
+ "base_ref": "develop",
+ "base_sha": "d33068da730aa1ffa3f1acb332e36653681efa2c",
+ "body": "This PR optimizes CBOR and MessagePack serialization by avoiding the construction of a temporary basic_json object for every object key during serialization.\r\n\r\nPreviously, object keys were passed through write_cbor()/write_msgpack(), which expected a BasicJsonType and therefore implicitly constructed a temporary basic_json for each key. This introduced unnecessary heap allocations during serialization.\r\n\r\nThis change factors out the string serialization logic into dedicated helper functions and serializes object keys directly. The implementation preserves compatibility with custom object key types while eliminating the extra basic_json allocations for the common case where object_t::key_type is string_t.\r\n\r\nA regression test has been added to verify compatibility with custom object key types.\r\n\r\nFixes #5318\r\n\r\nCompatibility note: This does not change the public API (detail::binary_writer is internal). For custom object_t::key_type implementations, CBOR and MessagePack object keys are now required to be implicitly convertible to string_t. Previously, a custom key type handled only through to_json could be serialized through the generic JSON serializer, potentially producing non-string map keys that the library's own CBOR/MessagePack readers would reject.",
+ "comments": [
+  {
+   "body": "## \ud83d\udd34 Amalgamation check failed! \ud83d\udd34\nThe source code has not been amalgamated and/or formatted correctly.\n\n\ud83d\udcce A ready-to-apply patch is attached to the [failed workflow run](https://github.com/nlohmann/json/actions/runs/30356634150) as the `amalgamation-patch` artifact. Download it, then apply it locally from the repository root with:\n\n```shell\ngit apply amalgamation.patch\n```\n\nThis does not require installing astyle yourself.",
+   "created_at": "2026-07-28T12:14:58Z",
+   "user": {
+    "login": "github-actions[bot]",
+    "type": "Bot"
+   }
+  },
+  {
+   "body": "Hi @nlohmann \r\nAll checks are successful now. \r\nThanks!",
+   "created_at": "2026-07-29T07:39:55Z",
+   "user": {
+    "login": "alexprabhat99",
+    "type": "User"
+   }
+  },
+  {
+   "body": "Thanks for tackling this! Overall this looks good and does exactly what #5318 asked for. A few minor comments below.\n\n### The claimed win is real\n\nI compiled the allocation-counting program from #5318 against `single_include/nlohmann/json.hpp` from `develop` and from this branch (clang, `-std=c++14 -O2`), 1000-key object:\n\n| case | develop | this PR |\n|---|---|---|\n| `to_cbor`, short (SSO) keys | 1015 | **15** |\n| `to_cbor`, 64-char keys | 2015 | **15** |\n| `to_msgpack`, short keys | 1015 | **15** |\n| `to_msgpack`, 64-char keys | 2015 | **15** |\n| `to_ubjson` / `to_bson` (unchanged) | 16 / 14 | 16 / 14 |\n\nCBOR and MessagePack now sit at the same allocation level as UBJSON and BSON. The extracted helper bodies are byte-for-byte the originals, and the `value_t::string` cases correctly reach the non-template overload via `*j.m_data.m_value.string`.\n\n### Comments\n\n**1. Missing SPDX header on the new test file**\n\n`tests/src/custom_object_key_type.hpp` starts straight at `#pragma once`. Every other file under `tests/src` carries the ASCII-art banner plus `SPDX-FileCopyrightText` / `SPDX-License-Identifier` from the `json_support` REUSE template. `ci_reuse_compliance` passes only because `.reuse/dep5` has a `Files: *` catch-all, so CI can't catch this. Running `make reuse` should fix it.\n\n**2. `key::c_str()` in the test helper looks like dead code**\n\nIt was added in d10514d31 (\"fixes for failing ci\"), but nothing on the CBOR/MessagePack path calls it \u2014 the template overload routes through `string_t(value)`. I deleted it locally and the test still compiles and passes under `-std=c++11/14/17/20/23`. If the intent was UBJSON compatibility, the type would also need `size()`, which it doesn't have (`binary_writer.hpp` line 940 uses both), so `to_ubjson` wouldn't compile with this key type anyway.\n\n**3. The unconstrained template overloads may not be needed, and are undocumented**\n\n`write_cbor_string(const KeyType&)` and `write_msgpack_string(const KeyType&)`. The BSON writer already solves the same problem by just declaring `write_bson_element(const string_t& name, ...)` and letting implicit conversion handle custom key types. I removed both templates from this branch's header and the new tests still compile and pass \u2014 the test's `key` has an implicit `operator std::string()`, so `const string_t&` binds directly.\n\nSo the templates' only added capability (key types with an *explicit*-only conversion to `string_t`) isn't exercised by the new tests, and they carry a small maintenance hazard: any future `write_cbor_string(x)` on a non-`string_t` silently allocates a temporary. Either drop them for consistency with the BSON writer, or keep them with a one-line comment explaining why \u2014 and make the test key's conversion operator `explicit` so the overload is actually load-bearing.\n\n**4. Worth noting the source-compatibility nuance in the PR description**\n\nPreviously keys went through `write_cbor()` / `write_msgpack()`, i.e. through the JSON serializer. A key type with a `to_json` but no string conversion used to compile (emitting a non-string CBOR/MessagePack key, which this library's own reader then rejects); it now fails to compile. A key type with *both* a `to_json` and a string conversion changes its encoding.\n\nI think the new behavior is the correct one, but since it's the convention here to state API impact: no public API break (`detail::binary_writer` is internal), with this source-level change for exotic `object_t::key_type`s.\n\n**5. Nit**\n\nDouble blank line after the `write_msgpack_string` template, in both `include/nlohmann/detail/output/binary_writer.hpp` and the amalgamated `single_include/nlohmann/json.hpp`. astyle doesn't collapse those, so CI stayed green.\n\n### Optional\n\nThere's no regression test guarding the allocation count, so this could silently regress later. Given it needs a global `operator new` override, it's probably not worth adding to the doctest binaries \u2014 just noting it.\n\n<sub>Reviewed with the help of Claude Code.</sub>\n",
+   "created_at": "2026-08-19T18:11:24Z",
+   "user": {
+    "login": "nlohmann",
+    "type": "User"
+   }
+  },
+  {
+   "body": "Hi @nlohmann \r\nI have addressed the review comments. The one failing test seems unrelated to the PR changes.",
+   "created_at": "2026-08-24T13:55:28Z",
+   "user": {
+    "login": "alexprabhat99",
+    "type": "User"
+   }
+  },
+  {
+   "body": "Please check the [DCO requirements](https://github.com/nlohmann/json/pull/5328/checks?check_run_id=97435561176).",
+   "created_at": "2026-08-25T06:11:02Z",
+   "user": {
+    "login": "nlohmann",
+    "type": "User"
+   }
+  },
+  {
+   "body": "Hi @nlohmann \r\nAll checks have passed.",
+   "created_at": "2026-08-26T03:59:41Z",
+   "user": {
+    "login": "alexprabhat99",
+    "type": "User"
+   }
+  },
+  {
+   "body": "Hi @nlohmann\r\nGentle ping! All checks have passed.",
+   "created_at": "2026-09-03T10:30:59Z",
+   "user": {
+    "login": "alexprabhat99",
+    "type": "User"
+   }
+  },
+  {
+   "body": "Please fix the [DCO](https://github.com/nlohmann/json/pull/5328/checks?check_run_id=102472478551) requirements.",
+   "created_at": "2026-09-09T14:47:37Z",
+   "user": {
+    "login": "nlohmann",
+    "type": "User"
+   }
+  },
+  {
+   "body": "## \ud83d\udd34 Amalgamation check failed! \ud83d\udd34\nThe source code has not been amalgamated and/or formatted correctly.\n\n\ud83d\udcce A ready-to-apply patch is attached to the [failed workflow run](https://github.com/nlohmann/json/actions/runs/34353567366) as the `amalgamation-patch` artifact. Download it, then apply it locally from the repository root with:\n\n```shell\ngit apply amalgamation.patch\n```\n\nThis does not require installing astyle yourself.",
+   "created_at": "2026-09-10T09:36:27Z",
+   "user": {
+    "login": "github-actions[bot]",
+    "type": "Bot"
+   }
+  },
+  {
+   "body": "## \ud83d\udd34 Amalgamation check failed! \ud83d\udd34\nThe source code has not been amalgamated and/or formatted correctly.\n\n\ud83d\udcce A ready-to-apply patch is attached to the [failed workflow run](https://github.com/nlohmann/json/actions/runs/34370897709) as the `amalgamation-patch` artifact. Download it, then apply it locally from the repository root with:\n\n```shell\ngit apply amalgamation.patch\n```\n\nThis does not require installing astyle yourself.",
+   "created_at": "2026-09-10T09:36:51Z",
+   "user": {
+    "login": "github-actions[bot]",
+    "type": "Bot"
+   }
+  },
+  {
+   "body": "Please rebase to the latest develop to resolve conflicts.",
+   "created_at": "2026-09-16T18:32:42Z",
+   "user": {
+    "login": "nlohmann",
+    "type": "User"
+   }
+  },
+  {
+   "body": "@alexprabhat99 Are you willing to continue working on this?",
+   "created_at": "2026-09-27T19:26:49Z",
+   "user": {
+    "login": "nlohmann",
+    "type": "User"
+   }
+  },
+  {
+   "body": "@nlohmann Apologies. I will resolve the conflicts as soon as I get time.",
+   "created_at": "2026-09-28T15:35:20Z",
+   "user": {
+    "login": "alexprabhat99",
+    "type": "User"
+   }
+  },
+  {
+   "body": "FYI: I opened #5767 to fix develop.",
+   "created_at": "2026-10-06T07:36:54Z",
+   "user": {
+    "login": "nlohmann",
+    "type": "User"
+   }
+  },
+  {
+   "body": "Thanks a lot! FYI I found an unrelated bug so there will be a follow-up PR.",
+   "created_at": "2026-10-09T11:22:31Z",
+   "user": {
+    "login": "nlohmann",
+    "type": "User"
+   }
+  }
+ ],
+ "created_at": "2026-07-28T11:53:40Z",
+ "fetched_at": "2026-11-17T20:10:08Z",
+ "head_sha": "5a1ca73d843422d2e80104a21dda5cf888cbda02",
+ "labels": [
+  "documentation",
+  "aspect: binary formats",
+  "L",
+  "tests"
+ ],
+ "linked_issues": [
+  {
+   "body": "### Description\n\n`write_cbor()` serializes object keys by calling itself on the key:\n\nhttps://github.com/nlohmann/json/blob/8ec98e2c9ea9c0adc15a791feb3d4d4468621743/include/nlohmann/detail/output/binary_writer.hpp#L403-L407\n\n`el.first` is a `string_t`, but the parameter is `const BasicJsonType&`, so each key is implicitly converted to a temporary `basic_json` \u2014 which heap-allocates a `string_t` (plus its buffer for keys beyond SSO) \u2014 purely to reach the `value_t::string` case a few lines above. `write_msgpack()` has the identical pattern.\n\nThe UBJSON and BSON writers in the same file already do it the direct way, writing the key's characters straight to the output adapter without constructing a `basic_json`.\n\n### Measurement\n\nCounting global `operator new` calls while serializing a 1000-entry object (`-O2`, g++ 13.3.0):\n\n| case | allocations |\n|---|---|\n| `to_cbor`, array of 1000 ints (baseline) | 13 |\n| `to_cbor`, object, 1000 short keys (SSO) | **1016** |\n| `to_cbor`, object, 1000 64-char keys | **2016** |\n| `to_msgpack`, object, 1000 short keys | **1016** |\n| `to_ubjson`, object, 1000 short keys | 17 |\n| `to_bson`, object, 1000 short keys | 14 |\n\nSo CBOR and MessagePack pay one allocation per key even when the key fits in the small-string buffer (the `string_t` object itself is heap-allocated by `basic_json`), and two per key otherwise. UBJSON and BSON pay none.\n\n### Minimal code example\n\n```cpp\nstatic long allocs = 0;\nvoid* operator new(std::size_t n) { ++allocs; void* p = std::malloc(n); if (!p) throw std::bad_alloc(); return p; }\nvoid operator delete(void* p) noexcept { std::free(p); }\nvoid operator delete(void* p, std::size_t) noexcept { std::free(p); }\n\n#include <nlohmann/json.hpp>\nusing json = nlohmann::json;\n\nint main()\n{\n    json j = json::object();\n    for (int i = 0; i < 1000; ++i) { char k[8]; std::snprintf(k, sizeof k, \"k%04d\", i); j[k] = i; }\n\n    allocs = 0; (void)json::to_cbor(j);   std::printf(\"cbor   %ld\\n\", allocs); // 1016\n    allocs = 0; (void)json::to_ubjson(j); std::printf(\"ubjson %ld\\n\", allocs); // 17\n}\n```\n\n### Suggested fix\n\nFactor the string-writing body of the `value_t::string` case out of `write_cbor` into a helper taking `const string_t&` (say `write_cbor_string`), call it from both the `value_t::string` case and the key loop, and do the same for `write_msgpack`. This is the same shape as the BSON writer cleanup in #5313, which changed `write_bson_unsigned` to take the underlying value rather than the `basic_json`.\n\n### Compiler and operating system\n\ng++ 13.3.0, Ubuntu 24.04, `-std=c++14`, `-O2`\n\n### Library version\n\n`develop` @ 8ec98e2\n\n### Would the fix be breaking?\n\nNo. This is a purely internal refactor of two `private` member functions of `detail::binary_writer`:\n\n- **Byte-for-byte identical output.** The extracted helper would run the same length-prefix and character-writing code the `value_t::string` case runs today, so `to_cbor`/`to_msgpack` produce exactly the same bytes. Existing round-trip tests should pass unchanged.\n- **No API/ABI surface.** `binary_writer` is in `detail` and the affected functions are not part of the documented API. No signature in `basic_json` changes.\n- **One thing to watch:** object keys are `object_t::key_type`, which is not necessarily `string_t` for a custom `ObjectType`. The helper should be written so key types that merely convert to `string_t` still compile \u2014 either by templating it or by keeping `write_cbor(el.first)` as a fallback for non-`string_t` key types. Getting this wrong would break exotic `basic_json` specializations at compile time, so it deserves a test with a custom object type.\n\nI'm happy to open a PR for this if it's wanted.",
+   "labels": [
+    "kind: enhancement/improvement",
+    "solution: proposed fix",
+    "aspect: binary formats"
+   ],
+   "number": 5318,
+   "state": "closed",
+   "title": "to_cbor()/to_msgpack() allocate a temporary basic_json for every object key"
+  }
+ ],
+ "merge_commit_sha": "69a0c1b82ca0d5c7e3e82524ce09abd407b4a0d6",
+ "merged_at": "2026-10-09T11:22:08Z",
+ "number": 5328,
+ "referenced_numbers": [
+  5318
+ ],
+ "repo": "nlohmann/json",
+ "review_comments": [
+  {
+   "body": "Looks like you added this manually and only to the `single_include` file.",
+   "created_at": "2026-09-09T15:08:50Z",
+   "diff_hunk": "@@ -17342,10 +17152,14 @@ class binary_writer\n                 }\n                 // LCOV_EXCL_STOP\n \n+                static_assert(",
+   "line": 17155,
+   "path": "single_include/nlohmann/json.hpp",
+   "user": {
+    "login": "gregmarr",
+    "type": "User"
+   }
+  },
+  {
+   "body": "The `static_assert(std::is_convertible<typename BasicJsonType::object_t::key_type, string_t>::value, ...)` that guards this call in `single_include/nlohmann/json.hpp` isn't present here in the modular header. Regenerating `single_include` from `include/` (as `check_amalgamation.yml` does on every PR) would drop those 4 lines, producing a nonzero diff and failing that CI job. Same issue applies to the MessagePack object loop further down in this file.",
+   "created_at": "2026-09-09T15:14:59Z",
+   "diff_hunk": "@@ -402,7 +370,7 @@ class binary_writer\n                 // step 2: write each element\n                 for (const auto& el : *j.m_data.m_value.object)\n                 {\n-                    write_cbor(el.first);\n+                    write_cbor_string(el.first);",
+   "line": 373,
+   "path": "include/nlohmann/detail/output/binary_writer.hpp",
+   "user": {
+    "login": "nlohmann",
+    "type": "User"
+   }
+  },
+  {
+   "body": "Same missing `static_assert` issue as the CBOR object loop above \u2014 it's present in `single_include/nlohmann/json.hpp` for this MessagePack loop too, but not here.",
+   "created_at": "2026-09-09T15:15:00Z",
+   "diff_hunk": "@@ -724,7 +663,7 @@ class binary_writer\n                 // step 2: write each element\n                 for (const auto& el : *j.m_data.m_value.object)\n                 {\n-                    write_msgpack(el.first);\n+                    write_msgpack_string(el.first);",
+   "line": 666,
+   "path": "include/nlohmann/detail/output/binary_writer.hpp",
+   "user": {
+    "login": "nlohmann",
+    "type": "User"
+   }
+  },
+  {
+   "body": "The comment says this is \"kept for compatibility with serializers that access object keys as C strings,\" but there's no matching `size()`. UBJSON's `write_ubjson` accesses object keys via `el.first.size()` and `el.first.c_str()` directly (not through the `string_t` conversion operator CBOR/MsgPack/BSON use), so `custom_object_key_test::json::to_ubjson(...)` fails to compile with \"no member named 'size' in 'custom_object_key_test::key'\" if this shared fixture is ever reused for a UBJSON test. Not exercised by this PR (CBOR/MsgPack only), so it's latent for now.",
+   "created_at": "2026-09-09T15:15:00Z",
+   "diff_hunk": "@@ -0,0 +1,74 @@\n+//     __ _____ _____ _____\n+//  __|  |   __|     |   | |  JSON for Modern C++ (supporting code)\n+// |  |  |__   |  |  | | | |  version 3.12.0\n+// |_____|_____|_____|_|___|  https://github.com/nlohmann/json\n+//\n+// SPDX-FileCopyrightText: 2013-2026 Niels Lohmann <https://nlohmann.me>\n+// SPDX-License-Identifier: MIT\n+\n+#pragma once\n+\n+#include <map>\n+#include <memory>\n+#include <string>\n+#include <utility>\n+#include <nlohmann/json.hpp>\n+\n+namespace custom_object_key_test\n+{\n+class key\n+{\n+  public:\n+    key() = default;\n+\n+    key(const char* value)\n+        : m_value(value)\n+    {}\n+\n+    key(std::string value)\n+        : m_value(std::move(value))\n+    {}\n+\n+    operator std::string() const\n+    {\n+        return m_value;\n+    }\n+\n+    // Kept for compatibility with serializers that access object keys as C strings.\n+    const char* c_str() const noexcept",
+   "line": 38,
+   "path": "tests/src/custom_object_key_type.hpp",
+   "user": {
+    "login": "nlohmann",
+    "type": "User"
+   }
+  },
+  {
+   "body": "This is right \u2014 develop currently fails to compile `unit-custom-object-type.cpp` since #5762 because `no_key_compare_map` has no `rbegin()`, so thanks for fixing it along the way.\n\nNit: the comment in `pop_last_child()` below still says `std::prev(end())` is used \"rather than rbegin() (see last_child() above)\", which is now circular since `last_child()` no longer uses `rbegin()` either. Could you reword one of the two, e.g. say in one place that `std::prev(end())` is used in both because a custom `object_t` need not provide `rbegin()` and `erase()` needs a forward iterator?",
+   "created_at": "2026-10-06T06:58:25Z",
+   "diff_hunk": "@@ -645,7 +645,9 @@ class basic_json // NOLINT(cppcoreguidelines-special-member-functions,hicpp-spec\n                 return v.m_data.m_value.array->back();\n             }\n             JSON_ASSERT(v.m_data.m_type == value_t::object);\n-            return v.m_data.m_value.object->rbegin()->second;\n+            // a custom object_t need not provide rbegin(), so\n+            // std::prev(end()) is used instead (as in pop_last_child() below)\n+            return std::prev(v.m_data.m_value.object->end())->second;",
+   "line": 650,
+   "path": "include/nlohmann/json.hpp",
+   "user": {
+    "login": "nlohmann",
+    "type": "User"
+   }
+  },
+  {
+   "body": "Posted via [Claude Code](https://claude.com/claude-code) on behalf of @nlohmann.\n\nStill applies to the reworded comment: UBJSON needs both `size()` and `c_str()` on the key, so this type still does not work with `to_ubjson`, and \"serialization paths that access object keys through c_str()\" suggests otherwise. Since no test here needs it, I would simply drop `c_str()`; the UBJSON gap can be a separate follow-up.",
+   "created_at": "2026-10-06T06:58:34Z",
+   "diff_hunk": "@@ -0,0 +1,74 @@\n+//     __ _____ _____ _____\n+//  __|  |   __|     |   | |  JSON for Modern C++ (supporting code)\n+// |  |  |__   |  |  | | | |  version 3.12.0\n+// |_____|_____|_____|_|___|  https://github.com/nlohmann/json\n+//\n+// SPDX-FileCopyrightText: 2013-2026 Niels Lohmann <https://nlohmann.me>\n+// SPDX-License-Identifier: MIT\n+\n+#pragma once\n+\n+#include <map>\n+#include <memory>\n+#include <string>\n+#include <utility>\n+#include <nlohmann/json.hpp>\n+\n+namespace custom_object_key_test\n+{\n+class key\n+{\n+  public:\n+    key() = default;\n+\n+    key(const char* value)\n+        : m_value(value)\n+    {}\n+\n+    key(std::string value)\n+        : m_value(std::move(value))\n+    {}\n+\n+    operator std::string() const\n+    {\n+        return m_value;\n+    }\n+\n+    // Kept for compatibility with serializers that access object keys as C strings.\n+    const char* c_str() const noexcept",
+   "line": 38,
+   "path": "tests/src/custom_object_key_type.hpp",
+   "user": {
+    "login": "nlohmann",
+    "type": "User"
+   }
+  },
+  {
+   "body": "As explained in point 2 of the review, nothing in the library calls `size()` or `c_str()` on an object key, so this comment is inaccurate and both members can go. Please keep `data()` below; `JSON_DIAGNOSTICS` needs it (`exceptions.hpp` reads `element.first.data()` when building the path).\n\n<sub>This comment was written by Claude Code on behalf of @nlohmann.</sub>",
+   "created_at": "2026-10-09T06:50:17Z",
+   "diff_hunk": "@@ -0,0 +1,88 @@\n+//     __ _____ _____ _____\n+//  __|  |   __|     |   | |  JSON for Modern C++ (supporting code)\n+// |  |  |__   |  |  | | | |  version 3.12.0\n+// |_____|_____|_____|_|___|  https://github.com/nlohmann/json\n+//\n+// SPDX-FileCopyrightText: 2013-2026 Niels Lohmann <https://nlohmann.me>\n+// SPDX-License-Identifier: MIT\n+\n+#pragma once\n+\n+#include <cstddef>\n+#include <map>\n+#include <memory>\n+#include <string>\n+#include <utility>\n+#include <nlohmann/json.hpp>\n+\n+namespace custom_object_key_test\n+{\n+class key\n+{\n+  public:\n+    key() = default;\n+\n+    key(const char* value)\n+        : m_value(value)\n+    {}\n+\n+    key(std::string value)\n+        : m_value(std::move(value))\n+    {}\n+\n+    operator std::string() const\n+    {\n+        return m_value;\n+    }\n+\n+    // UBJSON and BJData access object keys through size() and c_str()",
+   "line": 38,
+   "path": "tests/src/custom_object_key_type.hpp",
+   "user": {
+    "login": "nlohmann",
+    "type": "User"
+   }
+  },
+  {
+   "body": "Nit (non-blocking): when `object_t::key_type` isn't `string_t`, the `el.first` argument becomes a temporary `string_t` that lives only until the caller's statement ends. That's fine here, because `sanitized` doesn't outlive this call. But `sanitize_utf8_for_write` justifies returning `s` by reference with \"callers pass lvalues that outlive the call\", and this caller now breaks that assumption. Please add a sentence to this doc comment saying `value` may be such a temporary, so the result of `sanitize_utf8_for_write` must not escape this function. That stops a later refactor from storing it.\n\n<sub>This comment was written by Claude Code on behalf of @nlohmann.</sub>",
+   "created_at": "2026-10-09T06:50:17Z",
+   "diff_hunk": "@@ -1542,6 +1499,75 @@ class binary_writer\n         }\n     }\n \n+    /*!\n+    @brief write a CBOR text string\n+\n+    @a value is checked or sanitized according to @ref error_handler, with\n+    @a context (the string value itself, or the object a key belongs to) used\n+    as diagnostics context; this avoids converting object keys to a temporary\n+    basic_json just to write them\n+    */\n+    void write_cbor_string(const string_t& value, const BasicJsonType& context)",
+   "line": 1956,
+   "path": "include/nlohmann/detail/output/binary_writer.hpp",
+   "user": {
+    "login": "nlohmann",
+    "type": "User"
+   }
+  },
+  {
+   "body": "Nit: the `static_assert` checks `std::is_convertible`, which means *implicitly* convertible. An `explicit operator std::string()` would not satisfy it. Maybe: \"`object_t::key_type` must be implicitly convertible to `string_t` (required by the binary formats).\"\n\n<sub>This comment was written by Claude Code on behalf of @nlohmann.</sub>",
+   "created_at": "2026-10-09T06:50:17Z",
+   "diff_hunk": "@@ -26,7 +26,7 @@ To store objects in C++, a type is defined by the template parameters described\n \n `StringType`\n :   the type of the keys or names (e.g., `std::string`). The comparison function `std::less<StringType>` is used to\n-    order elements inside the container.\n+    order elements inside the container. The `object_t::key_type` must be convertible to `string_t`.",
+   "line": 29,
+   "path": "docs/mkdocs/docs/api/basic_json/object_t.md",
+   "user": {
+    "login": "nlohmann",
+    "type": "User"
+   }
+  }
+ ],
+ "state": "closed",
+ "title": "Avoid allocating temporary basic_json for cbor and msgpack object keys",
+ "transport": "gh",
+ "user": {
+  "login": "alexprabhat99",
+  "type": "User"
+ }
+}

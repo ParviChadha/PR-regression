@@ -1,0 +1,273 @@
+{
+ "base_ref": "develop",
+ "base_sha": "2dc1e548563823ff103a383894b735c51963db76",
+ "body": "`json_view::dump()` had a fast writer only for compact output. Indented output and `ensure_ascii` went through a generic walk that calls `put()` per token and `memset` per line break.\n\n1. **Write the indented output of json_view's `dump()` with the fast writer.**\n   - A line break is a copy of a 64-byte ruler.\n   - The indented walks are out of line (`dump_pretty()`): inlined next to the compact walk, they made compact dumps of integer arrays 7 % slower.\n2. **Scan the strings of json_view's `dump()` with `ensure_ascii` 16 bytes at a time.**\n   - SSE2/NEON, with fast paths for 2-byte and 3-byte UTF-8.\n   - The generic walk is removed.\n3. **Find the end of the plain run of a decoded string 16 bytes at a time with SSE2.**\n   - x86 only; NEON keeps the 8-byte scan.\n\n## Numbers\n\nInstructions vs develop:\n\n| case | Linux GCC 13 / Clang 18 | macOS |\n|---|---|---|\n| `dump(2)` twitter | -25 % / -30 % | 0.50x |\n| `dump(2)` citm | -29 % / -28 % | 0.51x |\n| `dump(2)` integer arrays | | 0.48x |\n| `dump(2, ' ', true)` twitter | -19 % / -38 % | |\n| `dump(-1, ' ', true)` raw CJK | -14 % / -47 % | |\n| compact `dump()` | 0.95 ... 1.00x | 0.997 ... 1.002x |\n\n## Validation\n\n- Fuzzed differential check against develop, identical output hashes:\n  - 12,000 cases on macOS (NEON) and 6,000 on Linux (SSE2, GCC and Clang);\n  - 12 dump styles, for read-only and editable documents.\n- An indented dump of a damaged image still throws `type_error.316` (new unit test).\n- All json_view unit tests with ASan/UBSan, in C++11 and C++20. No warnings with `-Wall -Wextra -Wconversion -Wshadow -Wold-style-cast`.\n- All commits build on their own, and each commit's `single_include` is a fresh `make amalgamate`.\n\n## Public API\n\nNo breaking changes: the output is byte-identical, and the exceptions are unchanged.\n\nWritten by Claude Code on behalf of @nlohmann.\n\n\ud83e\udd16 Generated with [Claude Code](https://claude.com/claude-code)\n",
+ "comments": [],
+ "created_at": "2026-10-22T07:36:30Z",
+ "fetched_at": "2026-11-17T20:09:00Z",
+ "head_sha": "d705cf0b63e961b05018ae8a3e4645560cd97b18",
+ "labels": [
+  "L",
+  "tests",
+  "\ud83d\ude80 ready to merge",
+  "performance",
+  "aspect: json_view"
+ ],
+ "linked_issues": [],
+ "merge_commit_sha": "e9c4fe3cdffb011bec83b323e89ea3b2b505ef94",
+ "merged_at": "2026-10-24T05:38:18Z",
+ "number": 5889,
+ "referenced_numbers": [],
+ "repo": "nlohmann/json",
+ "review_comments": [
+  {
+   "body": "## Flawfinder / Check when opening files - can an attacker redirect it (via symlinks), force the opening of special file type (e.g., device files), move things around to create a race condition, control its ancestors, or change its contents? (CWE-362).\n\nmisc/open:Check when opening files - can an attacker redirect it (via symlinks), force the opening of special file type (e.g., device files), move things around to create a race condition, control its ancestors, or change its contents? (CWE-362).\n\n[Show more details](https://github.com/nlohmann/json/security/code-scanning/1017)",
+   "created_at": "2026-10-22T11:14:19Z",
+   "diff_hunk": "@@ -275,6 +349,39 @@\n     return w + N - 1;\n }\n \n+/// the depth of the innermost open container, counted only for indented output\n+template<bool Counted>\n+struct depth_counter\n+{\n+    std::size_t value = 0;\n+    void open() noexcept",
+   "line": 357,
+   "path": "include/nlohmann/detail/view/serializer.hpp",
+   "user": {
+    "login": "github-advanced-security[bot]",
+    "type": "Bot"
+   }
+  },
+  {
+   "body": "## Flawfinder / Check when opening files - can an attacker redirect it (via symlinks), force the opening of special file type (e.g., device files), move things around to create a race condition, control its ancestors, or change its contents? (CWE-362).\n\nmisc/open:Check when opening files - can an attacker redirect it (via symlinks), force the opening of special file type (e.g., device files), move things around to create a race condition, control its ancestors, or change its contents? (CWE-362).\n\n[Show more details](https://github.com/nlohmann/json/security/code-scanning/1018)",
+   "created_at": "2026-10-22T11:14:19Z",
+   "diff_hunk": "@@ -275,6 +349,39 @@\n     return w + N - 1;\n }\n \n+/// the depth of the innermost open container, counted only for indented output\n+template<bool Counted>\n+struct depth_counter\n+{\n+    std::size_t value = 0;\n+    void open() noexcept\n+    {\n+        ++value;\n+    }\n+    std::size_t close() noexcept\n+    {\n+        return --value;\n+    }\n+    std::size_t get() const noexcept\n+    {\n+        return value;\n+    }\n+};\n+\n+template<>\n+struct depth_counter<false>\n+{\n+    void open() noexcept {}",
+   "line": 374,
+   "path": "include/nlohmann/detail/view/serializer.hpp",
+   "user": {
+    "login": "github-advanced-security[bot]",
+    "type": "Bot"
+   }
+  },
+  {
+   "body": "## Flawfinder / Does not check for buffer overflows when copying to destination (CWE-120).\n\nbuffer/memcpy:Does not check for buffer overflows when copying to destination (CWE-120).\n\n[Show more details](https://github.com/nlohmann/json/security/code-scanning/1019)",
+   "created_at": "2026-10-22T11:14:19Z",
+   "diff_hunk": "@@ -458,13 +521,154 @@\n         return (n.flags & node_flags::storage) == 0 && is_ascii_without_delete(src + n.off, n.len);\n     }\n \n-    /// a string with ensure_ascii (dump_compact()), out of line\n-    NLOHMANN_VIEW_NOINLINE void write_ascii_string(const node& n)\n+    /*!\n+    @brief a string with ensure_ascii: the characters that are not printable ASCII as \\\\uXXXX\n+    (a character beyond U+FFFF as a surrogate pair); strings of a document\n+    are valid UTF-8, except in a damaged image loaded with image_check::bounds,\n+    for which this throws what basic_json::dump() throws for the string\n+    */\n+    NLOHMANN_VIEW_NOINLINE void write_ascii(const node& n)\n     {\n-        write_string(n);\n+        const auto* const s = reinterpret_cast<const unsigned char*>(m_doc.str(n)); // NOLINT(cppcoreguidelines-pro-type-reinterpret-cast)\n+        const std::size_t size = n.len;\n+        char* w = m_out.cursor();\n+        char* lim = m_out.limit();\n+        // room for k bytes\n+        const auto room = [&](std::size_t k)\n+        {\n+            if (NLOHMANN_VIEW_UNLIKELY(static_cast<std::size_t>(lim - w) < k))\n+            {\n+                m_out.set_cursor(w);\n+                m_out.reserve(k);\n+                w = m_out.cursor();\n+                lim = m_out.limit();\n+            }\n+        };\n+        static constexpr const char* hex = \"0123456789abcdef\";\n+        // \\\\uXXXX\n+        const auto u_escape = [&](std::uint32_t u)\n+        {\n+            w[0] = '\\\\';\n+            w[1] = 'u';\n+            w[2] = hex[(u >> 12u) & 0xFu];\n+            w[3] = hex[(u >> 8u) & 0xFu];\n+            w[4] = hex[(u >> 4u) & 0xFu];\n+            w[5] = hex[u & 0xFu];\n+            w += 6;\n+        };\n+        room(1);\n+        *w++ = '\"';\n+        std::size_t i = 0;\n+        // (a string of the source starts with a run that has nothing to escape, 16 bytes per step)\n+        const std::size_t prefix = (n.flags & node_flags::storage) == 0 ? ascii_copyable_run(s, size, reinterpret_cast<const unsigned char*>(m_doc.src + m_doc.size)) : 0; // NOLINT(cppcoreguidelines-pro-type-reinterpret-cast)\n+        if (prefix != 0)\n+        {\n+            room(prefix);\n+            std::memcpy(w, s, prefix);",
+   "line": 570,
+   "path": "include/nlohmann/detail/view/serializer.hpp",
+   "user": {
+    "login": "github-advanced-security[bot]",
+    "type": "Bot"
+   }
+  },
+  {
+   "body": "## Flawfinder / Does not check for buffer overflows when copying to destination (CWE-120).\n\nbuffer/memcpy:Does not check for buffer overflows when copying to destination (CWE-120).\n\n[Show more details](https://github.com/nlohmann/json/security/code-scanning/1020)",
+   "created_at": "2026-10-22T11:14:20Z",
+   "diff_hunk": "@@ -458,13 +521,154 @@\n         return (n.flags & node_flags::storage) == 0 && is_ascii_without_delete(src + n.off, n.len);\n     }\n \n-    /// a string with ensure_ascii (dump_compact()), out of line\n-    NLOHMANN_VIEW_NOINLINE void write_ascii_string(const node& n)\n+    /*!\n+    @brief a string with ensure_ascii: the characters that are not printable ASCII as \\\\uXXXX\n+    (a character beyond U+FFFF as a surrogate pair); strings of a document\n+    are valid UTF-8, except in a damaged image loaded with image_check::bounds,\n+    for which this throws what basic_json::dump() throws for the string\n+    */\n+    NLOHMANN_VIEW_NOINLINE void write_ascii(const node& n)\n     {\n-        write_string(n);\n+        const auto* const s = reinterpret_cast<const unsigned char*>(m_doc.str(n)); // NOLINT(cppcoreguidelines-pro-type-reinterpret-cast)\n+        const std::size_t size = n.len;\n+        char* w = m_out.cursor();\n+        char* lim = m_out.limit();\n+        // room for k bytes\n+        const auto room = [&](std::size_t k)\n+        {\n+            if (NLOHMANN_VIEW_UNLIKELY(static_cast<std::size_t>(lim - w) < k))\n+            {\n+                m_out.set_cursor(w);\n+                m_out.reserve(k);\n+                w = m_out.cursor();\n+                lim = m_out.limit();\n+            }\n+        };\n+        static constexpr const char* hex = \"0123456789abcdef\";\n+        // \\\\uXXXX\n+        const auto u_escape = [&](std::uint32_t u)\n+        {\n+            w[0] = '\\\\';\n+            w[1] = 'u';\n+            w[2] = hex[(u >> 12u) & 0xFu];\n+            w[3] = hex[(u >> 8u) & 0xFu];\n+            w[4] = hex[(u >> 4u) & 0xFu];\n+            w[5] = hex[u & 0xFu];\n+            w += 6;\n+        };\n+        room(1);\n+        *w++ = '\"';\n+        std::size_t i = 0;\n+        // (a string of the source starts with a run that has nothing to escape, 16 bytes per step)\n+        const std::size_t prefix = (n.flags & node_flags::storage) == 0 ? ascii_copyable_run(s, size, reinterpret_cast<const unsigned char*>(m_doc.src + m_doc.size)) : 0; // NOLINT(cppcoreguidelines-pro-type-reinterpret-cast)\n+        if (prefix != 0)\n+        {\n+            room(prefix);\n+            std::memcpy(w, s, prefix);\n+            w += prefix;\n+            i = prefix;\n+        }\n+        while (i < size)\n+        {\n+            // (a character that needs an escape sequence is not worth a call)\n+            const std::size_t run = is_ascii_copyable(s[i]) ? find_ascii_copyable_run(s + i, size - i) : 0;\n+            if (run != 0)\n+            {\n+                room(run);\n+                std::memcpy(w, s + i, run);",
+   "line": 581,
+   "path": "include/nlohmann/detail/view/serializer.hpp",
+   "user": {
+    "login": "github-advanced-security[bot]",
+    "type": "Bot"
+   }
+  },
+  {
+   "body": "## Flawfinder / Does not check for buffer overflows when copying to destination (CWE-120).\n\nbuffer/memcpy:Does not check for buffer overflows when copying to destination (CWE-120).\n\n[Show more details](https://github.com/nlohmann/json/security/code-scanning/1022)",
+   "created_at": "2026-10-22T11:14:20Z",
+   "diff_hunk": "@@ -539,18 +753,34 @@\n             }\n             w += n;\n         };\n+        // (indented output) the line break and the indentation of a level\n+        const auto newline = [&](std::size_t depth)\n+        {\n+            const std::size_t count = 1 + (depth * indent);\n+            room(count);\n+            if (count <= ruler.size())\n+            {\n+                std::memcpy(w, ruler.data(), ruler.size());",
+   "line": 766,
+   "path": "include/nlohmann/detail/view/serializer.hpp",
+   "user": {
+    "login": "github-advanced-security[bot]",
+    "type": "Bot"
+   }
+  },
+  {
+   "body": "## Flawfinder / Check when opening files - can an attacker redirect it (via symlinks), force the opening of special file type (e.g., device files), move things around to create a race condition, control its ancestors, or change its contents? (CWE-362).\n\nmisc/open:Check when opening files - can an attacker redirect it (via symlinks), force the opening of special file type (e.g., device files), move things around to create a race condition, control its ancestors, or change its contents? (CWE-362).\n\n[Show more details](https://github.com/nlohmann/json/security/code-scanning/1024)",
+   "created_at": "2026-10-22T11:14:20Z",
+   "diff_hunk": "@@ -6341,6 +6416,39 @@\n     return w + N - 1;\n }\n \n+/// the depth of the innermost open container, counted only for indented output\n+template<bool Counted>\n+struct depth_counter\n+{\n+    std::size_t value = 0;\n+    void open() noexcept",
+   "line": 6424,
+   "path": "single_include/nlohmann/json_view.hpp",
+   "user": {
+    "login": "github-advanced-security[bot]",
+    "type": "Bot"
+   }
+  },
+  {
+   "body": "## Flawfinder / Check when opening files - can an attacker redirect it (via symlinks), force the opening of special file type (e.g., device files), move things around to create a race condition, control its ancestors, or change its contents? (CWE-362).\n\nmisc/open:Check when opening files - can an attacker redirect it (via symlinks), force the opening of special file type (e.g., device files), move things around to create a race condition, control its ancestors, or change its contents? (CWE-362).\n\n[Show more details](https://github.com/nlohmann/json/security/code-scanning/1025)",
+   "created_at": "2026-10-22T11:14:20Z",
+   "diff_hunk": "@@ -6341,6 +6416,39 @@\n     return w + N - 1;\n }\n \n+/// the depth of the innermost open container, counted only for indented output\n+template<bool Counted>\n+struct depth_counter\n+{\n+    std::size_t value = 0;\n+    void open() noexcept\n+    {\n+        ++value;\n+    }\n+    std::size_t close() noexcept\n+    {\n+        return --value;\n+    }\n+    std::size_t get() const noexcept\n+    {\n+        return value;\n+    }\n+};\n+\n+template<>\n+struct depth_counter<false>\n+{\n+    void open() noexcept {}",
+   "line": 6441,
+   "path": "single_include/nlohmann/json_view.hpp",
+   "user": {
+    "login": "github-advanced-security[bot]",
+    "type": "Bot"
+   }
+  },
+  {
+   "body": "## Flawfinder / Does not check for buffer overflows when copying to destination (CWE-120).\n\nbuffer/memcpy:Does not check for buffer overflows when copying to destination (CWE-120).\n\n[Show more details](https://github.com/nlohmann/json/security/code-scanning/1026)",
+   "created_at": "2026-10-22T11:14:20Z",
+   "diff_hunk": "@@ -6524,13 +6588,154 @@\n         return (n.flags & node_flags::storage) == 0 && is_ascii_without_delete(src + n.off, n.len);\n     }\n \n-    /// a string with ensure_ascii (dump_compact()), out of line\n-    NLOHMANN_VIEW_NOINLINE void write_ascii_string(const node& n)\n+    /*!\n+    @brief a string with ensure_ascii: the characters that are not printable ASCII as \\\\uXXXX\n+    (a character beyond U+FFFF as a surrogate pair); strings of a document\n+    are valid UTF-8, except in a damaged image loaded with image_check::bounds,\n+    for which this throws what basic_json::dump() throws for the string\n+    */\n+    NLOHMANN_VIEW_NOINLINE void write_ascii(const node& n)\n     {\n-        write_string(n);\n+        const auto* const s = reinterpret_cast<const unsigned char*>(m_doc.str(n)); // NOLINT(cppcoreguidelines-pro-type-reinterpret-cast)\n+        const std::size_t size = n.len;\n+        char* w = m_out.cursor();\n+        char* lim = m_out.limit();\n+        // room for k bytes\n+        const auto room = [&](std::size_t k)\n+        {\n+            if (NLOHMANN_VIEW_UNLIKELY(static_cast<std::size_t>(lim - w) < k))\n+            {\n+                m_out.set_cursor(w);\n+                m_out.reserve(k);\n+                w = m_out.cursor();\n+                lim = m_out.limit();\n+            }\n+        };\n+        static constexpr const char* hex = \"0123456789abcdef\";\n+        // \\\\uXXXX\n+        const auto u_escape = [&](std::uint32_t u)\n+        {\n+            w[0] = '\\\\';\n+            w[1] = 'u';\n+            w[2] = hex[(u >> 12u) & 0xFu];\n+            w[3] = hex[(u >> 8u) & 0xFu];\n+            w[4] = hex[(u >> 4u) & 0xFu];\n+            w[5] = hex[u & 0xFu];\n+            w += 6;\n+        };\n+        room(1);\n+        *w++ = '\"';\n+        std::size_t i = 0;\n+        // (a string of the source starts with a run that has nothing to escape, 16 bytes per step)\n+        const std::size_t prefix = (n.flags & node_flags::storage) == 0 ? ascii_copyable_run(s, size, reinterpret_cast<const unsigned char*>(m_doc.src + m_doc.size)) : 0; // NOLINT(cppcoreguidelines-pro-type-reinterpret-cast)\n+        if (prefix != 0)\n+        {\n+            room(prefix);\n+            std::memcpy(w, s, prefix);",
+   "line": 6637,
+   "path": "single_include/nlohmann/json_view.hpp",
+   "user": {
+    "login": "github-advanced-security[bot]",
+    "type": "Bot"
+   }
+  },
+  {
+   "body": "## Flawfinder / Does not check for buffer overflows when copying to destination (CWE-120).\n\nbuffer/memcpy:Does not check for buffer overflows when copying to destination (CWE-120).\n\n[Show more details](https://github.com/nlohmann/json/security/code-scanning/1027)",
+   "created_at": "2026-10-22T11:14:20Z",
+   "diff_hunk": "@@ -6524,13 +6588,154 @@\n         return (n.flags & node_flags::storage) == 0 && is_ascii_without_delete(src + n.off, n.len);\n     }\n \n-    /// a string with ensure_ascii (dump_compact()), out of line\n-    NLOHMANN_VIEW_NOINLINE void write_ascii_string(const node& n)\n+    /*!\n+    @brief a string with ensure_ascii: the characters that are not printable ASCII as \\\\uXXXX\n+    (a character beyond U+FFFF as a surrogate pair); strings of a document\n+    are valid UTF-8, except in a damaged image loaded with image_check::bounds,\n+    for which this throws what basic_json::dump() throws for the string\n+    */\n+    NLOHMANN_VIEW_NOINLINE void write_ascii(const node& n)\n     {\n-        write_string(n);\n+        const auto* const s = reinterpret_cast<const unsigned char*>(m_doc.str(n)); // NOLINT(cppcoreguidelines-pro-type-reinterpret-cast)\n+        const std::size_t size = n.len;\n+        char* w = m_out.cursor();\n+        char* lim = m_out.limit();\n+        // room for k bytes\n+        const auto room = [&](std::size_t k)\n+        {\n+            if (NLOHMANN_VIEW_UNLIKELY(static_cast<std::size_t>(lim - w) < k))\n+            {\n+                m_out.set_cursor(w);\n+                m_out.reserve(k);\n+                w = m_out.cursor();\n+                lim = m_out.limit();\n+            }\n+        };\n+        static constexpr const char* hex = \"0123456789abcdef\";\n+        // \\\\uXXXX\n+        const auto u_escape = [&](std::uint32_t u)\n+        {\n+            w[0] = '\\\\';\n+            w[1] = 'u';\n+            w[2] = hex[(u >> 12u) & 0xFu];\n+            w[3] = hex[(u >> 8u) & 0xFu];\n+            w[4] = hex[(u >> 4u) & 0xFu];\n+            w[5] = hex[u & 0xFu];\n+            w += 6;\n+        };\n+        room(1);\n+        *w++ = '\"';\n+        std::size_t i = 0;\n+        // (a string of the source starts with a run that has nothing to escape, 16 bytes per step)\n+        const std::size_t prefix = (n.flags & node_flags::storage) == 0 ? ascii_copyable_run(s, size, reinterpret_cast<const unsigned char*>(m_doc.src + m_doc.size)) : 0; // NOLINT(cppcoreguidelines-pro-type-reinterpret-cast)\n+        if (prefix != 0)\n+        {\n+            room(prefix);\n+            std::memcpy(w, s, prefix);\n+            w += prefix;\n+            i = prefix;\n+        }\n+        while (i < size)\n+        {\n+            // (a character that needs an escape sequence is not worth a call)\n+            const std::size_t run = is_ascii_copyable(s[i]) ? find_ascii_copyable_run(s + i, size - i) : 0;\n+            if (run != 0)\n+            {\n+                room(run);\n+                std::memcpy(w, s + i, run);",
+   "line": 6648,
+   "path": "single_include/nlohmann/json_view.hpp",
+   "user": {
+    "login": "github-advanced-security[bot]",
+    "type": "Bot"
+   }
+  },
+  {
+   "body": "## Flawfinder / Does not check for buffer overflows when copying to destination (CWE-120).\n\nbuffer/memcpy:Does not check for buffer overflows when copying to destination (CWE-120).\n\n[Show more details](https://github.com/nlohmann/json/security/code-scanning/1029)",
+   "created_at": "2026-10-22T11:14:20Z",
+   "diff_hunk": "@@ -6605,18 +6820,34 @@\n             }\n             w += n;\n         };\n+        // (indented output) the line break and the indentation of a level\n+        const auto newline = [&](std::size_t depth)\n+        {\n+            const std::size_t count = 1 + (depth * indent);\n+            room(count);\n+            if (count <= ruler.size())\n+            {\n+                std::memcpy(w, ruler.data(), ruler.size());",
+   "line": 6833,
+   "path": "single_include/nlohmann/json_view.hpp",
+   "user": {
+    "login": "github-advanced-security[bot]",
+    "type": "Bot"
+   }
+  },
+  {
+   "body": "False positive: these are `depth_counter`'s own `open()`/`close()` methods, not file functions. Renamed them to `enter()`/`leave()` in 86049706a.\n\n_\ud83e\udd16 Addressed by [Claude Code](https://claude.com/claude-code)_",
+   "created_at": "2026-10-22T11:18:16Z",
+   "diff_hunk": "@@ -275,6 +349,39 @@\n     return w + N - 1;\n }\n \n+/// the depth of the innermost open container, counted only for indented output\n+template<bool Counted>\n+struct depth_counter\n+{\n+    std::size_t value = 0;\n+    void open() noexcept",
+   "line": 357,
+   "path": "include/nlohmann/detail/view/serializer.hpp",
+   "user": {
+    "login": "nlohmann",
+    "type": "User"
+   }
+  },
+  {
+   "body": "False positive: these are `depth_counter`'s own `open()`/`close()` methods, not file functions. Renamed them to `enter()`/`leave()` in 86049706a.\n\n_\ud83e\udd16 Addressed by [Claude Code](https://claude.com/claude-code)_",
+   "created_at": "2026-10-22T11:18:17Z",
+   "diff_hunk": "@@ -275,6 +349,39 @@\n     return w + N - 1;\n }\n \n+/// the depth of the innermost open container, counted only for indented output\n+template<bool Counted>\n+struct depth_counter\n+{\n+    std::size_t value = 0;\n+    void open() noexcept\n+    {\n+        ++value;\n+    }\n+    std::size_t close() noexcept\n+    {\n+        return --value;\n+    }\n+    std::size_t get() const noexcept\n+    {\n+        return value;\n+    }\n+};\n+\n+template<>\n+struct depth_counter<false>\n+{\n+    void open() noexcept {}",
+   "line": 374,
+   "path": "include/nlohmann/detail/view/serializer.hpp",
+   "user": {
+    "login": "nlohmann",
+    "type": "User"
+   }
+  },
+  {
+   "body": "False positive: these are `depth_counter`'s own `open()`/`close()` methods, not file functions. Renamed them to `enter()`/`leave()` in 86049706a.\n\n_\ud83e\udd16 Addressed by [Claude Code](https://claude.com/claude-code)_",
+   "created_at": "2026-10-22T11:18:19Z",
+   "diff_hunk": "@@ -6341,6 +6416,39 @@\n     return w + N - 1;\n }\n \n+/// the depth of the innermost open container, counted only for indented output\n+template<bool Counted>\n+struct depth_counter\n+{\n+    std::size_t value = 0;\n+    void open() noexcept",
+   "line": 6424,
+   "path": "single_include/nlohmann/json_view.hpp",
+   "user": {
+    "login": "nlohmann",
+    "type": "User"
+   }
+  },
+  {
+   "body": "False positive: these are `depth_counter`'s own `open()`/`close()` methods, not file functions. Renamed them to `enter()`/`leave()` in 86049706a.\n\n_\ud83e\udd16 Addressed by [Claude Code](https://claude.com/claude-code)_",
+   "created_at": "2026-10-22T11:18:21Z",
+   "diff_hunk": "@@ -6341,6 +6416,39 @@\n     return w + N - 1;\n }\n \n+/// the depth of the innermost open container, counted only for indented output\n+template<bool Counted>\n+struct depth_counter\n+{\n+    std::size_t value = 0;\n+    void open() noexcept\n+    {\n+        ++value;\n+    }\n+    std::size_t close() noexcept\n+    {\n+        return --value;\n+    }\n+    std::size_t get() const noexcept\n+    {\n+        return value;\n+    }\n+};\n+\n+template<>\n+struct depth_counter<false>\n+{\n+    void open() noexcept {}",
+   "line": 6441,
+   "path": "single_include/nlohmann/json_view.hpp",
+   "user": {
+    "login": "nlohmann",
+    "type": "User"
+   }
+  },
+  {
+   "body": "No change: false positive. `room()` is called for exactly the bytes copied right before the copy.\n\n_\ud83e\udd16 Addressed by [Claude Code](https://claude.com/claude-code)_",
+   "created_at": "2026-10-22T11:18:22Z",
+   "diff_hunk": "@@ -458,13 +521,154 @@\n         return (n.flags & node_flags::storage) == 0 && is_ascii_without_delete(src + n.off, n.len);\n     }\n \n-    /// a string with ensure_ascii (dump_compact()), out of line\n-    NLOHMANN_VIEW_NOINLINE void write_ascii_string(const node& n)\n+    /*!\n+    @brief a string with ensure_ascii: the characters that are not printable ASCII as \\\\uXXXX\n+    (a character beyond U+FFFF as a surrogate pair); strings of a document\n+    are valid UTF-8, except in a damaged image loaded with image_check::bounds,\n+    for which this throws what basic_json::dump() throws for the string\n+    */\n+    NLOHMANN_VIEW_NOINLINE void write_ascii(const node& n)\n     {\n-        write_string(n);\n+        const auto* const s = reinterpret_cast<const unsigned char*>(m_doc.str(n)); // NOLINT(cppcoreguidelines-pro-type-reinterpret-cast)\n+        const std::size_t size = n.len;\n+        char* w = m_out.cursor();\n+        char* lim = m_out.limit();\n+        // room for k bytes\n+        const auto room = [&](std::size_t k)\n+        {\n+            if (NLOHMANN_VIEW_UNLIKELY(static_cast<std::size_t>(lim - w) < k))\n+            {\n+                m_out.set_cursor(w);\n+                m_out.reserve(k);\n+                w = m_out.cursor();\n+                lim = m_out.limit();\n+            }\n+        };\n+        static constexpr const char* hex = \"0123456789abcdef\";\n+        // \\\\uXXXX\n+        const auto u_escape = [&](std::uint32_t u)\n+        {\n+            w[0] = '\\\\';\n+            w[1] = 'u';\n+            w[2] = hex[(u >> 12u) & 0xFu];\n+            w[3] = hex[(u >> 8u) & 0xFu];\n+            w[4] = hex[(u >> 4u) & 0xFu];\n+            w[5] = hex[u & 0xFu];\n+            w += 6;\n+        };\n+        room(1);\n+        *w++ = '\"';\n+        std::size_t i = 0;\n+        // (a string of the source starts with a run that has nothing to escape, 16 bytes per step)\n+        const std::size_t prefix = (n.flags & node_flags::storage) == 0 ? ascii_copyable_run(s, size, reinterpret_cast<const unsigned char*>(m_doc.src + m_doc.size)) : 0; // NOLINT(cppcoreguidelines-pro-type-reinterpret-cast)\n+        if (prefix != 0)\n+        {\n+            room(prefix);\n+            std::memcpy(w, s, prefix);",
+   "line": 570,
+   "path": "include/nlohmann/detail/view/serializer.hpp",
+   "user": {
+    "login": "nlohmann",
+    "type": "User"
+   }
+  },
+  {
+   "body": "No change: false positive. `room()` is called for exactly the bytes copied right before the copy.\n\n_\ud83e\udd16 Addressed by [Claude Code](https://claude.com/claude-code)_",
+   "created_at": "2026-10-22T11:18:24Z",
+   "diff_hunk": "@@ -458,13 +521,154 @@\n         return (n.flags & node_flags::storage) == 0 && is_ascii_without_delete(src + n.off, n.len);\n     }\n \n-    /// a string with ensure_ascii (dump_compact()), out of line\n-    NLOHMANN_VIEW_NOINLINE void write_ascii_string(const node& n)\n+    /*!\n+    @brief a string with ensure_ascii: the characters that are not printable ASCII as \\\\uXXXX\n+    (a character beyond U+FFFF as a surrogate pair); strings of a document\n+    are valid UTF-8, except in a damaged image loaded with image_check::bounds,\n+    for which this throws what basic_json::dump() throws for the string\n+    */\n+    NLOHMANN_VIEW_NOINLINE void write_ascii(const node& n)\n     {\n-        write_string(n);\n+        const auto* const s = reinterpret_cast<const unsigned char*>(m_doc.str(n)); // NOLINT(cppcoreguidelines-pro-type-reinterpret-cast)\n+        const std::size_t size = n.len;\n+        char* w = m_out.cursor();\n+        char* lim = m_out.limit();\n+        // room for k bytes\n+        const auto room = [&](std::size_t k)\n+        {\n+            if (NLOHMANN_VIEW_UNLIKELY(static_cast<std::size_t>(lim - w) < k))\n+            {\n+                m_out.set_cursor(w);\n+                m_out.reserve(k);\n+                w = m_out.cursor();\n+                lim = m_out.limit();\n+            }\n+        };\n+        static constexpr const char* hex = \"0123456789abcdef\";\n+        // \\\\uXXXX\n+        const auto u_escape = [&](std::uint32_t u)\n+        {\n+            w[0] = '\\\\';\n+            w[1] = 'u';\n+            w[2] = hex[(u >> 12u) & 0xFu];\n+            w[3] = hex[(u >> 8u) & 0xFu];\n+            w[4] = hex[(u >> 4u) & 0xFu];\n+            w[5] = hex[u & 0xFu];\n+            w += 6;\n+        };\n+        room(1);\n+        *w++ = '\"';\n+        std::size_t i = 0;\n+        // (a string of the source starts with a run that has nothing to escape, 16 bytes per step)\n+        const std::size_t prefix = (n.flags & node_flags::storage) == 0 ? ascii_copyable_run(s, size, reinterpret_cast<const unsigned char*>(m_doc.src + m_doc.size)) : 0; // NOLINT(cppcoreguidelines-pro-type-reinterpret-cast)\n+        if (prefix != 0)\n+        {\n+            room(prefix);\n+            std::memcpy(w, s, prefix);\n+            w += prefix;\n+            i = prefix;\n+        }\n+        while (i < size)\n+        {\n+            // (a character that needs an escape sequence is not worth a call)\n+            const std::size_t run = is_ascii_copyable(s[i]) ? find_ascii_copyable_run(s + i, size - i) : 0;\n+            if (run != 0)\n+            {\n+                room(run);\n+                std::memcpy(w, s + i, run);",
+   "line": 581,
+   "path": "include/nlohmann/detail/view/serializer.hpp",
+   "user": {
+    "login": "nlohmann",
+    "type": "User"
+   }
+  },
+  {
+   "body": "No change: false positive. `room()` is called for exactly the bytes copied right before the copy.\n\n_\ud83e\udd16 Addressed by [Claude Code](https://claude.com/claude-code)_",
+   "created_at": "2026-10-22T11:18:25Z",
+   "diff_hunk": "@@ -6524,13 +6588,154 @@\n         return (n.flags & node_flags::storage) == 0 && is_ascii_without_delete(src + n.off, n.len);\n     }\n \n-    /// a string with ensure_ascii (dump_compact()), out of line\n-    NLOHMANN_VIEW_NOINLINE void write_ascii_string(const node& n)\n+    /*!\n+    @brief a string with ensure_ascii: the characters that are not printable ASCII as \\\\uXXXX\n+    (a character beyond U+FFFF as a surrogate pair); strings of a document\n+    are valid UTF-8, except in a damaged image loaded with image_check::bounds,\n+    for which this throws what basic_json::dump() throws for the string\n+    */\n+    NLOHMANN_VIEW_NOINLINE void write_ascii(const node& n)\n     {\n-        write_string(n);\n+        const auto* const s = reinterpret_cast<const unsigned char*>(m_doc.str(n)); // NOLINT(cppcoreguidelines-pro-type-reinterpret-cast)\n+        const std::size_t size = n.len;\n+        char* w = m_out.cursor();\n+        char* lim = m_out.limit();\n+        // room for k bytes\n+        const auto room = [&](std::size_t k)\n+        {\n+            if (NLOHMANN_VIEW_UNLIKELY(static_cast<std::size_t>(lim - w) < k))\n+            {\n+                m_out.set_cursor(w);\n+                m_out.reserve(k);\n+                w = m_out.cursor();\n+                lim = m_out.limit();\n+            }\n+        };\n+        static constexpr const char* hex = \"0123456789abcdef\";\n+        // \\\\uXXXX\n+        const auto u_escape = [&](std::uint32_t u)\n+        {\n+            w[0] = '\\\\';\n+            w[1] = 'u';\n+            w[2] = hex[(u >> 12u) & 0xFu];\n+            w[3] = hex[(u >> 8u) & 0xFu];\n+            w[4] = hex[(u >> 4u) & 0xFu];\n+            w[5] = hex[u & 0xFu];\n+            w += 6;\n+        };\n+        room(1);\n+        *w++ = '\"';\n+        std::size_t i = 0;\n+        // (a string of the source starts with a run that has nothing to escape, 16 bytes per step)\n+        const std::size_t prefix = (n.flags & node_flags::storage) == 0 ? ascii_copyable_run(s, size, reinterpret_cast<const unsigned char*>(m_doc.src + m_doc.size)) : 0; // NOLINT(cppcoreguidelines-pro-type-reinterpret-cast)\n+        if (prefix != 0)\n+        {\n+            room(prefix);\n+            std::memcpy(w, s, prefix);",
+   "line": 6637,
+   "path": "single_include/nlohmann/json_view.hpp",
+   "user": {
+    "login": "nlohmann",
+    "type": "User"
+   }
+  },
+  {
+   "body": "No change: false positive. `room()` is called for exactly the bytes copied right before the copy.\n\n_\ud83e\udd16 Addressed by [Claude Code](https://claude.com/claude-code)_",
+   "created_at": "2026-10-22T11:18:26Z",
+   "diff_hunk": "@@ -6524,13 +6588,154 @@\n         return (n.flags & node_flags::storage) == 0 && is_ascii_without_delete(src + n.off, n.len);\n     }\n \n-    /// a string with ensure_ascii (dump_compact()), out of line\n-    NLOHMANN_VIEW_NOINLINE void write_ascii_string(const node& n)\n+    /*!\n+    @brief a string with ensure_ascii: the characters that are not printable ASCII as \\\\uXXXX\n+    (a character beyond U+FFFF as a surrogate pair); strings of a document\n+    are valid UTF-8, except in a damaged image loaded with image_check::bounds,\n+    for which this throws what basic_json::dump() throws for the string\n+    */\n+    NLOHMANN_VIEW_NOINLINE void write_ascii(const node& n)\n     {\n-        write_string(n);\n+        const auto* const s = reinterpret_cast<const unsigned char*>(m_doc.str(n)); // NOLINT(cppcoreguidelines-pro-type-reinterpret-cast)\n+        const std::size_t size = n.len;\n+        char* w = m_out.cursor();\n+        char* lim = m_out.limit();\n+        // room for k bytes\n+        const auto room = [&](std::size_t k)\n+        {\n+            if (NLOHMANN_VIEW_UNLIKELY(static_cast<std::size_t>(lim - w) < k))\n+            {\n+                m_out.set_cursor(w);\n+                m_out.reserve(k);\n+                w = m_out.cursor();\n+                lim = m_out.limit();\n+            }\n+        };\n+        static constexpr const char* hex = \"0123456789abcdef\";\n+        // \\\\uXXXX\n+        const auto u_escape = [&](std::uint32_t u)\n+        {\n+            w[0] = '\\\\';\n+            w[1] = 'u';\n+            w[2] = hex[(u >> 12u) & 0xFu];\n+            w[3] = hex[(u >> 8u) & 0xFu];\n+            w[4] = hex[(u >> 4u) & 0xFu];\n+            w[5] = hex[u & 0xFu];\n+            w += 6;\n+        };\n+        room(1);\n+        *w++ = '\"';\n+        std::size_t i = 0;\n+        // (a string of the source starts with a run that has nothing to escape, 16 bytes per step)\n+        const std::size_t prefix = (n.flags & node_flags::storage) == 0 ? ascii_copyable_run(s, size, reinterpret_cast<const unsigned char*>(m_doc.src + m_doc.size)) : 0; // NOLINT(cppcoreguidelines-pro-type-reinterpret-cast)\n+        if (prefix != 0)\n+        {\n+            room(prefix);\n+            std::memcpy(w, s, prefix);\n+            w += prefix;\n+            i = prefix;\n+        }\n+        while (i < size)\n+        {\n+            // (a character that needs an escape sequence is not worth a call)\n+            const std::size_t run = is_ascii_copyable(s[i]) ? find_ascii_copyable_run(s + i, size - i) : 0;\n+            if (run != 0)\n+            {\n+                room(run);\n+                std::memcpy(w, s + i, run);",
+   "line": 6648,
+   "path": "single_include/nlohmann/json_view.hpp",
+   "user": {
+    "login": "nlohmann",
+    "type": "User"
+   }
+  },
+  {
+   "body": "No change: false positive. `room(count)` reserves `count + 64` bytes (the buffer's slack), so the 64-byte ruler always fits.\n\n_\ud83e\udd16 Addressed by [Claude Code](https://claude.com/claude-code)_",
+   "created_at": "2026-10-22T11:18:28Z",
+   "diff_hunk": "@@ -539,18 +753,34 @@\n             }\n             w += n;\n         };\n+        // (indented output) the line break and the indentation of a level\n+        const auto newline = [&](std::size_t depth)\n+        {\n+            const std::size_t count = 1 + (depth * indent);\n+            room(count);\n+            if (count <= ruler.size())\n+            {\n+                std::memcpy(w, ruler.data(), ruler.size());",
+   "line": 766,
+   "path": "include/nlohmann/detail/view/serializer.hpp",
+   "user": {
+    "login": "nlohmann",
+    "type": "User"
+   }
+  },
+  {
+   "body": "No change: false positive. `room(count)` reserves `count + 64` bytes (the buffer's slack), so the 64-byte ruler always fits.\n\n_\ud83e\udd16 Addressed by [Claude Code](https://claude.com/claude-code)_",
+   "created_at": "2026-10-22T11:18:30Z",
+   "diff_hunk": "@@ -6605,18 +6820,34 @@\n             }\n             w += n;\n         };\n+        // (indented output) the line break and the indentation of a level\n+        const auto newline = [&](std::size_t depth)\n+        {\n+            const std::size_t count = 1 + (depth * indent);\n+            room(count);\n+            if (count <= ruler.size())\n+            {\n+                std::memcpy(w, ruler.data(), ruler.size());",
+   "line": 6833,
+   "path": "single_include/nlohmann/json_view.hpp",
+   "user": {
+    "login": "nlohmann",
+    "type": "User"
+   }
+  },
+  {
+   "body": "Would make reading easier if `dump_ascii`, `dump_pretty` and `dump_text`  were right under the `private:` after dump`.  It seems unlikely that `dump_text` could be moved up that far cleanly, but the other two should be okay.",
+   "created_at": "2026-10-23T01:23:33Z",
+   "diff_hunk": "@@ -311,139 +420,95 @@ class view_serializer\n \n     void dump(const node* root)\n     {\n-        if (!m_style.pretty)\n+        if (m_style.ensure_ascii)\n         {\n-            if (m_style.ensure_ascii)\n-            {\n-                dump_compact_ascii(root);\n-            }\n-            else if (m_style.source_numbers)\n-            {\n-                dump_compact<true, false>(root);\n-            }\n-            else\n-            {\n-                dump_compact<false, false>(root);\n-            }\n-            return;\n+            dump_ascii(root);\n         }\n-        struct frame\n+        else if (m_style.pretty)\n         {\n-            const node* pos; ///< next element, or key of the next member\n-            const node* end;\n-            bool object;\n-            bool first;  ///< nothing written yet\n-        };\n-        std::array<frame, 32> buffer; // NOLINT(cppcoreguidelines-pro-type-member-init,hicpp-member-init): written before read\n-        std::vector<frame> heap;\n-        small_stack<frame> stack(buffer.data(), buffer.size(), heap);\n-        const node* n = root;\n-        for (;;)\n+            dump_pretty(root);\n+        }\n+        else if (m_style.source_numbers)\n         {\n-            // write the value at n\n-            if (is_container(*n))\n-            {\n-                const bool object = n->kind == static_cast<std::uint8_t>(value_t::object);\n-                if (n->len == 0)\n-                {\n-                    m_out.put(object ? \"{}\" : \"[]\", 2);\n-                }\n-                else\n-                {\n-                    m_out.put(object ? '{' : '[');\n-                    stack.push_back(frame{nav::first(m_doc, n), nav::end(m_doc, n), object, true});\n-                }\n-            }\n-            else\n-            {\n-                write_scalar(*n);\n-            }\n-\n-            // go to the next value: close finished containers, then separate\n-            for (;;)\n-            {\n-                if (stack.empty())\n-                {\n-                    m_out.finish();\n-                    return;\n-                }\n-                if (stack.back().pos == stack.back().end)\n-                {\n-                    const bool object = stack.back().object;\n-                    stack.pop_back();\n-                    newline(stack.size());\n-                    m_out.put(object ? '}' : ']');\n-                    continue;\n-                }\n-                frame& f = stack.back();\n-                if (!f.first)\n-                {\n-                    m_out.put(',');\n-                }\n-                f.first = false;\n-                newline(stack.size());\n-                if (f.object)\n-                {\n-                    write_string(*f.pos);\n-                    if (m_style.pretty)\n-                    {\n-                        m_out.put(\": \");\n-                    }\n-                    else\n-                    {\n-                        m_out.put(':');\n-                    }\n-                    n = nav::value(f.pos + 1);\n-                    f.pos = document_data::after(f.pos + 1);\n-                }\n-                else\n-                {\n-                    n = nav::value(f.pos);\n-                    f.pos = document_data::after(f.pos);\n-                }\n-                break;\n-            }\n+            dump_text<true, false, false>(root);\n+        }\n+        else\n+        {\n+            dump_text<false, false, false>(root);\n         }\n     }\n \n   private:\n     /// a string that is not a plain string of the source (decoded, or written\n     /// by an edit), without ensure_ascii: runs without characters to escape\n-    /// are copied\n-    NLOHMANN_VIEW_NOINLINE void write_decoded(const node& n)\n+    /// are copied. If validate is set, the string must be valid UTF-8: the\n+    /// runs are found by the lexer's scan, which validates the sequences, and\n+    /// invalid UTF-8 throws what basic_json::dump() throws. (The compact output\n+    /// writes the bytes of a damaged image unchanged, and scans without\n+    /// validating them.)\n+    NLOHMANN_VIEW_NOINLINE void write_decoded(const node& n, bool validate)\n     {\n         const auto* const s = reinterpret_cast<const unsigned char*>(m_doc.str(n)); // NOLINT(cppcoreguidelines-pro-type-reinterpret-cast)\n         m_out.put('\"');\n         for (std::size_t i = 0; i < n.len;)\n         {\n-            const std::size_t run = plain_output_run(s + i, n.len - i);\n+            const std::size_t run = validate ? string_bulk_run(s + i, n.len - i) : plain_output_run(s + i, n.len - i);\n             if (run != 0)\n             {\n                 m_out.put(reinterpret_cast<const char*>(s + i), run); // NOLINT(cppcoreguidelines-pro-type-reinterpret-cast)\n                 i += run;\n                 continue;\n             }\n+            if (validate && s[i] >= 0x80)\n+            {\n+                invalid_utf8(s, n.len); // (the scan stopped at ill-formed UTF-8)\n+            }\n             write_codepoint<false>(s[i], s + i, 1); // a quote, a backslash, or a control character\n             ++i;\n         }\n         m_out.put('\"');\n     }\n \n-    /// dump_compact() with ensure_ascii, out of line: the walk without it is\n-    /// faster when it is not merged with this one into dump()\n-    NLOHMANN_VIEW_NOINLINE void dump_compact_ascii(const node* root)\n+    /// dump_text() with indentation, out of line: the compact walk is faster\n+    /// when it is not merged with the indented ones into dump()\n+    NLOHMANN_VIEW_NOINLINE void dump_pretty(const node* root)",
+   "line": 469,
+   "path": "include/nlohmann/detail/view/serializer.hpp",
+   "user": {
+    "login": "gregmarr",
+    "type": "User"
+   }
+  },
+  {
+   "body": "Done in `d705cf0b6`: `dump_ascii()` and `dump_pretty()` now come right after `private:`, in the order `dump()` calls them, and `write_decoded()` follows them. `dump_text()` stays where it is.\n\n*(Written by Claude Code on behalf of @nlohmann.)*",
+   "created_at": "2026-10-23T04:49:53Z",
+   "diff_hunk": "@@ -311,139 +420,95 @@ class view_serializer\n \n     void dump(const node* root)\n     {\n-        if (!m_style.pretty)\n+        if (m_style.ensure_ascii)\n         {\n-            if (m_style.ensure_ascii)\n-            {\n-                dump_compact_ascii(root);\n-            }\n-            else if (m_style.source_numbers)\n-            {\n-                dump_compact<true, false>(root);\n-            }\n-            else\n-            {\n-                dump_compact<false, false>(root);\n-            }\n-            return;\n+            dump_ascii(root);\n         }\n-        struct frame\n+        else if (m_style.pretty)\n         {\n-            const node* pos; ///< next element, or key of the next member\n-            const node* end;\n-            bool object;\n-            bool first;  ///< nothing written yet\n-        };\n-        std::array<frame, 32> buffer; // NOLINT(cppcoreguidelines-pro-type-member-init,hicpp-member-init): written before read\n-        std::vector<frame> heap;\n-        small_stack<frame> stack(buffer.data(), buffer.size(), heap);\n-        const node* n = root;\n-        for (;;)\n+            dump_pretty(root);\n+        }\n+        else if (m_style.source_numbers)\n         {\n-            // write the value at n\n-            if (is_container(*n))\n-            {\n-                const bool object = n->kind == static_cast<std::uint8_t>(value_t::object);\n-                if (n->len == 0)\n-                {\n-                    m_out.put(object ? \"{}\" : \"[]\", 2);\n-                }\n-                else\n-                {\n-                    m_out.put(object ? '{' : '[');\n-                    stack.push_back(frame{nav::first(m_doc, n), nav::end(m_doc, n), object, true});\n-                }\n-            }\n-            else\n-            {\n-                write_scalar(*n);\n-            }\n-\n-            // go to the next value: close finished containers, then separate\n-            for (;;)\n-            {\n-                if (stack.empty())\n-                {\n-                    m_out.finish();\n-                    return;\n-                }\n-                if (stack.back().pos == stack.back().end)\n-                {\n-                    const bool object = stack.back().object;\n-                    stack.pop_back();\n-                    newline(stack.size());\n-                    m_out.put(object ? '}' : ']');\n-                    continue;\n-                }\n-                frame& f = stack.back();\n-                if (!f.first)\n-                {\n-                    m_out.put(',');\n-                }\n-                f.first = false;\n-                newline(stack.size());\n-                if (f.object)\n-                {\n-                    write_string(*f.pos);\n-                    if (m_style.pretty)\n-                    {\n-                        m_out.put(\": \");\n-                    }\n-                    else\n-                    {\n-                        m_out.put(':');\n-                    }\n-                    n = nav::value(f.pos + 1);\n-                    f.pos = document_data::after(f.pos + 1);\n-                }\n-                else\n-                {\n-                    n = nav::value(f.pos);\n-                    f.pos = document_data::after(f.pos);\n-                }\n-                break;\n-            }\n+            dump_text<true, false, false>(root);\n+        }\n+        else\n+        {\n+            dump_text<false, false, false>(root);\n         }\n     }\n \n   private:\n     /// a string that is not a plain string of the source (decoded, or written\n     /// by an edit), without ensure_ascii: runs without characters to escape\n-    /// are copied\n-    NLOHMANN_VIEW_NOINLINE void write_decoded(const node& n)\n+    /// are copied. If validate is set, the string must be valid UTF-8: the\n+    /// runs are found by the lexer's scan, which validates the sequences, and\n+    /// invalid UTF-8 throws what basic_json::dump() throws. (The compact output\n+    /// writes the bytes of a damaged image unchanged, and scans without\n+    /// validating them.)\n+    NLOHMANN_VIEW_NOINLINE void write_decoded(const node& n, bool validate)\n     {\n         const auto* const s = reinterpret_cast<const unsigned char*>(m_doc.str(n)); // NOLINT(cppcoreguidelines-pro-type-reinterpret-cast)\n         m_out.put('\"');\n         for (std::size_t i = 0; i < n.len;)\n         {\n-            const std::size_t run = plain_output_run(s + i, n.len - i);\n+            const std::size_t run = validate ? string_bulk_run(s + i, n.len - i) : plain_output_run(s + i, n.len - i);\n             if (run != 0)\n             {\n                 m_out.put(reinterpret_cast<const char*>(s + i), run); // NOLINT(cppcoreguidelines-pro-type-reinterpret-cast)\n                 i += run;\n                 continue;\n             }\n+            if (validate && s[i] >= 0x80)\n+            {\n+                invalid_utf8(s, n.len); // (the scan stopped at ill-formed UTF-8)\n+            }\n             write_codepoint<false>(s[i], s + i, 1); // a quote, a backslash, or a control character\n             ++i;\n         }\n         m_out.put('\"');\n     }\n \n-    /// dump_compact() with ensure_ascii, out of line: the walk without it is\n-    /// faster when it is not merged with this one into dump()\n-    NLOHMANN_VIEW_NOINLINE void dump_compact_ascii(const node* root)\n+    /// dump_text() with indentation, out of line: the compact walk is faster\n+    /// when it is not merged with the indented ones into dump()\n+    NLOHMANN_VIEW_NOINLINE void dump_pretty(const node* root)",
+   "line": 469,
+   "path": "include/nlohmann/detail/view/serializer.hpp",
+   "user": {
+    "login": "nlohmann",
+    "type": "User"
+   }
+  }
+ ],
+ "state": "closed",
+ "title": "json_view: indented and ensure_ascii dumps through the fast writer",
+ "transport": "gh",
+ "user": {
+  "login": "nlohmann",
+  "type": "User"
+ }
+}

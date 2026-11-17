@@ -1,0 +1,54 @@
+{
+ "base_ref": "perf/cbor-scalar-runs",
+ "base_sha": "b1b6a1535ed91fe0dfa68623ff3ffce60f913b64",
+ "body": "Stacked on #5975.\n\n## What\n\n`binary_reader::byte_swap` reversed `float` and `double` values byte by byte with a loop of `std::swap`. C++23's `std::byteswap` takes only integers. Clang merges the loop into one `bswap`, but GCC 13 does not: in callgrind it was about 7 % of the instructions for reading canada.json from CBOR.\n\n- New `byte_swap(float&)` and `byte_swap(double&)` overloads copy the bits into a `uint32_t`/`uint64_t`, call `detail::byteswap` from `bit_ops.hpp`, and copy them back. Integers keep the existing code.\n- The change applies to every reader that uses `get_number`: CBOR, MessagePack, UBJSON, BJData and BON8.\n- In the CBOR reader, the 0xFA/0xFB cases call a new never-inlined `get_cbor_float<T>()`. With the overloads alone, GCC stopped inlining `input_stream_adapter::get_character()` into `parse_cbor_internal`, making CBOR from a `std::istringstream` +0.45 % slower. Moving the float reads out of `parse_cbor_value`, which is inlined into `parse_cbor_internal`, removes that. Floats inside arrays are read by #5975's scalar-run loop, which does not take this path.\n\n## Measurements\n\nCBOR reads, B/A, where A is #5975. Same harness as #5975: ab-harness one-binary A/B. GCC 13 instruction counts are from callgrind on x86-64. The Mac is an M1 Max with Apple clang (60 reps; time is the geomean over both code layouts).\n\n| | GCC 13 instr | Mac instr | Mac time |\n|---|---|---|---|\n| DOM read canada | **0.961** | 1.000 | 1.005 |\n| SAX canada | 1.000 | 1.002 | 0.995 |\n| DOM read citm_catalog | 1.001 | 1.001 | 1.003 |\n| SAX citm_catalog | 1.000 | 1.001 | 1.000 |\n| DOM read twitter | 1.002 | 1.001 | 1.002 |\n| SAX twitter | 1.000 | 0.998 | 0.999 |\n| strict UTF-8, citm_catalog | 1.001 | 1.000 | 1.000 |\n| `std::istringstream`, citm_catalog | 0.999 | 1.000 | 1.012 |\n\nThe Mac time rows above 1 are layout noise: the instruction counts are flat, and neither layout's confidence interval shows a slowdown. Clang already produced a single `bswap`, so the Mac gains nothing.\n\nVariants that were measured and dropped:\n- the overloads without the CBOR helper: stream +0.45 % on GCC;\n- the same plus `JSON_HEDLEY_ALWAYS_INLINE` on the stream adapter's `get_character()`: no help;\n- `JSON_HEDLEY_ALWAYS_INLINE` on `binary_reader::get()`. This fixes it too and is slightly faster (read canada 0.956, twitter 0.993), but it affects every binary format, and only CBOR was measured.\n\n## Tests\n\nThe existing CBOR, MessagePack, UBJSON, BJData and BON8 tests cover float and double reads. The CBOR, BJData and BON8 tests also include NaN, infinities and negative zero. #5975's new test compares contiguous and stream input for every truncation of a document with floats. The full ctest suite passes with ASan/UBSan (184/184).\n\n## Breaking changes\n\nNone. The values read are identical bit for bit, and the public API is unchanged.\n\n\ud83e\udd16 Generated with [Claude Code](https://claude.com/claude-code)\n",
+ "comments": [],
+ "created_at": "2026-10-31T07:23:19Z",
+ "fetched_at": "2026-11-17T20:08:23Z",
+ "head_sha": "54763c2e703ffd26a26cb364708679678df32d16",
+ "labels": [
+  "aspect: binary formats",
+  "L",
+  "\ud83d\ude80 ready to merge",
+  "performance"
+ ],
+ "linked_issues": [],
+ "merge_commit_sha": "aecbef39490cfea51203f9663ce06e00a3b3796f",
+ "merged_at": "2026-11-01T16:22:34Z",
+ "number": 5976,
+ "referenced_numbers": [
+  5975
+ ],
+ "repo": "nlohmann/json",
+ "review_comments": [
+  {
+   "body": "## Flawfinder / Does not check for buffer overflows when copying to destination (CWE-120).\n\nbuffer/memcpy:Does not check for buffer overflows when copying to destination (CWE-120).\n\n[Show more details](https://github.com/nlohmann/json/security/code-scanning/1110)",
+   "created_at": "2026-10-31T12:13:31Z",
+   "diff_hunk": "@@ -4220,6 +4225,27 @@\n         return current;\n     }\n \n+    /// reverse the byte order of a double with a single byteswap(): GCC does\n+    /// not merge the byte-wise swap of the generic version into one\n+    static void byte_swap(double& number) noexcept\n+    {\n+        static_assert(sizeof(double) == sizeof(std::uint64_t), \"double must have 64 bits\");\n+        std::uint64_t bits{};\n+        std::memcpy(&bits, &number, sizeof(bits));\n+        bits = byteswap(bits);\n+        std::memcpy(&number, &bits, sizeof(bits));",
+   "line": 4237,
+   "path": "include/nlohmann/detail/input/binary_reader.hpp",
+   "user": {
+    "login": "github-advanced-security[bot]",
+    "type": "Bot"
+   }
+  },
+  {
+   "body": "## Flawfinder / Does not check for buffer overflows when copying to destination (CWE-120).\n\nbuffer/memcpy:Does not check for buffer overflows when copying to destination (CWE-120).\n\n[Show more details](https://github.com/nlohmann/json/security/code-scanning/1111)",
+   "created_at": "2026-10-31T12:13:31Z",
+   "diff_hunk": "@@ -4220,6 +4225,27 @@\n         return current;\n     }\n \n+    /// reverse the byte order of a double with a single byteswap(): GCC does\n+    /// not merge the byte-wise swap of the generic version into one\n+    static void byte_swap(double& number) noexcept\n+    {\n+        static_assert(sizeof(double) == sizeof(std::uint64_t), \"double must have 64 bits\");\n+        std::uint64_t bits{};\n+        std::memcpy(&bits, &number, sizeof(bits));\n+        bits = byteswap(bits);\n+        std::memcpy(&number, &bits, sizeof(bits));\n+    }\n+\n+    /// reverse the byte order of a float with a single byteswap()\n+    static void byte_swap(float& number) noexcept\n+    {\n+        static_assert(sizeof(float) == sizeof(std::uint32_t), \"float must have 32 bits\");\n+        std::uint32_t bits{};\n+        std::memcpy(&bits, &number, sizeof(bits));\n+        bits = byteswap(bits);\n+        std::memcpy(&number, &bits, sizeof(bits));",
+   "line": 4247,
+   "path": "include/nlohmann/detail/input/binary_reader.hpp",
+   "user": {
+    "login": "github-advanced-security[bot]",
+    "type": "Bot"
+   }
+  }
+ ],
+ "state": "closed",
+ "title": "Binary readers: swap the bytes of floats with a single byteswap",
+ "transport": "gh",
+ "user": {
+  "login": "nlohmann",
+  "type": "User"
+ }
+}

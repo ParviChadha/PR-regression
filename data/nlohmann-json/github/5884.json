@@ -1,0 +1,206 @@
+{
+ "base_ref": "develop",
+ "base_sha": "2dc1e548563823ff103a383894b735c51963db76",
+ "body": "Three changes to the `std::istream` input adapter:\n\n1. **Step over a character in the get area without leaving `get_character()`.**\n   - ifstream citm -5 %, `accept()` citm -8 % (macOS instructions).\n   - Linux citm 89.0 / 122.1 -> 84.6 / 118.7 M Ir.\n2. **Copy small binary reads straight from the streambuf get area.**\n   - CBOR, MessagePack and UBJSON from an ifstream: -4 ... -7 % (macOS).\n   - UBJSON citm -10 % (Linux).\n3. **Read a streambuf without a get area with a shorter path.**\n   - Unbuffered streambufs vs develop: -16 ... -20 % (macOS), -8 ... -11 % (GCC), -20 ... -23 % (Clang).\n\n## Numbers\n\nmacOS timing, develop -> this PR:\n\n| case | ratio |\n|---|---|\n| ifstream twitter | 0.91 |\n| `accept()` twitter | 0.90 |\n| CBOR twitter | 0.83 |\n| MessagePack citm | 0.87 |\n| unbuffered citm | 0.73 |\n\n`FILE*` input is unchanged (equal instructions).\n\n## Validation\n\n- Differential check against develop: 746,523 cases, 0 differences.\n  - Inputs:\n    - 1,228 corpus files, plus binary, truncated and NDJSON variants;\n    - custom streambufs with get areas of 0 to 4096 bytes, and a get area that only appears later;\n    - `FILE*` and pipes.\n  - Compared: value, exception text, `rdstate()`, `tellg()` and the bytes left in the stream.\n  - Builds: default, `JSON_DISABLE_STREAM_BULK_SCAN`, `JSON_PRECISE_STREAM_POSITION` and `JSON_DISABLE_UNLOCKED_FILE_IO`.\n- 13 unit test files with ASan/UBSan, in C++11 and C++20.\n- All commits build on their own, and each commit's `single_include` is a fresh `make amalgamate`.\n\n## Public API\n\nNo breaking changes: the stream state, position and the bytes left in the stream are unchanged.\n\nWritten by Claude Code on behalf of @nlohmann.\n\n\ud83e\udd16 Generated with [Claude Code](https://claude.com/claude-code)\n",
+ "comments": [],
+ "created_at": "2026-10-22T07:36:19Z",
+ "fetched_at": "2026-11-17T20:09:08Z",
+ "head_sha": "f83a689909f1a16ce8a831180470c00e04f463e3",
+ "labels": [
+  "L",
+  "tests",
+  "\ud83d\ude80 ready to merge",
+  "performance"
+ ],
+ "linked_issues": [],
+ "merge_commit_sha": "aa0b371f7c1dd54025ffb24fa76a33b6e45640f5",
+ "merged_at": "2026-10-23T04:48:00Z",
+ "number": 5884,
+ "referenced_numbers": [],
+ "repo": "nlohmann/json",
+ "review_comments": [
+  {
+   "body": "## Flawfinder / Does not check for buffer overflows when copying to destination (CWE-120).\n\nbuffer/memcpy:Does not check for buffer overflows when copying to destination (CWE-120).\n\n[Show more details](https://github.com/nlohmann/json/security/code-scanning/906)",
+   "created_at": "2026-10-22T08:43:18Z",
+   "diff_hunk": "@@ -72,6 +72,89 @@\n \n #ifndef JSON_NO_IO\n /*!\n+A growable array of characters for the part of a token that an input adapter\n+copied out of its window: unlike std::vector<char>::push_back(), appending a\n+character takes no reference to a local, and is a few instructions when there\n+is room.\n+*/\n+class token_carry_buffer\n+{\n+  public:\n+    token_carry_buffer() = default;\n+    token_carry_buffer(const token_carry_buffer&) = delete;\n+    token_carry_buffer& operator=(const token_carry_buffer&) = delete;\n+    token_carry_buffer(token_carry_buffer&& rhs) noexcept\n+        : m_begin(rhs.m_begin), m_end(rhs.m_end), m_capacity_end(rhs.m_capacity_end)\n+    {\n+        rhs.m_begin = rhs.m_end = rhs.m_capacity_end = nullptr;\n+    }\n+    token_carry_buffer& operator=(token_carry_buffer&&) = delete;\n+    ~token_carry_buffer()\n+    {\n+        delete[] m_begin;\n+    }\n+\n+    void clear() noexcept\n+    {\n+        m_end = m_begin;\n+    }\n+\n+    void push_back(char c)\n+    {\n+        if (JSON_HEDLEY_UNLIKELY(m_end == m_capacity_end))\n+        {\n+            grow(1);\n+        }\n+        *m_end++ = c;\n+    }\n+\n+    void append(const char* first, const char* last)\n+    {\n+        const auto n = static_cast<std::size_t>(last - first);\n+        if (n > static_cast<std::size_t>(m_capacity_end - m_end))\n+        {\n+            grow(n);\n+        }\n+        if (n != 0)\n+        {\n+            std::memcpy(m_end, first, n);",
+   "line": 119,
+   "path": "include/nlohmann/detail/input/input_adapters.hpp",
+   "user": {
+    "login": "github-advanced-security[bot]",
+    "type": "Bot"
+   }
+  },
+  {
+   "body": "## Flawfinder / Does not check for buffer overflows when copying to destination (CWE-120).\n\nbuffer/memcpy:Does not check for buffer overflows when copying to destination (CWE-120).\n\n[Show more details](https://github.com/nlohmann/json/security/code-scanning/907)",
+   "created_at": "2026-10-22T08:43:18Z",
+   "diff_hunk": "@@ -72,6 +72,89 @@\n \n #ifndef JSON_NO_IO\n /*!\n+A growable array of characters for the part of a token that an input adapter\n+copied out of its window: unlike std::vector<char>::push_back(), appending a\n+character takes no reference to a local, and is a few instructions when there\n+is room.\n+*/\n+class token_carry_buffer\n+{\n+  public:\n+    token_carry_buffer() = default;\n+    token_carry_buffer(const token_carry_buffer&) = delete;\n+    token_carry_buffer& operator=(const token_carry_buffer&) = delete;\n+    token_carry_buffer(token_carry_buffer&& rhs) noexcept\n+        : m_begin(rhs.m_begin), m_end(rhs.m_end), m_capacity_end(rhs.m_capacity_end)\n+    {\n+        rhs.m_begin = rhs.m_end = rhs.m_capacity_end = nullptr;\n+    }\n+    token_carry_buffer& operator=(token_carry_buffer&&) = delete;\n+    ~token_carry_buffer()\n+    {\n+        delete[] m_begin;\n+    }\n+\n+    void clear() noexcept\n+    {\n+        m_end = m_begin;\n+    }\n+\n+    void push_back(char c)\n+    {\n+        if (JSON_HEDLEY_UNLIKELY(m_end == m_capacity_end))\n+        {\n+            grow(1);\n+        }\n+        *m_end++ = c;\n+    }\n+\n+    void append(const char* first, const char* last)\n+    {\n+        const auto n = static_cast<std::size_t>(last - first);\n+        if (n > static_cast<std::size_t>(m_capacity_end - m_end))\n+        {\n+            grow(n);\n+        }\n+        if (n != 0)\n+        {\n+            std::memcpy(m_end, first, n);\n+        }\n+        m_end += n;\n+    }\n+\n+    /// replace the contents of @a out\n+    void copy_to(std::vector<char>& out) const\n+    {\n+        out.assign(m_begin, m_end);\n+    }\n+\n+  private:\n+    /// make room for @a extra more characters\n+    JSON_HEDLEY_NEVER_INLINE void grow(std::size_t extra)\n+    {\n+        const auto size = static_cast<std::size_t>(m_end - m_begin);\n+        const auto capacity = static_cast<std::size_t>(m_capacity_end - m_begin);\n+        std::size_t new_capacity = capacity < 32 ? 32 : 2 * capacity;\n+        if (new_capacity < size + extra)\n+        {\n+            new_capacity = size + extra;\n+        }\n+        char* const data = new char[new_capacity];\n+        if (size != 0)\n+        {\n+            std::memcpy(data, m_begin, size);",
+   "line": 145,
+   "path": "include/nlohmann/detail/input/input_adapters.hpp",
+   "user": {
+    "login": "github-advanced-security[bot]",
+    "type": "Bot"
+   }
+  },
+  {
+   "body": "## Flawfinder / Does not check for buffer overflows when copying to destination (CWE-120).\n\nbuffer/memcpy:Does not check for buffer overflows when copying to destination (CWE-120).\n\n[Show more details](https://github.com/nlohmann/json/security/code-scanning/908)",
+   "created_at": "2026-10-22T08:43:19Z",
+   "diff_hunk": "@@ -334,6 +401,18 @@\n     {\n #if JSON_PRECISE_STREAM_POSITION\n         commit_lookahead();\n+#endif\n+#if !JSON_DISABLE_STREAM_BULK_SCAN\n+        // the elements are in the get area: copy them, as sgetn() does, but\n+        // without the virtual call\n+        const char* const first = streambuf_access::get_ptr(sb);\n+        const auto available = static_cast<std::size_t>(streambuf_access::get_end(sb) - first);\n+        if (JSON_HEDLEY_LIKELY(count * sizeof(T) <= available && count * sizeof(T) <= static_cast<std::size_t>((std::numeric_limits<int>::max)())))\n+        {\n+            std::memcpy(dest, first, count * sizeof(T));",
+   "line": 406,
+   "path": "include/nlohmann/detail/input/input_adapters.hpp",
+   "user": {
+    "login": "github-advanced-security[bot]",
+    "type": "Bot"
+   }
+  },
+  {
+   "body": "## Flawfinder / Does not check for buffer overflows when copying to destination (CWE-120).\n\nbuffer/memcpy:Does not check for buffer overflows when copying to destination (CWE-120).\n\n[Show more details](https://github.com/nlohmann/json/security/code-scanning/909)",
+   "created_at": "2026-10-22T08:43:19Z",
+   "diff_hunk": "@@ -8537,6 +8537,89 @@\n \n #ifndef JSON_NO_IO\n /*!\n+A growable array of characters for the part of a token that an input adapter\n+copied out of its window: unlike std::vector<char>::push_back(), appending a\n+character takes no reference to a local, and is a few instructions when there\n+is room.\n+*/\n+class token_carry_buffer\n+{\n+  public:\n+    token_carry_buffer() = default;\n+    token_carry_buffer(const token_carry_buffer&) = delete;\n+    token_carry_buffer& operator=(const token_carry_buffer&) = delete;\n+    token_carry_buffer(token_carry_buffer&& rhs) noexcept\n+        : m_begin(rhs.m_begin), m_end(rhs.m_end), m_capacity_end(rhs.m_capacity_end)\n+    {\n+        rhs.m_begin = rhs.m_end = rhs.m_capacity_end = nullptr;\n+    }\n+    token_carry_buffer& operator=(token_carry_buffer&&) = delete;\n+    ~token_carry_buffer()\n+    {\n+        delete[] m_begin;\n+    }\n+\n+    void clear() noexcept\n+    {\n+        m_end = m_begin;\n+    }\n+\n+    void push_back(char c)\n+    {\n+        if (JSON_HEDLEY_UNLIKELY(m_end == m_capacity_end))\n+        {\n+            grow(1);\n+        }\n+        *m_end++ = c;\n+    }\n+\n+    void append(const char* first, const char* last)\n+    {\n+        const auto n = static_cast<std::size_t>(last - first);\n+        if (n > static_cast<std::size_t>(m_capacity_end - m_end))\n+        {\n+            grow(n);\n+        }\n+        if (n != 0)\n+        {\n+            std::memcpy(m_end, first, n);",
+   "line": 8584,
+   "path": "single_include/nlohmann/json.hpp",
+   "user": {
+    "login": "github-advanced-security[bot]",
+    "type": "Bot"
+   }
+  },
+  {
+   "body": "## Flawfinder / Does not check for buffer overflows when copying to destination (CWE-120).\n\nbuffer/memcpy:Does not check for buffer overflows when copying to destination (CWE-120).\n\n[Show more details](https://github.com/nlohmann/json/security/code-scanning/910)",
+   "created_at": "2026-10-22T08:43:19Z",
+   "diff_hunk": "@@ -8537,6 +8537,89 @@\n \n #ifndef JSON_NO_IO\n /*!\n+A growable array of characters for the part of a token that an input adapter\n+copied out of its window: unlike std::vector<char>::push_back(), appending a\n+character takes no reference to a local, and is a few instructions when there\n+is room.\n+*/\n+class token_carry_buffer\n+{\n+  public:\n+    token_carry_buffer() = default;\n+    token_carry_buffer(const token_carry_buffer&) = delete;\n+    token_carry_buffer& operator=(const token_carry_buffer&) = delete;\n+    token_carry_buffer(token_carry_buffer&& rhs) noexcept\n+        : m_begin(rhs.m_begin), m_end(rhs.m_end), m_capacity_end(rhs.m_capacity_end)\n+    {\n+        rhs.m_begin = rhs.m_end = rhs.m_capacity_end = nullptr;\n+    }\n+    token_carry_buffer& operator=(token_carry_buffer&&) = delete;\n+    ~token_carry_buffer()\n+    {\n+        delete[] m_begin;\n+    }\n+\n+    void clear() noexcept\n+    {\n+        m_end = m_begin;\n+    }\n+\n+    void push_back(char c)\n+    {\n+        if (JSON_HEDLEY_UNLIKELY(m_end == m_capacity_end))\n+        {\n+            grow(1);\n+        }\n+        *m_end++ = c;\n+    }\n+\n+    void append(const char* first, const char* last)\n+    {\n+        const auto n = static_cast<std::size_t>(last - first);\n+        if (n > static_cast<std::size_t>(m_capacity_end - m_end))\n+        {\n+            grow(n);\n+        }\n+        if (n != 0)\n+        {\n+            std::memcpy(m_end, first, n);\n+        }\n+        m_end += n;\n+    }\n+\n+    /// replace the contents of @a out\n+    void copy_to(std::vector<char>& out) const\n+    {\n+        out.assign(m_begin, m_end);\n+    }\n+\n+  private:\n+    /// make room for @a extra more characters\n+    JSON_HEDLEY_NEVER_INLINE void grow(std::size_t extra)\n+    {\n+        const auto size = static_cast<std::size_t>(m_end - m_begin);\n+        const auto capacity = static_cast<std::size_t>(m_capacity_end - m_begin);\n+        std::size_t new_capacity = capacity < 32 ? 32 : 2 * capacity;\n+        if (new_capacity < size + extra)\n+        {\n+            new_capacity = size + extra;\n+        }\n+        char* const data = new char[new_capacity];\n+        if (size != 0)\n+        {\n+            std::memcpy(data, m_begin, size);",
+   "line": 8610,
+   "path": "single_include/nlohmann/json.hpp",
+   "user": {
+    "login": "github-advanced-security[bot]",
+    "type": "Bot"
+   }
+  },
+  {
+   "body": "## Flawfinder / Does not check for buffer overflows when copying to destination (CWE-120).\n\nbuffer/memcpy:Does not check for buffer overflows when copying to destination (CWE-120).\n\n[Show more details](https://github.com/nlohmann/json/security/code-scanning/911)",
+   "created_at": "2026-10-22T08:43:19Z",
+   "diff_hunk": "@@ -8799,6 +8866,18 @@\n     {\n #if JSON_PRECISE_STREAM_POSITION\n         commit_lookahead();\n+#endif\n+#if !JSON_DISABLE_STREAM_BULK_SCAN\n+        // the elements are in the get area: copy them, as sgetn() does, but\n+        // without the virtual call\n+        const char* const first = streambuf_access::get_ptr(sb);\n+        const auto available = static_cast<std::size_t>(streambuf_access::get_end(sb) - first);\n+        if (JSON_HEDLEY_LIKELY(count * sizeof(T) <= available && count * sizeof(T) <= static_cast<std::size_t>((std::numeric_limits<int>::max)())))\n+        {\n+            std::memcpy(dest, first, count * sizeof(T));",
+   "line": 8871,
+   "path": "single_include/nlohmann/json.hpp",
+   "user": {
+    "login": "github-advanced-security[bot]",
+    "type": "Bot"
+   }
+  },
+  {
+   "body": "No change: false positive. `append()` grows the buffer to fit `n` bytes before the copy, so the destination always has room.\n\n_\ud83e\udd16 Addressed by [Claude Code](https://claude.com/claude-code)_",
+   "created_at": "2026-10-22T08:47:57Z",
+   "diff_hunk": "@@ -72,6 +72,89 @@\n \n #ifndef JSON_NO_IO\n /*!\n+A growable array of characters for the part of a token that an input adapter\n+copied out of its window: unlike std::vector<char>::push_back(), appending a\n+character takes no reference to a local, and is a few instructions when there\n+is room.\n+*/\n+class token_carry_buffer\n+{\n+  public:\n+    token_carry_buffer() = default;\n+    token_carry_buffer(const token_carry_buffer&) = delete;\n+    token_carry_buffer& operator=(const token_carry_buffer&) = delete;\n+    token_carry_buffer(token_carry_buffer&& rhs) noexcept\n+        : m_begin(rhs.m_begin), m_end(rhs.m_end), m_capacity_end(rhs.m_capacity_end)\n+    {\n+        rhs.m_begin = rhs.m_end = rhs.m_capacity_end = nullptr;\n+    }\n+    token_carry_buffer& operator=(token_carry_buffer&&) = delete;\n+    ~token_carry_buffer()\n+    {\n+        delete[] m_begin;\n+    }\n+\n+    void clear() noexcept\n+    {\n+        m_end = m_begin;\n+    }\n+\n+    void push_back(char c)\n+    {\n+        if (JSON_HEDLEY_UNLIKELY(m_end == m_capacity_end))\n+        {\n+            grow(1);\n+        }\n+        *m_end++ = c;\n+    }\n+\n+    void append(const char* first, const char* last)\n+    {\n+        const auto n = static_cast<std::size_t>(last - first);\n+        if (n > static_cast<std::size_t>(m_capacity_end - m_end))\n+        {\n+            grow(n);\n+        }\n+        if (n != 0)\n+        {\n+            std::memcpy(m_end, first, n);",
+   "line": 119,
+   "path": "include/nlohmann/detail/input/input_adapters.hpp",
+   "user": {
+    "login": "nlohmann",
+    "type": "User"
+   }
+  },
+  {
+   "body": "No change: false positive. `append()` grows the buffer to fit `n` bytes before the copy, so the destination always has room.\n\n_\ud83e\udd16 Addressed by [Claude Code](https://claude.com/claude-code)_",
+   "created_at": "2026-10-22T08:48:00Z",
+   "diff_hunk": "@@ -8537,6 +8537,89 @@\n \n #ifndef JSON_NO_IO\n /*!\n+A growable array of characters for the part of a token that an input adapter\n+copied out of its window: unlike std::vector<char>::push_back(), appending a\n+character takes no reference to a local, and is a few instructions when there\n+is room.\n+*/\n+class token_carry_buffer\n+{\n+  public:\n+    token_carry_buffer() = default;\n+    token_carry_buffer(const token_carry_buffer&) = delete;\n+    token_carry_buffer& operator=(const token_carry_buffer&) = delete;\n+    token_carry_buffer(token_carry_buffer&& rhs) noexcept\n+        : m_begin(rhs.m_begin), m_end(rhs.m_end), m_capacity_end(rhs.m_capacity_end)\n+    {\n+        rhs.m_begin = rhs.m_end = rhs.m_capacity_end = nullptr;\n+    }\n+    token_carry_buffer& operator=(token_carry_buffer&&) = delete;\n+    ~token_carry_buffer()\n+    {\n+        delete[] m_begin;\n+    }\n+\n+    void clear() noexcept\n+    {\n+        m_end = m_begin;\n+    }\n+\n+    void push_back(char c)\n+    {\n+        if (JSON_HEDLEY_UNLIKELY(m_end == m_capacity_end))\n+        {\n+            grow(1);\n+        }\n+        *m_end++ = c;\n+    }\n+\n+    void append(const char* first, const char* last)\n+    {\n+        const auto n = static_cast<std::size_t>(last - first);\n+        if (n > static_cast<std::size_t>(m_capacity_end - m_end))\n+        {\n+            grow(n);\n+        }\n+        if (n != 0)\n+        {\n+            std::memcpy(m_end, first, n);",
+   "line": 8584,
+   "path": "single_include/nlohmann/json.hpp",
+   "user": {
+    "login": "nlohmann",
+    "type": "User"
+   }
+  },
+  {
+   "body": "No change: false positive. `grow()` copies the old `size` bytes into a new buffer of at least `size + extra` bytes.\n\n_\ud83e\udd16 Addressed by [Claude Code](https://claude.com/claude-code)_",
+   "created_at": "2026-10-22T08:48:02Z",
+   "diff_hunk": "@@ -72,6 +72,89 @@\n \n #ifndef JSON_NO_IO\n /*!\n+A growable array of characters for the part of a token that an input adapter\n+copied out of its window: unlike std::vector<char>::push_back(), appending a\n+character takes no reference to a local, and is a few instructions when there\n+is room.\n+*/\n+class token_carry_buffer\n+{\n+  public:\n+    token_carry_buffer() = default;\n+    token_carry_buffer(const token_carry_buffer&) = delete;\n+    token_carry_buffer& operator=(const token_carry_buffer&) = delete;\n+    token_carry_buffer(token_carry_buffer&& rhs) noexcept\n+        : m_begin(rhs.m_begin), m_end(rhs.m_end), m_capacity_end(rhs.m_capacity_end)\n+    {\n+        rhs.m_begin = rhs.m_end = rhs.m_capacity_end = nullptr;\n+    }\n+    token_carry_buffer& operator=(token_carry_buffer&&) = delete;\n+    ~token_carry_buffer()\n+    {\n+        delete[] m_begin;\n+    }\n+\n+    void clear() noexcept\n+    {\n+        m_end = m_begin;\n+    }\n+\n+    void push_back(char c)\n+    {\n+        if (JSON_HEDLEY_UNLIKELY(m_end == m_capacity_end))\n+        {\n+            grow(1);\n+        }\n+        *m_end++ = c;\n+    }\n+\n+    void append(const char* first, const char* last)\n+    {\n+        const auto n = static_cast<std::size_t>(last - first);\n+        if (n > static_cast<std::size_t>(m_capacity_end - m_end))\n+        {\n+            grow(n);\n+        }\n+        if (n != 0)\n+        {\n+            std::memcpy(m_end, first, n);\n+        }\n+        m_end += n;\n+    }\n+\n+    /// replace the contents of @a out\n+    void copy_to(std::vector<char>& out) const\n+    {\n+        out.assign(m_begin, m_end);\n+    }\n+\n+  private:\n+    /// make room for @a extra more characters\n+    JSON_HEDLEY_NEVER_INLINE void grow(std::size_t extra)\n+    {\n+        const auto size = static_cast<std::size_t>(m_end - m_begin);\n+        const auto capacity = static_cast<std::size_t>(m_capacity_end - m_begin);\n+        std::size_t new_capacity = capacity < 32 ? 32 : 2 * capacity;\n+        if (new_capacity < size + extra)\n+        {\n+            new_capacity = size + extra;\n+        }\n+        char* const data = new char[new_capacity];\n+        if (size != 0)\n+        {\n+            std::memcpy(data, m_begin, size);",
+   "line": 145,
+   "path": "include/nlohmann/detail/input/input_adapters.hpp",
+   "user": {
+    "login": "nlohmann",
+    "type": "User"
+   }
+  },
+  {
+   "body": "No change: false positive. `grow()` copies the old `size` bytes into a new buffer of at least `size + extra` bytes.\n\n_\ud83e\udd16 Addressed by [Claude Code](https://claude.com/claude-code)_",
+   "created_at": "2026-10-22T08:48:04Z",
+   "diff_hunk": "@@ -8537,6 +8537,89 @@\n \n #ifndef JSON_NO_IO\n /*!\n+A growable array of characters for the part of a token that an input adapter\n+copied out of its window: unlike std::vector<char>::push_back(), appending a\n+character takes no reference to a local, and is a few instructions when there\n+is room.\n+*/\n+class token_carry_buffer\n+{\n+  public:\n+    token_carry_buffer() = default;\n+    token_carry_buffer(const token_carry_buffer&) = delete;\n+    token_carry_buffer& operator=(const token_carry_buffer&) = delete;\n+    token_carry_buffer(token_carry_buffer&& rhs) noexcept\n+        : m_begin(rhs.m_begin), m_end(rhs.m_end), m_capacity_end(rhs.m_capacity_end)\n+    {\n+        rhs.m_begin = rhs.m_end = rhs.m_capacity_end = nullptr;\n+    }\n+    token_carry_buffer& operator=(token_carry_buffer&&) = delete;\n+    ~token_carry_buffer()\n+    {\n+        delete[] m_begin;\n+    }\n+\n+    void clear() noexcept\n+    {\n+        m_end = m_begin;\n+    }\n+\n+    void push_back(char c)\n+    {\n+        if (JSON_HEDLEY_UNLIKELY(m_end == m_capacity_end))\n+        {\n+            grow(1);\n+        }\n+        *m_end++ = c;\n+    }\n+\n+    void append(const char* first, const char* last)\n+    {\n+        const auto n = static_cast<std::size_t>(last - first);\n+        if (n > static_cast<std::size_t>(m_capacity_end - m_end))\n+        {\n+            grow(n);\n+        }\n+        if (n != 0)\n+        {\n+            std::memcpy(m_end, first, n);\n+        }\n+        m_end += n;\n+    }\n+\n+    /// replace the contents of @a out\n+    void copy_to(std::vector<char>& out) const\n+    {\n+        out.assign(m_begin, m_end);\n+    }\n+\n+  private:\n+    /// make room for @a extra more characters\n+    JSON_HEDLEY_NEVER_INLINE void grow(std::size_t extra)\n+    {\n+        const auto size = static_cast<std::size_t>(m_end - m_begin);\n+        const auto capacity = static_cast<std::size_t>(m_capacity_end - m_begin);\n+        std::size_t new_capacity = capacity < 32 ? 32 : 2 * capacity;\n+        if (new_capacity < size + extra)\n+        {\n+            new_capacity = size + extra;\n+        }\n+        char* const data = new char[new_capacity];\n+        if (size != 0)\n+        {\n+            std::memcpy(data, m_begin, size);",
+   "line": 8610,
+   "path": "single_include/nlohmann/json.hpp",
+   "user": {
+    "login": "nlohmann",
+    "type": "User"
+   }
+  },
+  {
+   "body": "No change: false positive. The copy runs only when the get area holds `count * sizeof(T)` bytes, and `dest` has room for `count` elements, the same contract as the `sgetn()` path it replaces.\n\n_\ud83e\udd16 Addressed by [Claude Code](https://claude.com/claude-code)_",
+   "created_at": "2026-10-22T08:48:06Z",
+   "diff_hunk": "@@ -334,6 +401,18 @@\n     {\n #if JSON_PRECISE_STREAM_POSITION\n         commit_lookahead();\n+#endif\n+#if !JSON_DISABLE_STREAM_BULK_SCAN\n+        // the elements are in the get area: copy them, as sgetn() does, but\n+        // without the virtual call\n+        const char* const first = streambuf_access::get_ptr(sb);\n+        const auto available = static_cast<std::size_t>(streambuf_access::get_end(sb) - first);\n+        if (JSON_HEDLEY_LIKELY(count * sizeof(T) <= available && count * sizeof(T) <= static_cast<std::size_t>((std::numeric_limits<int>::max)())))\n+        {\n+            std::memcpy(dest, first, count * sizeof(T));",
+   "line": 406,
+   "path": "include/nlohmann/detail/input/input_adapters.hpp",
+   "user": {
+    "login": "nlohmann",
+    "type": "User"
+   }
+  },
+  {
+   "body": "No change: false positive. The copy runs only when the get area holds `count * sizeof(T)` bytes, and `dest` has room for `count` elements, the same contract as the `sgetn()` path it replaces.\n\n_\ud83e\udd16 Addressed by [Claude Code](https://claude.com/claude-code)_",
+   "created_at": "2026-10-22T08:48:07Z",
+   "diff_hunk": "@@ -8799,6 +8866,18 @@\n     {\n #if JSON_PRECISE_STREAM_POSITION\n         commit_lookahead();\n+#endif\n+#if !JSON_DISABLE_STREAM_BULK_SCAN\n+        // the elements are in the get area: copy them, as sgetn() does, but\n+        // without the virtual call\n+        const char* const first = streambuf_access::get_ptr(sb);\n+        const auto available = static_cast<std::size_t>(streambuf_access::get_end(sb) - first);\n+        if (JSON_HEDLEY_LIKELY(count * sizeof(T) <= available && count * sizeof(T) <= static_cast<std::size_t>((std::numeric_limits<int>::max)())))\n+        {\n+            std::memcpy(dest, first, count * sizeof(T));",
+   "line": 8871,
+   "path": "single_include/nlohmann/json.hpp",
+   "user": {
+    "login": "nlohmann",
+    "type": "User"
+   }
+  },
+  {
+   "body": "## Flawfinder / Does not check for buffer overflows when copying to destination (CWE-120).\n\nbuffer/memcpy:Does not check for buffer overflows when copying to destination (CWE-120).\n\n[Show more details](https://github.com/nlohmann/json/security/code-scanning/1035)",
+   "created_at": "2026-10-22T13:45:55Z",
+   "diff_hunk": "@@ -72,6 +73,81 @@\n \n #ifndef JSON_NO_IO\n /*!\n+A growable array of characters for the part of a token that an input adapter\n+copied out of its window: unlike std::vector<char>::push_back(), appending a\n+character takes no reference to a local, and is a few instructions when there\n+is room.\n+*/\n+class token_carry_buffer\n+{\n+  public:\n+    token_carry_buffer() = default;\n+    token_carry_buffer(const token_carry_buffer&) = delete;\n+    token_carry_buffer& operator=(const token_carry_buffer&) = delete;\n+    token_carry_buffer(token_carry_buffer&& rhs) noexcept\n+        : m_data(std::move(rhs.m_data)), m_end(rhs.m_end), m_capacity_end(rhs.m_capacity_end)\n+    {\n+        rhs.m_end = rhs.m_capacity_end = nullptr;\n+    }\n+    token_carry_buffer& operator=(token_carry_buffer&&) = delete;\n+    ~token_carry_buffer() = default;\n+\n+    void clear() noexcept\n+    {\n+        m_end = m_data.get();\n+    }\n+\n+    void push_back(char c)\n+    {\n+        if (JSON_HEDLEY_UNLIKELY(m_end == m_capacity_end))\n+        {\n+            grow(1);\n+        }\n+        *m_end++ = c;\n+    }\n+\n+    void append(const char* first, const char* last)\n+    {\n+        const auto n = static_cast<std::size_t>(last - first);\n+        if (n > static_cast<std::size_t>(m_capacity_end - m_end))\n+        {\n+            grow(n);\n+        }\n+        if (n != 0)\n+        {\n+            std::memcpy(m_end, first, n);\n+        }\n+        m_end += n;\n+    }\n+\n+    /// replace the contents of @a out\n+    void copy_to(std::vector<char>& out) const\n+    {\n+        out.assign(m_data.get(), m_end);\n+    }\n+\n+  private:\n+    /// make room for @a extra more characters\n+    JSON_HEDLEY_NEVER_INLINE void grow(std::size_t extra)\n+    {\n+        const auto size = static_cast<std::size_t>(m_end - m_data.get());\n+        const auto capacity = static_cast<std::size_t>(m_capacity_end - m_data.get());\n+        const std::size_t new_capacity = (std::max)(capacity < 32 ? static_cast<std::size_t>(32) : 2 * capacity, size + extra);\n+        std::unique_ptr<char[]> data(new char[new_capacity]); // NOLINT(cppcoreguidelines-avoid-c-arrays,hicpp-avoid-c-arrays,modernize-avoid-c-arrays)\n+        if (size != 0)\n+        {\n+            std::memcpy(data.get(), m_data.get(), size);",
+   "line": 140,
+   "path": "include/nlohmann/detail/input/input_adapters.hpp",
+   "user": {
+    "login": "github-advanced-security[bot]",
+    "type": "Bot"
+   }
+  },
+  {
+   "body": "## Flawfinder / Does not check for buffer overflows when copying to destination (CWE-120).\n\nbuffer/memcpy:Does not check for buffer overflows when copying to destination (CWE-120).\n\n[Show more details](https://github.com/nlohmann/json/security/code-scanning/1036)",
+   "created_at": "2026-10-22T13:45:55Z",
+   "diff_hunk": "@@ -8537,6 +8538,81 @@\n \n #ifndef JSON_NO_IO\n /*!\n+A growable array of characters for the part of a token that an input adapter\n+copied out of its window: unlike std::vector<char>::push_back(), appending a\n+character takes no reference to a local, and is a few instructions when there\n+is room.\n+*/\n+class token_carry_buffer\n+{\n+  public:\n+    token_carry_buffer() = default;\n+    token_carry_buffer(const token_carry_buffer&) = delete;\n+    token_carry_buffer& operator=(const token_carry_buffer&) = delete;\n+    token_carry_buffer(token_carry_buffer&& rhs) noexcept\n+        : m_data(std::move(rhs.m_data)), m_end(rhs.m_end), m_capacity_end(rhs.m_capacity_end)\n+    {\n+        rhs.m_end = rhs.m_capacity_end = nullptr;\n+    }\n+    token_carry_buffer& operator=(token_carry_buffer&&) = delete;\n+    ~token_carry_buffer() = default;\n+\n+    void clear() noexcept\n+    {\n+        m_end = m_data.get();\n+    }\n+\n+    void push_back(char c)\n+    {\n+        if (JSON_HEDLEY_UNLIKELY(m_end == m_capacity_end))\n+        {\n+            grow(1);\n+        }\n+        *m_end++ = c;\n+    }\n+\n+    void append(const char* first, const char* last)\n+    {\n+        const auto n = static_cast<std::size_t>(last - first);\n+        if (n > static_cast<std::size_t>(m_capacity_end - m_end))\n+        {\n+            grow(n);\n+        }\n+        if (n != 0)\n+        {\n+            std::memcpy(m_end, first, n);\n+        }\n+        m_end += n;\n+    }\n+\n+    /// replace the contents of @a out\n+    void copy_to(std::vector<char>& out) const\n+    {\n+        out.assign(m_data.get(), m_end);\n+    }\n+\n+  private:\n+    /// make room for @a extra more characters\n+    JSON_HEDLEY_NEVER_INLINE void grow(std::size_t extra)\n+    {\n+        const auto size = static_cast<std::size_t>(m_end - m_data.get());\n+        const auto capacity = static_cast<std::size_t>(m_capacity_end - m_data.get());\n+        const std::size_t new_capacity = (std::max)(capacity < 32 ? static_cast<std::size_t>(32) : 2 * capacity, size + extra);\n+        std::unique_ptr<char[]> data(new char[new_capacity]); // NOLINT(cppcoreguidelines-avoid-c-arrays,hicpp-avoid-c-arrays,modernize-avoid-c-arrays)\n+        if (size != 0)\n+        {\n+            std::memcpy(data.get(), m_data.get(), size);",
+   "line": 8605,
+   "path": "single_include/nlohmann/json.hpp",
+   "user": {
+    "login": "github-advanced-security[bot]",
+    "type": "Bot"
+   }
+  },
+  {
+   "body": "No change: false positive. `grow()` copies the old `size` bytes into a new buffer of at least `size + extra` characters (`new_capacity = max(..., size + extra)`).\n\n_\ud83e\udd16 Addressed by [Claude Code](https://claude.com/claude-code)_",
+   "created_at": "2026-10-22T13:49:51Z",
+   "diff_hunk": "@@ -72,6 +73,81 @@\n \n #ifndef JSON_NO_IO\n /*!\n+A growable array of characters for the part of a token that an input adapter\n+copied out of its window: unlike std::vector<char>::push_back(), appending a\n+character takes no reference to a local, and is a few instructions when there\n+is room.\n+*/\n+class token_carry_buffer\n+{\n+  public:\n+    token_carry_buffer() = default;\n+    token_carry_buffer(const token_carry_buffer&) = delete;\n+    token_carry_buffer& operator=(const token_carry_buffer&) = delete;\n+    token_carry_buffer(token_carry_buffer&& rhs) noexcept\n+        : m_data(std::move(rhs.m_data)), m_end(rhs.m_end), m_capacity_end(rhs.m_capacity_end)\n+    {\n+        rhs.m_end = rhs.m_capacity_end = nullptr;\n+    }\n+    token_carry_buffer& operator=(token_carry_buffer&&) = delete;\n+    ~token_carry_buffer() = default;\n+\n+    void clear() noexcept\n+    {\n+        m_end = m_data.get();\n+    }\n+\n+    void push_back(char c)\n+    {\n+        if (JSON_HEDLEY_UNLIKELY(m_end == m_capacity_end))\n+        {\n+            grow(1);\n+        }\n+        *m_end++ = c;\n+    }\n+\n+    void append(const char* first, const char* last)\n+    {\n+        const auto n = static_cast<std::size_t>(last - first);\n+        if (n > static_cast<std::size_t>(m_capacity_end - m_end))\n+        {\n+            grow(n);\n+        }\n+        if (n != 0)\n+        {\n+            std::memcpy(m_end, first, n);\n+        }\n+        m_end += n;\n+    }\n+\n+    /// replace the contents of @a out\n+    void copy_to(std::vector<char>& out) const\n+    {\n+        out.assign(m_data.get(), m_end);\n+    }\n+\n+  private:\n+    /// make room for @a extra more characters\n+    JSON_HEDLEY_NEVER_INLINE void grow(std::size_t extra)\n+    {\n+        const auto size = static_cast<std::size_t>(m_end - m_data.get());\n+        const auto capacity = static_cast<std::size_t>(m_capacity_end - m_data.get());\n+        const std::size_t new_capacity = (std::max)(capacity < 32 ? static_cast<std::size_t>(32) : 2 * capacity, size + extra);\n+        std::unique_ptr<char[]> data(new char[new_capacity]); // NOLINT(cppcoreguidelines-avoid-c-arrays,hicpp-avoid-c-arrays,modernize-avoid-c-arrays)\n+        if (size != 0)\n+        {\n+            std::memcpy(data.get(), m_data.get(), size);",
+   "line": 140,
+   "path": "include/nlohmann/detail/input/input_adapters.hpp",
+   "user": {
+    "login": "nlohmann",
+    "type": "User"
+   }
+  },
+  {
+   "body": "No change: false positive. `grow()` copies the old `size` bytes into a new buffer of at least `size + extra` characters (`new_capacity = max(..., size + extra)`).\n\n_\ud83e\udd16 Addressed by [Claude Code](https://claude.com/claude-code)_",
+   "created_at": "2026-10-22T13:49:53Z",
+   "diff_hunk": "@@ -8537,6 +8538,81 @@\n \n #ifndef JSON_NO_IO\n /*!\n+A growable array of characters for the part of a token that an input adapter\n+copied out of its window: unlike std::vector<char>::push_back(), appending a\n+character takes no reference to a local, and is a few instructions when there\n+is room.\n+*/\n+class token_carry_buffer\n+{\n+  public:\n+    token_carry_buffer() = default;\n+    token_carry_buffer(const token_carry_buffer&) = delete;\n+    token_carry_buffer& operator=(const token_carry_buffer&) = delete;\n+    token_carry_buffer(token_carry_buffer&& rhs) noexcept\n+        : m_data(std::move(rhs.m_data)), m_end(rhs.m_end), m_capacity_end(rhs.m_capacity_end)\n+    {\n+        rhs.m_end = rhs.m_capacity_end = nullptr;\n+    }\n+    token_carry_buffer& operator=(token_carry_buffer&&) = delete;\n+    ~token_carry_buffer() = default;\n+\n+    void clear() noexcept\n+    {\n+        m_end = m_data.get();\n+    }\n+\n+    void push_back(char c)\n+    {\n+        if (JSON_HEDLEY_UNLIKELY(m_end == m_capacity_end))\n+        {\n+            grow(1);\n+        }\n+        *m_end++ = c;\n+    }\n+\n+    void append(const char* first, const char* last)\n+    {\n+        const auto n = static_cast<std::size_t>(last - first);\n+        if (n > static_cast<std::size_t>(m_capacity_end - m_end))\n+        {\n+            grow(n);\n+        }\n+        if (n != 0)\n+        {\n+            std::memcpy(m_end, first, n);\n+        }\n+        m_end += n;\n+    }\n+\n+    /// replace the contents of @a out\n+    void copy_to(std::vector<char>& out) const\n+    {\n+        out.assign(m_data.get(), m_end);\n+    }\n+\n+  private:\n+    /// make room for @a extra more characters\n+    JSON_HEDLEY_NEVER_INLINE void grow(std::size_t extra)\n+    {\n+        const auto size = static_cast<std::size_t>(m_end - m_data.get());\n+        const auto capacity = static_cast<std::size_t>(m_capacity_end - m_data.get());\n+        const std::size_t new_capacity = (std::max)(capacity < 32 ? static_cast<std::size_t>(32) : 2 * capacity, size + extra);\n+        std::unique_ptr<char[]> data(new char[new_capacity]); // NOLINT(cppcoreguidelines-avoid-c-arrays,hicpp-avoid-c-arrays,modernize-avoid-c-arrays)\n+        if (size != 0)\n+        {\n+            std::memcpy(data.get(), m_data.get(), size);",
+   "line": 8605,
+   "path": "single_include/nlohmann/json.hpp",
+   "user": {
+    "login": "nlohmann",
+    "type": "User"
+   }
+  }
+ ],
+ "state": "closed",
+ "title": "Faster std::istream input: inline get-area path, binary reads, unbuffered streambufs",
+ "transport": "gh",
+ "user": {
+  "login": "nlohmann",
+  "type": "User"
+ }
+}

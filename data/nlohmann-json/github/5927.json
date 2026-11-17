@@ -1,0 +1,29 @@
+{
+ "base_ref": "develop",
+ "base_sha": "2a56afc714d485870ae41cb1ac4fb0556f86726b",
+ "body": "## Summary\n- `from_cbor` with `cbor_tag_handler_t::ignore` or `store` now skips tags in front of a text string map key, as it already did in front of values. Before, `A1 C0 61 61 0A` threw `parse_error.113 \u2026 found a tag`. SAX behaves the same. The `error` handler is unchanged.\n- The chunks of an indefinite-length text string are now UTF-8 checked individually (RFC 8949 \u00a73.2.3). Before, they were concatenated and checked once, so a split code point or an invalid chunk was accepted under `strict`, and `replace`/`ignore` gave different results.\n- Docs: corrected the negative-integer rows, the 0x1B row, the F9/NaN history (NaN/Inf were already `F9` before 3.13.0, since 3.8.0), the tag/subtype description and the `StringType`/`BinaryType` requirements; added the \"not deterministic encoding\" note (RFC 8949 \u00a74.2), duplicate keys (\u00a75.3.1), the tag-key and per-chunk rules, the complete exception list of `from_cbor`, the pointer/C-array input trap and the partial-output note.\n- Tests added to `unit-cbor.cpp` (incl. a 100000-tag chain, SAX, exact messages).\n\n## Breaking changes\nNo API or ABI change. Behaviour:\n- `ignore`/`store`: input with a tag before a text string key was an error and is now accepted.\n- `strict`/`replace`/`ignore`: an indefinite-length text string whose chunk is not valid UTF-8 on its own (including a split code point) is now rejected (`parse_error.113`) or sanitized per chunk. This is input RFC 8949 declares invalid. `keep` (default) is unchanged; conforming input is unaffected.\n- No new requirement on `StringType`/`BinaryType`.\n\nVerified with cbor2 and against RFC 8949; reviewed independently before submission.\n\n## Stack\nThis PR is part of a stack of six PRs from a review of the binary formats against their specifications and other implementations (CBOR \u2192 MessagePack \u2192 UBJSON \u2192 BSON \u2192 BJData \u2192 BON8). Please merge in that order.\n\n\ud83e\udd16 Generated with [Claude Code](https://claude.com/claude-code)\n",
+ "comments": [],
+ "created_at": "2026-10-25T16:59:08Z",
+ "fetched_at": "2026-11-17T20:08:51Z",
+ "head_sha": "34f9be2aa2536b0d3781a678ecf2872e2dc087f5",
+ "labels": [
+  "documentation",
+  "aspect: binary formats",
+  "L",
+  "tests"
+ ],
+ "linked_issues": [],
+ "merge_commit_sha": "d5da84249f47ae8086ba28d71e8c09e6724d40cd",
+ "merged_at": "2026-10-26T17:25:47Z",
+ "number": 5927,
+ "referenced_numbers": [],
+ "repo": "nlohmann/json",
+ "review_comments": [],
+ "state": "closed",
+ "title": "Skip CBOR tags in front of map keys, validate indefinite text chunks, fix CBOR docs",
+ "transport": "gh",
+ "user": {
+  "login": "nlohmann",
+  "type": "User"
+ }
+}

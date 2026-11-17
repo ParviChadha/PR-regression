@@ -1,0 +1,30 @@
+{
+ "base_ref": "develop",
+ "base_sha": "4e294f4b181435c89cc0fceb21ff2b5941d96fdc",
+ "body": "## Summary\n\nSince #5466, `json_sax_dom_callback_parser::key()` searched the object for a duplicate key with `find()` and then looked the key up a second time with `operator[]` to insert the placeholder. That doubled the tree lookups per member and made `json::parse(s, callback)` on one very wide object slower than in 3.12.0. This replaces both lookups by a single `emplace()`; duplicate-key semantics (stash and restore) are unchanged.\n\nCallback parse of `{\"k0\":0,\u2026,\"k31999\":31999}` (Apple M1 Max, clang, -O3, median of 31, interleaved, machine under load):\n\n| | 3.12.0 | develop | this PR |\n|---|---|---|---|\n| 8k members | 1.9 ms | 2.4 ms | 1.7 ms |\n| 32k members | 8.3 ms | 10.5 ms | 7.2\u20138.1 ms |\n| 128k members | 35 ms | 45 ms | 31 ms |\n\nComparing #5466 with its parent at 32k members: 7.3 ms vs 10.4 ms. Plain parsing is unchanged.\n\nTests: `unit-class_parser`, `unit-diagnostic-positions`, `unit-regression2` pass.\n\n## API\n\nNo breaking changes.\n\n\ud83e\udd16 Generated with [Claude Code](https://claude.com/claude-code)",
+ "comments": [],
+ "created_at": "2026-10-14T18:22:32Z",
+ "fetched_at": "2026-11-17T20:09:49Z",
+ "head_sha": "908038c0279db81e722e9d1f9318967da7581498",
+ "labels": [
+  "M",
+  "\ud83d\ude80 ready to merge",
+  "performance"
+ ],
+ "linked_issues": [],
+ "merge_commit_sha": "a6e9785ab6390332ae76a3565d1946fee29954fb",
+ "merged_at": "2026-10-15T18:01:24Z",
+ "number": 5831,
+ "referenced_numbers": [
+  5466
+ ],
+ "repo": "nlohmann/json",
+ "review_comments": [],
+ "state": "closed",
+ "title": "Look up the key only once in the callback parser's key()",
+ "transport": "gh",
+ "user": {
+  "login": "nlohmann",
+  "type": "User"
+ }
+}

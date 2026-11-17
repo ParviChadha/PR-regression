@@ -1,0 +1,228 @@
+{
+ "base_ref": "develop",
+ "base_sha": "c8b66cf36e9e00516fd8cebaf15787ec031f5ae0",
+ "body": "This pull request adds std::string_view support for operator[] to improve usability with modern C++ (C++17 and later). The behavior now matches the existing std::string overloads. Additionally, the exception messages were updated for consistency when operator[] is used with non-object types and a string_view key.\r\n\r\nThis change addresses and fixes issue #3912.\r\n\r\n- [x] The changes are described in detail, both the what and why.\r\n- [x] An existing issue is referenced (Fixes #3912).\r\n- [x] The Code coverage remains at 100%.. A test case for every new line of code.\r\n- [ ] If applicable, the [documentation](https://json.nlohmann.me) is updated.\r\n- [x] The source code is amalgamated by running `make amalgamate`.\r\n\r\nRead the [Contribution Guidelines](https://github.com/nlohmann/json/blob/develop/.github/CONTRIBUTING.md) for detailed information.",
+ "comments": [
+  {
+   "body": "`string_view` support already exists through this function:\r\n\r\n```\r\n    /// @brief access specified object element\r\n    /// @sa https://json.nlohmann.me/api/basic_json/operator%5B%5D/\r\n    template<class KeyType, detail::enable_if_t<\r\n                 detail::is_usable_as_basic_json_key_type<basic_json_t, KeyType>::value, int > = 0 >\r\n    reference operator[](KeyType && key)\r\n```\r\nhttps://github.com/nlohmann/json/pull/3423\r\n\r\nAs you can see from the godbolt link in the original issue, the issue isn't that `string_view` doesn't work, it's that the compiler doesn't pick up that the `operator string_view()` from the type should allow it to work.\r\n\r\nThe thing that should really be updated is `is_usable_as_basic_json_key_type`, and then all of the existing functions will work.  I think it currently asks \"can this type be used as a key\" when this scenario needs it to ask \"can this type be converted to a type that can be used as a key\".\r\n\r\nYou can update the test code like this to see the missing piece.\r\n```\r\n\tstd::cout << js[static_cast<std::string_view>(Bar{})] << \"\\n\";  // Okay\r\n\tstd::cout << js[Bar{}] << \"\\n\"; // Not okay\r\n```\r\n",
+   "created_at": "2025-10-22T16:56:50Z",
+   "user": {
+    "login": "gregmarr",
+    "type": "User"
+   }
+  },
+  {
+   "body": "@gregmarr \r\nYes, I understand that `string_view` is supported through the existing template function, and the issue arises with js[Bar{}] due to ambiguity between the two overloads, causing the compiler to fail. \r\n\r\nMy idea is to add specific `string_view` overloads for operator[] to guide the compiler in choosing the correct one, resolving the ambiguity.",
+   "created_at": "2025-10-22T17:16:53Z",
+   "user": {
+    "login": "khloodelhossiny",
+    "type": "User"
+   }
+  },
+  {
+   "body": "## \ud83d\udd34 Amalgamation check failed! \ud83d\udd34\nThe source code has not been amalgamated. @khloodelhossiny\n Please read and follow the [Contribution Guidelines](https://github.com/nlohmann/json/blob/develop/.github/CONTRIBUTING.md#files-to-change).",
+   "created_at": "2025-10-22T17:33:04Z",
+   "user": {
+    "login": "github-actions[bot]",
+    "type": "Bot"
+   }
+  },
+  {
+   "body": ">My idea is to add specific string_view overloads for operator[] to guide the compiler in choosing the correct one, resolving the ambiguity.\r\n\r\nOkay, that's not what your PR description says, so it wasn't clear that you knew that.  \r\n\r\nI'd be worried about the compiler potentially having a problem selecting between `operator[](KeyType && key)` and `operator[](std::string_view key)` and there also being unnecessary duplication.  I still think that making  `is_usable_as_basic_json_key_type` work with it is a better route here, but @nlohmann may be okay with the new functions.",
+   "created_at": "2025-10-23T01:56:02Z",
+   "user": {
+    "login": "gregmarr",
+    "type": "User"
+   }
+  },
+  {
+   "body": "I think a cleaner approach would be indeed to fix `is_usable_as_basic_json_key_type` to also work with string views.",
+   "created_at": "2025-10-23T07:08:49Z",
+   "user": {
+    "login": "nlohmann",
+    "type": "User"
+   }
+  },
+  {
+   "body": "> > My idea is to add specific string_view overloads for operator[] to guide the compiler in choosing the correct one, resolving the ambiguity.\r\n> \r\n> Okay, that's not what your PR description says, so it wasn't clear that you knew that.\r\n> \r\n> I'd be worried about the compiler potentially having a problem selecting between `operator[](KeyType && key)` and `operator[](std::string_view key)` and there also being unnecessary duplication. I still think that making `is_usable_as_basic_json_key_type` work with it is a better route here, but @nlohmann may be okay with the new functions.\r\n\r\nThanks a lot for the explanation. I see your point, and I\u2019ll update the code to follow that approach.",
+   "created_at": "2025-10-23T10:46:08Z",
+   "user": {
+    "login": "khloodelhossiny",
+    "type": "User"
+   }
+  },
+  {
+   "body": "> I think a cleaner approach would be indeed to fix `is_usable_as_basic_json_key_type` to also work with string views.\r\n\r\nThanks for the feedback! Yes, that makes sense \u2014 I will update the code.",
+   "created_at": "2025-10-23T10:48:44Z",
+   "user": {
+    "login": "khloodelhossiny",
+    "type": "User"
+   }
+  },
+  {
+   "body": "## \ud83d\udd34 Amalgamation check failed! \ud83d\udd34\nThe source code has not been amalgamated. @khloodelhossiny\n Please read and follow the [Contribution Guidelines](https://github.com/nlohmann/json/blob/develop/.github/CONTRIBUTING.md#files-to-change).",
+   "created_at": "2025-10-25T05:53:57Z",
+   "user": {
+    "login": "github-actions[bot]",
+    "type": "Bot"
+   }
+  },
+  {
+   "body": "\n[![Coverage Status](https://coveralls.io/builds/76774300/badge)](https://coveralls.io/builds/76774300)\n\ncoverage: 99.191%. remained the same\nwhen pulling **6d975144a57e44986d49b4ac5fdc6378463bd870 on khloodelhossiny:fix_issue-3912**\ninto **c8b66cf36e9e00516fd8cebaf15787ec031f5ae0 on nlohmann:develop**.\n",
+   "created_at": "2025-10-25T06:01:18Z",
+   "user": {
+    "login": "coveralls",
+    "type": "User"
+   }
+  },
+  {
+   "body": "## \ud83d\udd34 Amalgamation check failed! \ud83d\udd34\nThe source code has not been amalgamated. @khloodelhossiny\n Please read and follow the [Contribution Guidelines](https://github.com/nlohmann/json/blob/develop/.github/CONTRIBUTING.md#files-to-change).",
+   "created_at": "2025-10-27T13:49:48Z",
+   "user": {
+    "login": "github-actions[bot]",
+    "type": "Bot"
+   }
+  },
+  {
+   "body": "## \ud83d\udd34 Amalgamation check failed! \ud83d\udd34\nThe source code has not been amalgamated. @khloodelhossiny\n Please read and follow the [Contribution Guidelines](https://github.com/nlohmann/json/blob/develop/.github/CONTRIBUTING.md#files-to-change).",
+   "created_at": "2025-10-29T13:54:51Z",
+   "user": {
+    "login": "github-actions[bot]",
+    "type": "Bot"
+   }
+  },
+  {
+   "body": "I was hoping for something that didn't have to name `string_view` directly, but I'm not sure that's possible.\r\n\r\nAnother possibility that seems to work and doesn't require any changes to the library is to make your type comparable to `std::string`.\r\n\r\n```\r\nstruct Bar {\r\n\toperator std::string_view() const { return \"bar\"; }\r\n};\r\nbool operator<(const std::string &lhs, Bar const &rhs) {\r\n    return lhs < static_cast<std::string_view>(rhs);\r\n}\r\n```\r\n\r\nIt could be a bit more generic, but that might be dangerous in the rest of the program:\r\n\r\n```\r\ntemplate<typename T>\r\nbool operator<(const std::string &lhs, T &&rhs) {\r\n    return lhs < static_cast<std::string_view>(rhs);\r\n}\r\ntemplate<typename T>\r\nbool operator<(T&&lhs, const std::string &rhs) {\r\n    return static_cast<std::string_view>(lhs) < rhs;\r\n}\r\n```\r\n",
+   "created_at": "2025-10-31T23:56:38Z",
+   "user": {
+    "login": "gregmarr",
+    "type": "User"
+   }
+  },
+  {
+   "body": "\r\n\r\n\r\n\r\n> I was hoping for something that didn't have to name `string_view` directly, but I'm not sure that's possible.\r\n> \r\n> Another possibility that seems to work and doesn't require any changes to the library is to make your type comparable to `std::string`.\r\n> \r\n> ```\r\n> struct Bar {\r\n> \toperator std::string_view() const { return \"bar\"; }\r\n> };\r\n> bool operator<(const std::string &lhs, Bar const &rhs) {\r\n>     return lhs < static_cast<std::string_view>(rhs);\r\n> }\r\n> ```\r\n> \r\n> It could be a bit more generic, but that might be dangerous in the rest of the program:\r\n> \r\n> ```\r\n> template<typename T>\r\n> bool operator<(const std::string &lhs, T &&rhs) {\r\n>     return lhs < static_cast<std::string_view>(rhs);\r\n> }\r\n> template<typename T>\r\n> bool operator<(T&&lhs, const std::string &rhs) {\r\n>     return static_cast<std::string_view>(lhs) < rhs;\r\n> }\r\n> ```\r\nI got your point \u2014 I understand that you want the library to fully support `std::string_view`.\r\nFor example, this code:\r\n```\r\nstruct TestStruct {\r\n    operator std::string_view() const { return \"key\"; }\r\n};\r\nstd::cout << j.contains(TestStruct{}) << \"\\n\";\r\n```\r\nI tried to handle that case, but I think for now it might make sense to let users define their own comparison operators if they have custom types.\r\n_At least we\u2019ve fixed the issue that many people usually miss._\r\nI also agree that in the future, we should aim to support full `std::string_view `handling as a proper feature of the library.\r\n",
+   "created_at": "2025-11-01T14:06:41Z",
+   "user": {
+    "login": "khloodelhossiny",
+    "type": "User"
+   }
+  },
+  {
+   "body": "@gregmarr \r\nCan you help me? I\u2019m having some trouble with the CI checks.\r\nEvery time I push, I get these errors:\r\n\r\n  - Ubuntu / ci_static_analysis_clang (ci_test_clang)\r\n  - Ubuntu / ci_test_standards_clang (17, libstdcxx)\r\n  - Windows / mingw (x64)\r\n\r\nI tried to fix them several times, but after I push new changes, other errors appear.\r\n\r\nI believe most of them are related to clang-format.\r\nWhen I run the formatting command locally, it changes **macros** that should stay _on one line_ into _multiple lines_, which then causes conflicts.\r\n\r\nMy current steps are:\r\n\r\n1.   Edit the two files\r\n2.   Run the tests\r\n3.   Run `make amalgamate`\r\n4.   Push\r\n\r\nIf I\u2019m missing any step, please let me know \u2014 I\u2019m starting to get a bit disappointed :(\r\n\r\nAt this point, I almost believe that even if I push the develop branch, it will still fail the same checks :)",
+   "created_at": "2025-11-01T14:12:21Z",
+   "user": {
+    "login": "khloodelhossiny",
+    "type": "User"
+   }
+  },
+  {
+   "body": "@nlohmann will have to help you with the checks.\r\n\r\n> I also agree that in the future, we should aim to support full std::string_view handling as a proper feature of the library.\r\n\r\nIMO, the library supports `std::string_view` as a proper feature already.  The issue here is that the object isn't directly usable as a key but requires an intermediate conversion to a type that is usable as a key.\r\n",
+   "created_at": "2025-11-03T00:31:58Z",
+   "user": {
+    "login": "gregmarr",
+    "type": "User"
+   }
+  },
+  {
+   "body": "- [ci_static_analysis_clang](https://github.com/nlohmann/json/actions/runs/18982378422/job/54218502063?pr=4958#logs) and [ci_test_standards_clang (17, libstdcxx)](https://github.com/nlohmann/json/actions/runs/18982378422/job/54218502161?pr=4958#logs) complain about a missing new line at the end of a file\r\n- The MinGW job looks like a glitch - I restarted it.\r\n- Please take a look at https://github.com/nlohmann/json/pull/4958/checks?check_run_id=54217855538",
+   "created_at": "2025-11-03T09:59:12Z",
+   "user": {
+    "login": "nlohmann",
+    "type": "User"
+   }
+  },
+  {
+   "body": "> IMO, the library supports `std::string_view` as a proper feature already. The issue here is that the object isn't directly usable as a key but requires an intermediate conversion to a type that is usable as a key.\r\n\r\nGot it, thank you so much for the clarification and guidance!\r\nWhat I actually meant was that it doesn\u2019t fully support types that can be implicitly converted to std::string_view.\r\nBut yes, I\u2019ll try to find the best solution for that.",
+   "created_at": "2025-11-03T12:34:56Z",
+   "user": {
+    "login": "khloodelhossiny",
+    "type": "User"
+   }
+  },
+  {
+   "body": "@nlohmann Many thanks to you!",
+   "created_at": "2025-11-03T12:36:31Z",
+   "user": {
+    "login": "khloodelhossiny",
+    "type": "User"
+   }
+  },
+  {
+   "body": "Hi @nlohmann , I've resolved the conflicts and updated the branch. All CI checks should be green now. Let me know if there's anything else needed! \r\n_Thanks for the feedback_",
+   "created_at": "2025-12-03T11:30:45Z",
+   "user": {
+    "login": "khloodelhossiny",
+    "type": "User"
+   }
+  },
+  {
+   "body": "This pull request has been marked as stale because it has had no activity for 30 days. While we won\u2019t close it automatically, we encourage you to update or comment if it is still relevant. Keeping pull requests active and up-to-date helps us review and merge changes more efficiently. Thank you for your contributions!",
+   "created_at": "2026-01-03T00:13:23Z",
+   "user": {
+    "login": "github-actions[bot]",
+    "type": "Bot"
+   }
+  },
+  {
+   "body": "Still relevant.  @nlohmann anything still needed here?",
+   "created_at": "2026-01-05T16:39:23Z",
+   "user": {
+    "login": "gregmarr",
+    "type": "User"
+   }
+  },
+  {
+   "body": "Thanks a lot!",
+   "created_at": "2026-01-11T20:45:27Z",
+   "user": {
+    "login": "nlohmann",
+    "type": "User"
+   }
+  },
+  {
+   "body": "> Thanks a lot!\r\n\r\n_My pleasure!_ Happy this was useful.",
+   "created_at": "2026-01-12T09:39:55Z",
+   "user": {
+    "login": "khloodelhossiny",
+    "type": "User"
+   }
+  }
+ ],
+ "created_at": "2025-10-22T12:46:40Z",
+ "fetched_at": "2026-11-17T20:10:36Z",
+ "head_sha": "6d975144a57e44986d49b4ac5fdc6378463bd870",
+ "labels": [
+  "review needed",
+  "M",
+  "tests"
+ ],
+ "linked_issues": [
+  {
+   "body": "### Description\r\n\r\n`operator string_view()` isn't used, whereas `operator string()` _is_.\r\n\r\n### Reproduction steps\r\n\r\nhttps://godbolt.org/z/MYEYG3Gao\r\n\r\n### Expected vs. actual results\r\n\r\ncompiles\r\n\r\n### Minimal code example\r\n\r\n```c++\r\n#include <iostream>\r\n#include <string>\r\n#include \"nlohmann/json.hpp\"\r\n\r\nusing json = nlohmann::json;\r\n\r\nstruct Foo {\r\n\toperator std::string() const { return \"foo\"; }\r\n};\r\n\r\nstruct Bar {\r\n\toperator std::string_view() const { return \"bar\"; }\r\n};\r\n\r\nint main() {\r\n\r\n\tjson js {\r\n\t\t{ \"foo\", \"string\" },\r\n\t\t{ \"bar\", \"string_view\" },\r\n\t};\r\n\r\n\tstd::cout << js[std::string{\"foo\"}] << \"\\n\";\r\n\tstd::cout << js[Foo{}] << \"\\n\";\r\n\r\n\tstd::cout << js[std::string_view{\"bar\"}] << \"\\n\";\r\n\tstd::cout << js[Bar{}] << \"\\n\";\r\n}\r\n```\r\n\r\n\r\n### Error messages\r\n\r\n```Shell\r\n<source>: In function 'int main()':\r\n<source>:26:24: error: no match for 'operator[]' (operand types are 'json' {aka 'nlohmann::json_abi_v3_11_2::basic_json<>'} and 'Bar')\r\n   26 |         std::cout << js[Bar{}] << \"\\n\";\r\n      |                        ^\r\n```\r\n```\r\n\r\n\r\n### Compiler and operating system\r\n\r\nlinux gcc 12.2\r\n\r\n### Library version\r\n\r\ntrunk\r\n\r\n### Validation\r\n\r\n- [x] The bug also occurs if the latest version from the [`develop`](https://github.com/nlohmann/json/tree/develop) branch is used.\r\n- [ ] I can successfully [compile and run the unit tests](https://github.com/nlohmann/json#execute-unit-tests).",
+   "labels": [
+    "kind: bug",
+    "confirmed",
+    "state: please discuss",
+    "solution: proposed fix"
+   ],
+   "number": 3912,
+   "state": "closed",
+   "title": "inconsistency with string/string_view lookups"
+  }
+ ],
+ "merge_commit_sha": "8f7570014107c5040103c5c4f9a55250be9add0c",
+ "merged_at": "2026-01-11T20:45:22Z",
+ "number": 4958,
+ "referenced_numbers": [
+  3912
+ ],
+ "repo": "nlohmann/json",
+ "review_comments": [],
+ "state": "closed",
+ "title": "Enable string_view keys in operator[] by updating is_usable_as_basic_json_key_type (#3912)",
+ "transport": "gh",
+ "user": {
+  "login": "khloodelhossiny",
+  "type": "User"
+ }
+}

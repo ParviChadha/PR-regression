@@ -1,0 +1,98 @@
+{
+ "base_ref": "develop",
+ "base_sha": "ea8a05484b97fa3fa686e915f553d71fb7ca4d37",
+ "body": "The `check_utf8` experiment from #5869, stacked on #5924. Suggested by @gregmarr in #5630 ([comment](https://github.com/nlohmann/json/pull/5630#discussion_r4309190167)).\n\n## What changes\n\nStrings written into an editable document (`set()`, `push_back()`, `insert()`, keys) are checked for valid UTF-8 by `check_utf8()`. Until now, that was byte by byte.\n\n- **Strings of 32 bytes or more** first skip their well-formed part with the parser's string scan, `scan_string_run<true>()`. It checks 16 bytes at a time with NEON, SSE2/SSSE3, or the portable code under `JSON_NO_SIMD`. The scan also stops at quotes, backslashes, and control characters; these are legal in an edited string and are skipped.\n- **Errors are reported by the same code as before.** If the scan stops at ill-formed UTF-8, the byte-wise check runs from that position, so `type_error.316` has the same message and the same byte index.\n- **Shorter strings keep the byte-wise check.** The vector scan costs more than it saves there: a first version that scanned every string was 14\u201316 % slower on 16-byte strings. The byte-wise loop is force-inlined with a constant start, so this path compiles to the code it was, plus one length test. An earlier revision called it out of line with a run-time start index; on x86 that cost about 2 extra mispredicted branches per call for short emoji strings (+5\u20137 %).\n\n## Numbers\n\nMeasured with an A/B harness: both versions are linked into one binary and timed alternately. Each result is the median of the per-pair ratios, averaged over 4\u20136 code layouts. Pairs during which the other CPUs of the shared VPS were busy are discarded. On the VPS, an A/A check (the same tree twice) is within 1 % of 1.\n\n`set()`/`push_back()` of one string, time patch / base:\n\n| string | 16 B | 24 B | 32 B | 64 B | 1 KiB | 64 KiB |\n|---|---|---|---|---|---|---|\n| ASCII, x86-64 (GCC 13.3, Haswell) | 1.006 | 1.001 | 0.76 | 0.59 | 0.39 | 0.36 |\n| ~30 % 2-/3-byte UTF-8, x86-64 | 0.95 | 0.93 | 0.86 | 0.65 | 0.32 | 0.30 |\n| emoji, x86-64 | 0.97 | 0.91 | 0.76 | 0.57 | 0.30 | 0.29 |\n| ASCII, AArch64 (Apple clang) | 1.003 | \u2014 | 0.81 | 0.70 | 0.26 | \u2014 |\n| emoji, AArch64 | 0.997 | \u2014 | \u2014 | \u2014 | 0.25 | \u2014 |\n\nInstructions per call at 16 bytes: x86-64 (callgrind) 0.958 (ASCII), 0.967 (mixed), 0.985 (emoji); AArch64 0.9996 (ASCII), 0.9999 (emoji).\n\n**Other rows (`bench_edit`, json_view engine).** These edits write short strings and numbers.\n\n- Time patch / base on x86-64, over 6 layouts: 0.995\u20131.007. The one exception is rpc at 1.013; its layouts split both ways (0.97\u20131.08), and in the A/A check it alone varied by up to 2.2 %.\n- Instructions: rpc +0.04 %, status \u22120.06 %, twitter update +0.04 %, canada update +0.001 %.\n\nEarlier single-layout runs had shown canada patch 2.5 % slower. callgrind traced that to placement alone: the instructions per function and the machine code of the hot functions were identical, and only their addresses moved.\n\n## Breaking changes\n\nNone. The exceptions and their messages are unchanged.\n\n## Tests\n\n- **New test** in `unit-json_view_edit.cpp`. It compares `check_utf8()` with the byte-wise check (the same message, or \"ok\") on these inputs:\n  - every special piece (quotes, controls, valid 2- to 4-byte sequences, lone continuation bytes, overlongs, surrogates, U+110000, truncated sequences) behind prefixes of length 0 to 64;\n  - a bad byte at every position of ASCII and mixed strings of length 0 to 64;\n  - 100,000 random strings.\n- **Paths covered:**\n  - AArch64 NEON, with ASan/UBSan;\n  - `JSON_NO_SIMD`;\n  - x86-64 under Rosetta: SSSE3, `-mssse3`, and baseline x86-64 with the runtime CPU check.\n- Full suite with ASan/UBSan: 175/175. clang-tidy 22 is clean on the new code.\n\n\ud83e\udd16 Generated with [Claude Code](https://claude.com/claude-code)\n",
+ "comments": [
+  {
+   "body": "## \ud83d\udd34 Amalgamation check failed! \ud83d\udd34\nThe source code has not been amalgamated and/or formatted correctly, or `BUILD.bazel`, `nlohmann_json.natvis`, or the macro_builder tables in `macro_scope.hpp` are out of date. `make amalgamate BUILD.bazel natvis` fixes all but the tables (see `tools/macro_builder/README.md`).\n\n\ud83d\udcce A ready-to-apply patch is attached to the [failed workflow run](https://github.com/nlohmann/json/actions/runs/40384854045) as the `amalgamation-patch` artifact. Download it, then apply it locally from the repository root with:\n\n```shell\ngit apply amalgamation.patch\n```\n\nThis does not require installing astyle yourself.",
+   "created_at": "2026-10-26T21:45:57Z",
+   "user": {
+    "login": "github-actions[bot]",
+    "type": "Bot"
+   }
+  }
+ ],
+ "created_at": "2026-10-25T16:34:52Z",
+ "fetched_at": "2026-11-17T20:08:36Z",
+ "head_sha": "bbff8ca5762f14ad7b733ece34f74c5b2ed4e4cc",
+ "labels": [
+  "L",
+  "tests",
+  "\ud83d\ude80 ready to merge",
+  "aspect: json_view"
+ ],
+ "linked_issues": [],
+ "merge_commit_sha": "0b91f9ddd8314b3739f1a9ddf929eb5501e39136",
+ "merged_at": "2026-10-30T14:17:56Z",
+ "number": 5926,
+ "referenced_numbers": [
+  5869,
+  5924,
+  5630
+ ],
+ "repo": "nlohmann/json",
+ "review_comments": [
+  {
+   "body": "Why `for` instead of `while`?",
+   "created_at": "2026-10-29T02:59:15Z",
+   "diff_hunk": "@@ -46,10 +47,9 @@ struct first_true<false, Conditions...> : std::integral_constant < int, 1 + firs\n /// (type_error.316 with the same message), so that an editable document\n /// only holds valid UTF-8: the error is at the first byte that no\n /// well-formed sequence can continue with (Unicode, Table 3-7).\n-inline void check_utf8(const char* s, std::size_t n)\n+NLOHMANN_VIEW_ALWAYS_INLINE void check_utf8_bytewise(const unsigned char* p, std::size_t n, std::size_t i)\n {\n-    const auto* const p = reinterpret_cast<const unsigned char*>(s); // NOLINT(cppcoreguidelines-pro-type-reinterpret-cast)\n-    for (std::size_t i = 0; i < n;)\n+    for (; i < n;)",
+   "line": 52,
+   "path": "include/nlohmann/detail/view/edit.hpp",
+   "user": {
+    "login": "gregmarr",
+    "type": "User"
+   }
+  },
+  {
+   "body": "Why not just put these two lines at the start of the existing `check_utf8` since `check_utf8_bytewise` is \"always inline\".",
+   "created_at": "2026-10-29T03:02:57Z",
+   "diff_hunk": "@@ -79,6 +79,43 @@ inline void check_utf8(const char* s, std::size_t n)\n     }\n }\n \n+/// The long-string path of check_utf8(): skips well-formed runs with the\n+/// parser's string scan (which stops at a quote, a backslash, or a control\n+/// character, all legal here, and at ill-formed UTF-8); the byte-wise check\n+/// runs only from where the scan found ill-formed UTF-8, to report it.\n+NLOHMANN_VIEW_NOINLINE inline void check_utf8_scan(const unsigned char* p, std::size_t n)\n+{\n+    const unsigned char* const e = p + n;\n+    const unsigned char* q = p;\n+    for (;;)\n+    {\n+        q = scan_string_run<true>(q, e);\n+        if (q == e)\n+        {\n+            return;\n+        }\n+        if (*q >= 0x80)\n+        {\n+            check_utf8_bytewise(p, n, static_cast<std::size_t>(q - p));\n+            return; // not reached: the scan stopped at ill-formed UTF-8\n+        }\n+        ++q; // a quote, backslash, or control character\n+    }\n+}\n+\n+inline void check_utf8(const char* s, std::size_t n)\n+{\n+    const auto* const p = reinterpret_cast<const unsigned char*>(s); // NOLINT(cppcoreguidelines-pro-type-reinterpret-cast)\n+    if (NLOHMANN_VIEW_UNLIKELY(n >= 32))\n+    {\n+        check_utf8_scan(p, n);\n+        return;\n+    }",
+   "line": 113,
+   "path": "include/nlohmann/detail/view/edit.hpp",
+   "user": {
+    "login": "gregmarr",
+    "type": "User"
+   }
+  },
+  {
+   "body": "No reason: `i` is a parameter with no init-statement, so `while (i < n)` is the clearer form. Changed in 5462f70.\n\n---\n_Generated by [Claude Code](https://claude.ai/code)_",
+   "created_at": "2026-10-29T05:35:13Z",
+   "diff_hunk": "@@ -46,10 +47,9 @@ struct first_true<false, Conditions...> : std::integral_constant < int, 1 + firs\n /// (type_error.316 with the same message), so that an editable document\n /// only holds valid UTF-8: the error is at the first byte that no\n /// well-formed sequence can continue with (Unicode, Table 3-7).\n-inline void check_utf8(const char* s, std::size_t n)\n+NLOHMANN_VIEW_ALWAYS_INLINE void check_utf8_bytewise(const unsigned char* p, std::size_t n, std::size_t i)\n {\n-    const auto* const p = reinterpret_cast<const unsigned char*>(s); // NOLINT(cppcoreguidelines-pro-type-reinterpret-cast)\n-    for (std::size_t i = 0; i < n;)\n+    for (; i < n;)",
+   "line": 52,
+   "path": "include/nlohmann/detail/view/edit.hpp",
+   "user": {
+    "login": "nlohmann",
+    "type": "User"
+   }
+  },
+  {
+   "body": "I read this as: fold the `n >= 32` dispatch into the byte-wise function itself. That would not work, because `check_utf8_scan` calls `check_utf8_bytewise` from the first ill-formed byte (`i != 0`). A dispatch inside it would have to be skipped on that call, or it would rescan the string. It would also lose the constant `i = 0` that lets the short-string path inline to the plain loop. So I left the split as it is. If you meant something else, tell me which two lines and I'll look again.\n\n---\n_Generated by [Claude Code](https://claude.ai/code)_",
+   "created_at": "2026-10-29T05:35:15Z",
+   "diff_hunk": "@@ -79,6 +79,43 @@ inline void check_utf8(const char* s, std::size_t n)\n     }\n }\n \n+/// The long-string path of check_utf8(): skips well-formed runs with the\n+/// parser's string scan (which stops at a quote, a backslash, or a control\n+/// character, all legal here, and at ill-formed UTF-8); the byte-wise check\n+/// runs only from where the scan found ill-formed UTF-8, to report it.\n+NLOHMANN_VIEW_NOINLINE inline void check_utf8_scan(const unsigned char* p, std::size_t n)\n+{\n+    const unsigned char* const e = p + n;\n+    const unsigned char* q = p;\n+    for (;;)\n+    {\n+        q = scan_string_run<true>(q, e);\n+        if (q == e)\n+        {\n+            return;\n+        }\n+        if (*q >= 0x80)\n+        {\n+            check_utf8_bytewise(p, n, static_cast<std::size_t>(q - p));\n+            return; // not reached: the scan stopped at ill-formed UTF-8\n+        }\n+        ++q; // a quote, backslash, or control character\n+    }\n+}\n+\n+inline void check_utf8(const char* s, std::size_t n)\n+{\n+    const auto* const p = reinterpret_cast<const unsigned char*>(s); // NOLINT(cppcoreguidelines-pro-type-reinterpret-cast)\n+    if (NLOHMANN_VIEW_UNLIKELY(n >= 32))\n+    {\n+        check_utf8_scan(p, n);\n+        return;\n+    }",
+   "line": 113,
+   "path": "include/nlohmann/detail/view/edit.hpp",
+   "user": {
+    "login": "nlohmann",
+    "type": "User"
+   }
+  },
+  {
+   "body": "You are correct, that won't work because `check_utf8_scan` calls `check_utf8_bytewise` and thus it needs to be a separate function.",
+   "created_at": "2026-10-29T14:11:20Z",
+   "diff_hunk": "@@ -79,6 +79,43 @@ inline void check_utf8(const char* s, std::size_t n)\n     }\n }\n \n+/// The long-string path of check_utf8(): skips well-formed runs with the\n+/// parser's string scan (which stops at a quote, a backslash, or a control\n+/// character, all legal here, and at ill-formed UTF-8); the byte-wise check\n+/// runs only from where the scan found ill-formed UTF-8, to report it.\n+NLOHMANN_VIEW_NOINLINE inline void check_utf8_scan(const unsigned char* p, std::size_t n)\n+{\n+    const unsigned char* const e = p + n;\n+    const unsigned char* q = p;\n+    for (;;)\n+    {\n+        q = scan_string_run<true>(q, e);\n+        if (q == e)\n+        {\n+            return;\n+        }\n+        if (*q >= 0x80)\n+        {\n+            check_utf8_bytewise(p, n, static_cast<std::size_t>(q - p));\n+            return; // not reached: the scan stopped at ill-formed UTF-8\n+        }\n+        ++q; // a quote, backslash, or control character\n+    }\n+}\n+\n+inline void check_utf8(const char* s, std::size_t n)\n+{\n+    const auto* const p = reinterpret_cast<const unsigned char*>(s); // NOLINT(cppcoreguidelines-pro-type-reinterpret-cast)\n+    if (NLOHMANN_VIEW_UNLIKELY(n >= 32))\n+    {\n+        check_utf8_scan(p, n);\n+        return;\n+    }",
+   "line": 113,
+   "path": "include/nlohmann/detail/view/edit.hpp",
+   "user": {
+    "login": "gregmarr",
+    "type": "User"
+   }
+  }
+ ],
+ "state": "closed",
+ "title": "json_view: check_utf8 skips well-formed runs with the parser's string scan",
+ "transport": "gh",
+ "user": {
+  "login": "nlohmann",
+  "type": "User"
+ }
+}

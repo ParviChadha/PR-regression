@@ -1,0 +1,76 @@
+{
+ "base_ref": "develop",
+ "base_sha": "0cbe95ffa2fcd0c3db9b6621d6581dee38d0e8d2",
+ "body": "Two silent wrong-result bugs for custom number types that already compile on `develop`, found while analysing #3578.\n\n## Integer/float comparison with a class-type integer\n\n`compare_integer_with_float()` (`detail/value_t.hpp`) took the signedness from `std::is_signed<IntegerType>`, which is `false` for class types such as `absl::int128` or `boost::multiprecision::cpp_int`. Every float below zero then compared as less than every integer:\n\n```cpp\nusing J = nlohmann::basic_json<std::map, std::vector, std::string, bool, absl::int128, absl::uint128, double>;\nJ i(J::value_t::number_integer);\ni.get_ref<absl::int128&>() = -5;\nJ(-2.5) < i;  // true before, false now\ni < J(-2.5);  // false before, true now\n```\n\nThe signedness now comes from `std::numeric_limits<IntegerType>::is_signed`, matching the `digits` already used for the range bound.\n\n## Binary writers with integer types wider than 64 bits\n\nWith `basic_json<..., __int128, unsigned __int128, double>`:\n\n| format | before | after |\n|---|---|---|\n| CBOR | truncated (2^100 \u2192 0) | `out_of_range.407` outside [-2^64, 2^64-1] |\n| MessagePack | truncated | `out_of_range.407` outside [-2^63, 2^64-1] |\n| BSON | truncated | `out_of_range.407` outside int64 (signed) / uint64 (unsigned), before anything is written |\n| BON8 | did not compile (`std::to_string` ambiguous) | `out_of_range.407` outside int64 (same message as before for uint64) |\n| UBJSON | exact `H` high-precision number | unchanged |\n| BJData | signed: exact `H`; unsigned: truncated via `M` | unsigned beyond uint64 also written as `H` |\n| BJData ND-array | elements/dimensions beyond 64 bits truncated before the range check, so they could be encoded as wrong values | object falls back to a plain object, like other out-of-range elements |\n\nThe checks (`integer_fits_max/min/fits` in `binary_writer`) get the ranges from `std::numeric_limits` digits. They dispatch on a compile-time tag, so for number types of at most 64 bits they are the constant `true` and compile away. I checked this by compiling `to_cbor`/`to_msgpack`/`to_bson`/`to_ubjson`/`to_bjdata`/`to_bon8` for the default `json` at -O2. The CBOR, MessagePack and BSON writer functions have identical instruction counts before and after (clang). The UBJSON/BJData functions change by a few instructions because clang now makes different inlining decisions; they get no extra runtime checks. The cold throw path is shared with BON8.\n\nThe error message prints the number with `dump()`, because `std::to_string` has no overload for `__int128`.\n\n## Tests\n\nNew file `tests/src/unit-custom-number-types.cpp`:\n- A small trivial class-type signed integer with `std::numeric_limits` specialized (`is_signed = true`), standing in for `absl::int128`, which CI does not have. It covers `<`, `>`, `<=`, `>=`, `==`, `!=` against floats, including floats outside the integer's range.\n- `__int128`/`unsigned __int128` writers for all formats, including the edges of each range and the ND-array fallback. These tests are compiled only when the standard library treats `__int128` as an integral type: libc++, or libstdc++ outside strict ISO mode (`__GLIBCXX_TYPE_INT_N_0`; CMake builds use GNU mode by default). A `static_assert` checks the traits.\n\nAgainst `develop`'s headers, 30 of the new assertions fail (BON8 part left out, since it doesn't compile there). With the fix, all pass with Apple clang, GCC 16 and GCC 9 (C++11/17/20). Also checked: the existing cbor/msgpack/bson/ubjson/bjdata/bon8/comparison/binary_formats suites under ASan/UBSan, GCC 16's CI warning flags, clang `-Weverything` (Apple clang and clang 19), and clang-tidy with the repo config.\n\nDocs: the `out_of_range.407` entry in `exceptions.md` (it still said the exception could not occur, although BON8 already throws it) and the exception sections and version histories of `to_cbor`, `to_msgpack`, `to_bson`, `to_bjdata` and `to_bon8`.\n\n## Does this break the public API?\n\nNo breaking changes for the default number types: no signatures change, and the new checks compile away.\n\nFor custom number types the behaviour changes, but only where the old results were wrong:\n- Comparisons of class-type signed integers with floats now return the correct result.\n- Serializing an integer wider than 64 bits to CBOR, MessagePack, BSON or BON8 now throws `out_of_range.407` instead of silently writing a truncated value.\n- BJData writes unsigned integers beyond uint64 as high-precision numbers instead of truncating them.\n\n\ud83e\udd16 Generated with [Claude Code](https://claude.com/claude-code)\n",
+ "comments": [],
+ "created_at": "2026-10-10T14:55:52Z",
+ "fetched_at": "2026-11-17T20:09:22Z",
+ "head_sha": "5b53a26370f6c6613b819a14abf7c4db2b7a1ef4",
+ "labels": [
+  "documentation",
+  "aspect: binary formats",
+  "L",
+  "tests"
+ ],
+ "linked_issues": [],
+ "merge_commit_sha": "bd5227c2ec93264fea1696c33f6333e187d682a5",
+ "merged_at": "2026-10-21T08:36:31Z",
+ "number": 5805,
+ "referenced_numbers": [
+  3578
+ ],
+ "repo": "nlohmann/json",
+ "review_comments": [
+  {
+   "body": "astyle, not sure if fixable.",
+   "created_at": "2026-10-21T00:22:37Z",
+   "diff_hunk": "@@ -824,6 +848,133 @@ class binary_writer\n         JSON_THROW(type_error::create(exception_id::discarded_value_used, concat(\"cannot serialize discarded value to \", format_name), &j));\n     }\n \n+    /*!\n+    @brief whether integer @a n does not exceed the maximum of @a TargetType\n+\n+    The binary formats store integers in at most 64 bits, but number_integer_t\n+    and number_unsigned_t may be wider (e.g., __int128). The range of the\n+    integer is taken from std::numeric_limits, so a number type whose range\n+    fits into @a TargetType is never checked: the function is then constant\n+    true, and the default int64_t/uint64_t types pay nothing.\n+    */\n+    template<typename TargetType, typename NumberType>\n+    static constexpr bool integer_fits_max(const NumberType n) noexcept\n+    {\n+        return integer_fits_max<TargetType>(n, std::integral_constant < bool,",
+   "line": 863,
+   "path": "include/nlohmann/detail/output/binary_writer.hpp",
+   "user": {
+    "login": "gregmarr",
+    "type": "User"
+   }
+  },
+  {
+   "body": "negation",
+   "created_at": "2026-10-21T00:22:54Z",
+   "diff_hunk": "@@ -824,6 +848,133 @@ class binary_writer\n         JSON_THROW(type_error::create(exception_id::discarded_value_used, concat(\"cannot serialize discarded value to \", format_name), &j));\n     }\n \n+    /*!\n+    @brief whether integer @a n does not exceed the maximum of @a TargetType\n+\n+    The binary formats store integers in at most 64 bits, but number_integer_t\n+    and number_unsigned_t may be wider (e.g., __int128). The range of the\n+    integer is taken from std::numeric_limits, so a number type whose range\n+    fits into @a TargetType is never checked: the function is then constant\n+    true, and the default int64_t/uint64_t types pay nothing.\n+    */\n+    template<typename TargetType, typename NumberType>\n+    static constexpr bool integer_fits_max(const NumberType n) noexcept\n+    {\n+        return integer_fits_max<TargetType>(n, std::integral_constant < bool,\n+                                            (std::numeric_limits<NumberType>::digits > std::numeric_limits<TargetType>::digits) > ());\n+    }\n+\n+    template<typename TargetType, typename NumberType>\n+    static constexpr bool integer_fits_max(const NumberType /*unused*/, std::false_type /*may_exceed*/) noexcept\n+    {\n+        return true;\n+    }\n+\n+    template<typename TargetType, typename NumberType>\n+    static constexpr bool integer_fits_max(const NumberType n, std::true_type /*may_exceed*/) noexcept\n+    {\n+        // NumberType has more digits than TargetType, so it can hold its maximum\n+        return n <= static_cast<NumberType>((std::numeric_limits<TargetType>::max)());\n+    }\n+\n+    /*!\n+    @brief whether integer @a n is not below the minimum of @a TargetType;\n+           constant true if NumberType cannot hold such a value\n+    */\n+    template<typename TargetType, typename NumberType>\n+    static constexpr bool integer_fits_min(const NumberType n) noexcept\n+    {\n+        return integer_fits_min<TargetType>(n, std::integral_constant < bool, std::numeric_limits<NumberType>::is_signed &&\n+                                            (!std::numeric_limits<TargetType>::is_signed || std::numeric_limits<NumberType>::digits > std::numeric_limits<TargetType>::digits) > ());",
+   "line": 888,
+   "path": "include/nlohmann/detail/output/binary_writer.hpp",
+   "user": {
+    "login": "gregmarr",
+    "type": "User"
+   }
+  },
+  {
+   "body": "Fixed in 8c632d7df. The two conditions are now named members of a small `integer_range` trait (`may_exceed_max`, `may_fall_below_min`), so the `std::integral_constant<bool, ...>` argument no longer contains a comparison, and astyle leaves the line alone.\n\n\u2014 posted by Claude Code on behalf of @nlohmann",
+   "created_at": "2026-10-21T07:20:38Z",
+   "diff_hunk": "@@ -824,6 +848,133 @@ class binary_writer\n         JSON_THROW(type_error::create(exception_id::discarded_value_used, concat(\"cannot serialize discarded value to \", format_name), &j));\n     }\n \n+    /*!\n+    @brief whether integer @a n does not exceed the maximum of @a TargetType\n+\n+    The binary formats store integers in at most 64 bits, but number_integer_t\n+    and number_unsigned_t may be wider (e.g., __int128). The range of the\n+    integer is taken from std::numeric_limits, so a number type whose range\n+    fits into @a TargetType is never checked: the function is then constant\n+    true, and the default int64_t/uint64_t types pay nothing.\n+    */\n+    template<typename TargetType, typename NumberType>\n+    static constexpr bool integer_fits_max(const NumberType n) noexcept\n+    {\n+        return integer_fits_max<TargetType>(n, std::integral_constant < bool,",
+   "line": 863,
+   "path": "include/nlohmann/detail/output/binary_writer.hpp",
+   "user": {
+    "login": "nlohmann",
+    "type": "User"
+   }
+  },
+  {
+   "body": "Same commit (8c632d7df): the `!` moved into `integer_range::may_fall_below_min`, which is a plain `static constexpr bool`, so the template argument has no negation anymore.\n\n\u2014 posted by Claude Code on behalf of @nlohmann",
+   "created_at": "2026-10-21T07:20:40Z",
+   "diff_hunk": "@@ -824,6 +848,133 @@ class binary_writer\n         JSON_THROW(type_error::create(exception_id::discarded_value_used, concat(\"cannot serialize discarded value to \", format_name), &j));\n     }\n \n+    /*!\n+    @brief whether integer @a n does not exceed the maximum of @a TargetType\n+\n+    The binary formats store integers in at most 64 bits, but number_integer_t\n+    and number_unsigned_t may be wider (e.g., __int128). The range of the\n+    integer is taken from std::numeric_limits, so a number type whose range\n+    fits into @a TargetType is never checked: the function is then constant\n+    true, and the default int64_t/uint64_t types pay nothing.\n+    */\n+    template<typename TargetType, typename NumberType>\n+    static constexpr bool integer_fits_max(const NumberType n) noexcept\n+    {\n+        return integer_fits_max<TargetType>(n, std::integral_constant < bool,\n+                                            (std::numeric_limits<NumberType>::digits > std::numeric_limits<TargetType>::digits) > ());\n+    }\n+\n+    template<typename TargetType, typename NumberType>\n+    static constexpr bool integer_fits_max(const NumberType /*unused*/, std::false_type /*may_exceed*/) noexcept\n+    {\n+        return true;\n+    }\n+\n+    template<typename TargetType, typename NumberType>\n+    static constexpr bool integer_fits_max(const NumberType n, std::true_type /*may_exceed*/) noexcept\n+    {\n+        // NumberType has more digits than TargetType, so it can hold its maximum\n+        return n <= static_cast<NumberType>((std::numeric_limits<TargetType>::max)());\n+    }\n+\n+    /*!\n+    @brief whether integer @a n is not below the minimum of @a TargetType;\n+           constant true if NumberType cannot hold such a value\n+    */\n+    template<typename TargetType, typename NumberType>\n+    static constexpr bool integer_fits_min(const NumberType n) noexcept\n+    {\n+        return integer_fits_min<TargetType>(n, std::integral_constant < bool, std::numeric_limits<NumberType>::is_signed &&\n+                                            (!std::numeric_limits<TargetType>::is_signed || std::numeric_limits<NumberType>::digits > std::numeric_limits<TargetType>::digits) > ());",
+   "line": 888,
+   "path": "include/nlohmann/detail/output/binary_writer.hpp",
+   "user": {
+    "login": "nlohmann",
+    "type": "User"
+   }
+  }
+ ],
+ "state": "closed",
+ "title": "Fix silent wrong results for custom number types",
+ "transport": "gh",
+ "user": {
+  "login": "nlohmann",
+  "type": "User"
+ }
+}

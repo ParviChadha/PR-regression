@@ -1,0 +1,166 @@
+{
+ "base_ref": "develop",
+ "base_sha": "367336c83d47e26c3a36b8a58ef829ad43b3c217",
+ "body": "`full_multiplication()` currently uses `unsigned __int128` on GCC/Clang and falls back to four 32-bit partial products everywhere else. This adds the native intrinsics for the two MSVC targets that have them.\r\n\r\n- **x64:** `_umul128(a, b, &high)` gives both halves of the 128-bit product.\r\n- **ARM64:** `a * b` provides the low half and `__umulh(a, b)` provides the high half.\r\n- `<intrin.h>` is included only for MSVC x64/ARM64 builds, so other compilers and platforms are unaffected.\r\n- The `__SIZEOF_INT128__` branch remains first. This is important for clang-cl, which defines that macro and should continue using `unsigned __int128`.\r\n- 32-bit MSVC and other compilers continue to use the existing portable fallback unchanged.\r\n\r\nI extended the existing \"128-bit products and leading zeros\" test section with fixed edge cases checked against the existing big-integer reference, including `0`, `1`, `UINT64_MAX`, values around `2^32`, and large boundary values. The existing deterministic random-pair coverage is also preserved.\r\n\r\n`single_include/nlohmann/json.hpp` is synchronized with the implementation change.\r\n\r\n**Testing:** the touched tests pass locally with ASan and UBSan, and `git diff --check` is clean. MSVC/clang-cl are not available in my local environment, so the new MSVC branches have not been compiled locally. The repository's Windows CI jobs should provide compiler-specific validation.\r\n\r\n**Performance:** I have not benchmarked this change. The goal is to use the native 64\u00d764-bit multiplication support provided by MSVC rather than the portable partial-product implementation.\r\n\r\nCloses #5780",
+ "comments": [
+  {
+   "body": "## \ud83d\udd34 Amalgamation check failed! \ud83d\udd34\nThe source code has not been amalgamated and/or formatted correctly, or `BUILD.bazel` is out of date.\n\n\ud83d\udcce A ready-to-apply patch is attached to the [failed workflow run](https://github.com/nlohmann/json/actions/runs/37615881592) as the `amalgamation-patch` artifact. Download it, then apply it locally from the repository root with:\n\n```shell\ngit apply amalgamation.patch\n```\n\nThis does not require installing astyle yourself.\n\n@commit-msuyog Please read and follow the [Contribution Guidelines](https://github.com/nlohmann/json/blob/develop/.github/CONTRIBUTING.md#amalgamate-the-source-code).",
+   "created_at": "2026-10-07T13:13:56Z",
+   "user": {
+    "login": "github-actions[bot]",
+    "type": "Bot"
+   }
+  },
+  {
+   "body": "Please rebase to the latest develop: CI on develop is green again since #5779, so a rebase should give this PR a clean CI run.\n\n_(Comment written by Claude Code on behalf of @nlohmann.)_",
+   "created_at": "2026-10-07T14:41:26Z",
+   "user": {
+    "login": "nlohmann",
+    "type": "User"
+   }
+  },
+  {
+   "body": "The branch is still based on 30e542e52, so the GCC, Clang and Infer failures already fixed on develop by #5779 will probably come back. Those failures aren't caused by this PR. The new commits only touch bit_ops.hpp and the test, which don't affect them.",
+   "created_at": "2026-10-07T15:52:16Z",
+   "user": {
+    "login": "nlohmann",
+    "type": "User"
+   }
+  },
+  {
+   "body": "Rebased onto the latest `develop` including #5779.",
+   "created_at": "2026-10-07T16:11:55Z",
+   "user": {
+    "login": "commit-msuyog",
+    "type": "User"
+   }
+  },
+  {
+   "body": "Thanks! Now let's wait for the Windows jobs and AppVeyor to pick this up.",
+   "created_at": "2026-10-07T17:37:18Z",
+   "user": {
+    "login": "nlohmann",
+    "type": "User"
+   }
+  },
+  {
+   "body": "## \ud83d\udd34 Amalgamation check failed! \ud83d\udd34\nThe source code has not been amalgamated and/or formatted correctly, or `BUILD.bazel` is out of date.\n\n\ud83d\udcce A ready-to-apply patch is attached to the [failed workflow run](https://github.com/nlohmann/json/actions/runs/37650027351) as the `amalgamation-patch` artifact. Download it, then apply it locally from the repository root with:\n\n```shell\ngit apply amalgamation.patch\n```\n\nThis does not require installing astyle yourself.\n\n@commit-msuyog Please read and follow the [Contribution Guidelines](https://github.com/nlohmann/json/blob/develop/.github/CONTRIBUTING.md#amalgamate-the-source-code).",
+   "created_at": "2026-10-08T07:23:20Z",
+   "user": {
+    "login": "github-actions[bot]",
+    "type": "Bot"
+   }
+  },
+  {
+   "body": "## \ud83d\udd34 Amalgamation check failed! \ud83d\udd34\nThe source code has not been amalgamated and/or formatted correctly, or `BUILD.bazel` is out of date.\n\n\ud83d\udcce A ready-to-apply patch is attached to the [failed workflow run](https://github.com/nlohmann/json/actions/runs/37650027351) as the `amalgamation-patch` artifact. Download it, then apply it locally from the repository root with:\n\n```shell\ngit apply amalgamation.patch\n```\n\nThis does not require installing astyle yourself.\n\n@commit-msuyog Please read and follow the [Contribution Guidelines](https://github.com/nlohmann/json/blob/develop/.github/CONTRIBUTING.md#amalgamate-the-source-code).",
+   "created_at": "2026-10-08T09:49:38Z",
+   "user": {
+    "login": "github-actions[bot]",
+    "type": "Bot"
+   }
+  }
+ ],
+ "created_at": "2026-10-07T11:42:13Z",
+ "fetched_at": "2026-11-17T20:10:11Z",
+ "head_sha": "643ad5277c870e1d34f3f28466b263d5534e834e",
+ "labels": [
+  "M",
+  "tests",
+  "\ud83d\ude80 ready to merge"
+ ],
+ "linked_issues": [
+  {
+   "body": "`detail::full_multiplication()` in `include/nlohmann/detail/bit_ops.hpp` (added in #5617) computes the 128-bit product of two 64-bit numbers. GCC and Clang use `unsigned __int128`. All other compilers, including MSVC, fall back to four 32-bit partial products. MSVC has intrinsics for this:\n\n- x64: `_umul128(a, b, &high)` returns the low half and stores the high half (`<intrin.h>`).\n- ARM64: `a * b` for the low half and `__umulh(a, b)` for the high half.\n\n## Proposal\n\nAdd an `#elif defined(_MSC_VER) && (defined(_M_X64) || defined(_M_ARM64))` branch to `full_multiplication()` and keep the portable fallback for everything else (32-bit MSVC, other compilers). `clang-cl` defines `__SIZEOF_INT128__` and takes the first branch, so the order of the branches matters. Add a unit test that compares the result with the portable formula for edge values: 0, 1, `UINT64_MAX`, values around 2^32, and a few random pairs.\n\n## Why now, and why not yet\n\n- **On `develop`, MSVC gains little.** The only caller is the Eisel\u2013Lemire fallback in `number_parse.hpp`, which is only used when `std::from_chars` for floating-point is unavailable. Current MSVC has it.\n- **With the zero-copy view stack (#5768) it matters.** #5634 writes doubles with \u017bmij (`detail/conversions/zmij.hpp`), which calls `full_multiplication()` several times per number, and #5738 parses floats with it. MSVC would then run the slow fallback in the hot path of `dump()` for every double.\n\nSo this is worth doing once that stack is merged (or with it), and should be measured on MSVC x64 with `dump()` of a float-heavy file such as canada.json.\n\n## Background\n\nDiscussion #3782 asked for intrinsics in Grisu2's `diyfp::mul()` in `to_chars.hpp`, which uses the same 32-bit partial products. After #5634, Grisu2 is only used for `float`, so changing `diyfp::mul()` is not worth it on its own. It could call `full_multiplication()` to remove the duplicate code, keeping its rounding of the low half.\n\nWritten by Claude Code.",
+   "labels": [
+    "platform: visual studio",
+    "solution: proposed fix",
+    "performance"
+   ],
+   "number": 5780,
+   "state": "closed",
+   "title": "Use MSVC intrinsics for the 64\u00d764-bit multiplication in full_multiplication()"
+  }
+ ],
+ "merge_commit_sha": "a269794db7ce14879dc07b0ad510e878b593d4d2",
+ "merged_at": "2026-10-08T06:49:32Z",
+ "number": 5782,
+ "referenced_numbers": [
+  5780
+ ],
+ "repo": "nlohmann/json",
+ "review_comments": [
+  {
+   "body": "Two points about this include:\n\n1. The comment a few lines below says these helpers \"need no platform headers\". That is no longer true for MSVC x64/ARM64. Please update it.\n2. `<intrin.h>` is a large header, and every MSVC x64/ARM64 translation unit that includes `json.hpp` now pulls it in. Compile time is an open concern (#5294). Could you check whether `<intrin0.h>`, the lighter header the MSVC STL uses internally, declares both `_umul128` and `__umulh`? If not, keeping `<intrin.h>` is fine.",
+   "created_at": "2026-10-07T14:50:43Z",
+   "diff_hunk": "@@ -9,6 +9,9 @@\n #pragma once\n \n #include <cstdint> // uint64_t\n+#if !defined(__SIZEOF_INT128__) && defined(_MSC_VER) && (defined(_M_X64) || defined(_M_ARM64))\n+    #include <intrin.h> // __umulh, _umul128",
+   "line": 13,
+   "path": "include/nlohmann/detail/bit_ops.hpp",
+   "user": {
+    "login": "nlohmann",
+    "type": "User"
+   }
+  },
+  {
+   "body": "astyle formats this initializer differently (the inner `{` goes on its own line, with the entries indented below it), which is why the `check` job fails. `make amalgamate` fixes it.",
+   "created_at": "2026-10-07T14:50:43Z",
+   "diff_hunk": "@@ -891,8 +892,38 @@ TEST_CASE(\"Eisel-Lemire float conversion\")\n \n     SECTION(\"128-bit products and leading zeros\")\n     {\n+        const auto check_product = [](std::uint64_t a, std::uint64_t b)\n+        {\n+            const auto product = nlohmann::detail::full_multiplication(a, b);\n+            CHECK(big_from(product.high, product.low) == big_mul(big_from(0, a), big_from(0, b)));\n+        };\n+\n+        const std::uint64_t max = (std::numeric_limits<std::uint64_t>::max)();\n+        const std::array<std::pair<std::uint64_t, std::uint64_t>, 10> edge_cases =",
+   "line": 902,
+   "path": "tests/src/unit-class_lexer.cpp",
+   "user": {
+    "login": "nlohmann",
+    "type": "User"
+   }
+  },
+  {
+   "body": "Nit: these three calls could go into `edge_cases` (which would then have 13 entries) instead of being listed separately after the loop.",
+   "created_at": "2026-10-07T14:50:43Z",
+   "diff_hunk": "@@ -891,8 +892,38 @@ TEST_CASE(\"Eisel-Lemire float conversion\")\n \n     SECTION(\"128-bit products and leading zeros\")\n     {\n+        const auto check_product = [](std::uint64_t a, std::uint64_t b)\n+        {\n+            const auto product = nlohmann::detail::full_multiplication(a, b);\n+            CHECK(big_from(product.high, product.low) == big_mul(big_from(0, a), big_from(0, b)));\n+        };\n+\n+        const std::uint64_t max = (std::numeric_limits<std::uint64_t>::max)();\n+        const std::array<std::pair<std::uint64_t, std::uint64_t>, 10> edge_cases =\n+        {{\n+            {0, 0},\n+            {0, 1},\n+            {1, 1},\n+            {1, max},\n+            {0xFFFFFFFFu, 0x100000000u},\n+            {0x100000000u, 0x100000000u},\n+            {0x100000001u, 0x100000001u},\n+            {max, max},\n+            {max, 2},\n+            {0xFFFFFFFF00000000u, 0x100000001u},\n+        }};\n+\n+        for (const auto& test : edge_cases)\n+        {\n+            check_product(test.first, test.second);\n+        }\n+\n+        check_product(0x100000001u, 0xFFFFFFFF00000000u);\n+        check_product(max, 1);\n+        check_product(2, max);",
+   "line": 923,
+   "path": "tests/src/unit-class_lexer.cpp",
+   "user": {
+    "login": "nlohmann",
+    "type": "User"
+   }
+  },
+  {
+   "body": "I checked this with MSVC x64 (19.51.36248). <intrin0.h> provides both _umul128 and __umulh, so I switched the include to <intrin0.h>.",
+   "created_at": "2026-10-07T15:45:43Z",
+   "diff_hunk": "@@ -9,6 +9,9 @@\n #pragma once\n \n #include <cstdint> // uint64_t\n+#if !defined(__SIZEOF_INT128__) && defined(_MSC_VER) && (defined(_M_X64) || defined(_M_ARM64))\n+    #include <intrin.h> // __umulh, _umul128",
+   "line": 13,
+   "path": "include/nlohmann/detail/bit_ops.hpp",
+   "user": {
+    "login": "commit-msuyog",
+    "type": "User"
+   }
+  },
+  {
+   "body": "Fixed with `make amalgamate`.",
+   "created_at": "2026-10-07T15:47:14Z",
+   "diff_hunk": "@@ -891,8 +892,38 @@ TEST_CASE(\"Eisel-Lemire float conversion\")\n \n     SECTION(\"128-bit products and leading zeros\")\n     {\n+        const auto check_product = [](std::uint64_t a, std::uint64_t b)\n+        {\n+            const auto product = nlohmann::detail::full_multiplication(a, b);\n+            CHECK(big_from(product.high, product.low) == big_mul(big_from(0, a), big_from(0, b)));\n+        };\n+\n+        const std::uint64_t max = (std::numeric_limits<std::uint64_t>::max)();\n+        const std::array<std::pair<std::uint64_t, std::uint64_t>, 10> edge_cases =",
+   "line": 902,
+   "path": "tests/src/unit-class_lexer.cpp",
+   "user": {
+    "login": "commit-msuyog",
+    "type": "User"
+   }
+  },
+  {
+   "body": "Done \u2014 moved them into `edge_cases`, bringing it to 13 entries.",
+   "created_at": "2026-10-07T15:48:03Z",
+   "diff_hunk": "@@ -891,8 +892,38 @@ TEST_CASE(\"Eisel-Lemire float conversion\")\n \n     SECTION(\"128-bit products and leading zeros\")\n     {\n+        const auto check_product = [](std::uint64_t a, std::uint64_t b)\n+        {\n+            const auto product = nlohmann::detail::full_multiplication(a, b);\n+            CHECK(big_from(product.high, product.low) == big_mul(big_from(0, a), big_from(0, b)));\n+        };\n+\n+        const std::uint64_t max = (std::numeric_limits<std::uint64_t>::max)();\n+        const std::array<std::pair<std::uint64_t, std::uint64_t>, 10> edge_cases =\n+        {{\n+            {0, 0},\n+            {0, 1},\n+            {1, 1},\n+            {1, max},\n+            {0xFFFFFFFFu, 0x100000000u},\n+            {0x100000000u, 0x100000000u},\n+            {0x100000001u, 0x100000001u},\n+            {max, max},\n+            {max, 2},\n+            {0xFFFFFFFF00000000u, 0x100000001u},\n+        }};\n+\n+        for (const auto& test : edge_cases)\n+        {\n+            check_product(test.first, test.second);\n+        }\n+\n+        check_product(0x100000001u, 0xFFFFFFFF00000000u);\n+        check_product(max, 1);\n+        check_product(2, max);",
+   "line": 923,
+   "path": "tests/src/unit-class_lexer.cpp",
+   "user": {
+    "login": "commit-msuyog",
+    "type": "User"
+   }
+  }
+ ],
+ "state": "closed",
+ "title": "Use MSVC intrinsics for full multiplication",
+ "transport": "gh",
+ "user": {
+  "login": "commit-msuyog",
+  "type": "User"
+ }
+}

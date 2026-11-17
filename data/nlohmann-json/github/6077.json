@@ -1,0 +1,28 @@
+{
+ "base_ref": "develop",
+ "base_sha": "017a3ce0011545104c319ae41be318ec61750553",
+ "body": "`patch()` and `patch_inplace()` take quadratic time for consecutive operations with long paths that share a prefix on current `develop` (3.13.0 work in progress; 3.12.0 is linear). A two-operation patch on a 1.8 MB document takes 0.6 to 1.0 s; 3.12.0 needs 11 to 37 ms. The time quadruples with each doubling of the path length. `patch.md` and `patch_inplace.md` promise \"Linear in the size of the JSON value and the length of the JSON patch\". The attacker must control the patch and the target must be deeply nested, so this is weaker than the `unflatten()` problem, which is fixed in a separate PR.\n\n## Cause\n\n`patch_inplace()` keeps the values along the previously resolved pointer, so that the next operation resumes from the prefix the two paths have in common. To find the resume point, each cached step was tested from the deepest upwards with a `memcmp` over its whole prefix. If two paths share a prefix and the previous path continues for D more tokens, the search compared D prefixes of that length.\n\n## Change\n\nWith more than 16 cached steps, the length of the common prefix of the two paths is computed once, and the deepest cached step that ends within it, at a token boundary of the new path, is taken. Steps that are skipped are dropped from the cache, so the search is amortized constant per token. With 16 or fewer steps (the usual case) they are compared as before: an earlier version that used the new search for all path lengths cost 1 to 3 % on short-path patches. Which values stay valid after an operation is unchanged. Only private helpers of `detail::json_pointer` changed.\n\n## Measurements (Apple clang -O2, arm64)\n\n`patch_inplace()` of two `test` operations whose paths share n tokens and continue for n more:\n\n| n | 25k | 50k | 100k | 200k |\n|---|---|---|---|---|\n| before | 42 ms | 182 ms | 1194 ms | 5433 ms |\n| after | 0 ms | 2 ms | 4 ms | 8 ms |\n| 3.12.0 | 3 ms | 5 ms | 10 ms | 19 ms |\n\nPatches of ordinary documents (`diff()` then `patch()`, many short operations, canada, citm_catalog, twitter, mesh, update-center): within 0.5 % of before in instructions retired (worst single row +0.8 % at noise level). Interleaved branches, 100k operations of 100 tokens and alternating deep paths are all linear.\n\n## Tests\n\n`unit-json_patch.cpp`: hand-written cases (a prefix that differs only at a token boundary: `/a/bc` vs `/a/b`, a path that is a prefix of another, insert/remove/replace above a cached path, removal making the cached path vanish, a 40-level case that takes the new branch), a random test (300 documents with 25 operations each, biased to share prefixes) that checks `patch()`, `patch_inplace()` and an `ordered_json` run against applying one operation at a time, and a time-ratio check (best of 5 CPU-time runs, two `test` operations sharing n = 25,000 tokens vs. two identical ones; ratio about 1.5 now, about 90 on the previous code, bound 10). The new test fails on `develop`. Flakiness runs (50\u00d7 8 and 64\u00d7 16 in parallel, -O0 and -O1) gave no failure. Differential runs against `develop` (36,000 cases including the 16/17-step boundary, `json`, `ordered_json`, `JSON_DIAGNOSTICS=1`) gave identical results and errors. The suite passes under ASan and UBSan; clang-tidy 22, clang `-Weverything` and g++ 16 report nothing new.\n\n## Breaking changes\n\nNo breaking changes. `patch()` and `patch_inplace()` behave identically; only private helpers changed.\n",
+ "comments": [],
+ "created_at": "2026-11-11T15:39:25Z",
+ "fetched_at": "2026-11-17T20:07:32Z",
+ "head_sha": "06b11f80fdeb00fb0ed2186df9e51c152bf52e9d",
+ "labels": [
+  "L",
+  "tests",
+  "\ud83d\ude80 ready to merge"
+ ],
+ "linked_issues": [],
+ "merge_commit_sha": "0d38e99d834ec2eaa0827a0c2f9d13a2f0ceb3b4",
+ "merged_at": "2026-11-11T21:31:24Z",
+ "number": 6077,
+ "referenced_numbers": [],
+ "repo": "nlohmann/json",
+ "review_comments": [],
+ "state": "closed",
+ "title": "Resume patch operations from the common prefix in constant time per step",
+ "transport": "gh",
+ "user": {
+  "login": "nlohmann",
+  "type": "User"
+ }
+}

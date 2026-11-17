@@ -1,0 +1,30 @@
+{
+ "base_ref": "develop",
+ "base_sha": "e32051125faf95dc64d49a129959b6742b9ffee9",
+ "body": "## Summary\n\n`output_vector_sink` (the sink behind `to_cbor(j)`, `to_msgpack(j)`, `to_ubjson(j)`, `to_bjdata(j)`, `to_bon8(j)` and `to_bson(j)` returning a `std::vector`) grew the vector by resizing it to its whole new capacity. `resize()` zeroes the characters it adds, so each doubling zeroed megabytes of a fresh allocation at once. That faults in all the pages and pushes them out of the cache before the writer gets there, so the writer's stores miss again.\n\nThe sink now reserves the same capacity as before, but resizes the vector only to 64 KiB (`vector_sink_window`) ahead of the write position, which is still in the cache when the writer's stores come. The vector's capacity and growth stay as they were. The destructor still trims the vector to the bytes written, and `binary_reserve_hint` is unchanged: it is still a lower bound.\n\n## Why\n\nThe 3.13.0 writers gained much less on x86 than on Apple M1. For example, `to_cbor` of a number array got 2.4\u00d7 faster on a Skylake laptop and 4.8\u00d7 faster on an M1 Max. A/B runs (3.12.0 and develop in one binary, alternating samples, 4 code layouts) found the reason:\n\n- **Not the compiler.** GCC 16 and Clang 23 on a Haswell VPS behave like Apple clang 13 on the Skylake laptop.\n- **Not the encoders.** With output reused between repetitions, the Skylake laptop takes 1.8\u20132.2\u00d7 as long as the M1, the same as across the whole suite.\n- **Fresh output memory.** The rest is page faults, zero-filling and reallocation copies of a 9\u201380 MB output. That is 30\u201376 % of the 3.13.0 time on x86 and 13\u201340 % on the M1. The cost is the same as in 3.12.0; the encoding around it got faster.\n\nThis PR removes the part of that cost the sink adds itself: zeroing the whole doubled capacity ahead of the writer.\n\n## Measurements\n\ndevelop vs this branch, 33 rows (to_cbor/msgpack/ubjson/bjdata/bon8/bson of number arrays and the nativejson documents), geometric mean over 4 layouts, 15 pairs each:\n\n| | Apple M1 Max | Skylake laptop, Apple clang 13 | Haswell VPS, GCC 16 | Haswell VPS, Clang 23 |\n|---|---|---|---|---|\n| cbor/msgpack, 1M ints | \u22121.4 \u2026 \u22121.6 % | \u221210 \u2026 \u221211 % | \u221213 \u2026 \u221218 % | \u221211 \u2026 \u221215 % |\n| cbor/msgpack, 1M floats | \u22122.5 % | \u221213 \u2026 \u221215 % | \u221218 % | \u221221 \u2026 \u221222 % |\n| ubjson/bjdata/bon8, ints and floats | \u22121 \u2026 \u22122.5 % | \u22129 \u2026 \u221217 % | \u221210 \u2026 \u221222 % | \u221214 \u2026 \u221226 % |\n| small_signed_ints | \u22121 % | \u22124.5 % | \u22125 % | \u22124.5 % |\n| twitter, citm, canada (all formats) | within 0.4 % | within 0.4 % (rerun, 60 pairs) | within 0.4 % | within 0.4 % (rerun, 60 pairs) |\n\nThe rows that first read 1\u20132 % slower on the noisy x86 machines were within 0.4 % in reruns, and their callgrind instruction counts go down (cbor twitter \u22122.4 %, canada \u22120.5 %). On the M1 the gain is below 3 %; no row there is slower.\n\n## Tests\n\n`unit-binary_writer_sinks.cpp` gets a test value whose output spans several 64 KiB windows in every format, so the windowed growth is compared against the adapter sink byte for byte. The full suite passes with ASan/UBSan.\n\n## Breaking changes\n\nNo breaking changes. The public API, the output bytes and the capacity of the returned vector are unchanged. `vector_sink_window` is a new constant in `nlohmann::detail`.\n\n\ud83e\udd16 Generated with [Claude Code](https://claude.com/claude-code)\n",
+ "comments": [],
+ "created_at": "2026-11-03T15:31:38Z",
+ "fetched_at": "2026-11-17T20:07:45Z",
+ "head_sha": "74a96a0bbb69effd892c7d8dcbc331c124d8a56f",
+ "labels": [
+  "aspect: binary formats",
+  "M",
+  "tests",
+  "\ud83d\ude80 ready to merge",
+  "performance"
+ ],
+ "linked_issues": [],
+ "merge_commit_sha": "42825fba0744d0169c59a18c4bca6f8e3155be20",
+ "merged_at": "2026-11-04T16:13:25Z",
+ "number": 6020,
+ "referenced_numbers": [],
+ "repo": "nlohmann/json",
+ "review_comments": [],
+ "state": "closed",
+ "title": "Binary writers: zero only a window ahead of the vector sink's position",
+ "transport": "gh",
+ "user": {
+  "login": "nlohmann",
+  "type": "User"
+ }
+}

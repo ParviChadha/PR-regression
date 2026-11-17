@@ -1,0 +1,110 @@
+{
+ "base_ref": "develop",
+ "base_sha": "21a69230bdaabd05c9b8b1427302f35b11771caf",
+ "body": "Fixes #5676.\n\n`sax_parse` rejects CBOR tags because its public signatures did not pass a tag handler to the binary reader. This also rejects binary values with a subtype written by `to_cbor`.\n\nConsolidate `sax_parse` by adding a defaulted `const cbor_tag_handler_t tag_handler = cbor_tag_handler_t::error` parameter directly to the existing `sax_parse` signatures (compatible inputs, iterator pairs, and the deprecated span adapter). The parameter passes the handler to the binary reader, allowing callers to choose `ignore` or `store`. Regression tests cover all three input forms, each handler mode, and the JSON path.\n\nValidation (Docker, GCC 12, C++11):\n\n- `unit-regression3` with multiple headers: 12 cases, 107 assertions passed.\n- `unit-regression3` with the single header: 12 cases, 107 assertions passed.\n- `unit-cbor --test-case=\"Tagged values\"`: 1 case, 209 assertions passed.\n- Regenerated the single header with the repository amalgamation script and formatted with AStyle 3.4.13.\n\n- [x] Changes are described with the cause and fix.\n- [x] The existing issue is referenced.\n- [ ] OSS-Fuzz issue: not applicable.\n- [ ] Code coverage remains at 100%: not measured locally; the new branches have regression coverage.\n- [x] Documentation is updated.\n- [x] Ran `make amalgamate`: ran its amalgamation script and pinned formatter directly.\n",
+ "comments": [
+  {
+   "body": "Thanks for the PR! I merged `develop` into your branch (857d3baaa) to resolve conflicts with #5737 and #5745. Two things changed besides the conflict markers, so please pull before pushing again:\n\n- On develop, `binary_reader` now gets the input format when it is constructed, so `binary_reader::sax_parse` no longer takes a `format` argument. I updated your three new call sites in `include/nlohmann/json.hpp` to `.sax_parse(sax, strict, tag_handler)`.\n- #5737 wrapped the deprecated span-adapter `sax_parse` overload in `#pragma clang diagnostic ignored \"-Wdocumentation-deprecated-sync\"`. Your two new deprecated overloads are now inside that block as well.\n\n`single_include` is regenerated. The CBOR \"Tagged values\" tests (209 assertions), unit-regression3 and unit-class_parser pass locally.\n\n(This comment was written by Claude Code.)\n",
+   "created_at": "2026-10-01T07:01:16Z",
+   "user": {
+    "login": "nlohmann",
+    "type": "User"
+   }
+  },
+  {
+   "body": "Updated to consolidate the \\sax_parse\\ functions by adding the default \\\tag_handler = cbor_tag_handler_t::error\\ parameter directly to the existing signatures instead of having separate overloads. Documentation and \\single_include\\ have been regenerated, and all test suites pass locally in Docker.",
+   "created_at": "2026-10-01T09:19:23Z",
+   "user": {
+    "login": "Tyagiquamar",
+    "type": "User"
+   }
+  },
+  {
+   "body": "Merged \\develop\\ into the branch, added the version history entry for \\\tag_handler\\ in \\docs/mkdocs/docs/api/basic_json/sax_parse.md\\, verified amalgamation and formatting, and updated the PR description.",
+   "created_at": "2026-10-04T17:15:41Z",
+   "user": {
+    "login": "Tyagiquamar",
+    "type": "User"
+   }
+  },
+  {
+   "body": "Thanks!",
+   "created_at": "2026-10-07T05:38:36Z",
+   "user": {
+    "login": "nlohmann",
+    "type": "User"
+   }
+  }
+ ],
+ "created_at": "2026-09-30T19:05:38Z",
+ "fetched_at": "2026-11-17T20:10:28Z",
+ "head_sha": "51696a32f586300d72ea8a7761dad082800302bc",
+ "labels": [
+  "documentation",
+  "aspect: binary formats",
+  "M",
+  "tests",
+  "\ud83d\ude80 ready to merge"
+ ],
+ "linked_issues": [
+  {
+   "body": "### Description\n\n[`sax_parse`](https://json.nlohmann.me/api/basic_json/sax_parse/) supports CBOR input, but it has no parameter for a [`cbor_tag_handler_t`](https://json.nlohmann.me/api/basic_json/cbor_tag_handler_t/). The CBOR reader therefore always runs with the default `cbor_tag_handler_t::error`, so any CBOR document that contains a tag fails with parse_error.112. That includes the output of `to_cbor` for every binary value with a subtype, because the writer stores subtypes as tags 0xD8..0xDB ([cbor.md](https://github.com/nlohmann/json/blob/633de8e44bbbc29383d72f8c920343ea5d1eaa21/docs/mkdocs/docs/features/binary_formats/cbor.md?plain=1#L60)).\n\n`from_cbor` has the same default, but it takes a `tag_handler` argument, and the documentation tells users to pass `ignore` or `store` ([cbor.md](https://github.com/nlohmann/json/blob/633de8e44bbbc29383d72f8c920343ea5d1eaa21/docs/mkdocs/docs/features/binary_formats/cbor.md?plain=1#L204)). With `sax_parse` there is no such way, so tagged CBOR cannot be processed with the SAX interface at all. Tags are common in real-world CBOR, for example for date/time, bignums and URIs.\n\nThe underlying `detail::binary_reader::sax_parse` already takes the handler ([binary_reader.hpp](https://github.com/nlohmann/json/blob/633de8e44bbbc29383d72f8c920343ea5d1eaa21/include/nlohmann/detail/input/binary_reader.hpp#L134-L137)). The three public `basic_json::sax_parse` overloads just don't forward one ([json.hpp](https://github.com/nlohmann/json/blob/633de8e44bbbc29383d72f8c920343ea5d1eaa21/include/nlohmann/json.hpp#L4984-L5036)).\n\n**Possible fix (untested):**\n\n- Add a trailing `const cbor_tag_handler_t tag_handler = cbor_tag_handler_t::error` parameter to the three `sax_parse` overloads and pass it to `binary_reader::sax_parse`.\n- Alternatively, add CBOR-specific overloads, since the parameter only matters for CBOR, much like `ignore_comments` and `ignore_trailing_commas` only matter for JSON.\n\nNeither changes behavior for existing callers.\n\nRelated: #1968 (tags were not skipped by `from_cbor`, fixed by adding `cbor_tag_handler_t` in #2273), #5316 (`store` semantics).\n\n### Reproduction steps\n\n1. Save the program below as `sax_cbor.cpp`.\n2. `clang++ -std=c++11 -I include sax_cbor.cpp -o sax_cbor && ./sax_cbor`\n\n### Expected vs. actual results\n\n- **Expected:** a way to SAX-parse the CBOR document that `to_cbor` produced, as `from_cbor(..., cbor_tag_handler_t::store)` can.\n- **Actual:** `sax_parse` reports parse_error.112 at the tag byte 0xD8, and there is no argument to change that.\n\n### Minimal code example\n\n```cpp\n#include <nlohmann/json.hpp>\n#include <cstdio>\n#include <iostream>\n\nusing json = nlohmann::json;\n\n// a SAX handler that only counts events\nstruct counter : nlohmann::json_sax<json>\n{\n    std::size_t events = 0;\n    bool null() override { return ++events != 0; }\n    bool boolean(bool) override { return ++events != 0; }\n    bool number_integer(number_integer_t) override { return ++events != 0; }\n    bool number_unsigned(number_unsigned_t) override { return ++events != 0; }\n    bool number_float(number_float_t, const string_t&) override { return ++events != 0; }\n    bool string(string_t&) override { return ++events != 0; }\n    bool binary(binary_t&) override { return ++events != 0; }\n    bool start_object(std::size_t) override { return ++events != 0; }\n    bool key(string_t&) override { return ++events != 0; }\n    bool end_object() override { return ++events != 0; }\n    bool start_array(std::size_t) override { return ++events != 0; }\n    bool end_array() override { return ++events != 0; }\n    bool parse_error(std::size_t, const std::string&, const nlohmann::detail::exception& e) override\n    {\n        std::cout << \"parse_error: \" << e.what() << '\\n';\n        return false;\n    }\n};\n\nint main()\n{\n    // to_cbor writes the subtype of a binary value as a CBOR tag (here: D8 2A)\n    const json j = {{\"data\", json::binary({1, 2, 3}, 42)}};\n    const std::vector<std::uint8_t> cbor = json::to_cbor(j);\n    for (auto b : cbor)\n    {\n        std::printf(\"%02X \", b);\n    }\n    std::printf(\"\\n\");\n\n    // from_cbor reads it when given a tag handler\n    std::cout << \"from_cbor with cbor_tag_handler_t::store: \" << json::from_cbor(cbor, true, true, json::cbor_tag_handler_t::store) << '\\n';\n\n    // sax_parse has no tag handler parameter and always rejects tags\n    counter handler;\n    const bool ok = json::sax_parse(cbor, &handler, json::input_format_t::cbor);\n    std::cout << \"sax_parse returned \" << ok << \" after \" << handler.events << \" events\\n\";\n}\n```\n\n### Error messages\n\n```\nA1 64 64 61 74 61 D8 2A 43 01 02 03 \nfrom_cbor with cbor_tag_handler_t::store: {\"data\":{\"bytes\":[1,2,3],\"subtype\":42}}\nparse_error: [json.exception.parse_error.112] parse error at byte 7: syntax error while parsing CBOR value: invalid byte: 0xD8\nsax_parse returned 0 after 2 events\n```\n\n### Compiler and operating system\n\nApple clang 21.0.0 (clang-2100.3.34.2), macOS 27.0 (arm64)\n\n### Library version\n\n`develop` @ 633de8e44bbbc29383d72f8c920343ea5d1eaa21\n\n### Validation\n\n- [x] The bug also occurs if the latest version from the `develop` branch is used.\n- [ ] I can successfully [compile and run the unit tests](https://github.com/nlohmann/json#execute-unit-tests).\n\n---\n*This issue was written by [Claude Code](https://claude.com/claude-code) on behalf of @nlohmann.*\n",
+   "labels": [
+    "kind: enhancement/improvement",
+    "aspect: binary formats"
+   ],
+   "number": 5676,
+   "state": "closed",
+   "title": "sax_parse cannot read CBOR that contains tags, including binary values with a subtype written by to_cbor"
+  }
+ ],
+ "merge_commit_sha": "675e519966404f2e2ea0160c5ea28d4a3607fc2a",
+ "merged_at": "2026-10-07T05:38:24Z",
+ "number": 5740,
+ "referenced_numbers": [
+  5676
+ ],
+ "repo": "nlohmann/json",
+ "review_comments": [
+  {
+   "body": "Can the handling just be added as new parameters to the existing functions?  Since this is a header-only library, we only need to preserve source compatibility, not binary.",
+   "created_at": "2026-10-01T04:09:50Z",
+   "diff_hunk": "@@ -18,16 +18,32 @@ static bool sax_parse(IteratorType first, SentinelType last,\n                       const bool strict = true,\n                       const bool ignore_comments = false,\n                       const bool ignore_trailing_commas = false);\n+\n+// (3)",
+   "line": 22,
+   "path": "docs/mkdocs/docs/api/basic_json/sax_parse.md",
+   "user": {
+    "login": "gregmarr",
+    "type": "User"
+   }
+  },
+  {
+   "body": "I agree - this would also halve the code in this PR.",
+   "created_at": "2026-10-01T05:45:53Z",
+   "diff_hunk": "@@ -18,16 +18,32 @@ static bool sax_parse(IteratorType first, SentinelType last,\n                       const bool strict = true,\n                       const bool ignore_comments = false,\n                       const bool ignore_trailing_commas = false);\n+\n+// (3)",
+   "line": 22,
+   "path": "docs/mkdocs/docs/api/basic_json/sax_parse.md",
+   "user": {
+    "login": "nlohmann",
+    "type": "User"
+   }
+  },
+  {
+   "body": "Addressed in 5a3606080: tag_handler is now a defaulted final parameter on the three existing sax_parse overloads. The extra overloads were removed, and single_include and the API docs match.",
+   "created_at": "2026-10-03T05:52:29Z",
+   "diff_hunk": "@@ -18,16 +18,32 @@ static bool sax_parse(IteratorType first, SentinelType last,\n                       const bool strict = true,\n                       const bool ignore_comments = false,\n                       const bool ignore_trailing_commas = false);\n+\n+// (3)",
+   "line": 22,
+   "path": "docs/mkdocs/docs/api/basic_json/sax_parse.md",
+   "user": {
+    "login": "Tyagiquamar",
+    "type": "User"
+   }
+  }
+ ],
+ "state": "closed",
+ "title": "Allow SAX parsing of tagged CBOR",
+ "transport": "gh",
+ "user": {
+  "login": "Tyagiquamar",
+  "type": "User"
+ }
+}

@@ -1,0 +1,95 @@
+{
+ "base_ref": "develop",
+ "base_sha": "8a142bc4362afa543df5cd52f35a1b597b973a25",
+ "body": "Adds member alias templates to `basic_json` that create a `basic_json` type with one of its template parameters replaced, so you don't have to spell out all eleven:\n\n```cpp\nusing my_json = nlohmann::json::with_string_t<my_string>;\n// instead of\nusing my_json = nlohmann::basic_json<std::map, std::vector, my_string, bool, std::int64_t, std::uint64_t,\n                                     double, std::allocator, nlohmann::adl_serializer, std::vector<std::uint8_t>>;\n```\n\nAliases: `with_object_t`, `with_array_t`, `with_string_t`, `with_boolean_t`, `with_integers_t<I, U>`, `with_float_t`, `with_allocator_t`, `with_json_serializer_t`, `with_binary_t`, `with_base_class_t`. Together they cover all template parameters. They are members, so they also work from `ordered_json` or any other specialization and keep its other parameters.\n\nThis takes over #3898 by @barcode, which went stale. Their commit is included with them as author. On top of it, following the review in #3898:\n\n- `with_changed_*_t` is renamed to the shorter `with_*_t`.\n- The separate signed and unsigned integer aliases are merged into `with_integers_t<I, U>` (@gregmarr's suggestion), because the two are usually changed together.\n- New documentation page `api/basic_json/with_t.md` with an example, linked from the `basic_json` index and `mkdocs.yml`.\n- `std::is_same` tests for every alias in `unit-udt.cpp`, including one that checks `ordered_json::with_string_t` keeps `ordered_map`.\n- Tests and examples that spelled out the full parameter list now use the aliases.\n\nSupersedes #3898. Thanks @barcode!\n\n## Public API\n\nOnly additions: ten new public member alias templates on `basic_json`. Nothing existing changes. No breaking changes.\n\n\ud83e\udd16 Generated with [Claude Code](https://claude.com/claude-code)\n",
+ "comments": [
+  {
+   "body": "Because this is a nested template type, these can chain.  This is not obvious and should probably be called out with an example.  Also, that it can start with `ordered_json` as well.\r\n\r\n```\r\n  using my_json = nlohmann::json::with_integers_t<int, unsigned int>::with_float_t<float>;\r\n```\r\n\r\nI did verify that  `nlohmann::json::with_object_t<nlohmann::ordered_map>` and `nlohmann::ordered_json` are the same type, as least as far as `typeid().name()` is concerned.  That's what I would expect.\r\n",
+   "created_at": "2026-10-05T00:38:52Z",
+   "user": {
+    "login": "gregmarr",
+    "type": "User"
+   }
+  },
+  {
+   "body": "Good point, thanks for checking. 8ab8fa934 adds a paragraph to `with_t.md` explaining that the aliases are members of every `basic_json` specialization (including `ordered_json`), so they can be chained:\n\n```cpp\nusing my_json = nlohmann::json::with_integers_t<int, unsigned int>::with_float_t<float>;\n```\n\nIt also notes that the order of chained aliases does not matter and that `json::with_object_t<nlohmann::ordered_map>` is `ordered_json`. These are now checked with `std::is_same` in `unit-udt.cpp` (both chaining orders, and `json` \u2194 `ordered_json` in both directions).\n\n*(Written by Claude Code.)*\n",
+   "created_at": "2026-10-05T07:04:45Z",
+   "user": {
+    "login": "nlohmann",
+    "type": "User"
+   }
+  },
+  {
+   "body": "@nlohmann Would you want to update the tests and examples to use this new functionality?  If so, would you prefer `nlohmann::basic_json::with_...` or `nlohmann::json::with_...` and would you want to change `...basic_json<my_object_type` to `...json::with_object_t<my_object_type>`.\r\n\r\nIn looking at this, I found a few places where only `integer_t` was changed, and a few places that all three numbers were changed.  There might be a case to have `with_integer_t` and `with_numbers_t` as well.",
+   "created_at": "2026-10-08T00:33:11Z",
+   "user": {
+    "login": "gregmarr",
+    "type": "User"
+   }
+  },
+  {
+   "body": "Thanks! Yes, done in #5787. It uses `nlohmann::json::with_\u2026` (`basic_json` would need `<>`), and that includes the short `basic_json<my_object_type>` forms. I left out `with_numbers_t` / `with_integer_t` for now: the five int32/uint32/float sites read fine as `json::with_integers_t<std::int32_t, std::uint32_t>::with_float_t<float>`, and the signed-only ones as `with_integers_t<std::int32_t, std::uint64_t>`. If more call sites show up, we can still add a `with_numbers_t`.\n\n*(Written by Claude Code on behalf of @nlohmann.)*\n",
+   "created_at": "2026-10-08T06:45:06Z",
+   "user": {
+    "login": "nlohmann",
+    "type": "User"
+   }
+  },
+  {
+   "body": ">I left out with_numbers_t / with_integer_t for now\r\n\r\nSounds good.",
+   "created_at": "2026-10-08T18:16:18Z",
+   "user": {
+    "login": "gregmarr",
+    "type": "User"
+   }
+  }
+ ],
+ "created_at": "2026-10-04T16:12:06Z",
+ "fetched_at": "2026-11-17T20:10:31Z",
+ "head_sha": "c9a6d0635f6ef05d5d5a76f22ada71f1ec29fda7",
+ "labels": [
+  "documentation",
+  "L",
+  "tests",
+  "\ud83d\ude80 ready to merge"
+ ],
+ "linked_issues": [],
+ "merge_commit_sha": "162e13b86f1b9641c5a12b0bad8aea066df4c6a7",
+ "merged_at": "2026-10-06T20:33:30Z",
+ "number": 5758,
+ "referenced_numbers": [
+  3898
+ ],
+ "repo": "nlohmann/json",
+ "review_comments": [
+  {
+   "body": "Seems weird that this isn't indented.  Intentional?",
+   "created_at": "2026-10-05T00:28:10Z",
+   "diff_hunk": "@@ -232,6 +232,7 @@ nav:\n           - 'update': api/basic_json/update.md\n           - 'value': api/basic_json/value.md\n           - 'value_t': api/basic_json/value_t.md\n+- 'with_t': api/basic_json/with_t.md",
+   "line": 235,
+   "path": "docs/mkdocs/mkdocs.yml",
+   "user": {
+    "login": "gregmarr",
+    "type": "User"
+   }
+  },
+  {
+   "body": "Not intentional, thanks \u2014 the entry ended up at the top level of `nav`. Fixed in 8ab8fa934.\n\n*(Written by Claude Code.)*\n",
+   "created_at": "2026-10-05T07:04:43Z",
+   "diff_hunk": "@@ -232,6 +232,7 @@ nav:\n           - 'update': api/basic_json/update.md\n           - 'value': api/basic_json/value.md\n           - 'value_t': api/basic_json/value_t.md\n+- 'with_t': api/basic_json/with_t.md",
+   "line": 235,
+   "path": "docs/mkdocs/mkdocs.yml",
+   "user": {
+    "login": "nlohmann",
+    "type": "User"
+   }
+  }
+ ],
+ "state": "closed",
+ "title": "Add with_*_t alias templates to create basic_json types with changed template parameters",
+ "transport": "gh",
+ "user": {
+  "login": "nlohmann",
+  "type": "User"
+ }
+}

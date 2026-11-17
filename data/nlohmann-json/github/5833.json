@@ -1,0 +1,50 @@
+{
+ "base_ref": "perf/json-pointer",
+ "base_sha": "65efb8aa3ca2dbcacf53f67be0dea09383f5511b",
+ "body": "## Summary\n- `from_json` for array-like containers (`std::vector`, `std::deque`, `std::set`, ...): loops over the stored `array_t` and calls `push_back` (SFINAE/`priority_tag`), falling back to `insert(end(), ...)` for containers without `push_back`. This also speeds up `std::array<T,N>` (which uses `at(i)`).\n- New `GetArray<...>` benchmarks in `tests/benchmarks`.\n- The `at(size_type)` / `at(key)` cold-throw change was removed from this PR; it moved to #5838 together with the single \"array index N is out of range\" helper.\n\n## Numbers (Apple clang 21, -O2, ns per element, best of 7)\n| | before | after |\n|---|---|---|\n| `get<std::vector<int>>` | 4.6 | 1.0 |\n| `get<std::deque<int>>` | 11.96 | 1.32 |\n| `get<std::array<int,8>>` | 1.66 | 0.95 |\n| `get<std::set<int>>` | 114.7 | 74.7 (noisy, allocation-bound) |\n\n## Breaking changes\nNo breaking changes. No public API change: only the internal loop of `from_json` for array-like containers changes; results and exception types are identical.\n\nUnit tests `conversions1/2` and `element_access1/2` pass; `make amalgamate` run.\n",
+ "comments": [
+  {
+   "body": "Update since the last review (written by Claude Code on behalf of @nlohmann): narrowed the PR to the array-to-container `from_json` speed-up. The `at()` changes (`throw_array_index_out_of_range`, `throw_key_not_found`, `ArrayAt` benchmark) were reverted here and move to #5838. Also removed the incorrect claim in the description that the `get_ref` throws were already out of line. Conversions and element-access tests pass.",
+   "created_at": "2026-10-15T06:08:24Z",
+   "user": {
+    "login": "nlohmann",
+    "type": "User"
+   }
+  }
+ ],
+ "created_at": "2026-10-14T20:18:47Z",
+ "fetched_at": "2026-11-17T20:09:45Z",
+ "head_sha": "01452b353108293c8ad7080799508ec8373d013e",
+ "labels": [
+  "\ud83d\ude80 ready to merge",
+  "performance"
+ ],
+ "linked_issues": [],
+ "merge_commit_sha": "6ba53e63ddbf8f82d91a66ba6a4144fbc738e46f",
+ "merged_at": "2026-10-15T18:01:27Z",
+ "number": 5833,
+ "referenced_numbers": [
+  5838
+ ],
+ "repo": "nlohmann/json",
+ "review_comments": [
+  {
+   "body": "Use `emplace_hint`, or does that function fall outside what `object_t` should provide?",
+   "created_at": "2026-10-15T15:16:59Z",
+   "diff_hunk": "@@ -383,9 +397,13 @@ inline void from_json(const BasicJsonType& j, ConstructibleObjectType& obj)\n     ConstructibleObjectType ret;\n     const auto* inner_object = j.template get_ptr<const typename BasicJsonType::object_t*>();\n     from_json_object_reserve(ret, inner_object->size(), priority_tag<1> {});\n+    using value_type = typename ConstructibleObjectType::value_type;\n     for (const auto& p : *inner_object)\n     {\n-        ret.emplace(p.first, p.second.template get<typename ConstructibleObjectType::mapped_type>());\n+        // the keys of the source are sorted for the usual object types, so\n+        // hinting the end makes every insertion constant-time (for containers\n+        // that order their keys the same way)\n+        ret.insert(ret.end(), value_type(p.first, p.second.template get<typename ConstructibleObjectType::mapped_type>()));",
+   "line": 406,
+   "path": "include/nlohmann/detail/conversions/from_json.hpp",
+   "user": {
+    "login": "gregmarr",
+    "type": "User"
+   }
+  }
+ ],
+ "state": "closed",
+ "title": "Speed up array-to-container from_json",
+ "transport": "gh",
+ "user": {
+  "login": "nlohmann",
+  "type": "User"
+ }
+}

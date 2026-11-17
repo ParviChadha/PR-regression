@@ -1,0 +1,31 @@
+{
+ "base_ref": "develop",
+ "base_sha": "2a56afc714d485870ae41cb1ac4fb0556f86726b",
+ "body": "1. **Size the buffer of decoded strings on its first growth from the input.** A quarter of the input plus 16 bytes, capped at 4 KiB, instead of 272 bytes: a document with escapes no longer grows it twice, with a zero-filled copy each time. The cap keeps a large document with one escape from zero-filling a large buffer.\n2. **Allocate the node index of documents with an estimate of up to 1024 nodes (was 256) together with the header.** One allocation less. The limit is a named constant, `document_data::max_inline_nodes`.\n\n## Numbers\n\n`compare.py --download --rounds 30`, Apple M1 Max, clang 21, develop vs this PR, each unaligned twice and once aligned (reference engines moved by a median of 1.000 in the aligned run). Ratio = this PR / develop, aligned and the two unaligned runs:\n\n| row (2.5 KB minified tweet with escapes) | ratio |\n|---|---|\n| parse | 0.959, 0.964, 0.950 |\n| traverse | 0.967, 0.981, 0.963 |\n| select | 0.969, 0.975, 0.955 |\n| parse+dump | 0.972, 0.974, 0.960 |\n| `rpc` parse / dump (not affected) | 1.006, 1.007, 0.993 / 1.024, 1.005, 1.011 |\n\nFresh parse of the tweet: 993 to 958 ns (best of three). It stays behind yyjson (about 1.11x before, about 1.07x after). No `json_view` row is consistently slower in all three runs; a few large-document rows moved by 2-4 % in one run and not in the aligned run, on code this PR does not touch.\n\nFresh parse and `memory_usage()` of dense numeric arrays (more nodes per byte than the estimate expects):\n\n| document | parse | memory_usage() |\n|---|---|---|\n| 1 KB, 500 numbers | 2047 to 1863 ns | 11,310 to 15,566 B |\n| 4 KB, 2000 numbers | 7907 to 7225 ns | 41,310 to 57,566 B |\n\n### Trade-off\n\nWhen the estimate is too low (dense numbers), the node block that was allocated with the header stays unused: at most 16 KiB instead of 4 KiB. Documents whose estimate fits keep the same memory. `shrink_to_fit()` cannot release a node index that lives in the header allocation; it was already documented as non-binding, and the page now says which part cannot be released.\n\n## Validation\n\n- New \"block sizes\" test section: escaping and dense documents of 1 to 5000 elements around the 256 and 1024 node points (also pretty-printed, and after `shrink_to_fit()`), and a 100k-node document with one escape.\n- All six `json_view` unit test files with ASan/UBSan, in C++11 and C++17.\n- `single_include` is a fresh `make amalgamate` (`json.hpp` is unchanged).\n\n## Public API\n\nNo breaking changes. `memory_usage()` can report more memory for dense small documents, as described above; no signature or documented guarantee changes.\n\nWritten by Claude Code on behalf of @nlohmann.\n\n\ud83e\udd16 Generated with [Claude Code](https://claude.com/claude-code)\n",
+ "comments": [],
+ "created_at": "2026-10-25T10:42:58Z",
+ "fetched_at": "2026-11-17T20:08:42Z",
+ "head_sha": "4006a406a7a30cde51482de0e73a5d797a83c994",
+ "labels": [
+  "documentation",
+  "M",
+  "tests",
+  "\ud83d\ude80 ready to merge",
+  "performance",
+  "aspect: json_view"
+ ],
+ "linked_issues": [],
+ "merge_commit_sha": "21ec9bd801584fce68882c3e9e4a973bb0710e9e",
+ "merged_at": "2026-10-27T06:22:50Z",
+ "number": 5915,
+ "referenced_numbers": [],
+ "repo": "nlohmann/json",
+ "review_comments": [],
+ "state": "closed",
+ "title": "json_view: fewer allocations when parsing small documents",
+ "transport": "gh",
+ "user": {
+  "login": "nlohmann",
+  "type": "User"
+ }
+}

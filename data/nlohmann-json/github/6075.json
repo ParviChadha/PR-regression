@@ -1,0 +1,97 @@
+{
+ "base_ref": "develop",
+ "base_sha": "017a3ce0011545104c319ae41be318ec61750553",
+ "body": "In C++20, `json(std::u8string)` was stored as a JSON string only when `std::filesystem::path` support was available (the `to_json` overload sat inside the `JSON_HAS_FILESYSTEM` guard), and there was no matching `from_json`, so `get<std::u8string>()` threw `type_error.302` (\"type must be array, but is string\"). Without `std::filesystem` the same expression still produced an array of code units, the 3.12.0 behaviour. So the same source gave different JSON types depending on the configuration, and the stored value could not be read back.\n\n## Change\n\n- Move the `to_json` overload out of the filesystem guard, so that a `std::u8string` is a JSON string in every configuration. The value is built directly from the code units, which also works for a custom `string_t` such as the tests' `alt_string`.\n- Add a `from_json` overload for `std::basic_string<char8_t>` that reads a JSON string. The array of numbers written by 3.12.0 is still accepted; other types throw `type_error.302` (\"type must be string or array\").\n- `std::u8string_view`, `char8_t` arrays and `const char8_t*` are unchanged (they still produce arrays of code units, as in 3.12.0). `std::filesystem::path` still round-trips.\n- Documented in `home/releases/unreleased.md`, `basic_json.md`, `get.md` and `template_parameters.md`.\n\n## Tests\n\n- `unit-conversions2.cpp`: the `std::u8string` case now covers ASCII and UTF-8 content, round trips (`get`, `get_to`, embedded NUL, `vector`, `map`), the old array form, wrong types, `ordered_json`, and the unchanged `u8string_view` and `char8_t` arrays. The file now also mentions `JSON_HAS_CPP_20`/`_23`, so it is built as `_cpp20` and `_cpp23` as well (the test previously never ran in C++20 under CMake).\n- A new target `test-conversions2_no_filesystem` runs it with `JSON_HAS_FILESYSTEM=0` and `JSON_HAS_EXPERIMENTAL_FILESYSTEM=0`.\n- `unit-alt-string.cpp` gets a test with a custom string type.\n- The new tests fail on `develop` (`get<std::u8string>` throws; without `std::filesystem` the value is an array) and pass with the change. Passes with clang 21 and g++ 16 in C++11/17/20/23, and with `JSON_DIAGNOSTICS=1`. The full unit suite passes under ASan and UBSan. Compile time and conversion benchmarks (`std::string`, `std::vector<int>`, `std::filesystem::path` to JSON) show no regression; the path conversion retires about 3 % fewer instructions.\n\n## Breaking changes\n\nThis is a behaviour change relative to 3.12.0 for C++20 code with `__cpp_lib_char8_t`, although it is not a source break and no signature was removed.\n\n- **Who is affected:** code that converts a `std::u8string` to JSON and then looks at the JSON form: `is_array()` checks, reading it as `std::vector<char8_t>` or `std::vector<std::uint8_t>`, or comparing the serialised output with `[...]`. Such a value now serialises as a string. The change is transitive: a `std::u8string` inside a `std::vector`, `std::pair`, `std::tuple`, `std::optional` or as a `std::map` key also becomes a string.\n- **Not affected:** reading old data (`get<std::u8string>()` still accepts the 3.12.0 array), code that only round-trips a `std::u8string`, and anyone already on current `develop` with `std::filesystem` available, where it was already a string.\n- **Mitigation:** build the array form explicitly, e.g. `json(std::vector<char8_t>(s.begin(), s.end()))`.\n",
+ "comments": [],
+ "created_at": "2026-11-11T15:32:09Z",
+ "fetched_at": "2026-11-17T20:07:26Z",
+ "head_sha": "23117333a67364018b255c98fecd3219652246f8",
+ "labels": [
+  "documentation",
+  "L",
+  "tests",
+  "CMake",
+  "\ud83d\ude80 ready to merge"
+ ],
+ "linked_issues": [],
+ "merge_commit_sha": "cdfb130fa6582e8dbfae5391201c1c747290b071",
+ "merged_at": "2026-11-12T07:40:19Z",
+ "number": 6075,
+ "referenced_numbers": [],
+ "repo": "nlohmann/json",
+ "review_comments": [
+  {
+   "body": "astyle",
+   "created_at": "2026-11-11T15:50:38Z",
+   "diff_hunk": "@@ -785,6 +785,37 @@ void from_json(const BasicJsonType& j, std::unordered_map<Key, Value, Hash, KeyE\n     from_json_pair_array_to_map(j, m);\n }\n \n+#if defined(__cpp_lib_char8_t)\n+// a std::u8string is read from a JSON string; the array of code units written by\n+// versions before 3.13.0 is still accepted\n+template < typename BasicJsonType, typename Tr, typename Allocator,",
+   "line": 791,
+   "path": "include/nlohmann/detail/conversions/from_json.hpp",
+   "user": {
+    "login": "gregmarr",
+    "type": "User"
+   }
+  },
+  {
+   "body": "Does `reserve` and `push_back` perform better than `resize` and direct access?",
+   "created_at": "2026-11-11T15:52:04Z",
+   "diff_hunk": "@@ -785,6 +785,37 @@ void from_json(const BasicJsonType& j, std::unordered_map<Key, Value, Hash, KeyE\n     from_json_pair_array_to_map(j, m);\n }\n \n+#if defined(__cpp_lib_char8_t)\n+// a std::u8string is read from a JSON string; the array of code units written by\n+// versions before 3.13.0 is still accepted\n+template < typename BasicJsonType, typename Tr, typename Allocator,\n+           enable_if_t < std::is_same<typename json_type_of_t<BasicJsonType>::string_t::value_type, char>::value, int > = 0 >\n+inline void from_json(const BasicJsonType& j, std::basic_string<char8_t, Tr, Allocator>& s)\n+{\n+    if (j.is_string())\n+    {\n+        const auto& str = string_value(j);\n+        const char* const data = str.data();\n+        const std::size_t size = str.size();\n+        std::basic_string<char8_t, Tr, Allocator> ret(s.get_allocator());\n+        ret.reserve(size);\n+        for (std::size_t i = 0; i < size; ++i)\n+        {\n+            ret.push_back(static_cast<char8_t>(static_cast<unsigned char>(data[i])));",
+   "line": 804,
+   "path": "include/nlohmann/detail/conversions/from_json.hpp",
+   "user": {
+    "login": "gregmarr",
+    "type": "User"
+   }
+  },
+  {
+   "body": "`astyle` 3.4.13 (the version pinned in `tools/astyle`) leaves this declaration unchanged, so the spacing in `template < \u2026 enable_if_t < \u2026 > = 0 >` is what it produces. Did you mean something else, e.g. a different layout for the `enable_if_t` default parameter?\n\n*(Written by Claude Code on behalf of @nlohmann.)*",
+   "created_at": "2026-11-11T17:29:29Z",
+   "diff_hunk": "@@ -785,6 +785,37 @@ void from_json(const BasicJsonType& j, std::unordered_map<Key, Value, Hash, KeyE\n     from_json_pair_array_to_map(j, m);\n }\n \n+#if defined(__cpp_lib_char8_t)\n+// a std::u8string is read from a JSON string; the array of code units written by\n+// versions before 3.13.0 is still accepted\n+template < typename BasicJsonType, typename Tr, typename Allocator,",
+   "line": 791,
+   "path": "include/nlohmann/detail/conversions/from_json.hpp",
+   "user": {
+    "login": "nlohmann",
+    "type": "User"
+   }
+  },
+  {
+   "body": "No, `resize` plus direct access is faster. I measured `std::string` \u2192 `std::u8string` with clang `-std=c++20 -O2`: 16 bytes is equal (about 44 ns), 1000 bytes takes 2189 ns with `reserve` + `push_back` against 388 ns with `resize` + `[i]`, and 1 MB takes 2.14 ms against 0.36 ms. The `push_back` loop is not vectorized. Fixed in `95424664a`. I did not measure GCC.\n\n*(Written by Claude Code on behalf of @nlohmann.)*",
+   "created_at": "2026-11-11T17:29:31Z",
+   "diff_hunk": "@@ -785,6 +785,37 @@ void from_json(const BasicJsonType& j, std::unordered_map<Key, Value, Hash, KeyE\n     from_json_pair_array_to_map(j, m);\n }\n \n+#if defined(__cpp_lib_char8_t)\n+// a std::u8string is read from a JSON string; the array of code units written by\n+// versions before 3.13.0 is still accepted\n+template < typename BasicJsonType, typename Tr, typename Allocator,\n+           enable_if_t < std::is_same<typename json_type_of_t<BasicJsonType>::string_t::value_type, char>::value, int > = 0 >\n+inline void from_json(const BasicJsonType& j, std::basic_string<char8_t, Tr, Allocator>& s)\n+{\n+    if (j.is_string())\n+    {\n+        const auto& str = string_value(j);\n+        const char* const data = str.data();\n+        const std::size_t size = str.size();\n+        std::basic_string<char8_t, Tr, Allocator> ret(s.get_allocator());\n+        ret.reserve(size);\n+        for (std::size_t i = 0; i < size; ++i)\n+        {\n+            ret.push_back(static_cast<char8_t>(static_cast<unsigned char>(data[i])));",
+   "line": 804,
+   "path": "include/nlohmann/detail/conversions/from_json.hpp",
+   "user": {
+    "login": "nlohmann",
+    "type": "User"
+   }
+  },
+  {
+   "body": "I just noticed it was spread out, couldn't tell why.  I know that there are some that need to be fixed manually, and some that can't be fixed at all.  I can't keep track of them.",
+   "created_at": "2026-11-11T17:31:16Z",
+   "diff_hunk": "@@ -785,6 +785,37 @@ void from_json(const BasicJsonType& j, std::unordered_map<Key, Value, Hash, KeyE\n     from_json_pair_array_to_map(j, m);\n }\n \n+#if defined(__cpp_lib_char8_t)\n+// a std::u8string is read from a JSON string; the array of code units written by\n+// versions before 3.13.0 is still accepted\n+template < typename BasicJsonType, typename Tr, typename Allocator,",
+   "line": 791,
+   "path": "include/nlohmann/detail/conversions/from_json.hpp",
+   "user": {
+    "login": "gregmarr",
+    "type": "User"
+   }
+  },
+  {
+   "body": "You were right to ask, and my earlier answer was misleading: astyle 3.4.13 also leaves the compact form `template<typename \u2026, enable_if_t<\u2026, int> = 0>` unchanged, so the spread form was not required by astyle, only written that way. Fixed in `9b686490f6`: the declaration now uses the compact form like the other `from_json` overloads in this file.\n\n*(Written by Claude Code on behalf of @nlohmann.)*",
+   "created_at": "2026-11-11T18:22:57Z",
+   "diff_hunk": "@@ -785,6 +785,37 @@ void from_json(const BasicJsonType& j, std::unordered_map<Key, Value, Hash, KeyE\n     from_json_pair_array_to_map(j, m);\n }\n \n+#if defined(__cpp_lib_char8_t)\n+// a std::u8string is read from a JSON string; the array of code units written by\n+// versions before 3.13.0 is still accepted\n+template < typename BasicJsonType, typename Tr, typename Allocator,",
+   "line": 791,
+   "path": "include/nlohmann/detail/conversions/from_json.hpp",
+   "user": {
+    "login": "nlohmann",
+    "type": "User"
+   }
+  }
+ ],
+ "state": "closed",
+ "title": "Read a std::u8string from a JSON string and store it as one in every configuration",
+ "transport": "gh",
+ "user": {
+  "login": "nlohmann",
+  "type": "User"
+ }
+}

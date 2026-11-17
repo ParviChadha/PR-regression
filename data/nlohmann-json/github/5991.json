@@ -1,0 +1,140 @@
+{
+ "base_ref": "develop",
+ "base_sha": "100f676b3e9d85cedbf90e2995cadf9473b6b0e5",
+ "body": "Fixes #5985.\n\nWhen an allocation failed while `json::parse()` built an object or array member, the result was destroyed with a member whose type said *object*/*array* but whose pointer was null, so the destructor dereferenced it instead of the `std::bad_alloc` reaching the caller. Introduced by #5882 (not in any release).\n\n### Cause and fix\n\n`json_sax_dom_parser::set_member()` placement-news the new value over the null member it inserted for the key. `basic_json(value_t)` writes `m_type` before the allocation of `m_value`, so a throwing allocation left the member half-overwritten. Now a value whose construction can throw (a string, a binary value or a container) is created in a local first and placement-new'd into the member by move (the move constructor is `noexcept`), so a failed allocation never touches the member. A value that is nothrow-constructible (null, boolean, numbers) is still constructed in place, as before, so it pays no extra move; the choice is made at compile time with `std::is_nothrow_constructible`. This also covers `ordered_json`, `JSON_DIAGNOSTICS` and `sax_parse()` with `detail::json_sax_dom_parser` into an existing value (same code). The callback parser and the binary parsers assign a temporary and were not affected.\n\n### Tests\n\n`tests/src/unit-allocator.cpp`: \"parse() survives a failing allocation at every point (#5985)\" fails allocation k = 1, 2, \u2026 with a counting allocator (checks for a clean `std::bad_alloc` and no leak) for `json`, `ordered_json`, the callback parser (keep-all and filtering) and `sax_parse()` into an existing value. On develop it crashes under UBSan (`json.hpp:912: reference binding to null pointer`); with the fix it passes, also with `JSON_DIAGNOSTICS=1`. The issue's reproducer now runs to `no throw at k=14: done`. Full `ctest` with ASan+UBSan: 188/188.\n\n### Performance\n\nThe alternative (setting `m_type` after the allocation in `data(value_t)`) was prototyped too; both were measured against develop with an A/B harness (Mac instruction counts, DOM parse, `json` and `ordered_json`). The chosen fix is at or below develop on all large inputs (twitter 0.996, citm 0.999, canada 0.999, update-center 0.993\u20130.999, random 0.994\u20130.996); the alternative was up to +0.8 %. Small inputs (< 1e8 instructions) stay within their \u00b12 % noise.\n\nThese numbers were measured before scalars went back to in-place construction (review follow-up, 4809610d60). That change only removes work from the scalar path, and it has not been re-measured.\n\n### Public API\n\nNo breaking changes.\n\n\ud83e\udd16 Generated with [Claude Code](https://claude.com/claude-code)\n\n",
+ "comments": [
+  {
+   "body": "### Performance check\n\n**No measurable impact.** This touches the hottest part of DOM parsing (creating every new object member), so I checked it closely.\n\n- **Generated code** (clang, arm64): `json_sax_dom_parser::store<...>()` changes for every value type. For scalar members, the move adds one store instruction: the zeroing of the slot is split into separate stores. For strings and containers (`store<value_t>`, `store<string_t>`), the functions are actually **one 16-byte block shorter**. The temporary's destructor apparently folds away, since the moved-from value is known to be null. Nothing else changes.\n- **Instruction counts**:\n\n| case | clang/arm64 PR/base | GCC/x86-64 (callgrind, exact) PR/base |\n|---|---:|---:|\n| parse twitter | 0.9976 | 1.00081 |\n| parse citm_catalog | 0.9986 | 1.00004 |\n| parse canada | 0.9973 | 1.00000 |\n| parse twitter from `std::istream` | 0.9975 | 1.00066 |\n| parse twitter with callback | 0.9990 | 1.00000 |\n\n  The worst case is GCC on twitter at +0.08 % (19k instructions out of 23.2M per parse). That is well under the 1 % threshold. On clang every row is within noise. The other 33 rows are also within noise.\n\n<details><summary>Method</summary>\n\n- PR head vs. its base (merge base), both compiled into one binary (namespaces renamed per copy) with the same workload: DOM parse (string, stream, callback), copy/destroy, `==`/`<`, iteration, `dump()`, msgpack/UBJSON/BJData read and write, `json_document` parse/`dump()`/`==`/`get<std::int64_t>()` on twitter, citm_catalog, canada and small_signed_ints.\n- **Generated code**: both variants disassembled (Apple clang 21, `-O3`, arm64), names and addresses masked, compared function by function.\n- **Instruction counts**: Apple M1 Max, instructions retired per repetition (minimum of 3 runs, setup subtracted). Rows whose machine code is identical vary by about \u00b10.4 %, which is the noise floor. Where a hot path changes, also GCC 13.3 `-O3` on x86-64 under callgrind, which gives exact counts (built with `-falign-functions=64 -falign-loops=64` unless a row says otherwise).\n</details>\n\n---\n*Written by Claude Code on behalf of @nlohmann.*\n",
+   "created_at": "2026-11-02T08:24:52Z",
+   "user": {
+    "login": "nlohmann",
+    "type": "User"
+   }
+  }
+ ],
+ "created_at": "2026-11-01T20:09:30Z",
+ "fetched_at": "2026-11-17T20:07:57Z",
+ "head_sha": "fa020335aa9d15098928d496e1c7a449f71e11c3",
+ "labels": [
+  "L",
+  "tests",
+  "\ud83d\ude80 ready to merge"
+ ],
+ "linked_issues": [
+  {
+   "body": "### Description\n\nWhen an allocation fails while `json::parse()` builds an object or array member, the result is destroyed with a member whose type says *object*, *array* or *string* but whose pointer is null. The destructor then dereferences that null pointer: UBSan reports `reference binding to null pointer`, a debug build fails `assert_invariant()`, a release build segfaults. The `std::bad_alloc` never reaches the caller, although [`parse()` documents the strong guarantee](https://json.nlohmann.me/api/basic_json/parse/#exception-safety).\n\n**Root cause.** The DOM SAX parser constructs a new member *in place* over the existing null member it inserted for the key ([json_sax.hpp#L1300-L1313](https://github.com/nlohmann/json/blob/ddc34f546a652cd098dd78225d80f1909b921871/include/nlohmann/detail/input/json_sax.hpp#L1300-L1313), the same code in `json_sax_dom_callback_parser`):\n\n```cpp\nif (JSON_HEDLEY_LIKELY(member.is_null()))\n{\n    // a new member is null and holds nothing: construct the value\n    // over it instead of destroying and swapping\n    ::new (static_cast<void*>(&member)) BasicJsonType(std::forward<Value>(v));\n}\n```\n\n`basic_json(value_t)` initialises `data::m_type` before `data::m_value` ([json.hpp#L6216-L6219](https://github.com/nlohmann/json/blob/ddc34f546a652cd098dd78225d80f1909b921871/include/nlohmann/json.hpp#L6216-L6219)), and `json_value(value_t)` / `json_value(string_t&&)` allocate. When that allocation throws, the constructor never completes, so no destructor runs for it, but the placement new has already written `m_type = object` (or array/string) into the member's storage, while the union still holds the null member's zero pointer. The member is a fully constructed element of its parent's container, so the parent's destructor destroys it: `destroy_bounded()` dereferences the null pointer at [json.hpp#L912](https://github.com/nlohmann/json/blob/ddc34f546a652cd098dd78225d80f1909b921871/include/nlohmann/json.hpp#L912) (object) or [#L902](https://github.com/nlohmann/json/blob/ddc34f546a652cd098dd78225d80f1909b921871/include/nlohmann/json.hpp#L902) (array).\n\nThe two other branches of `set_member()` (a repeated key, or a custom `json_base_class_t`) assign `member = BasicJsonType(...)` and are safe. The binary readers use `json_sax_dom_binary_parser`, which assigns a temporary ([json_sax.hpp#L1598](https://github.com/nlohmann/json/blob/ddc34f546a652cd098dd78225d80f1909b921871/include/nlohmann/detail/input/json_sax.hpp#L1598)); the same fail-point sweep over `from_cbor`, `from_msgpack`, `from_bson` and `from_ubjson` found no problem there.\n\n**Also affected.** `ordered_json` (same code), builds with `JSON_DIAGNOSTICS` (array member, line 902), and `sax_parse()` with `detail::json_sax_dom_parser` into an existing value, which is left holding the invalid member.\n\n**Since when.** Introduced by #5882 (9c50bdd140, 2026-10-24, \"Make the DOM parser cheaper per container and per member\"), which added the placement-new path. Not in any release: the same program runs to completion with the 3.12.0 header (every allocation point throws cleanly).\n\n**Possible fix.** Keep the placement new only where the constructor cannot throw (scalars), and for owning kinds construct the value first and move it into the member, as the binary parser does:\n\n```cpp\nmember = BasicJsonType(std::forward<Value>(v));   // or: construct a local, then placement-new by move (noexcept)\n```\n\nAlternatively, allocate the `json_value` first and set `m_type` only afterwards (the pattern #5585 established for the other constructors). A regression test belongs in `tests/src/unit-allocator.cpp`: run `parse()` of an object with nested containers and strings with a global or custom allocator that fails at every allocation in turn, and check that every failure is a clean `std::bad_alloc` and that nothing leaks.\n\n### Reproduction steps\n\n1. Save the program below as `parse_badalloc.cpp`.\n2. `clang++ -std=c++17 -O1 -g -fsanitize=address,undefined -fno-sanitize-recover=undefined -I include parse_badalloc.cpp -o parse_badalloc && ./parse_badalloc`\n\nThe program replaces `operator new` so that the `k`-th allocation throws `std::bad_alloc`, and runs `json::parse()` for k = 1, 2, 3, \u2026\n\n### Expected vs. actual results\n\nExpected: every iteration prints `k=\u2026 threw bad_alloc, fine` until no allocation fails any more (`no throw at k=\u2026: done`).\n\nActual: k = 1 \u2026 10 are fine; at k = 11 the program dies in `~basic_json()` while `parse_impl()` unwinds (see *Error messages*). GCC 16 / libstdc++ in Docker behaves the same (`json.hpp:912:17: runtime error: reference binding to null pointer of type 'struct map'`).\n\n### Minimal code example\n\n```cpp\n#include <cstdio>\n#include <cstdlib>\n#include <new>\n#include <nlohmann/json.hpp>\nusing json = nlohmann::json;\nstatic long counter = 0, fail_at = 0;\nvoid* operator new(std::size_t n)\n{\n    if (fail_at > 0 && ++counter == fail_at) throw std::bad_alloc();\n    void* p = std::malloc(n ? n : 1); if (!p) throw std::bad_alloc(); return p;\n}\nvoid operator delete(void* p) noexcept { std::free(p); }\nvoid operator delete(void* p, std::size_t) noexcept { std::free(p); }\nint main()\n{\n    const char* text = R\"({\"a\":\"a long string that does not fit into the small string buffer1\",\"b\":[1,2],\"c\":{\"x\":1},\"d\":1})\";\n    for (long k = 1; k < 1000; ++k)\n    {\n        counter = 0; fail_at = k;\n        try { json j = json::parse(text); fail_at = 0; std::printf(\"no throw at k=%ld: done\\n\", k); return 0; }\n        catch (const std::bad_alloc&) { fail_at = 0; std::printf(\"k=%ld threw bad_alloc, fine\\n\", k); }\n    }\n}\n```\n\n### Error messages\n\n```\nk=1 threw bad_alloc, fine\n\u2026\nk=10 threw bad_alloc, fine\ninclude/nlohmann/json.hpp:912:36: runtime error: reference binding to null pointer of type 'object_t' (aka 'map<std::string, nlohmann::basic_json<\u2026>>')\n    #0 basic_json<>::json_value::destroy_bounded(basic_json<>&, unsigned long) json.hpp:912\n    #1 basic_json<>::json_value::destroy_bounded(basic_json<>&, unsigned long) json.hpp:916\n    #2 basic_json<>::json_value::destroy_container(detail::value_t) json.hpp:885\n    #3 basic_json<>::json_value::destroy_owned(detail::value_t) json.hpp:1034\n    #4 basic_json<>::json_value::destroy(detail::value_t) json.hpp:1016\n    #5 basic_json<>::data::~data() json.hpp:6235\n    #7 basic_json<>::~basic_json() json.hpp:2723\n    #9 basic_json<>::parse_impl<\u2026>(\u2026) json.hpp:3111\n    #10 basic_json<>::parse<char const*&>(\u2026) json.hpp:6025\n    #11 main parse_badalloc.cpp:21\nSUMMARY: UndefinedBehaviorSanitizer: undefined-behavior include/nlohmann/json.hpp:912:36\n```\n\nThe allocation that fails at k = 11 is `create<object_t>()` for the member `\"c\"`, called from `json_value::init_owned()` \u2190 `json_value(value_t)` \u2190 `data(value_t)` \u2190 `basic_json(value_t)` \u2190 `json_sax_dom_parser::set_member()`.\n\n### Compiler and operating system\n\nApple clang 21.0.0 (clang-2100.3.34.2), libc++, macOS 27; GCC 16.1, libstdc++, Debian (Docker `gcc:16`).\n\n### Library version\n\ndevelop at ddc34f546a (2026-11-01); 3.12.0 is not affected.\n\n### Validation\n\n- [x] The bug also occurs if the latest version from the [`develop`](https://github.com/nlohmann/json/tree/develop) branch is used.\n- [x] I can successfully [compile and run the unit tests](https://github.com/nlohmann/json#execute-unit-tests).\n\n---\n*Found by an allocation fail-point sweep during a bug hunt; written by Claude Code on behalf of @nlohmann.*\n",
+   "labels": [
+    "kind: bug",
+    "solution: proposed fix"
+   ],
+   "number": 5985,
+   "state": "closed",
+   "title": "parse() crashes in the destructor instead of propagating std::bad_alloc (the DOM parser leaves a half-constructed member)"
+  }
+ ],
+ "merge_commit_sha": "590b622d481d6ec350a42c047bd5fe23baec4a13",
+ "merged_at": "2026-11-02T17:25:31Z",
+ "number": 5991,
+ "referenced_numbers": [
+  5985,
+  5882
+ ],
+ "repo": "nlohmann/json",
+ "review_comments": [
+  {
+   "body": "astyle (probably the &&, not sure that can be fixed)",
+   "created_at": "2026-11-02T15:39:21Z",
+   "diff_hunk": "@@ -1303,7 +1303,7 @@ class json_sax_dom_parser : public json_sax_dom_error_state\n         {\n             // a new member is null and holds nothing: construct the value\n             // over it instead of destroying and swapping",
+   "line": 1305,
+   "path": "include/nlohmann/detail/input/json_sax.hpp",
+   "user": {
+    "login": "gregmarr",
+    "type": "User"
+   }
+  },
+  {
+   "body": "You don't know it's a scalar, just that it's `nothrow_constructible`.",
+   "created_at": "2026-11-02T15:40:11Z",
+   "diff_hunk": "@@ -1312,6 +1312,25 @@ class json_sax_dom_parser : public json_sax_dom_error_state\n         }\n     }\n \n+    /// a scalar cannot throw: construct it in place",
+   "line": 1315,
+   "path": "include/nlohmann/detail/input/json_sax.hpp",
+   "user": {
+    "login": "gregmarr",
+    "type": "User"
+   }
+  },
+  {
+   "body": "Fixed in f00fe043f0: it was the `&&`. Since `Value` is a forwarding-reference parameter, `std::is_nothrow_constructible<BasicJsonType, Value>` asks the same question as `Value &&` (`Value` is `T` for an rvalue and `T&` for an lvalue), and astyle leaves that spelling alone.\n\n*(Written by Claude Code on behalf of @nlohmann.)*",
+   "created_at": "2026-11-02T16:10:24Z",
+   "diff_hunk": "@@ -1303,7 +1303,7 @@ class json_sax_dom_parser : public json_sax_dom_error_state\n         {\n             // a new member is null and holds nothing: construct the value\n             // over it instead of destroying and swapping",
+   "line": 1305,
+   "path": "include/nlohmann/detail/input/json_sax.hpp",
+   "user": {
+    "login": "nlohmann",
+    "type": "User"
+   }
+  },
+  {
+   "body": "Right, the overload is selected by `std::is_nothrow_constructible`, not by the value being a scalar. Fixed in f00fe043f0: the comments now say \"constructing the value cannot throw (a number, a boolean)\" and \"constructing the value can throw (a container, a string)\". No behaviour change.\n\n*(Written by Claude Code on behalf of @nlohmann.)*",
+   "created_at": "2026-11-02T16:10:26Z",
+   "diff_hunk": "@@ -1312,6 +1312,25 @@ class json_sax_dom_parser : public json_sax_dom_error_state\n         }\n     }\n \n+    /// a scalar cannot throw: construct it in place",
+   "line": 1315,
+   "path": "include/nlohmann/detail/input/json_sax.hpp",
+   "user": {
+    "login": "nlohmann",
+    "type": "User"
+   }
+  },
+  {
+   "body": "I was assuming the possibility that there are custom containers or strings that are nothrow constructible, but I'm not sure how likely that is.  I suppose they could use a custom arena that is guaranteed to never throw.",
+   "created_at": "2026-11-02T16:26:14Z",
+   "diff_hunk": "@@ -1312,6 +1312,25 @@ class json_sax_dom_parser : public json_sax_dom_error_state\n         }\n     }\n \n+    /// a scalar cannot throw: construct it in place",
+   "line": 1315,
+   "path": "include/nlohmann/detail/input/json_sax.hpp",
+   "user": {
+    "login": "gregmarr",
+    "type": "User"
+   }
+  },
+  {
+   "body": "Agreed, that case works: the trait is the whole criterion, so a custom string or container whose construction is declared `noexcept` (an arena that cannot fail, say) takes the in-place path, and that is correct because there is no interrupted constructor to worry about. For the default types it is only the numbers and booleans (I checked: `std::string`, `array_t` and `object_t` all report `false`). If such a type claimed `noexcept` and threw anyway, the program would already terminate in its constructor, whichever way the member is placed. The \"(a number, a boolean)\" in the comment is only the usual examples; I can make it \"for example\" if you think it reads as the condition.\n\n*(Written by Claude Code on behalf of @nlohmann.)*",
+   "created_at": "2026-11-02T16:30:54Z",
+   "diff_hunk": "@@ -1312,6 +1312,25 @@ class json_sax_dom_parser : public json_sax_dom_error_state\n         }\n     }\n \n+    /// a scalar cannot throw: construct it in place",
+   "line": 1315,
+   "path": "include/nlohmann/detail/input/json_sax.hpp",
+   "user": {
+    "login": "nlohmann",
+    "type": "User"
+   }
+  },
+  {
+   "body": "Yes, I think \"for example\" would help there, to make it clear that these aren't trying to detect \"primitives\" vs \"containers\" but \"potentially throwing\" and \"can't throw\", so that it's okay if a custom non-throwing container gets into the first one.  Don't want someone to think that they might need a check to push containers to the second one, or even worse, push a custom number class to the first one when it is not nothrow constructible.",
+   "created_at": "2026-11-02T16:34:39Z",
+   "diff_hunk": "@@ -1312,6 +1312,25 @@ class json_sax_dom_parser : public json_sax_dom_error_state\n         }\n     }\n \n+    /// a scalar cannot throw: construct it in place",
+   "line": 1315,
+   "path": "include/nlohmann/detail/input/json_sax.hpp",
+   "user": {
+    "login": "gregmarr",
+    "type": "User"
+   }
+  },
+  {
+   "body": "Right, that is the distinction I want the comments to carry: \"may throw\" versus \"cannot throw\", decided by `std::is_nothrow_constructible`, not by primitive versus container. Done in 2906d8d44c: both comments now say \"for example\", so a custom non-throwing container landing in the first overload is expected, and nobody needs a check to route anything.\n\n*(Written by Claude Code on behalf of @nlohmann.)*",
+   "created_at": "2026-11-02T16:38:48Z",
+   "diff_hunk": "@@ -1312,6 +1312,25 @@ class json_sax_dom_parser : public json_sax_dom_error_state\n         }\n     }\n \n+    /// a scalar cannot throw: construct it in place",
+   "line": 1315,
+   "path": "include/nlohmann/detail/input/json_sax.hpp",
+   "user": {
+    "login": "nlohmann",
+    "type": "User"
+   }
+  }
+ ],
+ "state": "closed",
+ "title": "parse(): propagate std::bad_alloc instead of crashing on a half-constructed member",
+ "transport": "gh",
+ "user": {
+  "login": "nlohmann",
+  "type": "User"
+ }
+}

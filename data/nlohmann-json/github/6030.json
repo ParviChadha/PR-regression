@@ -1,0 +1,41 @@
+{
+ "base_ref": "develop",
+ "base_sha": "b54267d2a74c085ff2b05b01e369ecb7dd70cec6",
+ "body": "## Summary\n\nParsing from a `FILE*` still read one character at a time through `getc_unlocked()`, while a `std::istream` has its get area scanned in bulk. `file_input_adapter` now offers the lexer the same kind of window into the buffer of the `FILE`.\n\nIt reads the fields that the C library's own `getc_unlocked()` macro reads:\n\n- glibc: `_IO_read_ptr` and `_IO_read_end`,\n- Apple: `_p` and `_r`.\n\nIt consumes exactly the characters `getc_unlocked()` would return, so the file is left where it was left before. When the buffer is about to be refilled, the part of the current token in it is kept for error messages, as for streams.\n\nThe window needs the file locked for the whole parse, so `JSON_DISABLE_UNLOCKED_FILE_IO` and MemorySanitizer builds turn it off, and the docs of that macro say so. uClibc defines `__GLIBC__` but has other fields, so it does not get the window. Other C libraries keep `getc_unlocked()` / `_fgetc_nolock()` / `std::fgetc` as before. The idea is gnulib's `freadptr()` / `freadseek()`.\n\n## Measurements\n\n| | Apple M1 Max | x86-64 (glibc, GCC 15 / Clang 21) |\n|---|---|---|\n| `parse(FILE*)` | 2.0\u20132.6\u00d7 | 1.7\u20132.2\u00d7 |\n| `accept(FILE*)` | 3.0\u20134.1\u00d7 | 2.9\u20134.4\u00d7 |\n\nThe rows are for `twitter.json`, `citm_catalog.json` and `canada.json`. Parsing from a `FILE*` is now about as fast as from a `std::ifstream`. In the Google Benchmark suite, `ParseFILE/*` is 2.3\u20133.1\u00d7 as fast, and the binary readers from a `FILE*` (`FromMsgpack/*`, `FromBinaryFile/*`) 1.3\u20131.8\u00d7.\n\n## Tests\n\nNew sections of `unit-file_input.cpp`, on macOS and on glibc (Docker, GCC, ASan):\n\n- FILE buffers of 1 to 70 bytes and unbuffered files, against parsing from a string: values, exception messages and `accept()`,\n- characters pushed back with `ungetc()` before parsing,\n- SAX events at the same file positions with small buffers,\n- CBOR strings across the edges of the buffer.\n\nThey also pass with `JSON_DISABLE_UNLOCKED_FILE_IO=1`. `fuzzer-parse_json` compares `FILE*` with pointer input and ran 4.4 M executions with this change without a finding.\n\n## Notes for review\n\n- `JSON_FILE_WINDOW` is set next to `JSON_UNLOCKED_FILE_IO` and undefined at the end of the header.\n- This PR and #6031 both change one paragraph of `docs/mkdocs/docs/features/performance.md`. Whichever is merged second needs a small conflict resolution there.\n\n## Breaking changes\n\nNo breaking changes. The public API is unchanged, and the file is left in the same state after parsing. As before, the file is locked for the whole parse.\n\n\ud83e\udd16 Generated with [Claude Code](https://claude.com/claude-code)\n",
+ "comments": [
+  {
+   "body": "## \ud83d\udd34 Amalgamation check failed! \ud83d\udd34\nThe source code has not been amalgamated and/or formatted correctly, or `BUILD.bazel`, `nlohmann_json.natvis`, or the macro_builder tables in `macro_scope.hpp` are out of date. `make amalgamate BUILD.bazel natvis` fixes all but the tables (see `tools/macro_builder/README.md`).\n\n\ud83d\udcce A ready-to-apply patch is attached to the [failed workflow run](https://github.com/nlohmann/json/actions/runs/42187581782) as the `amalgamation-patch` artifact. Download it, then apply it locally from the repository root with:\n\n```shell\ngit apply amalgamation.patch\n```\n\nThis does not require installing astyle yourself.",
+   "created_at": "2026-11-06T13:47:15Z",
+   "user": {
+    "login": "github-actions[bot]",
+    "type": "Bot"
+   }
+  }
+ ],
+ "created_at": "2026-11-06T05:58:55Z",
+ "fetched_at": "2026-11-17T20:07:39Z",
+ "head_sha": "9be0b052a5951f315f0d9339ec2b337b1f918d7c",
+ "labels": [
+  "documentation",
+  "L",
+  "tests",
+  "\ud83d\ude80 ready to merge",
+  "performance"
+ ],
+ "linked_issues": [],
+ "merge_commit_sha": "18138227dc754f0b6293beadd05192de3221b794",
+ "merged_at": "2026-11-07T09:11:10Z",
+ "number": 6030,
+ "referenced_numbers": [
+  6031
+ ],
+ "repo": "nlohmann/json",
+ "review_comments": [],
+ "state": "closed",
+ "title": "Scan the buffer of a FILE in bulk with glibc and the Apple C library",
+ "transport": "gh",
+ "user": {
+  "login": "nlohmann",
+  "type": "User"
+ }
+}

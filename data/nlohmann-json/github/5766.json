@@ -1,0 +1,63 @@
+{
+ "base_ref": "develop",
+ "base_sha": "0490778fc30c7887db704f278941612587b0e0b7",
+ "body": "Closes #5317. Supersedes #5325 by @JosephDemarest. Their commit is kept with their authorship; this PR rebases it onto the current `develop` and adds the remaining review points.\n\nRFC 8949 \u00a73.2.3 doesn't allow indefinite-length strings to be nested. Until now, the CBOR reader accepted nested indefinite-length text and byte strings (it counted the open levels instead of recursing; see #5104). With this change it rejects them at the nested marker with `parse_error.113`. The reader stays iterative.\n\n## Changes\n\n- **54beb8ffa** (JosephDemarest, rebased): reject a second `0x7F`/`0x5F` inside an indefinite-length string, list only the definite-length forms in chunk error messages, keep the byte-for-byte decoding check for the valid prefix of `cbor_binary.cbor`, and add regression tests.\n  - Conflict resolution: `exception_message()` no longer takes the input format. Also, the break marker that closes an indefinite-length text string now runs `check_string_utf8()` again, as it does on `develop` since #5741. A plain auto-merge had silently dropped that check; the existing \"ill-formed UTF-8 in indefinite-length string\" test covers it.\n- **65bcce35b**: review nits from #5325: rename `is_chunk` \u2192 `inside_indefinite`, update the stale test section names, use lowercase comments.\n\n## Public API\n\nNo signatures change, but the behavior does: nested indefinite-length CBOR strings or byte arrays that used to parse now throw `parse_error.113` (or return a discarded value if exceptions are disabled). Valid definite- and indefinite-length strings work as before. This will go in the release notes.\n\n## Tests\n\nRan `unit-cbor`, `unit-regression1`, and `unit-regression3` locally against the modular headers, with the test data: all pass. `make check-amalgamation` is clean.\n\n\ud83e\udd16 Generated with [Claude Code](https://claude.com/claude-code)\n",
+ "comments": [
+  {
+   "body": "Is this a behavior change that needs an opt-in?  It sounds like they were successfully read before even though they aren't allowed by the standard.",
+   "created_at": "2026-10-06T07:07:53Z",
+   "user": {
+    "login": "gregmarr",
+    "type": "User"
+   }
+  },
+  {
+   "body": "@gregmarr Good question. Yes, every release so far has accepted them, but I don't think this needs an opt-in:\n\n- The input is not well-formed CBOR, not just discouraged. RFC 8949 \u00a73.2.3 requires each chunk of an indefinite-length string to be a definite-length string, and Appendix F.1 explicitly lists `5f 5f 41 00 ff ff` and `7f 7f 61 00 ff ff` (\"indefinite-length string chunks not definite length\") as examples of data items that are not well-formed. \u00a710 says a CBOR decoder, by definition, only accepts well-formed CBOR.\n- No conforming encoder can produce such input, and our own `to_cbor` never emits indefinite-length strings at all. So the only data affected is hand-crafted or broken input.\n- Accepting it was never a design decision. It was a side effect of the old reader recursing into itself for every chunk, which is also why repeated `0x7F` bytes crashed it (#5104).\n\nThat's different from cases like #5741, where real-world producers do emit the data (invalid UTF-8) and we kept the readers lenient. We'll document the change in the release notes as a behavior change: nested indefinite-length strings now throw `parse_error.113`.\n\n_(Comment written by Claude Code on behalf of @nlohmann.)_",
+   "created_at": "2026-10-06T07:32:45Z",
+   "user": {
+    "login": "nlohmann",
+    "type": "User"
+   }
+  }
+ ],
+ "created_at": "2026-10-06T06:29:37Z",
+ "fetched_at": "2026-11-17T20:10:26Z",
+ "head_sha": "65bcce35ba8584aba1b1767bb9329ec1df1834b6",
+ "labels": [
+  "documentation",
+  "aspect: binary formats",
+  "L",
+  "tests",
+  "\ud83d\ude80 ready to merge"
+ ],
+ "linked_issues": [
+  {
+   "body": "### Description\n\nRFC 8949 \u00a73.2.3 requires that the chunks of an indefinite-length string be *definite-length* strings of the same major type:\n\n> Each chunk of an indefinite-length string is a definite-length string of the same major type.\n\n`get_cbor_string()` and `get_cbor_binary()` read each chunk by recursing into themselves ([`binary_reader.hpp:1025-1037`](https://github.com/nlohmann/json/blob/8ec98e2c9ea9c0adc15a791feb3d4d4468621743/include/nlohmann/detail/input/binary_reader.hpp#L1025-L1037) and [`1125-1137`](https://github.com/nlohmann/json/blob/8ec98e2c9ea9c0adc15a791feb3d4d4468621743/include/nlohmann/detail/input/binary_reader.hpp#L1125-L1137)), and the recursive call re-enters the full `switch` including the `0x7F`/`0x5F` case. So a chunk may itself be an indefinite-length string, to arbitrary depth, and the library accepts it.\n\nThe cross-major-type rule is already enforced correctly \u2014 a byte-string chunk inside a text string is rejected, and vice versa. It is only the \"definite-length\" half of the rule that is missing.\n\nSecondary effect: because the nesting is unbounded, `0x7F` repeated ~50 000 times segfaults. That aspect overlaps with #5104 / #5293, but a depth guard alone would only turn the crash into a clean `parse_error` \u2014 the two-level case below would still be accepted rather than rejected. The conformance fix is independent and cheaper: reject `0x7F`/`0x5F` when already inside an indefinite-length string, which also removes this particular recursion path entirely.\n\n### Reproduction steps\n\nParse a two-level indefinite-length text string and byte string.\n\n### Expected vs. actual results\n\nExpected: `parse_error.113`, same as any other invalid chunk head.\n\nActual:\n\n| input | meaning | result |\n|---|---|---|\n| `7F 7F 61 61 FF FF` | indefinite tstr containing an indefinite tstr | **accepted**, yields `\"a\"` |\n| `5F 5F 41 61 FF FF` | indefinite bstr containing an indefinite bstr | **accepted**, yields `h'61'` |\n| `7F 41 61 FF` | bstr chunk inside a tstr | rejected (correct) |\n| `5F 61 61 FF` | tstr chunk inside a bstr | rejected (correct) |\n\n### Minimal code example\n\n```cpp\n#include <nlohmann/json.hpp>\n#include <iostream>\nusing json = nlohmann::json;\n\nint main()\n{\n    // 0x7F ( 0x7F ( \"a\" ) )  -- a chunk that is itself indefinite-length\n    const std::vector<std::uint8_t> v{0x7F, 0x7F, 0x61, 0x61, 0xFF, 0xFF};\n    std::cout << json::from_cbor(v) << \"\\n\";   // prints \"a\"; should throw\n\n    // unbounded nesting -> stack exhaustion (cf. #5104)\n    std::vector<std::uint8_t> deep(50000, 0x7F);\n    deep.insert(deep.end(), 50000, 0xFF);\n    (void)json::from_cbor(deep);               // segfault\n}\n```\n\n### Error messages\n\nNone \u2014 the malformed input is accepted. (The deep case terminates with SIGSEGV.)\n\n### Compiler and operating system\n\ng++ 13.3.0, Ubuntu 24.04, `-std=c++11`\n\n### Library version\n\n`develop` @ 8ec98e2\n\n### Would the fix be breaking?\n\nNo API/ABI change, and the behavior change is confined to input that is malformed per the spec.\n\n- **What changes:** byte sequences that RFC 8949 forbids and that other CBOR implementations reject would start throwing `parse_error.113` instead of being accepted. There is no valid encoder that produces them, so no legitimate document is affected.\n- **Round-trip safety:** the library never *emits* indefinite-length strings, so nothing it writes can trip the new check.\n- **Risk:** the only realistic breakage is a user whose non-conforming producer happens to emit nested chunks and who relies on this library's leniency. That seems remote, and tightening it matches how the reader already handles the cross-major-type half of the same rule.\n- **Docs/tests:** the \"Deserialization\" section of `docs/mkdocs/docs/features/binary_formats/cbor.md` doesn't currently say anything about chunk structure; a sentence could be added. I did not find an existing unit test that covers nested chunks, so nothing in `unit-cbor.cpp` should need to be relaxed.\n\nFixing this also shrinks the surface of #5104: with nesting rejected, indefinite-length strings stop being a recursion vector at all, and the depth guard in #5293 is left to handle the genuinely recursive cases (nested arrays/maps and chained tags).",
+   "labels": [
+    "solution: proposed fix",
+    "aspect: binary formats"
+   ],
+   "number": 5317,
+   "state": "closed",
+   "title": "CBOR: nested indefinite-length strings/byte strings are accepted (RFC 8949 3.2.3 requires definite-length chunks)"
+  }
+ ],
+ "merge_commit_sha": "ff6f3d7d4af2b409c8efbb5af63441647c0131c8",
+ "merged_at": "2026-10-07T05:38:52Z",
+ "number": 5766,
+ "referenced_numbers": [
+  5317,
+  5325,
+  5104,
+  5741
+ ],
+ "repo": "nlohmann/json",
+ "review_comments": [],
+ "state": "closed",
+ "title": "Reject nested indefinite-length CBOR string chunks",
+ "transport": "gh",
+ "user": {
+  "login": "nlohmann",
+  "type": "User"
+ }
+}

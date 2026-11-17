@@ -1,0 +1,648 @@
+{
+ "base_ref": "develop",
+ "base_sha": "e8b747e4bc0b38fa86ecd0b7972bfcf4119b02a7",
+ "body": "The JSON merge patch document format describes the set of modifications to a resource's content, that more closely mimics the syntax of the resource being modified.\r\n\r\nHowever, and in contrast to JSON Patch (RFC 6902), a JSON Merge Patch cannot express certain modifications, e.g., changing an array element at a specific index, or setting a specific object value to null. The null value in a JSON Merge Patch is used to remove the key from the object.\r\n\r\nThe diff algorithm is not part of the RFC 7396, but it was tested against all examples provided, plus additional cases on how null values are handled.\r\n\r\nJSON Merge Patch PR: https://github.com/nlohmann/json/pull/876\r\nPR discussing the diff: https://github.com/nlohmann/json/issues/2018\r\n\r\nIf the content is approved, please let me know if/what documentation needs to be updated.\r\n\r\n[Describe your pull request here. Please read the text below the line and make sure you follow the checklist.]\r\n\r\n- [x] The changes are described in detail, both the what and why.\r\n- [x] If applicable, an [existing issue](https://github.com/nlohmann/json/issues) is referenced.\r\n- [ ] The [Code coverage](https://coveralls.io/github/nlohmann/json) remained at 100%. A test case for every new line of code.\r\n- [x] If applicable, the [documentation](https://json.nlohmann.me) is updated.\r\n- [x] The source code is amalgamated by running `make amalgamate`.\r\n\r\nRead the [Contribution Guidelines](https://github.com/nlohmann/json/blob/develop/.github/CONTRIBUTING.md) for detailed information.\r\n",
+ "comments": [
+  {
+   "body": "## \ud83d\udd34 Amalgamation check failed! \ud83d\udd34\nThe source code has not been amalgamated. @satelliteprogrammer\n Please read and follow the [Contribution Guidelines](https://github.com/nlohmann/json/blob/develop/.github/CONTRIBUTING.md#files-to-change).",
+   "created_at": "2025-10-25T17:51:15Z",
+   "user": {
+    "login": "github-actions[bot]",
+    "type": "Bot"
+   }
+  },
+  {
+   "body": "\n[![Coverage Status](https://coveralls.io/builds/76146257/badge)](https://coveralls.io/builds/76146257)\n\ncoverage: 99.194% (+0.003%) from 99.191%\nwhen pulling **d32edb3d51156579ba8a7e635bb59ab64c3b7c4d on satelliteprogrammer:develop**\ninto **29913ca760c663e1b1df3512f125c247681905e8 on nlohmann:develop**.\n",
+   "created_at": "2025-10-25T18:23:51Z",
+   "user": {
+    "login": "coveralls",
+    "type": "User"
+   }
+  },
+  {
+   "body": "I am not sure if this feature would be widely used, so I'm opening a discussion.",
+   "created_at": "2025-10-25T19:13:10Z",
+   "user": {
+    "login": "nlohmann",
+    "type": "User"
+   }
+  },
+  {
+   "body": "We had a (somewhat niche) need for this at work, that's why I've contributed here.\r\n\r\nIt's essentially a combination of 2 things:\r\n\r\n1. we log all our data structures in JSON, this makes it easier to parse the logs and pretty-format large data structures;\r\n2. we have a container that only notifies listeners on data changes.\r\n\r\nFor very large data structures, reading through a log line to find the one variable that did change is a pain. Not only that, but on some interfaces only a small amount of member variables on the entire structure are actually changing.\r\nGiven that we are already serializing in JSON, on those containers that track differences, we thought why not log only those differences using one of the available JSON patch methods. So here we are.",
+   "created_at": "2025-10-25T20:13:23Z",
+   "user": {
+    "login": "satelliteprogrammer",
+    "type": "User"
+   }
+  },
+  {
+   "body": "This pull request has been marked as stale because it has had no activity for 30 days. While we won\u2019t close it automatically, we encourage you to update or comment if it is still relevant. Keeping pull requests active and up-to-date helps us review and merge changes more efficiently. Thank you for your contributions!",
+   "created_at": "2025-11-25T00:11:54Z",
+   "user": {
+    "login": "github-actions[bot]",
+    "type": "Bot"
+   }
+  },
+  {
+   "body": "> [..] we thought why not log only those differences using one of the available JSON patch methods. So here we are.\r\n\r\nWe had this exact need as well: logging changes in simple JSON structures without all the noise of the formal JSON Patch syntax. Would have been convenient to have this capability built in.",
+   "created_at": "2026-03-13T11:27:47Z",
+   "user": {
+    "login": "cschreib-ibex",
+    "type": "User"
+   }
+  },
+  {
+   "body": "This is a feature that would be very useful to me. Our usecase is we would like to create a hierarchical data storage system that allows users to override values set in a base layer of json, storing user \"overrides\" as a merge patch. So being able to easily apply and generate merge patch documents would be essential to such a use case.\r\n\r\nI find the merge patch formatting to be more human-readable than the json patch \"action list\" format. They are more intuitive to interpret for my usecase, where you are essentially looking at a sparse overlay document. You have the context of the changed element's path in the document providing self-documentation as to the intent of the change. A flat list of change actions lacks some of this context when it isn't structured like a typical document.\r\n\r\nThank you for your time, have a nice day.",
+   "created_at": "2026-03-16T19:09:23Z",
+   "user": {
+    "login": "benpeck-eepics",
+    "type": "User"
+   }
+  },
+  {
+   "body": "@cschreib-ibex just in case it's useful for you. You can represent null values iff the source and target represent the same container. In that scenario you don't need null to represent removing existing values.",
+   "created_at": "2026-03-19T10:52:47Z",
+   "user": {
+    "login": "satelliteprogrammer",
+    "type": "User"
+   }
+  },
+  {
+   "body": "This pull request has been marked as stale because it has had no activity for 30 days. While we won\u2019t close it automatically, we encourage you to update or comment if it is still relevant. Keeping pull requests active and up-to-date helps us review and merge changes more efficiently. Thank you for your contributions!",
+   "created_at": "2026-04-19T00:24:39Z",
+   "user": {
+    "login": "github-actions[bot]",
+    "type": "Bot"
+   }
+  },
+  {
+   "body": "@satelliteprogrammer Are you willing to continue working on this?",
+   "created_at": "2026-09-27T19:26:12Z",
+   "user": {
+    "login": "nlohmann",
+    "type": "User"
+   }
+  },
+  {
+   "body": "> @satelliteprogrammer Are you willing to continue working on this?\n\nHi @nlohmann thanks for the interest and taking the time to review the PR.\nAbsolutely, I'll take a look at your examples and see what I missed.\nI'll do it over the week.",
+   "created_at": "2026-09-27T20:02:31Z",
+   "user": {
+    "login": "satelliteprogrammer",
+    "type": "User"
+   }
+  },
+  {
+   "body": "Thanks, this looks good to merge from my side. Two things left before I can approve:\n\n1. **DCO:** all three commits need a `Signed-off-by:` line, not only the last one. For example, run `git rebase --signoff HEAD~3` and then force-push.\n2. **Merge `develop`:** the current CI failures (MSVC C4127, the `-Wexperimental-fmv-target` gcc flag, cpplint in `ordered_map.hpp`) come from `develop` and were fixed in #5754. Merging `develop` into your branch should make CI green.\n\n<sub>This comment was written by Claude Code on behalf of @nlohmann.</sub>",
+   "created_at": "2026-10-04T16:13:34Z",
+   "user": {
+    "login": "nlohmann",
+    "type": "User"
+   }
+  },
+  {
+   "body": "Please rebase to the latest develop: CI on develop is green again since #5779, so a rebase should give this PR a clean CI run.\n\n_(Comment written by Claude Code on behalf of @nlohmann.)_",
+   "created_at": "2026-10-07T14:41:34Z",
+   "user": {
+    "login": "nlohmann",
+    "type": "User"
+   }
+  },
+  {
+   "body": "> ### Will you continue?\r\n> \r\n> Are you willing to continue working on this, mainly the iterative fallback, which is the only larger piece left? If you'd rather not take on that part, say so and we can find another way to finish it, keeping your commits. Either way, thanks for sticking with this PR for so long.\r\n\r\nI will, I just didn't have much time during the week. I should have a commit addressing the iterative part and the rest of comments during the weekend.\r\n",
+   "created_at": "2026-10-09T18:38:42Z",
+   "user": {
+    "login": "satelliteprogrammer",
+    "type": "User"
+   }
+  },
+  {
+   "body": "> ### 1. Depth limit with an iterative fallback (blocking, @gregmarr's point)\r\n\r\nDone.\r\n\r\n> ### 2. Missing docset entry (blocking, fails `ci_test_documentation`)\r\n\r\nSuperseded by #5799 it seems.\r\n\r\n> ### 3. Complexity wording\r\n\r\nDone.\r\n\r\n> ### 4. Small things (non-blocking)\r\n\r\nAddressed.\r\n",
+   "created_at": "2026-10-11T19:06:15Z",
+   "user": {
+    "login": "satelliteprogrammer",
+    "type": "User"
+   }
+  },
+  {
+   "body": "> There are several CI jobs failing unit-merge_diff. Please check.\r\n\r\nSeemed to be some odd front-end compiler behavior with multi-line strings inside a macro. I don't have the compilers locally, so need to check if they pass on the CI again.",
+   "created_at": "2026-10-11T21:56:38Z",
+   "user": {
+    "login": "satelliteprogrammer",
+    "type": "User"
+   }
+  },
+  {
+   "body": "Thanks!",
+   "created_at": "2026-10-12T07:33:44Z",
+   "user": {
+    "login": "nlohmann",
+    "type": "User"
+   }
+  },
+  {
+   "body": "> Thanks!\n\nMy pleasure.",
+   "created_at": "2026-10-12T08:17:14Z",
+   "user": {
+    "login": "satelliteprogrammer",
+    "type": "User"
+   }
+  }
+ ],
+ "created_at": "2025-10-25T16:40:15Z",
+ "fetched_at": "2026-11-17T20:09:54Z",
+ "head_sha": "6b950f6af08ca4b7a5c2dd783d9d12c3af1be068",
+ "labels": [
+  "documentation",
+  "L",
+  "tests",
+  "\ud83d\ude80 ready to merge"
+ ],
+ "linked_issues": [],
+ "merge_commit_sha": "40a62947d3e23f46cbc863afdcc6f5c933d5ed10",
+ "merged_at": "2026-10-12T07:33:43Z",
+ "number": 4965,
+ "referenced_numbers": [],
+ "repo": "nlohmann/json",
+ "review_comments": [
+  {
+   "body": "This may be overly constraining. An alternative would be to interpret \"field set to `null`\" as \"field removed\".\n\nThe RFC isn't very clear on this. While it says:\n>This design means that merge patch documents are suitable for describing modifications to JSON documents that primarily use objects for their structure and do not make use of explicit null values.\n\nIt also lists examples in appendix where some fields are set to `null` in the source JSON. So they may have meant \"do not make use of explicit null values\" as \"do not attribute specific meaning to explicit null values\".",
+   "created_at": "2026-03-13T11:54:52Z",
+   "diff_hunk": "@@ -5254,6 +5254,57 @@ class basic_json // NOLINT(cppcoreguidelines-special-member-functions,hicpp-spec\n         }\n     }\n \n+    /// @brief creates a diff as a JSON Merge Patch\n+    JSON_HEDLEY_WARN_UNUSED_RESULT\n+    static basic_json merge_diff(const basic_json& source, const basic_json& target)\n+    {\n+        if (!target.is_object())\n+        {\n+            return target;\n+        }\n+\n+        basic_json result(value_t::object);\n+\n+        if (source.is_object())\n+        {\n+            for (auto it = source.begin(); it != source.end(); ++it)\n+            {\n+                auto itf = target.find(it.key());\n+                if (itf != target.end())\n+                {\n+                    if (it.value() != itf.value())\n+                    {\n+                        auto diff = merge_diff(it.value(), itf.value());\n+                        if (diff.is_null())\n+                        {\n+                            JSON_THROW(other_error::create(503, detail::concat(\"cannot set \\\"\", itf.key(), \"\\\" to null\"), &target));\n+                        }",
+   "line": 5281,
+   "path": "include/nlohmann/json.hpp",
+   "user": {
+    "login": "cschreib-ibex",
+    "type": "User"
+   }
+  },
+  {
+   "body": "Inefficient; `merge_diff` was already called on the same inputs above and `diff` could be reused here.",
+   "created_at": "2026-03-13T11:56:32Z",
+   "diff_hunk": "@@ -5254,6 +5254,57 @@ class basic_json // NOLINT(cppcoreguidelines-special-member-functions,hicpp-spec\n         }\n     }\n \n+    /// @brief creates a diff as a JSON Merge Patch\n+    JSON_HEDLEY_WARN_UNUSED_RESULT\n+    static basic_json merge_diff(const basic_json& source, const basic_json& target)\n+    {\n+        if (!target.is_object())\n+        {\n+            return target;\n+        }\n+\n+        basic_json result(value_t::object);\n+\n+        if (source.is_object())\n+        {\n+            for (auto it = source.begin(); it != source.end(); ++it)\n+            {\n+                auto itf = target.find(it.key());\n+                if (itf != target.end())\n+                {\n+                    if (it.value() != itf.value())\n+                    {\n+                        auto diff = merge_diff(it.value(), itf.value());\n+                        if (diff.is_null())\n+                        {\n+                            JSON_THROW(other_error::create(503, detail::concat(\"cannot set \\\"\", itf.key(), \"\\\" to null\"), &target));\n+                        }\n+                        result[it.key()] = merge_diff(it.value(), itf.value());",
+   "line": 5282,
+   "path": "include/nlohmann/json.hpp",
+   "user": {
+    "login": "cschreib-ibex",
+    "type": "User"
+   }
+  },
+  {
+   "body": "Inefficient: this will traverse the whole depth of the JSON structure to check for equality of all sub fields, and we'll do that again in `merge_diff` if going inside the `if`. This check could be removed, calling `merge_diff` unconditionally, then checking the output isn't an empty object.",
+   "created_at": "2026-03-13T11:58:55Z",
+   "diff_hunk": "@@ -5254,6 +5254,57 @@ class basic_json // NOLINT(cppcoreguidelines-special-member-functions,hicpp-spec\n         }\n     }\n \n+    /// @brief creates a diff as a JSON Merge Patch\n+    JSON_HEDLEY_WARN_UNUSED_RESULT\n+    static basic_json merge_diff(const basic_json& source, const basic_json& target)\n+    {\n+        if (!target.is_object())\n+        {\n+            return target;\n+        }\n+\n+        basic_json result(value_t::object);\n+\n+        if (source.is_object())\n+        {\n+            for (auto it = source.begin(); it != source.end(); ++it)\n+            {\n+                auto itf = target.find(it.key());\n+                if (itf != target.end())\n+                {\n+                    if (it.value() != itf.value())",
+   "line": 7588,
+   "path": "include/nlohmann/json.hpp",
+   "user": {
+    "login": "cschreib-ibex",
+    "type": "User"
+   }
+  },
+  {
+   "body": "Though, this will need checking for value types, and only call `merge_diff` if both source and target are objects. \n```c++\nif (it.value().is_object() && itf.value().is_object()) \n{\n    auto diff = merge_diff(it.value(), itf.value());\n    if (!diff.empty()) \n    {\n        result[it.key()] = std::move(diff);\n    }\n} \nelse if (it.value() != itf.value()) \n{\n    result[it.key()] = itf.value();\n}\n```",
+   "created_at": "2026-03-13T12:06:01Z",
+   "diff_hunk": "@@ -5254,6 +5254,57 @@ class basic_json // NOLINT(cppcoreguidelines-special-member-functions,hicpp-spec\n         }\n     }\n \n+    /// @brief creates a diff as a JSON Merge Patch\n+    JSON_HEDLEY_WARN_UNUSED_RESULT\n+    static basic_json merge_diff(const basic_json& source, const basic_json& target)\n+    {\n+        if (!target.is_object())\n+        {\n+            return target;\n+        }\n+\n+        basic_json result(value_t::object);\n+\n+        if (source.is_object())\n+        {\n+            for (auto it = source.begin(); it != source.end(); ++it)\n+            {\n+                auto itf = target.find(it.key());\n+                if (itf != target.end())\n+                {\n+                    if (it.value() != itf.value())",
+   "line": 7588,
+   "path": "include/nlohmann/json.hpp",
+   "user": {
+    "login": "cschreib-ibex",
+    "type": "User"
+   }
+  },
+  {
+   "body": "Thanks! I had figured this one out already, but since the PR wasn't going anywhere I didn't fix it here.",
+   "created_at": "2026-03-19T10:02:56Z",
+   "diff_hunk": "@@ -5254,6 +5254,57 @@ class basic_json // NOLINT(cppcoreguidelines-special-member-functions,hicpp-spec\n         }\n     }\n \n+    /// @brief creates a diff as a JSON Merge Patch\n+    JSON_HEDLEY_WARN_UNUSED_RESULT\n+    static basic_json merge_diff(const basic_json& source, const basic_json& target)\n+    {\n+        if (!target.is_object())\n+        {\n+            return target;\n+        }\n+\n+        basic_json result(value_t::object);\n+\n+        if (source.is_object())\n+        {\n+            for (auto it = source.begin(); it != source.end(); ++it)\n+            {\n+                auto itf = target.find(it.key());\n+                if (itf != target.end())\n+                {\n+                    if (it.value() != itf.value())\n+                    {\n+                        auto diff = merge_diff(it.value(), itf.value());\n+                        if (diff.is_null())\n+                        {\n+                            JSON_THROW(other_error::create(503, detail::concat(\"cannot set \\\"\", itf.key(), \"\\\" to null\"), &target));\n+                        }\n+                        result[it.key()] = merge_diff(it.value(), itf.value());",
+   "line": 5282,
+   "path": "include/nlohmann/json.hpp",
+   "user": {
+    "login": "satelliteprogrammer",
+    "type": "User"
+   }
+  },
+  {
+   "body": "> this will traverse the whole depth of the JSON structure to check for equality of all sub fields\r\n\r\nI realised it, but since it would break on the first inequality, I conceded. What nudged me in this direction was that we were already checking if the target is not an object at the start, so it didn't feel right to check again before calling the recursive function.\r\n\r\nI've now realised where I was wrong. \r\nFor two non-object identical values, it they are present at the top-level of the JSON, then the patch must contain them, as otherwise it will not apply them.\r\nHowever, if the identical non-objects are nested within an object, then, even though it would still work, they aren't necessary in the patch file, as the target object will retain its previous values.\r\n\r\nI think this difference in behaviour is what requires the extra work within the for-loop. And then you're correct, we need to check the type to make sure we're applying the most efficient comparison.",
+   "created_at": "2026-03-19T10:42:02Z",
+   "diff_hunk": "@@ -5254,6 +5254,57 @@ class basic_json // NOLINT(cppcoreguidelines-special-member-functions,hicpp-spec\n         }\n     }\n \n+    /// @brief creates a diff as a JSON Merge Patch\n+    JSON_HEDLEY_WARN_UNUSED_RESULT\n+    static basic_json merge_diff(const basic_json& source, const basic_json& target)\n+    {\n+        if (!target.is_object())\n+        {\n+            return target;\n+        }\n+\n+        basic_json result(value_t::object);\n+\n+        if (source.is_object())\n+        {\n+            for (auto it = source.begin(); it != source.end(); ++it)\n+            {\n+                auto itf = target.find(it.key());\n+                if (itf != target.end())\n+                {\n+                    if (it.value() != itf.value())",
+   "line": 7588,
+   "path": "include/nlohmann/json.hpp",
+   "user": {
+    "login": "satelliteprogrammer",
+    "type": "User"
+   }
+  },
+  {
+   "body": "I've changed the if to explicitly check if we have a transition from !null -> null. That one is impossible to generate, as it would collide with the actual meaning of null in the patch file.\n\n> Null values in the merge patch are given special meaning to indicate the removal of existing values in the target.\n\nHowever, the end result is the same. We would reach here if the source != target AND target == null. There's no other way for the diff to be null.",
+   "created_at": "2026-03-19T10:47:03Z",
+   "diff_hunk": "@@ -5254,6 +5254,57 @@ class basic_json // NOLINT(cppcoreguidelines-special-member-functions,hicpp-spec\n         }\n     }\n \n+    /// @brief creates a diff as a JSON Merge Patch\n+    JSON_HEDLEY_WARN_UNUSED_RESULT\n+    static basic_json merge_diff(const basic_json& source, const basic_json& target)\n+    {\n+        if (!target.is_object())\n+        {\n+            return target;\n+        }\n+\n+        basic_json result(value_t::object);\n+\n+        if (source.is_object())\n+        {\n+            for (auto it = source.begin(); it != source.end(); ++it)\n+            {\n+                auto itf = target.find(it.key());\n+                if (itf != target.end())\n+                {\n+                    if (it.value() != itf.value())\n+                    {\n+                        auto diff = merge_diff(it.value(), itf.value());\n+                        if (diff.is_null())\n+                        {\n+                            JSON_THROW(other_error::create(503, detail::concat(\"cannot set \\\"\", itf.key(), \"\\\" to null\"), &target));\n+                        }",
+   "line": 5281,
+   "path": "include/nlohmann/json.hpp",
+   "user": {
+    "login": "satelliteprogrammer",
+    "type": "User"
+   }
+  },
+  {
+   "body": "**Bug:** this recurses whenever the *source* value is an object, even when the target value isn't one. In that case the recursive call hits the `!target.is_object()` early return and returns the target unchanged, so `diff` becomes e.g. `[]`, `\"\"`, or `0`. `basic_json::empty()` is `true` for an empty array (and for `null`), so the change is dropped:\n\n```\nmerge_diff({\"a\":{\"x\":1}}, {\"a\":[]})  ->  {}      // should be {\"a\":[]}\nmerge_diff({\"a\":{}},      {\"a\":[]})  ->  {}      // should be {\"a\":[]}\n```\n\nAs @cschreib-ibex suggested earlier, only recurse when both sides are objects:\n\n```cpp\nif (it.value().is_object() && itf.value().is_object())\n{\n    auto diff = merge_diff(it.value(), itf.value());\n    if (!diff.empty())\n    {\n        result[it.key()] = std::move(diff);\n    }\n}\nelse if (it.value() != itf.value())\n{\n    result[it.key()] = itf.value();\n}\n```\n\n<sub>This comment was written by Claude Code on behalf of @nlohmann.</sub>",
+   "created_at": "2026-09-27T15:59:37Z",
+   "diff_hunk": "@@ -5254,6 +5254,65 @@ class basic_json // NOLINT(cppcoreguidelines-special-member-functions,hicpp-spec\n         }\n     }\n \n+    /// @brief creates a diff as a JSON Merge Patch\n+    JSON_HEDLEY_WARN_UNUSED_RESULT\n+    static basic_json merge_diff(const basic_json& source, const basic_json& target)\n+    {\n+        if (!target.is_object())\n+        {\n+            return target;\n+        }\n+\n+        basic_json result(value_t::object);\n+\n+        if (source.is_object())\n+        {\n+            for (auto it = source.begin(); it != source.end(); ++it)\n+            {\n+                auto itf = target.find(it.key());\n+                if (itf != target.end())\n+                {\n+                    if (!it.value().is_null() && itf.value().is_null())\n+                    {\n+                        JSON_THROW(other_error::create(503, detail::concat(\"cannot set \\\"\", it.key(), \"\\\" to null\"), &source));\n+                    }\n+\n+                    if (it.value().is_object())",
+   "line": 5280,
+   "path": "include/nlohmann/json.hpp",
+   "user": {
+    "login": "nlohmann",
+    "type": "User"
+   }
+  },
+  {
+   "body": "**Inconsistent null handling.** A null directly under a key in the target throws here (and in the second loop). But a null *nested inside* a value that is added or replaced as a whole is copied into the patch unchecked, and `merge_patch` then strips it silently:\n\n```\nmerge_diff({},      {\"a\":{\"b\":null}})  ->  {\"a\":{\"b\":null}}   // applying gives {\"a\":{}}\nmerge_diff({\"a\":1}, {\"a\":{\"b\":null}})  ->  {\"a\":{\"b\":null}}   // applying gives {\"a\":{}}\nmerge_diff(1,       {\"a\":{\"b\":null}})  ->  {\"a\":{\"b\":null}}   // applying gives {\"a\":{}}\nmerge_diff({\"a\":{\"b\":1}}, {\"a\":{\"b\":null}})                     // throws 503\n```\n\nSo whether you get an exception depends on the shape of the *source*, not on whether the target can be represented. Please pick one behavior and apply it at every depth:\n\n- **(a) Never throw.** Treat a null member in the target as \"absent\", which is how RFC 7396 itself treats nulls (\"do not make use of explicit null values\"). Then `merge_diff` works on every input, and the documented guarantee becomes `merge_patch(a, merge_diff(a, b)) == b` whenever `b` contains no null object members. I'd lean towards this.\n- **(b) Always throw.** Also scan every subtree that is copied into the patch as a whole (the `result[it.key()] = itf.value()` and `result[it.key()] = it.value()` branches) and throw if it contains a null object member.\n\nWhichever you choose, please document it on the API page.\n\nAlso, if the exception stays: the context argument is the whole `source`/`target` container, so with `JSON_DIAGNOSTICS=1` the reported path points at the parent instead of the offending member. `&itf.value()` here and `&it.value()` in the second loop would be more precise.\n\n<sub>This comment was written by Claude Code on behalf of @nlohmann.</sub>",
+   "created_at": "2026-09-27T15:59:37Z",
+   "diff_hunk": "@@ -5254,6 +5254,65 @@ class basic_json // NOLINT(cppcoreguidelines-special-member-functions,hicpp-spec\n         }\n     }\n \n+    /// @brief creates a diff as a JSON Merge Patch\n+    JSON_HEDLEY_WARN_UNUSED_RESULT\n+    static basic_json merge_diff(const basic_json& source, const basic_json& target)\n+    {\n+        if (!target.is_object())\n+        {\n+            return target;\n+        }\n+\n+        basic_json result(value_t::object);\n+\n+        if (source.is_object())\n+        {\n+            for (auto it = source.begin(); it != source.end(); ++it)\n+            {\n+                auto itf = target.find(it.key());\n+                if (itf != target.end())\n+                {\n+                    if (!it.value().is_null() && itf.value().is_null())\n+                    {\n+                        JSON_THROW(other_error::create(503, detail::concat(\"cannot set \\\"\", it.key(), \"\\\" to null\"), &source));",
+   "line": 5277,
+   "path": "include/nlohmann/json.hpp",
+   "user": {
+    "login": "nlohmann",
+    "type": "User"
+   }
+  },
+  {
+   "body": "Minor: for `ordered_json`, `find` is a linear scan, so both loops are O(n\u00b7m) in the number of keys. That's probably acceptable for typical documents, but please state the complexity on the docs page like `diff.md` and `merge_patch.md` do. Please also add an `ordered_json` test to make sure it compiles and behaves the same.\n\n<sub>This comment was written by Claude Code on behalf of @nlohmann.</sub>",
+   "created_at": "2026-09-27T15:59:37Z",
+   "diff_hunk": "@@ -5254,6 +5254,65 @@ class basic_json // NOLINT(cppcoreguidelines-special-member-functions,hicpp-spec\n         }\n     }\n \n+    /// @brief creates a diff as a JSON Merge Patch\n+    JSON_HEDLEY_WARN_UNUSED_RESULT\n+    static basic_json merge_diff(const basic_json& source, const basic_json& target)\n+    {\n+        if (!target.is_object())\n+        {\n+            return target;\n+        }\n+\n+        basic_json result(value_t::object);\n+\n+        if (source.is_object())\n+        {\n+            for (auto it = source.begin(); it != source.end(); ++it)\n+            {\n+                auto itf = target.find(it.key());\n+                if (itf != target.end())\n+                {\n+                    if (!it.value().is_null() && itf.value().is_null())\n+                    {\n+                        JSON_THROW(other_error::create(503, detail::concat(\"cannot set \\\"\", it.key(), \"\\\" to null\"), &source));\n+                    }\n+\n+                    if (it.value().is_object())\n+                    {\n+                        auto diff = merge_diff(it.value(), itf.value());\n+                        if (!diff.empty())\n+                        {\n+                            result[it.key()] = std::move(diff);\n+                        }\n+                    }\n+                    else if (it.value() != itf.value())\n+                    {\n+                        result[it.key()] = itf.value();\n+                    }\n+                }\n+                else\n+                {\n+                    result[it.key()] = value_t::null;\n+                }\n+            }\n+        }\n+\n+        for (auto it = target.begin(); it != target.end(); ++it)\n+        {\n+            auto itf = source.find(it.key());",
+   "line": 5302,
+   "path": "include/nlohmann/json.hpp",
+   "user": {
+    "login": "nlohmann",
+    "type": "User"
+   }
+  },
+  {
+   "body": "Please expand this to match the neighboring functions, i.e. `/// @brief creates a merge patch ...` plus `/// @sa https://json.nlohmann.me/api/basic_json/merge_diff/`, and add the corresponding docs page (see the review summary).\n\n<sub>This comment was written by Claude Code on behalf of @nlohmann.</sub>",
+   "created_at": "2026-09-27T15:59:37Z",
+   "diff_hunk": "@@ -5254,6 +5254,65 @@ class basic_json // NOLINT(cppcoreguidelines-special-member-functions,hicpp-spec\n         }\n     }\n \n+    /// @brief creates a diff as a JSON Merge Patch",
+   "line": 7452,
+   "path": "include/nlohmann/json.hpp",
+   "user": {
+    "login": "nlohmann",
+    "type": "User"
+   }
+  },
+  {
+   "body": "The tests only check the round-trip (`document == expected` after applying the patch). Please add assertions on the produced patch itself for a few cases, e.g. `CHECK(json::merge_diff(a, b) == R\"({\"a\":[]})\"_json)`. Together with the cases from the review summary (object \u2192 empty array, object \u2192 `{}`, nested nulls under added/replaced values, non-object source with a null-containing target), that would cover both bugs.\n\n<sub>This comment was written by Claude Code on behalf of @nlohmann.</sub>",
+   "created_at": "2026-09-27T15:59:37Z",
+   "diff_hunk": "@@ -0,0 +1,460 @@\n+//     __ _____ _____ _____\n+//  __|  |   __|     |   | |  JSON for Modern C++ (supporting code)\n+// |  |  |__   |  |  | | | |  version 3.12.0\n+// |_____|_____|_____|_|___|  https://github.com/nlohmann/json\n+//\n+// SPDX-FileCopyrightText: 2013-2025 Niels Lohmann <https://nlohmann.me>\n+// SPDX-License-Identifier: MIT\n+\n+#include \"doctest_compatibility.h\"\n+\n+#include <nlohmann/json.hpp>\n+using nlohmann::json;\n+#ifdef JSON_TEST_NO_GLOBAL_UDLS\n+    using namespace nlohmann::literals; // NOLINT(google-build-using-namespace)\n+#endif\n+\n+TEST_CASE(\"JSON Merge Patch\")\n+{\n+    SECTION(\"examples from RFC 7396\")\n+    {\n+        SECTION(\"Section 1\")\n+        {\n+            json document = R\"({\n+                \"a\": \"b\",\n+                \"c\": {\n+                    \"d\": \"e\",\n+                    \"f\": \"g\"\n+                }\n+            })\"_json;\n+\n+            json expected = R\"({\n+                \"a\": \"z\",\n+                \"c\": {\n+                    \"d\": \"e\"\n+                }\n+            })\"_json;\n+\n+            document.merge_patch(json::merge_diff(document, expected));\n+            CHECK(document == expected);\n+        }\n+\n+        SECTION(\"Section 3\")\n+        {\n+            json document = R\"({\n+                \"title\": \"Goodbye!\",\n+                \"author\": {\n+                    \"givenName\": \"John\",\n+                    \"familyName\": \"Doe\"\n+                },\n+                \"tags\": [\n+                    \"example\",\n+                    \"sample\"\n+                ],\n+                \"content\": \"This will be unchanged\"\n+            })\"_json;\n+\n+            json expected = R\"({\n+                \"title\": \"Hello!\",\n+                \"author\": {\n+                    \"givenName\": \"John\"\n+                },\n+                \"tags\": [\n+                    \"example\"\n+                ],\n+                \"content\": \"This will be unchanged\",\n+                \"phoneNumber\": \"+01-123-456-7890\"\n+            })\"_json;\n+\n+            document.merge_patch(json::merge_diff(document, expected));\n+            CHECK(document == expected);\n+        }\n+\n+        SECTION(\"Appendix A\")\n+        {\n+            SECTION(\"Example 1\")\n+            {\n+                json original = R\"({\"a\":\"b\"})\"_json;\n+                json result = R\"({\"a\":\"c\"})\"_json;\n+\n+                original.merge_patch(json::merge_diff(original, result));\n+                CHECK(original == result);\n+            }\n+\n+            SECTION(\"Example 2\")\n+            {\n+                json original = R\"({\"a\":\"b\"})\"_json;\n+                json result = R\"({\"a\":\"b\", \"b\":\"c\"})\"_json;\n+\n+                original.merge_patch(json::merge_diff(original, result));\n+                CHECK(original == result);\n+            }\n+\n+            SECTION(\"Example 3\")\n+            {\n+                json original = R\"({\"a\":\"b\"})\"_json;\n+                json result = R\"({})\"_json;\n+\n+                original.merge_patch(json::merge_diff(original, result));\n+                CHECK(original == result);\n+            }\n+\n+            SECTION(\"Example 4\")\n+            {\n+                json original = R\"({\"a\":\"b\",\"b\":\"c\"})\"_json;\n+                json result = R\"({\"b\":\"c\"})\"_json;\n+\n+                original.merge_patch(json::merge_diff(original, result));\n+                CHECK(original == result);\n+            }\n+\n+            SECTION(\"Example 5\")\n+            {\n+                json original = R\"({\"a\":[\"b\"]})\"_json;\n+                json result = R\"({\"a\":\"c\"})\"_json;\n+\n+                original.merge_patch(json::merge_diff(original, result));\n+                CHECK(original == result);\n+            }\n+\n+            SECTION(\"Example 6\")\n+            {\n+                json original = R\"({\"a\":\"c\"})\"_json;\n+                json result = R\"({\"a\":[\"b\"]})\"_json;\n+\n+                original.merge_patch(json::merge_diff(original, result));\n+                CHECK(original == result);\n+            }\n+\n+            SECTION(\"Example 7\")\n+            {\n+                json original = R\"({\"a\":{\"b\": \"c\"}})\"_json;\n+                json result = R\"({\"a\": {\"b\": \"d\"}})\"_json;\n+\n+                original.merge_patch(json::merge_diff(original, result));\n+                CHECK(original == result);\n+            }\n+\n+            SECTION(\"Example 8\")\n+            {\n+                json original = R\"({\"a\":[{\"b\":\"c\"}]})\"_json;\n+                json result = R\"({\"a\":[1]})\"_json;\n+\n+                original.merge_patch(json::merge_diff(original, result));\n+                CHECK(original == result);\n+            }\n+\n+            SECTION(\"Example 9\")\n+            {\n+                json original = R\"([\"a\",\"b\"])\"_json;\n+                json result = R\"([\"c\",\"d\"])\"_json;\n+\n+                original.merge_patch(json::merge_diff(original, result));\n+                CHECK(original == result);\n+            }\n+\n+            SECTION(\"Example 10\")\n+            {\n+                json original = R\"({\"a\":\"b\"})\"_json;\n+                json result = R\"([\"c\"])\"_json;\n+\n+                original.merge_patch(json::merge_diff(original, result));\n+                CHECK(original == result);\n+            }\n+\n+            SECTION(\"Example 11\")\n+            {\n+                json original = R\"({\"a\":\"foo\"})\"_json;\n+                json result = R\"(null)\"_json;\n+\n+                original.merge_patch(json::merge_diff(original, result));\n+                CHECK(original == result);\n+            }\n+\n+            SECTION(\"Example 12\")\n+            {\n+                json original = R\"({\"a\":\"foo\"})\"_json;\n+                json result = R\"(\"bar\")\"_json;\n+\n+                original.merge_patch(json::merge_diff(original, result));\n+                CHECK(original == result);\n+            }\n+\n+            SECTION(\"Example 13\")\n+            {\n+                json original = R\"({\"e\":null})\"_json;\n+                json result = R\"({\"e\":null,\"a\":1})\"_json;\n+\n+                original.merge_patch(json::merge_diff(original, result));\n+                CHECK(original == result);\n+            }\n+\n+            SECTION(\"Example 14\")\n+            {\n+                json original = R\"([1,2])\"_json;\n+                json result = R\"({\"a\":\"b\"})\"_json;\n+\n+                original.merge_patch(json::merge_diff(original, result));\n+                CHECK(original == result);\n+            }\n+\n+            SECTION(\"Example 15\")\n+            {\n+                json original = R\"({})\"_json;\n+                json result = R\"({\"a\":{\"bb\":{}}})\"_json;\n+\n+                original.merge_patch(json::merge_diff(original, result));\n+                CHECK(original == result);\n+            }\n+        }\n+    }\n+\n+    SECTION(\"null values\")\n+    {\n+        SECTION(\"object with null value to object\")\n+        {\n+            json original = R\"({\"a\":null})\"_json;\n+            json result = R\"({\"a\":{\"b\":\"c\"}})\"_json;\n+\n+            original.merge_patch(json::merge_diff(original, result));\n+            CHECK(original == result);\n+        }\n+\n+        SECTION(\"object to object with null value\")\n+        {\n+            json original = R\"({\"a\":{\"b\":\"c\"}})\"_json;\n+            json result = R\"({\"a\":null})\"_json;\n+\n+            json _;\n+            CHECK_THROWS_WITH_AS(_ = json::merge_diff(original, result), \"[json.exception.other_error.503] cannot set \\\"a\\\" to null\", json::other_error&);\n+        }\n+\n+        SECTION(\"primitive to object with null value\")\n+        {\n+            json original = R\"({\"a\":1})\"_json;\n+            json result   = R\"({\"a\":null})\"_json;\n+\n+            json _;\n+            CHECK_THROWS_WITH_AS(_ = json::merge_diff(original, result), \"[json.exception.other_error.503] cannot set \\\"a\\\" to null\", json::other_error&);\n+        }\n+\n+        SECTION(\"nested primitive to object with null value\")\n+        {\n+            json original = R\"({\"a\":{\"b\":1}})\"_json;\n+            json result   = R\"({\"a\":{\"b\":null}})\"_json;\n+\n+            json _;\n+            CHECK_THROWS_WITH_AS(_ = json::merge_diff(original, result), \"[json.exception.other_error.503] cannot set \\\"b\\\" to null\", json::other_error&);\n+        }\n+\n+        SECTION(\"array value to object with null value\")\n+        {\n+            json original = R\"({\"a\":[1,2]})\"_json;\n+            json result   = R\"({\"a\":null})\"_json;\n+\n+            json _;\n+            CHECK_THROWS_WITH_AS(_ = json::merge_diff(original, result), \"[json.exception.other_error.503] cannot set \\\"a\\\" to null\", json::other_error&);\n+        }\n+\n+        SECTION(\"nested object to object with null value\")\n+        {\n+            json original = R\"({\"a\":{\"b\":{\"c\":\"d\"}}})\"_json;\n+            json result   = R\"({\"a\":{\"b\":null}})\"_json;\n+\n+            json _;\n+            CHECK_THROWS_WITH_AS(_ = json::merge_diff(original, result), \"[json.exception.other_error.503] cannot set \\\"b\\\" to null\", json::other_error&);\n+        }\n+\n+        SECTION(\"nested primitive to object with null value with sibling\")\n+        {\n+            json original = R\"({\"x\":\"y\",\"a\":{\"b\":\"c\"}})\"_json;\n+            json result   = R\"({\"x\":\"y\",\"a\":{\"b\":null, \"c\":\"d\"}})\"_json;\n+\n+            json _;\n+            CHECK_THROWS_WITH_AS(_ = json::merge_diff(original, result), \"[json.exception.other_error.503] cannot set \\\"b\\\" to null\", json::other_error&);\n+        }\n+\n+        SECTION(\"empty object to object with null value\")\n+        {\n+            json original = R\"({})\"_json;\n+            json result   = R\"({\"a\":null})\"_json;\n+\n+            json _;\n+            CHECK_THROWS_WITH_AS(_ = json::merge_diff(original, result), \"[json.exception.other_error.503] cannot set \\\"a\\\" to null\", json::other_error&);\n+        }\n+\n+        SECTION(\"null to object with null value\")\n+        {\n+            json original = R\"(null)\"_json;\n+            json result   = R\"({\"a\":null})\"_json;\n+\n+            json _;\n+            CHECK_THROWS_WITH_AS(_ = json::merge_diff(original, result), \"[json.exception.other_error.503] cannot set \\\"a\\\" to null\", json::other_error&);\n+        }\n+\n+        SECTION(\"array to object with null value\")\n+        {\n+            json original = R\"([])\"_json;\n+            json result   = R\"({\"a\":null})\"_json;\n+\n+            json _;\n+            CHECK_THROWS_WITH_AS(_ = json::merge_diff(original, result), \"[json.exception.other_error.503] cannot set \\\"a\\\" to null\", json::other_error&);\n+        }\n+    }\n+\n+    SECTION(\"no change\")\n+    {\n+        SECTION(\"object\")\n+        {\n+            json original = R\"({\"a\":\"b\",\"b\":\"c\"})\"_json;\n+            json result   = R\"({\"a\":\"b\",\"b\":\"c\"})\"_json;\n+\n+            auto patch = json::merge_diff(original, result);\n+            CHECK(patch.empty());\n+            original.merge_patch(patch);\n+            CHECK(original == result);\n+        }\n+\n+        SECTION(\"empty object\")\n+        {\n+            json original = R\"({})\"_json;\n+            json result   = R\"({})\"_json;\n+\n+            auto patch = json::merge_diff(original, result);\n+            CHECK(patch.empty());\n+            original.merge_patch(patch);\n+            CHECK(original == result);\n+        }\n+\n+        SECTION(\"array\")\n+        {\n+            json original = R\"([1,2,3])\"_json;\n+            json result   = R\"([1,2,3])\"_json;\n+\n+            auto patch = json::merge_diff(original, result);\n+            CHECK(!patch.empty());\n+            original.merge_patch(patch);\n+            CHECK(original == result);\n+        }\n+\n+        SECTION(\"null\")\n+        {\n+            json original = R\"(null)\"_json;\n+            json result   = R\"(null)\"_json;\n+\n+            auto patch = json::merge_diff(original, result);\n+            CHECK(patch.empty());\n+            original.merge_patch(patch);\n+            CHECK(original == result);\n+        }\n+\n+        SECTION(\"string\")\n+        {\n+            json original = R\"(\"ab\")\"_json;\n+            json result   = R\"(\"ab\")\"_json;\n+\n+            auto patch = json::merge_diff(original, result);\n+            CHECK(!patch.empty());\n+            original.merge_patch(patch);\n+            CHECK(original == result);\n+        }\n+\n+        SECTION(\"number\")\n+        {\n+            json original = R\"(42)\"_json;\n+            json result   = R\"(42)\"_json;\n+\n+            auto patch = json::merge_diff(original, result);\n+            CHECK(!patch.empty());\n+            original.merge_patch(patch);\n+            CHECK(original == result);\n+        }\n+    }\n+\n+    SECTION(\"primitives\")\n+    {\n+        SECTION(\"string\")\n+        {\n+            json original = R\"(\"a\")\"_json;\n+            json result   = R\"(\"b\")\"_json;\n+\n+            original.merge_patch(json::merge_diff(original, result));\n+            CHECK(original == result);\n+        }\n+\n+        SECTION(\"number\")\n+        {\n+            json original = R\"(1)\"_json;\n+            json result   = R\"(2)\"_json;\n+\n+            original.merge_patch(json::merge_diff(original, result));\n+            CHECK(original == result);\n+        }\n+\n+        SECTION(\"boolean\")\n+        {\n+            json original = R\"(false)\"_json;\n+            json result   = R\"(true)\"_json;\n+\n+            original.merge_patch(json::merge_diff(original, result));\n+            CHECK(original == result);\n+        }\n+\n+        SECTION(\"object to primitive\")\n+        {\n+            json original = R\"({\"a\":{\"b\":\"c\"}})\"_json;\n+            json result   = R\"({\"a\":1})\"_json;\n+\n+            original.merge_patch(json::merge_diff(original, result));\n+            CHECK(original == result);\n+        }\n+\n+        SECTION(\"primitive to object\")\n+        {\n+            json original = R\"({\"a\":1})\"_json;\n+            json result   = R\"({\"a\":{\"b\":\"c\"}})\"_json;\n+\n+            original.merge_patch(json::merge_diff(original, result));\n+            CHECK(original == result);\n+        }\n+    }\n+\n+    SECTION(\"arrays\")\n+    {\n+        SECTION(\"array to array\")\n+        {\n+            json original = R\"([1,2,3])\"_json;\n+            json result   = R\"([1,2,4])\"_json;\n+\n+            original.merge_patch(json::merge_diff(original, result));\n+            CHECK(original == result);\n+        }\n+\n+        SECTION(\"array to empty array\")\n+        {\n+            json original = R\"([1,2,3])\"_json;\n+            json result   = R\"([])\"_json;\n+\n+            original.merge_patch(json::merge_diff(original, result));\n+            CHECK(original == result);\n+        }",
+   "line": 808,
+   "path": "tests/src/unit-merge_diff.cpp",
+   "user": {
+    "login": "nlohmann",
+    "type": "User"
+   }
+  },
+  {
+   "body": "Cases 1-3 are interesting, hadn't thought of that.\nSo the choice is between inconsistent targets pre/post patch if it contains nulls versus not accepting null in the target.",
+   "created_at": "2026-10-01T21:35:37Z",
+   "diff_hunk": "@@ -5254,6 +5254,65 @@ class basic_json // NOLINT(cppcoreguidelines-special-member-functions,hicpp-spec\n         }\n     }\n \n+    /// @brief creates a diff as a JSON Merge Patch\n+    JSON_HEDLEY_WARN_UNUSED_RESULT\n+    static basic_json merge_diff(const basic_json& source, const basic_json& target)\n+    {\n+        if (!target.is_object())\n+        {\n+            return target;\n+        }\n+\n+        basic_json result(value_t::object);\n+\n+        if (source.is_object())\n+        {\n+            for (auto it = source.begin(); it != source.end(); ++it)\n+            {\n+                auto itf = target.find(it.key());\n+                if (itf != target.end())\n+                {\n+                    if (!it.value().is_null() && itf.value().is_null())\n+                    {\n+                        JSON_THROW(other_error::create(503, detail::concat(\"cannot set \\\"\", it.key(), \"\\\" to null\"), &source));",
+   "line": 5277,
+   "path": "include/nlohmann/json.hpp",
+   "user": {
+    "login": "satelliteprogrammer",
+    "type": "User"
+   }
+  },
+  {
+   "body": "I find (a) elegant, as it actually achieves my original goal of logging diffs, even if either the source or target contain null values (`std::nullopt` for instance).",
+   "created_at": "2026-10-01T22:40:46Z",
+   "diff_hunk": "@@ -5254,6 +5254,65 @@ class basic_json // NOLINT(cppcoreguidelines-special-member-functions,hicpp-spec\n         }\n     }\n \n+    /// @brief creates a diff as a JSON Merge Patch\n+    JSON_HEDLEY_WARN_UNUSED_RESULT\n+    static basic_json merge_diff(const basic_json& source, const basic_json& target)\n+    {\n+        if (!target.is_object())\n+        {\n+            return target;\n+        }\n+\n+        basic_json result(value_t::object);\n+\n+        if (source.is_object())\n+        {\n+            for (auto it = source.begin(); it != source.end(); ++it)\n+            {\n+                auto itf = target.find(it.key());\n+                if (itf != target.end())\n+                {\n+                    if (!it.value().is_null() && itf.value().is_null())\n+                    {\n+                        JSON_THROW(other_error::create(503, detail::concat(\"cannot set \\\"\", it.key(), \"\\\" to null\"), &source));",
+   "line": 5277,
+   "path": "include/nlohmann/json.hpp",
+   "user": {
+    "login": "satelliteprogrammer",
+    "type": "User"
+   }
+  },
+  {
+   "body": "Fixed. Regression tests added.",
+   "created_at": "2026-10-01T22:52:27Z",
+   "diff_hunk": "@@ -5254,6 +5254,65 @@ class basic_json // NOLINT(cppcoreguidelines-special-member-functions,hicpp-spec\n         }\n     }\n \n+    /// @brief creates a diff as a JSON Merge Patch\n+    JSON_HEDLEY_WARN_UNUSED_RESULT\n+    static basic_json merge_diff(const basic_json& source, const basic_json& target)\n+    {\n+        if (!target.is_object())\n+        {\n+            return target;\n+        }\n+\n+        basic_json result(value_t::object);\n+\n+        if (source.is_object())\n+        {\n+            for (auto it = source.begin(); it != source.end(); ++it)\n+            {\n+                auto itf = target.find(it.key());\n+                if (itf != target.end())\n+                {\n+                    if (!it.value().is_null() && itf.value().is_null())\n+                    {\n+                        JSON_THROW(other_error::create(503, detail::concat(\"cannot set \\\"\", it.key(), \"\\\" to null\"), &source));\n+                    }\n+\n+                    if (it.value().is_object())",
+   "line": 5280,
+   "path": "include/nlohmann/json.hpp",
+   "user": {
+    "login": "satelliteprogrammer",
+    "type": "User"
+   }
+  },
+  {
+   "body": "Done. The `merge_diff` itself is fine, but the `merge_patch` will not always yield the original order.",
+   "created_at": "2026-10-01T23:03:09Z",
+   "diff_hunk": "@@ -5254,6 +5254,65 @@ class basic_json // NOLINT(cppcoreguidelines-special-member-functions,hicpp-spec\n         }\n     }\n \n+    /// @brief creates a diff as a JSON Merge Patch\n+    JSON_HEDLEY_WARN_UNUSED_RESULT\n+    static basic_json merge_diff(const basic_json& source, const basic_json& target)\n+    {\n+        if (!target.is_object())\n+        {\n+            return target;\n+        }\n+\n+        basic_json result(value_t::object);\n+\n+        if (source.is_object())\n+        {\n+            for (auto it = source.begin(); it != source.end(); ++it)\n+            {\n+                auto itf = target.find(it.key());\n+                if (itf != target.end())\n+                {\n+                    if (!it.value().is_null() && itf.value().is_null())\n+                    {\n+                        JSON_THROW(other_error::create(503, detail::concat(\"cannot set \\\"\", it.key(), \"\\\" to null\"), &source));\n+                    }\n+\n+                    if (it.value().is_object())\n+                    {\n+                        auto diff = merge_diff(it.value(), itf.value());\n+                        if (!diff.empty())\n+                        {\n+                            result[it.key()] = std::move(diff);\n+                        }\n+                    }\n+                    else if (it.value() != itf.value())\n+                    {\n+                        result[it.key()] = itf.value();\n+                    }\n+                }\n+                else\n+                {\n+                    result[it.key()] = value_t::null;\n+                }\n+            }\n+        }\n+\n+        for (auto it = target.begin(); it != target.end(); ++it)\n+        {\n+            auto itf = source.find(it.key());",
+   "line": 5302,
+   "path": "include/nlohmann/json.hpp",
+   "user": {
+    "login": "satelliteprogrammer",
+    "type": "User"
+   }
+  },
+  {
+   "body": "Done.",
+   "created_at": "2026-10-01T23:07:06Z",
+   "diff_hunk": "@@ -5254,6 +5254,65 @@ class basic_json // NOLINT(cppcoreguidelines-special-member-functions,hicpp-spec\n         }\n     }\n \n+    /// @brief creates a diff as a JSON Merge Patch",
+   "line": 7452,
+   "path": "include/nlohmann/json.hpp",
+   "user": {
+    "login": "satelliteprogrammer",
+    "type": "User"
+   }
+  },
+  {
+   "body": "Added CHECKs for all patches, plus regression tests for all findings.",
+   "created_at": "2026-10-01T23:10:44Z",
+   "diff_hunk": "@@ -0,0 +1,460 @@\n+//     __ _____ _____ _____\n+//  __|  |   __|     |   | |  JSON for Modern C++ (supporting code)\n+// |  |  |__   |  |  | | | |  version 3.12.0\n+// |_____|_____|_____|_|___|  https://github.com/nlohmann/json\n+//\n+// SPDX-FileCopyrightText: 2013-2025 Niels Lohmann <https://nlohmann.me>\n+// SPDX-License-Identifier: MIT\n+\n+#include \"doctest_compatibility.h\"\n+\n+#include <nlohmann/json.hpp>\n+using nlohmann::json;\n+#ifdef JSON_TEST_NO_GLOBAL_UDLS\n+    using namespace nlohmann::literals; // NOLINT(google-build-using-namespace)\n+#endif\n+\n+TEST_CASE(\"JSON Merge Patch\")\n+{\n+    SECTION(\"examples from RFC 7396\")\n+    {\n+        SECTION(\"Section 1\")\n+        {\n+            json document = R\"({\n+                \"a\": \"b\",\n+                \"c\": {\n+                    \"d\": \"e\",\n+                    \"f\": \"g\"\n+                }\n+            })\"_json;\n+\n+            json expected = R\"({\n+                \"a\": \"z\",\n+                \"c\": {\n+                    \"d\": \"e\"\n+                }\n+            })\"_json;\n+\n+            document.merge_patch(json::merge_diff(document, expected));\n+            CHECK(document == expected);\n+        }\n+\n+        SECTION(\"Section 3\")\n+        {\n+            json document = R\"({\n+                \"title\": \"Goodbye!\",\n+                \"author\": {\n+                    \"givenName\": \"John\",\n+                    \"familyName\": \"Doe\"\n+                },\n+                \"tags\": [\n+                    \"example\",\n+                    \"sample\"\n+                ],\n+                \"content\": \"This will be unchanged\"\n+            })\"_json;\n+\n+            json expected = R\"({\n+                \"title\": \"Hello!\",\n+                \"author\": {\n+                    \"givenName\": \"John\"\n+                },\n+                \"tags\": [\n+                    \"example\"\n+                ],\n+                \"content\": \"This will be unchanged\",\n+                \"phoneNumber\": \"+01-123-456-7890\"\n+            })\"_json;\n+\n+            document.merge_patch(json::merge_diff(document, expected));\n+            CHECK(document == expected);\n+        }\n+\n+        SECTION(\"Appendix A\")\n+        {\n+            SECTION(\"Example 1\")\n+            {\n+                json original = R\"({\"a\":\"b\"})\"_json;\n+                json result = R\"({\"a\":\"c\"})\"_json;\n+\n+                original.merge_patch(json::merge_diff(original, result));\n+                CHECK(original == result);\n+            }\n+\n+            SECTION(\"Example 2\")\n+            {\n+                json original = R\"({\"a\":\"b\"})\"_json;\n+                json result = R\"({\"a\":\"b\", \"b\":\"c\"})\"_json;\n+\n+                original.merge_patch(json::merge_diff(original, result));\n+                CHECK(original == result);\n+            }\n+\n+            SECTION(\"Example 3\")\n+            {\n+                json original = R\"({\"a\":\"b\"})\"_json;\n+                json result = R\"({})\"_json;\n+\n+                original.merge_patch(json::merge_diff(original, result));\n+                CHECK(original == result);\n+            }\n+\n+            SECTION(\"Example 4\")\n+            {\n+                json original = R\"({\"a\":\"b\",\"b\":\"c\"})\"_json;\n+                json result = R\"({\"b\":\"c\"})\"_json;\n+\n+                original.merge_patch(json::merge_diff(original, result));\n+                CHECK(original == result);\n+            }\n+\n+            SECTION(\"Example 5\")\n+            {\n+                json original = R\"({\"a\":[\"b\"]})\"_json;\n+                json result = R\"({\"a\":\"c\"})\"_json;\n+\n+                original.merge_patch(json::merge_diff(original, result));\n+                CHECK(original == result);\n+            }\n+\n+            SECTION(\"Example 6\")\n+            {\n+                json original = R\"({\"a\":\"c\"})\"_json;\n+                json result = R\"({\"a\":[\"b\"]})\"_json;\n+\n+                original.merge_patch(json::merge_diff(original, result));\n+                CHECK(original == result);\n+            }\n+\n+            SECTION(\"Example 7\")\n+            {\n+                json original = R\"({\"a\":{\"b\": \"c\"}})\"_json;\n+                json result = R\"({\"a\": {\"b\": \"d\"}})\"_json;\n+\n+                original.merge_patch(json::merge_diff(original, result));\n+                CHECK(original == result);\n+            }\n+\n+            SECTION(\"Example 8\")\n+            {\n+                json original = R\"({\"a\":[{\"b\":\"c\"}]})\"_json;\n+                json result = R\"({\"a\":[1]})\"_json;\n+\n+                original.merge_patch(json::merge_diff(original, result));\n+                CHECK(original == result);\n+            }\n+\n+            SECTION(\"Example 9\")\n+            {\n+                json original = R\"([\"a\",\"b\"])\"_json;\n+                json result = R\"([\"c\",\"d\"])\"_json;\n+\n+                original.merge_patch(json::merge_diff(original, result));\n+                CHECK(original == result);\n+            }\n+\n+            SECTION(\"Example 10\")\n+            {\n+                json original = R\"({\"a\":\"b\"})\"_json;\n+                json result = R\"([\"c\"])\"_json;\n+\n+                original.merge_patch(json::merge_diff(original, result));\n+                CHECK(original == result);\n+            }\n+\n+            SECTION(\"Example 11\")\n+            {\n+                json original = R\"({\"a\":\"foo\"})\"_json;\n+                json result = R\"(null)\"_json;\n+\n+                original.merge_patch(json::merge_diff(original, result));\n+                CHECK(original == result);\n+            }\n+\n+            SECTION(\"Example 12\")\n+            {\n+                json original = R\"({\"a\":\"foo\"})\"_json;\n+                json result = R\"(\"bar\")\"_json;\n+\n+                original.merge_patch(json::merge_diff(original, result));\n+                CHECK(original == result);\n+            }\n+\n+            SECTION(\"Example 13\")\n+            {\n+                json original = R\"({\"e\":null})\"_json;\n+                json result = R\"({\"e\":null,\"a\":1})\"_json;\n+\n+                original.merge_patch(json::merge_diff(original, result));\n+                CHECK(original == result);\n+            }\n+\n+            SECTION(\"Example 14\")\n+            {\n+                json original = R\"([1,2])\"_json;\n+                json result = R\"({\"a\":\"b\"})\"_json;\n+\n+                original.merge_patch(json::merge_diff(original, result));\n+                CHECK(original == result);\n+            }\n+\n+            SECTION(\"Example 15\")\n+            {\n+                json original = R\"({})\"_json;\n+                json result = R\"({\"a\":{\"bb\":{}}})\"_json;\n+\n+                original.merge_patch(json::merge_diff(original, result));\n+                CHECK(original == result);\n+            }\n+        }\n+    }\n+\n+    SECTION(\"null values\")\n+    {\n+        SECTION(\"object with null value to object\")\n+        {\n+            json original = R\"({\"a\":null})\"_json;\n+            json result = R\"({\"a\":{\"b\":\"c\"}})\"_json;\n+\n+            original.merge_patch(json::merge_diff(original, result));\n+            CHECK(original == result);\n+        }\n+\n+        SECTION(\"object to object with null value\")\n+        {\n+            json original = R\"({\"a\":{\"b\":\"c\"}})\"_json;\n+            json result = R\"({\"a\":null})\"_json;\n+\n+            json _;\n+            CHECK_THROWS_WITH_AS(_ = json::merge_diff(original, result), \"[json.exception.other_error.503] cannot set \\\"a\\\" to null\", json::other_error&);\n+        }\n+\n+        SECTION(\"primitive to object with null value\")\n+        {\n+            json original = R\"({\"a\":1})\"_json;\n+            json result   = R\"({\"a\":null})\"_json;\n+\n+            json _;\n+            CHECK_THROWS_WITH_AS(_ = json::merge_diff(original, result), \"[json.exception.other_error.503] cannot set \\\"a\\\" to null\", json::other_error&);\n+        }\n+\n+        SECTION(\"nested primitive to object with null value\")\n+        {\n+            json original = R\"({\"a\":{\"b\":1}})\"_json;\n+            json result   = R\"({\"a\":{\"b\":null}})\"_json;\n+\n+            json _;\n+            CHECK_THROWS_WITH_AS(_ = json::merge_diff(original, result), \"[json.exception.other_error.503] cannot set \\\"b\\\" to null\", json::other_error&);\n+        }\n+\n+        SECTION(\"array value to object with null value\")\n+        {\n+            json original = R\"({\"a\":[1,2]})\"_json;\n+            json result   = R\"({\"a\":null})\"_json;\n+\n+            json _;\n+            CHECK_THROWS_WITH_AS(_ = json::merge_diff(original, result), \"[json.exception.other_error.503] cannot set \\\"a\\\" to null\", json::other_error&);\n+        }\n+\n+        SECTION(\"nested object to object with null value\")\n+        {\n+            json original = R\"({\"a\":{\"b\":{\"c\":\"d\"}}})\"_json;\n+            json result   = R\"({\"a\":{\"b\":null}})\"_json;\n+\n+            json _;\n+            CHECK_THROWS_WITH_AS(_ = json::merge_diff(original, result), \"[json.exception.other_error.503] cannot set \\\"b\\\" to null\", json::other_error&);\n+        }\n+\n+        SECTION(\"nested primitive to object with null value with sibling\")\n+        {\n+            json original = R\"({\"x\":\"y\",\"a\":{\"b\":\"c\"}})\"_json;\n+            json result   = R\"({\"x\":\"y\",\"a\":{\"b\":null, \"c\":\"d\"}})\"_json;\n+\n+            json _;\n+            CHECK_THROWS_WITH_AS(_ = json::merge_diff(original, result), \"[json.exception.other_error.503] cannot set \\\"b\\\" to null\", json::other_error&);\n+        }\n+\n+        SECTION(\"empty object to object with null value\")\n+        {\n+            json original = R\"({})\"_json;\n+            json result   = R\"({\"a\":null})\"_json;\n+\n+            json _;\n+            CHECK_THROWS_WITH_AS(_ = json::merge_diff(original, result), \"[json.exception.other_error.503] cannot set \\\"a\\\" to null\", json::other_error&);\n+        }\n+\n+        SECTION(\"null to object with null value\")\n+        {\n+            json original = R\"(null)\"_json;\n+            json result   = R\"({\"a\":null})\"_json;\n+\n+            json _;\n+            CHECK_THROWS_WITH_AS(_ = json::merge_diff(original, result), \"[json.exception.other_error.503] cannot set \\\"a\\\" to null\", json::other_error&);\n+        }\n+\n+        SECTION(\"array to object with null value\")\n+        {\n+            json original = R\"([])\"_json;\n+            json result   = R\"({\"a\":null})\"_json;\n+\n+            json _;\n+            CHECK_THROWS_WITH_AS(_ = json::merge_diff(original, result), \"[json.exception.other_error.503] cannot set \\\"a\\\" to null\", json::other_error&);\n+        }\n+    }\n+\n+    SECTION(\"no change\")\n+    {\n+        SECTION(\"object\")\n+        {\n+            json original = R\"({\"a\":\"b\",\"b\":\"c\"})\"_json;\n+            json result   = R\"({\"a\":\"b\",\"b\":\"c\"})\"_json;\n+\n+            auto patch = json::merge_diff(original, result);\n+            CHECK(patch.empty());\n+            original.merge_patch(patch);\n+            CHECK(original == result);\n+        }\n+\n+        SECTION(\"empty object\")\n+        {\n+            json original = R\"({})\"_json;\n+            json result   = R\"({})\"_json;\n+\n+            auto patch = json::merge_diff(original, result);\n+            CHECK(patch.empty());\n+            original.merge_patch(patch);\n+            CHECK(original == result);\n+        }\n+\n+        SECTION(\"array\")\n+        {\n+            json original = R\"([1,2,3])\"_json;\n+            json result   = R\"([1,2,3])\"_json;\n+\n+            auto patch = json::merge_diff(original, result);\n+            CHECK(!patch.empty());\n+            original.merge_patch(patch);\n+            CHECK(original == result);\n+        }\n+\n+        SECTION(\"null\")\n+        {\n+            json original = R\"(null)\"_json;\n+            json result   = R\"(null)\"_json;\n+\n+            auto patch = json::merge_diff(original, result);\n+            CHECK(patch.empty());\n+            original.merge_patch(patch);\n+            CHECK(original == result);\n+        }\n+\n+        SECTION(\"string\")\n+        {\n+            json original = R\"(\"ab\")\"_json;\n+            json result   = R\"(\"ab\")\"_json;\n+\n+            auto patch = json::merge_diff(original, result);\n+            CHECK(!patch.empty());\n+            original.merge_patch(patch);\n+            CHECK(original == result);\n+        }\n+\n+        SECTION(\"number\")\n+        {\n+            json original = R\"(42)\"_json;\n+            json result   = R\"(42)\"_json;\n+\n+            auto patch = json::merge_diff(original, result);\n+            CHECK(!patch.empty());\n+            original.merge_patch(patch);\n+            CHECK(original == result);\n+        }\n+    }\n+\n+    SECTION(\"primitives\")\n+    {\n+        SECTION(\"string\")\n+        {\n+            json original = R\"(\"a\")\"_json;\n+            json result   = R\"(\"b\")\"_json;\n+\n+            original.merge_patch(json::merge_diff(original, result));\n+            CHECK(original == result);\n+        }\n+\n+        SECTION(\"number\")\n+        {\n+            json original = R\"(1)\"_json;\n+            json result   = R\"(2)\"_json;\n+\n+            original.merge_patch(json::merge_diff(original, result));\n+            CHECK(original == result);\n+        }\n+\n+        SECTION(\"boolean\")\n+        {\n+            json original = R\"(false)\"_json;\n+            json result   = R\"(true)\"_json;\n+\n+            original.merge_patch(json::merge_diff(original, result));\n+            CHECK(original == result);\n+        }\n+\n+        SECTION(\"object to primitive\")\n+        {\n+            json original = R\"({\"a\":{\"b\":\"c\"}})\"_json;\n+            json result   = R\"({\"a\":1})\"_json;\n+\n+            original.merge_patch(json::merge_diff(original, result));\n+            CHECK(original == result);\n+        }\n+\n+        SECTION(\"primitive to object\")\n+        {\n+            json original = R\"({\"a\":1})\"_json;\n+            json result   = R\"({\"a\":{\"b\":\"c\"}})\"_json;\n+\n+            original.merge_patch(json::merge_diff(original, result));\n+            CHECK(original == result);\n+        }\n+    }\n+\n+    SECTION(\"arrays\")\n+    {\n+        SECTION(\"array to array\")\n+        {\n+            json original = R\"([1,2,3])\"_json;\n+            json result   = R\"([1,2,4])\"_json;\n+\n+            original.merge_patch(json::merge_diff(original, result));\n+            CHECK(original == result);\n+        }\n+\n+        SECTION(\"array to empty array\")\n+        {\n+            json original = R\"([1,2,3])\"_json;\n+            json result   = R\"([])\"_json;\n+\n+            original.merge_patch(json::merge_diff(original, result));\n+            CHECK(original == result);\n+        }",
+   "line": 808,
+   "path": "tests/src/unit-merge_diff.cpp",
+   "user": {
+    "login": "satelliteprogrammer",
+    "type": "User"
+   }
+  },
+  {
+   "body": "**Nit (non-blocking):** when a key is missing from `source` and its value in `target` is `null`, this copies `\"a\": null` into the patch. Applying it removes a member that isn't there, so it has no effect. Since the docs say a `null` member of `target` is treated as absent, it would be a bit cleaner to leave it out:\n\n```cpp\nif (itf == source.end() && !it.value().is_null())\n```\n\n(The test \"empty object to object with null value\" would then expect `{}`.)\n\n<sub>This comment was written by Claude Code on behalf of @nlohmann.</sub>",
+   "created_at": "2026-10-02T06:07:35Z",
+   "diff_hunk": "@@ -6945,6 +6945,57 @@ class basic_json // NOLINT(cppcoreguidelines-special-member-functions,hicpp-spec\n     }\n \n   public:\n+    /// @brief creates a diff as a JSON Merge Patch\n+    /// @sa https://json.nlohmann.me/api/basic_json/merge_diff/\n+    JSON_HEDLEY_WARN_UNUSED_RESULT\n+    static basic_json merge_diff(const basic_json& source, const basic_json& target)\n+    {\n+        if (!target.is_object())\n+        {\n+            return target;\n+        }\n+\n+        basic_json result(value_t::object);\n+\n+        if (source.is_object())\n+        {\n+            for (auto it = source.begin(); it != source.end(); ++it)\n+            {\n+                auto itf = target.find(it.key());\n+                if (itf != target.end())\n+                {\n+                    if (it.value().is_object() && itf.value().is_object())\n+                    {\n+                        auto diff = merge_diff(it.value(), itf.value());\n+                        if (!diff.empty())\n+                        {\n+                            result[it.key()] = std::move(diff);\n+                        }\n+                    }\n+                    else if (it.value() != itf.value())\n+                    {\n+                        result[it.key()] = itf.value();\n+                    }\n+                }\n+                else\n+                {\n+                    result[it.key()] = value_t::null;\n+                }\n+            }\n+        }\n+\n+        for (auto it = target.begin(); it != target.end(); ++it)\n+        {\n+            auto itf = source.find(it.key());\n+            if (itf == source.end())\n+            {\n+                result[it.key()] = it.value();",
+   "line": 6992,
+   "path": "include/nlohmann/json.hpp",
+   "user": {
+    "login": "nlohmann",
+    "type": "User"
+   }
+  },
+  {
+   "body": "**Nit (non-blocking):** \"yields always\" \u2192 \"always yields\".\n\n<sub>This comment was written by Claude Code on behalf of @nlohmann.</sub>",
+   "created_at": "2026-10-02T06:07:35Z",
+   "diff_hunk": "@@ -0,0 +1,78 @@\n+# <small>nlohmann::basic_json::</small>merge_diff\n+\n+```cpp\n+static basic_json merge_diff(const basic_json& source,\n+                             const basic_json& target);\n+```\n+\n+Creates a [JSON Merge Patch](https://tools.ietf.org/html/rfc7396) so that value `source` can be changed into the value\n+`target` by calling the [`merge_patch`](merge_patch.md) function. The patch contains only what differs: changed and\n+added members with their new values, and removed members with the value `#!json null`. Nested objects are compared\n+member by member; any other value that differs, including an array, is replaced as a whole.\n+\n+For two JSON values `source` and `target`, where `target` contains no object member whose value is `#!json null`, the\n+following code yields always `#!cpp true`:",
+   "line": 14,
+   "path": "docs/mkdocs/docs/api/basic_json/merge_diff.md",
+   "user": {
+    "login": "nlohmann",
+    "type": "User"
+   }
+  },
+  {
+   "body": "**Nit (non-blocking):** `merge_diff` is static and doesn't modify anything, so \"no changes in the JSON value\" reads a bit odd. Maybe: \"Strong guarantee: `source` and `target` are never modified.\"\n\n<sub>This comment was written by Claude Code on behalf of @nlohmann.</sub>",
+   "created_at": "2026-10-02T06:07:35Z",
+   "diff_hunk": "@@ -0,0 +1,78 @@\n+# <small>nlohmann::basic_json::</small>merge_diff\n+\n+```cpp\n+static basic_json merge_diff(const basic_json& source,\n+                             const basic_json& target);\n+```\n+\n+Creates a [JSON Merge Patch](https://tools.ietf.org/html/rfc7396) so that value `source` can be changed into the value\n+`target` by calling the [`merge_patch`](merge_patch.md) function. The patch contains only what differs: changed and\n+added members with their new values, and removed members with the value `#!json null`. Nested objects are compared\n+member by member; any other value that differs, including an array, is replaced as a whole.\n+\n+For two JSON values `source` and `target`, where `target` contains no object member whose value is `#!json null`, the\n+following code yields always `#!cpp true`:\n+```cpp\n+basic_json patched = source;\n+patched.merge_patch(merge_diff(source, target));\n+patched == target;\n+```\n+\n+## Parameters\n+\n+`source` (in)\n+:   JSON value to compare from\n+\n+`target` (in)\n+:   JSON value to compare against\n+\n+## Return value\n+\n+a JSON Merge Patch to convert the `source` to `target`\n+\n+## Exception safety\n+\n+Strong guarantee: if an exception is thrown, there are no changes in the JSON value.",
+   "line": 35,
+   "path": "docs/mkdocs/docs/api/basic_json/merge_diff.md",
+   "user": {
+    "login": "nlohmann",
+    "type": "User"
+   }
+  },
+  {
+   "body": "**Nit (non-blocking):** this leaves out the cost of comparing changed non-object values: two arrays (or nested arrays inside them) are compared element by element with `!=`. Something like \"plus the cost of comparing non-object values\" would make it complete.\n\n<sub>This comment was written by Claude Code on behalf of @nlohmann.</sub>",
+   "created_at": "2026-10-02T06:07:35Z",
+   "diff_hunk": "@@ -0,0 +1,78 @@\n+# <small>nlohmann::basic_json::</small>merge_diff\n+\n+```cpp\n+static basic_json merge_diff(const basic_json& source,\n+                             const basic_json& target);\n+```\n+\n+Creates a [JSON Merge Patch](https://tools.ietf.org/html/rfc7396) so that value `source` can be changed into the value\n+`target` by calling the [`merge_patch`](merge_patch.md) function. The patch contains only what differs: changed and\n+added members with their new values, and removed members with the value `#!json null`. Nested objects are compared\n+member by member; any other value that differs, including an array, is replaced as a whole.\n+\n+For two JSON values `source` and `target`, where `target` contains no object member whose value is `#!json null`, the\n+following code yields always `#!cpp true`:\n+```cpp\n+basic_json patched = source;\n+patched.merge_patch(merge_diff(source, target));\n+patched == target;\n+```\n+\n+## Parameters\n+\n+`source` (in)\n+:   JSON value to compare from\n+\n+`target` (in)\n+:   JSON value to compare against\n+\n+## Return value\n+\n+a JSON Merge Patch to convert the `source` to `target`\n+\n+## Exception safety\n+\n+Strong guarantee: if an exception is thrown, there are no changes in the JSON value.\n+\n+## Complexity\n+\n+Linear in the sizes of `source` and `target`, times the cost of looking up a key in an object: logarithmic in the size",
+   "line": 39,
+   "path": "docs/mkdocs/docs/api/basic_json/merge_diff.md",
+   "user": {
+    "login": "nlohmann",
+    "type": "User"
+   }
+  },
+  {
+   "body": "I found it slightly off as well, but it's the same sentence that's in `diff`.",
+   "created_at": "2026-10-02T17:31:29Z",
+   "diff_hunk": "@@ -0,0 +1,78 @@\n+# <small>nlohmann::basic_json::</small>merge_diff\n+\n+```cpp\n+static basic_json merge_diff(const basic_json& source,\n+                             const basic_json& target);\n+```\n+\n+Creates a [JSON Merge Patch](https://tools.ietf.org/html/rfc7396) so that value `source` can be changed into the value\n+`target` by calling the [`merge_patch`](merge_patch.md) function. The patch contains only what differs: changed and\n+added members with their new values, and removed members with the value `#!json null`. Nested objects are compared\n+member by member; any other value that differs, including an array, is replaced as a whole.\n+\n+For two JSON values `source` and `target`, where `target` contains no object member whose value is `#!json null`, the\n+following code yields always `#!cpp true`:",
+   "line": 14,
+   "path": "docs/mkdocs/docs/api/basic_json/merge_diff.md",
+   "user": {
+    "login": "satelliteprogrammer",
+    "type": "User"
+   }
+  },
+  {
+   "body": "Again, same sentence as in `diff`. Should I change both?",
+   "created_at": "2026-10-02T17:33:32Z",
+   "diff_hunk": "@@ -0,0 +1,78 @@\n+# <small>nlohmann::basic_json::</small>merge_diff\n+\n+```cpp\n+static basic_json merge_diff(const basic_json& source,\n+                             const basic_json& target);\n+```\n+\n+Creates a [JSON Merge Patch](https://tools.ietf.org/html/rfc7396) so that value `source` can be changed into the value\n+`target` by calling the [`merge_patch`](merge_patch.md) function. The patch contains only what differs: changed and\n+added members with their new values, and removed members with the value `#!json null`. Nested objects are compared\n+member by member; any other value that differs, including an array, is replaced as a whole.\n+\n+For two JSON values `source` and `target`, where `target` contains no object member whose value is `#!json null`, the\n+following code yields always `#!cpp true`:\n+```cpp\n+basic_json patched = source;\n+patched.merge_patch(merge_diff(source, target));\n+patched == target;\n+```\n+\n+## Parameters\n+\n+`source` (in)\n+:   JSON value to compare from\n+\n+`target` (in)\n+:   JSON value to compare against\n+\n+## Return value\n+\n+a JSON Merge Patch to convert the `source` to `target`\n+\n+## Exception safety\n+\n+Strong guarantee: if an exception is thrown, there are no changes in the JSON value.",
+   "line": 35,
+   "path": "docs/mkdocs/docs/api/basic_json/merge_diff.md",
+   "user": {
+    "login": "satelliteprogrammer",
+    "type": "User"
+   }
+  },
+  {
+   "body": "Good point.",
+   "created_at": "2026-10-02T17:34:26Z",
+   "diff_hunk": "@@ -0,0 +1,78 @@\n+# <small>nlohmann::basic_json::</small>merge_diff\n+\n+```cpp\n+static basic_json merge_diff(const basic_json& source,\n+                             const basic_json& target);\n+```\n+\n+Creates a [JSON Merge Patch](https://tools.ietf.org/html/rfc7396) so that value `source` can be changed into the value\n+`target` by calling the [`merge_patch`](merge_patch.md) function. The patch contains only what differs: changed and\n+added members with their new values, and removed members with the value `#!json null`. Nested objects are compared\n+member by member; any other value that differs, including an array, is replaced as a whole.\n+\n+For two JSON values `source` and `target`, where `target` contains no object member whose value is `#!json null`, the\n+following code yields always `#!cpp true`:\n+```cpp\n+basic_json patched = source;\n+patched.merge_patch(merge_diff(source, target));\n+patched == target;\n+```\n+\n+## Parameters\n+\n+`source` (in)\n+:   JSON value to compare from\n+\n+`target` (in)\n+:   JSON value to compare against\n+\n+## Return value\n+\n+a JSON Merge Patch to convert the `source` to `target`\n+\n+## Exception safety\n+\n+Strong guarantee: if an exception is thrown, there are no changes in the JSON value.\n+\n+## Complexity\n+\n+Linear in the sizes of `source` and `target`, times the cost of looking up a key in an object: logarithmic in the size",
+   "line": 39,
+   "path": "docs/mkdocs/docs/api/basic_json/merge_diff.md",
+   "user": {
+    "login": "satelliteprogrammer",
+    "type": "User"
+   }
+  },
+  {
+   "body": "I get the point, but wouldn't this also fit the idea of **inconsistent null handling**?\r\n`{} -> {\"a\":{\"b\":null}}` results in `{\"a\":{\"b\":null}}`, not `{\"a\":{}}`, unless I recursively search for nulls.",
+   "created_at": "2026-10-02T18:05:24Z",
+   "diff_hunk": "@@ -6945,6 +6945,57 @@ class basic_json // NOLINT(cppcoreguidelines-special-member-functions,hicpp-spec\n     }\n \n   public:\n+    /// @brief creates a diff as a JSON Merge Patch\n+    /// @sa https://json.nlohmann.me/api/basic_json/merge_diff/\n+    JSON_HEDLEY_WARN_UNUSED_RESULT\n+    static basic_json merge_diff(const basic_json& source, const basic_json& target)\n+    {\n+        if (!target.is_object())\n+        {\n+            return target;\n+        }\n+\n+        basic_json result(value_t::object);\n+\n+        if (source.is_object())\n+        {\n+            for (auto it = source.begin(); it != source.end(); ++it)\n+            {\n+                auto itf = target.find(it.key());\n+                if (itf != target.end())\n+                {\n+                    if (it.value().is_object() && itf.value().is_object())\n+                    {\n+                        auto diff = merge_diff(it.value(), itf.value());\n+                        if (!diff.empty())\n+                        {\n+                            result[it.key()] = std::move(diff);\n+                        }\n+                    }\n+                    else if (it.value() != itf.value())\n+                    {\n+                        result[it.key()] = itf.value();\n+                    }\n+                }\n+                else\n+                {\n+                    result[it.key()] = value_t::null;\n+                }\n+            }\n+        }\n+\n+        for (auto it = target.begin(); it != target.end(); ++it)\n+        {\n+            auto itf = source.find(it.key());\n+            if (itf == source.end())\n+            {\n+                result[it.key()] = it.value();",
+   "line": 6992,
+   "path": "include/nlohmann/json.hpp",
+   "user": {
+    "login": "satelliteprogrammer",
+    "type": "User"
+   }
+  },
+  {
+   "body": "Fair point, you're right. Skipping only the top-level `null` would just move the inconsistency one level down, and stripping `null`s recursively isn't worth the extra cost for a patch entry that does nothing anyway. The documented guarantee already excludes targets with `null` members. Let's keep it as it is, so consider this nit withdrawn.\n\n<sub>This comment was written by Claude Code on behalf of @nlohmann.</sub>",
+   "created_at": "2026-10-04T16:13:29Z",
+   "diff_hunk": "@@ -6945,6 +6945,57 @@ class basic_json // NOLINT(cppcoreguidelines-special-member-functions,hicpp-spec\n     }\n \n   public:\n+    /// @brief creates a diff as a JSON Merge Patch\n+    /// @sa https://json.nlohmann.me/api/basic_json/merge_diff/\n+    JSON_HEDLEY_WARN_UNUSED_RESULT\n+    static basic_json merge_diff(const basic_json& source, const basic_json& target)\n+    {\n+        if (!target.is_object())\n+        {\n+            return target;\n+        }\n+\n+        basic_json result(value_t::object);\n+\n+        if (source.is_object())\n+        {\n+            for (auto it = source.begin(); it != source.end(); ++it)\n+            {\n+                auto itf = target.find(it.key());\n+                if (itf != target.end())\n+                {\n+                    if (it.value().is_object() && itf.value().is_object())\n+                    {\n+                        auto diff = merge_diff(it.value(), itf.value());\n+                        if (!diff.empty())\n+                        {\n+                            result[it.key()] = std::move(diff);\n+                        }\n+                    }\n+                    else if (it.value() != itf.value())\n+                    {\n+                        result[it.key()] = itf.value();\n+                    }\n+                }\n+                else\n+                {\n+                    result[it.key()] = value_t::null;\n+                }\n+            }\n+        }\n+\n+        for (auto it = target.begin(); it != target.end(); ++it)\n+        {\n+            auto itf = source.find(it.key());\n+            if (itf == source.end())\n+            {\n+                result[it.key()] = it.value();",
+   "line": 6992,
+   "path": "include/nlohmann/json.hpp",
+   "user": {
+    "login": "nlohmann",
+    "type": "User"
+   }
+  },
+  {
+   "body": "Good catch that it comes from `diff.md`. Please use \"always yields\" on the new page. I'll fix `diff.md` in a separate PR so this one stays focused.\n\n<sub>This comment was written by Claude Code on behalf of @nlohmann.</sub>",
+   "created_at": "2026-10-04T16:13:31Z",
+   "diff_hunk": "@@ -0,0 +1,78 @@\n+# <small>nlohmann::basic_json::</small>merge_diff\n+\n+```cpp\n+static basic_json merge_diff(const basic_json& source,\n+                             const basic_json& target);\n+```\n+\n+Creates a [JSON Merge Patch](https://tools.ietf.org/html/rfc7396) so that value `source` can be changed into the value\n+`target` by calling the [`merge_patch`](merge_patch.md) function. The patch contains only what differs: changed and\n+added members with their new values, and removed members with the value `#!json null`. Nested objects are compared\n+member by member; any other value that differs, including an array, is replaced as a whole.\n+\n+For two JSON values `source` and `target`, where `target` contains no object member whose value is `#!json null`, the\n+following code yields always `#!cpp true`:",
+   "line": 14,
+   "path": "docs/mkdocs/docs/api/basic_json/merge_diff.md",
+   "user": {
+    "login": "nlohmann",
+    "type": "User"
+   }
+  },
+  {
+   "body": "Same answer: please use the clearer wording here (\"Strong guarantee: `source` and `target` are never modified.\"), and I'll update `diff.md` separately.\n\n<sub>This comment was written by Claude Code on behalf of @nlohmann.</sub>",
+   "created_at": "2026-10-04T16:13:32Z",
+   "diff_hunk": "@@ -0,0 +1,78 @@\n+# <small>nlohmann::basic_json::</small>merge_diff\n+\n+```cpp\n+static basic_json merge_diff(const basic_json& source,\n+                             const basic_json& target);\n+```\n+\n+Creates a [JSON Merge Patch](https://tools.ietf.org/html/rfc7396) so that value `source` can be changed into the value\n+`target` by calling the [`merge_patch`](merge_patch.md) function. The patch contains only what differs: changed and\n+added members with their new values, and removed members with the value `#!json null`. Nested objects are compared\n+member by member; any other value that differs, including an array, is replaced as a whole.\n+\n+For two JSON values `source` and `target`, where `target` contains no object member whose value is `#!json null`, the\n+following code yields always `#!cpp true`:\n+```cpp\n+basic_json patched = source;\n+patched.merge_patch(merge_diff(source, target));\n+patched == target;\n+```\n+\n+## Parameters\n+\n+`source` (in)\n+:   JSON value to compare from\n+\n+`target` (in)\n+:   JSON value to compare against\n+\n+## Return value\n+\n+a JSON Merge Patch to convert the `source` to `target`\n+\n+## Exception safety\n+\n+Strong guarantee: if an exception is thrown, there are no changes in the JSON value.",
+   "line": 35,
+   "path": "docs/mkdocs/docs/api/basic_json/merge_diff.md",
+   "user": {
+    "login": "nlohmann",
+    "type": "User"
+   }
+  },
+  {
+   "body": "Done.",
+   "created_at": "2026-10-04T19:29:59Z",
+   "diff_hunk": "@@ -0,0 +1,78 @@\n+# <small>nlohmann::basic_json::</small>merge_diff\n+\n+```cpp\n+static basic_json merge_diff(const basic_json& source,\n+                             const basic_json& target);\n+```\n+\n+Creates a [JSON Merge Patch](https://tools.ietf.org/html/rfc7396) so that value `source` can be changed into the value\n+`target` by calling the [`merge_patch`](merge_patch.md) function. The patch contains only what differs: changed and\n+added members with their new values, and removed members with the value `#!json null`. Nested objects are compared\n+member by member; any other value that differs, including an array, is replaced as a whole.\n+\n+For two JSON values `source` and `target`, where `target` contains no object member whose value is `#!json null`, the\n+following code yields always `#!cpp true`:\n+```cpp\n+basic_json patched = source;\n+patched.merge_patch(merge_diff(source, target));\n+patched == target;\n+```\n+\n+## Parameters\n+\n+`source` (in)\n+:   JSON value to compare from\n+\n+`target` (in)\n+:   JSON value to compare against\n+\n+## Return value\n+\n+a JSON Merge Patch to convert the `source` to `target`\n+\n+## Exception safety\n+\n+Strong guarantee: if an exception is thrown, there are no changes in the JSON value.",
+   "line": 35,
+   "path": "docs/mkdocs/docs/api/basic_json/merge_diff.md",
+   "user": {
+    "login": "satelliteprogrammer",
+    "type": "User"
+   }
+  },
+  {
+   "body": "Done.",
+   "created_at": "2026-10-05T18:27:10Z",
+   "diff_hunk": "@@ -0,0 +1,78 @@\n+# <small>nlohmann::basic_json::</small>merge_diff\n+\n+```cpp\n+static basic_json merge_diff(const basic_json& source,\n+                             const basic_json& target);\n+```\n+\n+Creates a [JSON Merge Patch](https://tools.ietf.org/html/rfc7396) so that value `source` can be changed into the value\n+`target` by calling the [`merge_patch`](merge_patch.md) function. The patch contains only what differs: changed and\n+added members with their new values, and removed members with the value `#!json null`. Nested objects are compared\n+member by member; any other value that differs, including an array, is replaced as a whole.\n+\n+For two JSON values `source` and `target`, where `target` contains no object member whose value is `#!json null`, the\n+following code yields always `#!cpp true`:",
+   "line": 14,
+   "path": "docs/mkdocs/docs/api/basic_json/merge_diff.md",
+   "user": {
+    "login": "satelliteprogrammer",
+    "type": "User"
+   }
+  },
+  {
+   "body": "Actually, isn't the cost of comparing non-object values included in the \"linear in the sizes of ...\"?\nFor the following 2 JSONs: {\"a\": [1,2,3]} and {\"a\": {\"1\": \"one\", \"2\": \"two\", \"3\": \"three\"}, what would you consider to be the size of each?",
+   "created_at": "2026-10-05T18:51:06Z",
+   "diff_hunk": "@@ -0,0 +1,78 @@\n+# <small>nlohmann::basic_json::</small>merge_diff\n+\n+```cpp\n+static basic_json merge_diff(const basic_json& source,\n+                             const basic_json& target);\n+```\n+\n+Creates a [JSON Merge Patch](https://tools.ietf.org/html/rfc7396) so that value `source` can be changed into the value\n+`target` by calling the [`merge_patch`](merge_patch.md) function. The patch contains only what differs: changed and\n+added members with their new values, and removed members with the value `#!json null`. Nested objects are compared\n+member by member; any other value that differs, including an array, is replaced as a whole.\n+\n+For two JSON values `source` and `target`, where `target` contains no object member whose value is `#!json null`, the\n+following code yields always `#!cpp true`:\n+```cpp\n+basic_json patched = source;\n+patched.merge_patch(merge_diff(source, target));\n+patched == target;\n+```\n+\n+## Parameters\n+\n+`source` (in)\n+:   JSON value to compare from\n+\n+`target` (in)\n+:   JSON value to compare against\n+\n+## Return value\n+\n+a JSON Merge Patch to convert the `source` to `target`\n+\n+## Exception safety\n+\n+Strong guarantee: if an exception is thrown, there are no changes in the JSON value.\n+\n+## Complexity\n+\n+Linear in the sizes of `source` and `target`, times the cost of looking up a key in an object: logarithmic in the size",
+   "line": 39,
+   "path": "docs/mkdocs/docs/api/basic_json/merge_diff.md",
+   "user": {
+    "login": "satelliteprogrammer",
+    "type": "User"
+   }
+  },
+  {
+   "body": "This is a new recursive function and doesn't have the depth limit fallback to an iterative function that is being added to all other recursive functions.",
+   "created_at": "2026-10-05T20:49:18Z",
+   "diff_hunk": "@@ -7159,6 +7159,57 @@ class basic_json // NOLINT(cppcoreguidelines-special-member-functions,hicpp-spec\n     }\n \n   public:\n+    /// @brief creates a diff as a JSON Merge Patch\n+    /// @sa https://json.nlohmann.me/api/basic_json/merge_diff/\n+    JSON_HEDLEY_WARN_UNUSED_RESULT\n+    static basic_json merge_diff(const basic_json& source, const basic_json& target)\n+    {\n+        if (!target.is_object())\n+        {\n+            return target;\n+        }\n+\n+        basic_json result(value_t::object);\n+\n+        if (source.is_object())\n+        {\n+            for (auto it = source.begin(); it != source.end(); ++it)\n+            {\n+                auto itf = target.find(it.key());\n+                if (itf != target.end())\n+                {\n+                    if (it.value().is_object() && itf.value().is_object())\n+                    {\n+                        auto diff = merge_diff(it.value(), itf.value());",
+   "line": 7183,
+   "path": "include/nlohmann/json.hpp",
+   "user": {
+    "login": "gregmarr",
+    "type": "User"
+   }
+  },
+  {
+   "body": "Should there be handling for arrays here?  Otherwise, a one element difference in an array will result in the diff having a full replacement of the array.",
+   "created_at": "2026-10-05T20:51:14Z",
+   "diff_hunk": "@@ -7159,6 +7159,57 @@ class basic_json // NOLINT(cppcoreguidelines-special-member-functions,hicpp-spec\n     }\n \n   public:\n+    /// @brief creates a diff as a JSON Merge Patch\n+    /// @sa https://json.nlohmann.me/api/basic_json/merge_diff/\n+    JSON_HEDLEY_WARN_UNUSED_RESULT\n+    static basic_json merge_diff(const basic_json& source, const basic_json& target)\n+    {\n+        if (!target.is_object())\n+        {\n+            return target;\n+        }\n+\n+        basic_json result(value_t::object);\n+\n+        if (source.is_object())\n+        {\n+            for (auto it = source.begin(); it != source.end(); ++it)\n+            {\n+                auto itf = target.find(it.key());\n+                if (itf != target.end())\n+                {\n+                    if (it.value().is_object() && itf.value().is_object())\n+                    {\n+                        auto diff = merge_diff(it.value(), itf.value());\n+                        if (!diff.empty())\n+                        {\n+                            result[it.key()] = std::move(diff);\n+                        }\n+                    }\n+                    else if (it.value() != itf.value())",
+   "line": 7189,
+   "path": "include/nlohmann/json.hpp",
+   "user": {
+    "login": "gregmarr",
+    "type": "User"
+   }
+  },
+  {
+   "body": "I'll take a look at what changed in the other recursive functions.",
+   "created_at": "2026-10-06T20:35:09Z",
+   "diff_hunk": "@@ -7159,6 +7159,57 @@ class basic_json // NOLINT(cppcoreguidelines-special-member-functions,hicpp-spec\n     }\n \n   public:\n+    /// @brief creates a diff as a JSON Merge Patch\n+    /// @sa https://json.nlohmann.me/api/basic_json/merge_diff/\n+    JSON_HEDLEY_WARN_UNUSED_RESULT\n+    static basic_json merge_diff(const basic_json& source, const basic_json& target)\n+    {\n+        if (!target.is_object())\n+        {\n+            return target;\n+        }\n+\n+        basic_json result(value_t::object);\n+\n+        if (source.is_object())\n+        {\n+            for (auto it = source.begin(); it != source.end(); ++it)\n+            {\n+                auto itf = target.find(it.key());\n+                if (itf != target.end())\n+                {\n+                    if (it.value().is_object() && itf.value().is_object())\n+                    {\n+                        auto diff = merge_diff(it.value(), itf.value());",
+   "line": 7183,
+   "path": "include/nlohmann/json.hpp",
+   "user": {
+    "login": "satelliteprogrammer",
+    "type": "User"
+   }
+  },
+  {
+   "body": "That's the specification.\r\n\r\n> Also, it is not possible to patch part of a target that is not an object, such as to replace just some of the values in an array.",
+   "created_at": "2026-10-06T20:37:45Z",
+   "diff_hunk": "@@ -7159,6 +7159,57 @@ class basic_json // NOLINT(cppcoreguidelines-special-member-functions,hicpp-spec\n     }\n \n   public:\n+    /// @brief creates a diff as a JSON Merge Patch\n+    /// @sa https://json.nlohmann.me/api/basic_json/merge_diff/\n+    JSON_HEDLEY_WARN_UNUSED_RESULT\n+    static basic_json merge_diff(const basic_json& source, const basic_json& target)\n+    {\n+        if (!target.is_object())\n+        {\n+            return target;\n+        }\n+\n+        basic_json result(value_t::object);\n+\n+        if (source.is_object())\n+        {\n+            for (auto it = source.begin(); it != source.end(); ++it)\n+            {\n+                auto itf = target.find(it.key());\n+                if (itf != target.end())\n+                {\n+                    if (it.value().is_object() && itf.value().is_object())\n+                    {\n+                        auto diff = merge_diff(it.value(), itf.value());\n+                        if (!diff.empty())\n+                        {\n+                            result[it.key()] = std::move(diff);\n+                        }\n+                    }\n+                    else if (it.value() != itf.value())",
+   "line": 7189,
+   "path": "include/nlohmann/json.hpp",
+   "user": {
+    "login": "satelliteprogrammer",
+    "type": "User"
+   }
+  },
+  {
+   "body": "Oh, that's unfortunate, but I guess there's nothing to do about it.",
+   "created_at": "2026-10-06T20:43:15Z",
+   "diff_hunk": "@@ -7159,6 +7159,57 @@ class basic_json // NOLINT(cppcoreguidelines-special-member-functions,hicpp-spec\n     }\n \n   public:\n+    /// @brief creates a diff as a JSON Merge Patch\n+    /// @sa https://json.nlohmann.me/api/basic_json/merge_diff/\n+    JSON_HEDLEY_WARN_UNUSED_RESULT\n+    static basic_json merge_diff(const basic_json& source, const basic_json& target)\n+    {\n+        if (!target.is_object())\n+        {\n+            return target;\n+        }\n+\n+        basic_json result(value_t::object);\n+\n+        if (source.is_object())\n+        {\n+            for (auto it = source.begin(); it != source.end(); ++it)\n+            {\n+                auto itf = target.find(it.key());\n+                if (itf != target.end())\n+                {\n+                    if (it.value().is_object() && itf.value().is_object())\n+                    {\n+                        auto diff = merge_diff(it.value(), itf.value());\n+                        if (!diff.empty())\n+                        {\n+                            result[it.key()] = std::move(diff);\n+                        }\n+                    }\n+                    else if (it.value() != itf.value())",
+   "line": 7189,
+   "path": "include/nlohmann/json.hpp",
+   "user": {
+    "login": "gregmarr",
+    "type": "User"
+   }
+  },
+  {
+   "body": "Nit: `2013-2025` \u2192 `2013-2026`, as in the other files on `develop`.\n\n<sub>This comment was written by Claude Code on behalf of @nlohmann.</sub>",
+   "created_at": "2026-10-09T06:50:42Z",
+   "diff_hunk": "@@ -0,0 +1,825 @@\n+//     __ _____ _____ _____\n+//  __|  |   __|     |   | |  JSON for Modern C++ (supporting code)\n+// |  |  |__   |  |  | | | |  version 3.12.0\n+// |_____|_____|_____|_|___|  https://github.com/nlohmann/json\n+//\n+// SPDX-FileCopyrightText: 2013-2025 Niels Lohmann <https://nlohmann.me>",
+   "line": 6,
+   "path": "tests/src/unit-merge_diff.cpp",
+   "user": {
+    "login": "nlohmann",
+    "type": "User"
+   }
+  },
+  {
+   "body": "Nit: `unit-merge_patch.cpp` already has a `TEST_CASE(\"JSON Merge Patch\")`. A distinct name such as `\"JSON Merge Patch diff\"` would make it clear which file a failure comes from.\n\n<sub>This comment was written by Claude Code on behalf of @nlohmann.</sub>",
+   "created_at": "2026-10-09T06:50:42Z",
+   "diff_hunk": "@@ -0,0 +1,825 @@\n+//     __ _____ _____ _____\n+//  __|  |   __|     |   | |  JSON for Modern C++ (supporting code)\n+// |  |  |__   |  |  | | | |  version 3.12.0\n+// |_____|_____|_____|_|___|  https://github.com/nlohmann/json\n+//\n+// SPDX-FileCopyrightText: 2013-2025 Niels Lohmann <https://nlohmann.me>\n+// SPDX-License-Identifier: MIT\n+\n+#include \"doctest_compatibility.h\"\n+\n+#include <nlohmann/json.hpp>\n+using nlohmann::json;\n+using nlohmann::ordered_json;\n+#ifdef JSON_TEST_NO_GLOBAL_UDLS\n+    using namespace nlohmann::literals; // NOLINT(google-build-using-namespace)\n+#endif\n+\n+TEST_CASE(\"JSON Merge Patch\")",
+   "line": 18,
+   "path": "tests/src/unit-merge_diff.cpp",
+   "user": {
+    "login": "nlohmann",
+    "type": "User"
+   }
+  },
+  {
+   "body": "You're right, this is covered if \"size\" counts nested values as well; see point 3 of my review for an optional rewording. Resolved from my side.\n\n<sub>This comment was written by Claude Code on behalf of @nlohmann.</sub>",
+   "created_at": "2026-10-09T06:50:44Z",
+   "diff_hunk": "@@ -0,0 +1,78 @@\n+# <small>nlohmann::basic_json::</small>merge_diff\n+\n+```cpp\n+static basic_json merge_diff(const basic_json& source,\n+                             const basic_json& target);\n+```\n+\n+Creates a [JSON Merge Patch](https://tools.ietf.org/html/rfc7396) so that value `source` can be changed into the value\n+`target` by calling the [`merge_patch`](merge_patch.md) function. The patch contains only what differs: changed and\n+added members with their new values, and removed members with the value `#!json null`. Nested objects are compared\n+member by member; any other value that differs, including an array, is replaced as a whole.\n+\n+For two JSON values `source` and `target`, where `target` contains no object member whose value is `#!json null`, the\n+following code yields always `#!cpp true`:\n+```cpp\n+basic_json patched = source;\n+patched.merge_patch(merge_diff(source, target));\n+patched == target;\n+```\n+\n+## Parameters\n+\n+`source` (in)\n+:   JSON value to compare from\n+\n+`target` (in)\n+:   JSON value to compare against\n+\n+## Return value\n+\n+a JSON Merge Patch to convert the `source` to `target`\n+\n+## Exception safety\n+\n+Strong guarantee: if an exception is thrown, there are no changes in the JSON value.\n+\n+## Complexity\n+\n+Linear in the sizes of `source` and `target`, times the cost of looking up a key in an object: logarithmic in the size",
+   "line": 39,
+   "path": "docs/mkdocs/docs/api/basic_json/merge_diff.md",
+   "user": {
+    "login": "nlohmann",
+    "type": "User"
+   }
+  },
+  {
+   "body": "Done.",
+   "created_at": "2026-10-11T19:03:01Z",
+   "diff_hunk": "@@ -7159,6 +7159,57 @@ class basic_json // NOLINT(cppcoreguidelines-special-member-functions,hicpp-spec\n     }\n \n   public:\n+    /// @brief creates a diff as a JSON Merge Patch\n+    /// @sa https://json.nlohmann.me/api/basic_json/merge_diff/\n+    JSON_HEDLEY_WARN_UNUSED_RESULT\n+    static basic_json merge_diff(const basic_json& source, const basic_json& target)\n+    {\n+        if (!target.is_object())\n+        {\n+            return target;\n+        }\n+\n+        basic_json result(value_t::object);\n+\n+        if (source.is_object())\n+        {\n+            for (auto it = source.begin(); it != source.end(); ++it)\n+            {\n+                auto itf = target.find(it.key());\n+                if (itf != target.end())\n+                {\n+                    if (it.value().is_object() && itf.value().is_object())\n+                    {\n+                        auto diff = merge_diff(it.value(), itf.value());",
+   "line": 7183,
+   "path": "include/nlohmann/json.hpp",
+   "user": {
+    "login": "satelliteprogrammer",
+    "type": "User"
+   }
+  },
+  {
+   "body": "Fixed.",
+   "created_at": "2026-10-11T19:03:13Z",
+   "diff_hunk": "@@ -0,0 +1,825 @@\n+//     __ _____ _____ _____\n+//  __|  |   __|     |   | |  JSON for Modern C++ (supporting code)\n+// |  |  |__   |  |  | | | |  version 3.12.0\n+// |_____|_____|_____|_|___|  https://github.com/nlohmann/json\n+//\n+// SPDX-FileCopyrightText: 2013-2025 Niels Lohmann <https://nlohmann.me>",
+   "line": 6,
+   "path": "tests/src/unit-merge_diff.cpp",
+   "user": {
+    "login": "satelliteprogrammer",
+    "type": "User"
+   }
+  },
+  {
+   "body": "Fixed.",
+   "created_at": "2026-10-11T19:03:22Z",
+   "diff_hunk": "@@ -0,0 +1,825 @@\n+//     __ _____ _____ _____\n+//  __|  |   __|     |   | |  JSON for Modern C++ (supporting code)\n+// |  |  |__   |  |  | | | |  version 3.12.0\n+// |_____|_____|_____|_|___|  https://github.com/nlohmann/json\n+//\n+// SPDX-FileCopyrightText: 2013-2025 Niels Lohmann <https://nlohmann.me>\n+// SPDX-License-Identifier: MIT\n+\n+#include \"doctest_compatibility.h\"\n+\n+#include <nlohmann/json.hpp>\n+using nlohmann::json;\n+using nlohmann::ordered_json;\n+#ifdef JSON_TEST_NO_GLOBAL_UDLS\n+    using namespace nlohmann::literals; // NOLINT(google-build-using-namespace)\n+#endif\n+\n+TEST_CASE(\"JSON Merge Patch\")",
+   "line": 18,
+   "path": "tests/src/unit-merge_diff.cpp",
+   "user": {
+    "login": "satelliteprogrammer",
+    "type": "User"
+   }
+  }
+ ],
+ "state": "closed",
+ "title": "support JSON Merge Patch (RFC 7396) diff creation",
+ "transport": "gh",
+ "user": {
+  "login": "satelliteprogrammer",
+  "type": "User"
+ }
+}

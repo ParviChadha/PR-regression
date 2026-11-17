@@ -1,0 +1,29 @@
+{
+ "base_ref": "binary-review/ubjson",
+ "base_sha": "d3d39a9c106b51a5e0d2fda79a54e15a21f30b70",
+ "body": "## Summary\n- **Subtype 0x02 (\"binary (old)\")**: `to_bson` wrote it without the inner int32 length that the specification requires (`int32 byte*`); pymongo and libbson reject those bytes. The writer now emits outer length = size + 4, subtype `0x02`, inner int32 = size, payload. `from_bson` validates the inner length (= outer \u2212 4, else `parse_error.112`, matching the bson-corpus decode errors) and returns only the payload, so the round trip holds. Cross-checked with pymongo (both directions) and the mongodb bson-corpus `binary.json`.\n- **Document size** is now checked against the content earlier (size \u2265 5, embedded documents end before their parent, element headers fit), not only at the terminator. Same error id `parse_error.112`; `strict=false` still does not skip it.\n- UUID/MD5 payload lengths are documented as not checked (not rejected). Docs also gain the lenient-read list (duplicate keys, embedded NUL, trailing bytes), the corrected key-validation statement, a BSON example for `out_of_range.415`, and the member order on write.\n\n## Breaking changes\nNo API or ABI change; behaviour changes without an opt-in macro (the old subtype 0x02 output was a bug that other decoders reject):\n1. `to_bson` output for binaries with subtype 2 is 4 bytes longer; all other subtypes are byte-identical.\n2. `from_bson` now rejects subtype 2 input without the inner length, with a mismatched one, or with an outer length below 4 (`parse_error.112`). BSON written by this library with subtype 2 until now is not readable any more (it would otherwise be misread) and must be written again.\n3. Document-size errors are reported earlier: error id unchanged, but message, byte position and the number of SAX events for already invalid input change. A differential fuzz (old vs. new, ~44,000 mutated documents, DOM and SAX, strict and non-strict) found no input accepted before and rejected now other than old-format subtype 2, and none rejected before and accepted now.\n\n## Stack\nThis PR is part of a stack of six PRs from a review of the binary formats against their specifications and other implementations (CBOR \u2192 MessagePack \u2192 UBJSON \u2192 BSON \u2192 BJData \u2192 BON8). Please merge in that order.\n\n\ud83e\udd16 Generated with [Claude Code](https://claude.com/claude-code)\n",
+ "comments": [],
+ "created_at": "2026-10-25T16:59:15Z",
+ "fetched_at": "2026-11-17T20:08:48Z",
+ "head_sha": "da65c02eeac369309ccb8589acc364d221dccf92",
+ "labels": [
+  "documentation",
+  "aspect: binary formats",
+  "L",
+  "tests"
+ ],
+ "linked_issues": [],
+ "merge_commit_sha": "dc768a7d5da7e789e85514510915a029bbbb5b8e",
+ "merged_at": "2026-10-26T17:25:51Z",
+ "number": 5930,
+ "referenced_numbers": [],
+ "repo": "nlohmann/json",
+ "review_comments": [],
+ "state": "closed",
+ "title": "Fix BSON binary subtype 0x02 and check the declared document size earlier",
+ "transport": "gh",
+ "user": {
+  "login": "nlohmann",
+  "type": "User"
+ }
+}

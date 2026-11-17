@@ -1,0 +1,53 @@
+{
+ "base_ref": "develop",
+ "base_sha": "755bb16d7a80436646380b5f871b93c6a443a3b7",
+ "body": "## What\n\nThe digits after the decimal point were skipped by `skip_digits()`: 16 compare-and-branch steps in a row, about 3.5 instructions per\ndigit and an exit branch that is mispredicted when the lengths vary. On x86 with SSE2, the fraction is now skipped by\n`skip_fraction_digits()`: 16 bytes are compared at once and the end of the run is taken from the bit mask, about a third of the\ninstructions for a fraction of 12 digits. The last bytes of the input are skipped one at a time as before. Without SSE2 (AArch64, other targets,\n`JSON_NO_SIMD`) `skip_fraction_digits()` is `skip_digits()`: nothing changes there. Integer digits keep `skip_digits()`\n(their exit is predictable; an earlier try with word arithmetic for integers made `citm_catalog` 6 % slower).\n\n**GCC-specific part:** GCC unrolls the scalar loop over the last bytes in every inlined copy (`number()` is inlined into the parse loop at several places),\nwhich made the parse loop 4 KiB larger (31,980 -> 35,926 bytes) and files with few fractions 1-4 % slower with more instructions. For GCC\nthat loop is out of line (`skip_digits_tail()`, +167 bytes instead of +4 KiB); Clang is faster with it inline (an out-of-line tail costs it 5 % on\n`instruments`). It is the only compiler-specific `#if` of the change.\n\n## Performance\n\n`json_document::parse()`, A/B in one binary (this branch against `origin/develop`), 6 code layouts, 20 pairs each, x86-64 Haswell, time after / before.\nAArch64 is not affected (same code).\n\n| row | GCC 16.2 | Clang 23 |\n|---|---|---|\n| **numbers.json** (10,001 floats) | **0.717** | **0.683** |\n| **canada.json** | **0.775** | **0.783** |\n| **mesh.json** | **0.909** | **0.878** |\n| **marine_ik.json** | **0.919** | **0.927** |\n| **mesh.pretty.json** | **0.914** | **0.945** |\n| tree-pretty / instruments | 1.002 / 0.993 | 0.990 / 1.017 |\n| gsoc-2018 / twitter | 0.996 / 1.011 | 0.999 / 1.003 |\n| prices (20,000 objects with two-decimal prices) | 0.998 | 1.004 |\n| fixed6 (60,000 pairs with six decimals) | 1.064 (3) | 0.993 |\n| citm_catalog | **1.078** (4) | 0.996 |\n\n(3) Spread 0.99-1.33: one layout of a loaded run; callgrind says -9 % instructions, -19 % branches, -15 % mispredicts for this row.\n(4) Stable over the layouts (1.06-1.09) but the instruction count is +0.3 % and mispredicts -11 %: a code-placement effect of GCC on this file. In earlier runs of\nthe same code on a slightly different base this row was 1.000-1.05, and the same file moved by +-7 % between builds of unrelated variants.\nPlease weigh it: if you consider a +8 % on one guard row on GCC unacceptable, the other rows show that the idea works and the GCC part could be limited\nfurther, but I have not found a form without it.\n\nInstruction counts (callgrind, GCC 16.2, per parse): `numbers` 0.68 (branches 0.57, simulated mispredicts 0.03), `canada` 0.75 (mispredicts 0.59);\n`prices` 1.00 (mispredicts 0.91). The gain is the instruction count; an earlier variant that kept the instruction count and removed only the\nmispredicts gained nothing.\n\n## Tests\n\n`json_view builder`, new test case `fraction digits`: fractions of every length from 0 to 40 digits followed by every kind of byte that ends a number\nor lies next to the digits in ASCII (`, ] } / : . e E + - x` space, newline, tab, `\"`, `0`, `9`), as a root value, in arrays, in objects, and cut in\nevery place near the end of the text (the length of the number token is what `value_of()` compares with `json::parse()`), for all option combinations and\nwith and without a terminating NUL. Checked against a deliberate off-by-one at the 16th byte (1,401 assertions fail).\n\nRun locally: all `unit-json_view*.cpp` with clang++ `-std=c++11` on arm64; the builder test on x86-64 with Apple clang (Rosetta), g++ 16 and Clang 23 on Linux\n(the compiler-specific tail is only compiled there); `make amalgamate` run. The full CI matrix has not run; MSVC (`_mm_cmplt_epi8` etc. are in\n`<emmintrin.h>`, the same header the other SSE2 code uses) and 32-bit x86 are untested.\n\n## Breaking API\n\nNo breaking changes. Internal scan function only; the same values and the same errors (tests above); no change to the ABI.\n",
+ "comments": [],
+ "created_at": "2026-10-30T21:19:50Z",
+ "fetched_at": "2026-11-17T20:08:26Z",
+ "head_sha": "9124dea82fe8e35f34f26b46a8c4303d2107ce9f",
+ "labels": [
+  "L",
+  "tests",
+  "\ud83d\ude80 ready to merge",
+  "performance",
+  "aspect: json_view"
+ ],
+ "linked_issues": [],
+ "merge_commit_sha": "162eda2574bb46a6d31c92a0037d9939f1009f84",
+ "merged_at": "2026-11-01T16:21:19Z",
+ "number": 5971,
+ "referenced_numbers": [],
+ "repo": "nlohmann/json",
+ "review_comments": [
+  {
+   "body": "```\nstd::string pair;\npair.reserve(number.size() * 2 + 3);\npair += '[';\npair += number;\npair += ',';\npair += number;\npair += ']';\ncheck_same(pair);\n```",
+   "created_at": "2026-11-01T14:28:24Z",
+   "diff_hunk": "@@ -546,7 +546,11 @@ TEST_CASE(\"json_view builder: fraction digits\")\n             const std::string number = std::string(rng() % 2 == 0 ? \"-\" : \"\") + std::to_string(rng() % 100000) + \".\" + fraction;\n             check_same(number);\n             check_same(\"[\" + number + \"]\");\n-            check_same(\"[\" + number + \",\" + number + \"]\");\n+            std::string pair = \"[\" + number;\n+            pair += \",\";\n+            pair += number;\n+            pair += \"]\";\n+            check_same(pair);",
+   "line": 553,
+   "path": "tests/src/unit-json_view_builder.cpp",
+   "user": {
+    "login": "gregmarr",
+    "type": "User"
+   }
+  },
+  {
+   "body": "Done in `9124dea82f`, as you suggested: `pair` is reserved first and built with character appends.\n\n*(Written by Claude Code on behalf of @nlohmann.)*",
+   "created_at": "2026-11-01T15:33:20Z",
+   "diff_hunk": "@@ -546,7 +546,11 @@ TEST_CASE(\"json_view builder: fraction digits\")\n             const std::string number = std::string(rng() % 2 == 0 ? \"-\" : \"\") + std::to_string(rng() % 100000) + \".\" + fraction;\n             check_same(number);\n             check_same(\"[\" + number + \"]\");\n-            check_same(\"[\" + number + \",\" + number + \"]\");\n+            std::string pair = \"[\" + number;\n+            pair += \",\";\n+            pair += number;\n+            pair += \"]\";\n+            check_same(pair);",
+   "line": 553,
+   "path": "tests/src/unit-json_view_builder.cpp",
+   "user": {
+    "login": "nlohmann",
+    "type": "User"
+   }
+  }
+ ],
+ "state": "closed",
+ "title": "json_view: skip the digits of a fraction 16 bytes at a time (SSE2)",
+ "transport": "gh",
+ "user": {
+  "login": "nlohmann",
+  "type": "User"
+ }
+}

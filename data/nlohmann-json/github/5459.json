@@ -1,0 +1,108 @@
+{
+ "base_ref": "develop",
+ "base_sha": "19386dd14af178fecd4a4a65549b07e240e092a9",
+ "body": "Fixes #5401.\n\nThe mixed number arms of `JSON_IMPLEMENT_OPERATOR` widen the integer to `number_float_t` before comparing, which is lossy past the mantissa. Reproducing the triple from the issue:\n\n```\n== x==y:1 y==z:1 x==z:0 | SWO eq(x,y):1 eq(y,z):1 eq(x,z):0 (x<z):1\n```\n\nComparing exactly instead is enough to fix both the equality and the ordering. The integer's range is a power of two that the float represents exactly, so a float outside it is ordered by magnitude alone; inside it, truncating the float is exact, and then the integer parts and any fractional part decide.\n\nThe helper returns a pair whose comparison with the original operator reproduces that ordering, rather than an ordering value directly. That keeps each operator's return type exactly as it was, including `partial_ordering` for `<=>`, and it gives NaN somewhere to go: a NaN operand comes back in both members, so it stays false for the relational operators and unordered for the spaceship, which is what the float comparison did before.\n\n### Checking\n\nThe ordering axioms, over a set concentrated on the lossy boundary and checked exhaustively rather than sampled:\n\n| | transitivity of `<` | transitivity of equivalence |\n|---|---|---|\n| before | 0 | **30** |\n| after | 0 | 0 |\n\n(24 values, 13824 triples. Sampling triples at random is not much use here, the failing combination is too rare to land on.)\n\nThe comparison itself was then differentially tested against Python, which compares int and float exactly: 20221 signed and 20108 unsigned pairs, covering the boundaries at 2^53, 2^63 and 2^64, both infinities, and fractional values. No mismatches, first against the algorithm on its own and then through the library's operators.\n\nBehaviour that should not move, and does not: `json(1) == json(1.0)`, `json(1u) == json(1.0)`, `json(-3) == json(-3.0)`, fractional ordering either way round, and NaN unordered against both integer kinds. The new section in `unit-comparison.cpp` sits next to the existing signed/unsigned one since it is the same family of problem; reverting the two headers with it in place fails 8 of its assertions.\n\nFull suite passes, 91 of 91, and `make check-amalgamation` is clean.\n",
+ "comments": [
+  {
+   "body": "<!-- codex-pull-request-review-summary -->\n\n## Codex Review Summary\n\nThis comment shows the latest Codex review activity on this pull request.\n\n| Review | Status | Commit | Review trigger |\n| --- | --- | --- | --- |\n| \ud83d\udcdd **Code Review** | \u2705 **Completed** <relative-time datetime=\"2026-09-02T22:10:10.935493Z\">2026-09-02T22:10:10.935493Z</relative-time> | `b9066aa` | PR opened |\n\n\n\n<details> <summary>\u2139\ufe0f About Codex in GitHub</summary>\n<br/>\n\n[Your team has set up Codex to review pull requests in this repo](https://chatgpt.com/codex/cloud/settings/general). Reviews are triggered when you\n- Open a pull request for review\n- Mark a draft as ready\n- Comment \"@codex review\" or \"@codex security review\".\n\nCodex reacts with \ud83d\udc40 while any review is running, comments if it has suggestions, and reacts with \ud83d\udc4d once all reviews finish with no findings.\n\n</details>",
+   "created_at": "2026-09-02T22:07:29Z",
+   "user": {
+    "login": "chatgpt-codex-connector[bot]",
+    "type": "Bot"
+   }
+  },
+  {
+   "body": "Thanks!",
+   "created_at": "2026-09-03T11:23:11Z",
+   "user": {
+    "login": "nlohmann",
+    "type": "User"
+   }
+  },
+  {
+   "body": "@nlohmann There are workflows awaiting approval to run.",
+   "created_at": "2026-09-03T16:08:33Z",
+   "user": {
+    "login": "gregmarr",
+    "type": "User"
+   }
+  },
+  {
+   "body": "Thanks!",
+   "created_at": "2026-09-05T07:43:11Z",
+   "user": {
+    "login": "nlohmann",
+    "type": "User"
+   }
+  }
+ ],
+ "created_at": "2026-09-02T22:07:18Z",
+ "fetched_at": "2026-11-17T20:10:38Z",
+ "head_sha": "be4e98cbd398404fcde7edfd36f8ac4946113b6f",
+ "labels": [
+  "L",
+  "tests",
+  "\ud83d\ude80 ready to merge"
+ ],
+ "linked_issues": [
+  {
+   "body": "### Description\n\nWhen one operand of a comparison is an integer and the other a float, the integer is cast to `number_float_t` (double) before comparing (`JSON_IMPLEMENT_OPERATOR` in [`include/nlohmann/json.hpp`](https://github.com/nlohmann/json/blob/develop/include/nlohmann/json.hpp), used by `operator==`, `operator<`, and `operator<=>`). Near 2^63 this cast is lossy, which makes equality **intransitive** and the ordering **not a strict weak ordering**. Passing such values to `std::sort`, or using them as keys in `std::set`/`std::map`, is therefore undefined behavior.\n\nBoth `9223372036854775806` (2^63\u22122) and `9223372036854775807` (2^63\u22121) round to the same double `9223372036854775808.0` (2^63). With `x = int64(2^63\u22122)`, `y = double(2^63)`, `z = int64(2^63\u22121)`:\n\n- `x == y` is `true` and `y == z` is `true`, but `x == z` is `false` (both integers, `2^63\u22122 \u2260 2^63\u22121`) \u2192 equality is intransitive.\n- `equiv(x,y)` and `equiv(y,z)` are both `true` (where `equiv(p,q) = !(p<q) && !(q<p)`), yet `x < z` is `true`, so `equiv(x,z)` is `false` \u2192 transitivity of incomparability fails, which is exactly the property `std::sort`/`std::set` rely on.\n\nThe docs for the comparison operators only document NaN as unordered; the finite-number precision-loss inconsistency is not documented (they merely say numbers \"are automatically converted before comparison\"). This is distinct from the already-fixed unsigned-vs-signed integer case in #5210 \u2014 here the loss comes from the integer\u2192`double` conversion.\n\n### Reproduction steps\n\nCompare the three values above; observe the intransitive equality and the SWO violation.\n\n### Expected vs. actual results\n\n- **Expected:** a consistent equivalence relation and a valid strict weak ordering (e.g. exact integer/float comparison, as `operator<=>` implementations for mixed int/float types can do without precision loss).\n- **Actual:** `x==y` and `y==z` but `x!=z`; `equiv(x,y)` and `equiv(y,z)` but `x<z`.\n\n### Minimal code example\n\n```cpp\n#include <nlohmann/json.hpp>\n#include <cstdint>\n#include <cstdio>\nusing json = nlohmann::json;\n\nint main()\n{\n    json x = std::int64_t(9223372036854775806LL); // 2^63-2\n    json y = 9223372036854775808.0;                // double 2^63\n    json z = std::int64_t(9223372036854775807LL);  // 2^63-1\n    auto eq = [](const json& p, const json& q){ return !(p<q) && !(q<p); };\n    std::printf(\"== x==y:%d y==z:%d x==z:%d | SWO eq(x,y):%d eq(y,z):%d eq(x,z):%d (x<z):%d\\n\",\n                (int)(x==y),(int)(y==z),(int)(x==z),\n                (int)eq(x,y),(int)eq(y,z),(int)eq(x,z),(int)(x<z));\n}\n```\n\n### Error messages\n\n```\n== x==y:1 y==z:1 x==z:0 | SWO eq(x,y):1 eq(y,z):1 eq(x,z):0 (x<z):1\n```\n\n(Concrete transitivity-violating triple; sorting an array containing such a mix is UB.)\n\n### Compiler and operating system\n\ng++ 13.3.0 (Ubuntu 24.04, x86-64)\n\n### Library version\n\n`develop` @ `01853ed6bcf9ebe88ec2e248ea757b86417b1487`\n\n### Validation\n\n- [x] The bug also occurs if the latest version from the `develop` branch is used.\n- [x] I can successfully compile and run the unit tests.",
+   "labels": [
+    "kind: bug",
+    "solution: proposed fix"
+   ],
+   "number": 5401,
+   "state": "closed",
+   "title": "Mixed integer/float comparison near 2^63 is intransitive, violating strict-weak-ordering (std::sort/std::set on such values is UB)"
+  }
+ ],
+ "merge_commit_sha": "137a40b9aa3dff087f080c3f6ed52159e24b4b2f",
+ "merged_at": "2026-09-05T07:43:07Z",
+ "number": 5459,
+ "referenced_numbers": [
+  5401
+ ],
+ "repo": "nlohmann/json",
+ "review_comments": [
+  {
+   "body": "`clang_tidy` doesn't like this line.\n\nvalue_t.hpp:171:65: error: conditional operator is used as sub-expression of parent conditional operator, refrain from using nested conditional operators [readability-avoid-nested-conditional-operator,-warnings-as-errors]\n  171 |     return ordered(fraction > static_cast<FloatType>(0) ? -1 : (fraction < static_cast<FloatType>(0) ? 1 : 0));\n      |                                                                 ^",
+   "created_at": "2026-09-03T13:52:41Z",
+   "diff_hunk": "@@ -114,5 +117,59 @@ inline bool operator<(const value_t lhs, const value_t rhs) noexcept\n }\n #endif\n \n+\n+/*!\n+@brief compare an integer with a floating point number without precision loss\n+\n+Widening the integer to the floating point type loses precision beyond the\n+float's mantissa, which makes equality intransitive: both 2^63-2 and 2^63-1\n+round to 2^63, so each compares equal to that float while differing from each\n+other. Ordering built on that is not a strict weak ordering, so sorting such\n+values, or using them as keys in an ordered container, is undefined behavior.\n+\n+Returns a value to be compared against zero with the original operator, which\n+reproduces the exact ordering. A NaN operand is returned as is, so comparing it\n+against zero keeps NaN's semantics: false for the relational operators and\n+unordered for `<=>`.\n+*/\n+template<typename IntegerType, typename FloatType>\n+FloatType compare_integer_with_float(const IntegerType i, const FloatType f) noexcept\n+{\n+    const auto ordered = [](int c) noexcept\n+    {\n+        return static_cast<FloatType>(c);\n+    };\n+\n+    if (std::isnan(f))\n+    {\n+        return f;\n+    }\n+\n+    // values of IntegerType lie in [-bound, bound) when signed and in\n+    // [0, bound) when unsigned; digits excludes the sign bit, so bound is a\n+    // power of two that the float represents exactly\n+    const FloatType bound = std::ldexp(static_cast<FloatType>(1), std::numeric_limits<IntegerType>::digits);\n+    if (f >= bound)\n+    {\n+        return ordered(-1);\n+    }\n+    if (std::is_signed<IntegerType>::value ? (f < -bound) : (f < static_cast<FloatType>(0)))\n+    {\n+        return ordered(1);\n+    }\n+\n+    // f is now within the integer's range, so truncating it is exact\n+    const FloatType truncated = std::trunc(f);\n+    const auto as_integer = static_cast<IntegerType>(truncated);\n+    if (i != as_integer)\n+    {\n+        return ordered(i < as_integer ? -1 : 1);\n+    }\n+\n+    // the integer parts agree, so any fractional part decides\n+    const FloatType fraction = f - truncated;\n+    return ordered(fraction > static_cast<FloatType>(0) ? -1 : (fraction < static_cast<FloatType>(0) ? 1 : 0));",
+   "line": 171,
+   "path": "include/nlohmann/detail/value_t.hpp",
+   "user": {
+    "login": "gregmarr",
+    "type": "User"
+   }
+  },
+  {
+   "body": "/json.hpp:3706:119: error: macro argument should be enclosed in parentheses [bugprone-macro-parentheses,-warnings-as-errors]\n 3706 |         return detail::compare_integer_with_float(lhs.m_data.m_value.number_integer, rhs.m_data.m_value.number_float) op static_cast<number_float_t>(0); \\\n      |                                                                                                                       ^\n      |                                                                                                                       ( )\n",
+   "created_at": "2026-09-03T13:54:02Z",
+   "diff_hunk": "@@ -3703,19 +3703,19 @@ class basic_json // NOLINT(cppcoreguidelines-special-member-functions,hicpp-spec\n     }                                                                                                    \\\n     else if (lhs_type == value_t::number_integer && rhs_type == value_t::number_float)                   \\\n     {                                                                                                    \\\n-        return static_cast<number_float_t>(lhs.m_data.m_value.number_integer) op rhs.m_data.m_value.number_float;      \\\n+        return detail::compare_integer_with_float(lhs.m_data.m_value.number_integer, rhs.m_data.m_value.number_float) op static_cast<number_float_t>(0); \\",
+   "line": 3706,
+   "path": "include/nlohmann/json.hpp",
+   "user": {
+    "login": "gregmarr",
+    "type": "User"
+   }
+  },
+  {
+   "body": "/__w/json/json/include/nlohmann/json.hpp:3714:120: error: macro argument should be enclosed in parentheses [bugprone-macro-parentheses,-warnings-as-errors]\n 3714 |         return detail::compare_integer_with_float(lhs.m_data.m_value.number_unsigned, rhs.m_data.m_value.number_float) op static_cast<number_float_t>(0); \\",
+   "created_at": "2026-09-03T13:54:16Z",
+   "diff_hunk": "@@ -3703,19 +3703,19 @@ class basic_json // NOLINT(cppcoreguidelines-special-member-functions,hicpp-spec\n     }                                                                                                    \\\n     else if (lhs_type == value_t::number_integer && rhs_type == value_t::number_float)                   \\\n     {                                                                                                    \\\n-        return static_cast<number_float_t>(lhs.m_data.m_value.number_integer) op rhs.m_data.m_value.number_float;      \\\n+        return detail::compare_integer_with_float(lhs.m_data.m_value.number_integer, rhs.m_data.m_value.number_float) op static_cast<number_float_t>(0); \\\n     }                                                                                                    \\\n     else if (lhs_type == value_t::number_float && rhs_type == value_t::number_integer)                   \\\n     {                                                                                                    \\\n-        return lhs.m_data.m_value.number_float op static_cast<number_float_t>(rhs.m_data.m_value.number_integer);      \\\n+        return static_cast<number_float_t>(0) op detail::compare_integer_with_float(rhs.m_data.m_value.number_integer, lhs.m_data.m_value.number_float); \\\n     }                                                                                                    \\\n     else if (lhs_type == value_t::number_unsigned && rhs_type == value_t::number_float)                  \\\n     {                                                                                                    \\\n-        return static_cast<number_float_t>(lhs.m_data.m_value.number_unsigned) op rhs.m_data.m_value.number_float;     \\\n+        return detail::compare_integer_with_float(lhs.m_data.m_value.number_unsigned, rhs.m_data.m_value.number_float) op static_cast<number_float_t>(0); \\",
+   "line": 3714,
+   "path": "include/nlohmann/json.hpp",
+   "user": {
+    "login": "gregmarr",
+    "type": "User"
+   }
+  }
+ ],
+ "state": "closed",
+ "title": "Compare integers with floats exactly instead of widening the integer",
+ "transport": "gh",
+ "user": {
+  "login": "qatcod",
+  "type": "User"
+ }
+}

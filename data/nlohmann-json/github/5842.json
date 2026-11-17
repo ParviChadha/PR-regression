@@ -1,0 +1,39 @@
+{
+ "base_ref": "perf/binary-reader-cold-errors",
+ "base_sha": "6e2e21969be52d20e60f21468901b7d6f4f5b71f",
+ "body": "`patch_inplace()` built its error messages inline. In particular, `get_value()` concatenated the context-sensitive `operation 'x'` string on **every** call, even when the member was present. This PR moves the JSON Patch exceptions out of line:\n\n- **Index and key errors** reuse `basic_json`'s existing `throw_array_index_out_of_range` and `throw_key_not_found` from #5838.\n- **The seven patch-specific messages** each get one `NEVER_INLINE` helper in `detail/exceptions.hpp`: add/remove parent not a container, not an array, missing member, move into child, test failed, invalid operation.\n- **`get_value()`** now builds the `operation 'x'` string only inside the missing-member helper.\n\nException ids and messages are byte-identical. `unit-throw_messages` gets a `patch` section that pins all 14 messages. It strips the `(/0) ` prefix that `JSON_DIAGNOSTICS` adds, so the section passes in both configurations.\n\n## Measured\n\n`patch(diff(a, b))` on citm_catalog, best of 9, alternating builds:\n\n| Compiler | Before (#5839) | After | Change |\n|---|---|---|---|\n| Apple clang, `-O2` | 2.03\u20132.07 ms | 1.89\u20131.96 ms | \u22126.6 % |\n| GCC 16, `-O2` | 3.04\u20133.10 ms | 2.75\u20132.79 ms | \u22129.5 % |\n\nThe GCC numbers come from the all-sites prototype, before it was reduced to the patch sites.\n\n## Deliberately left inline\n\nThe other exceptions that are still built inline were prototyped together and measured on parse, accept, dump, all binary writers and diff for citm, twitter and canada. Nothing moved beyond noise: \u00b12.8 % on clang, \u00b11.5 % on GCC. These sites stay as they are, because they are cold or already behind a call:\n\n- `parser::syntax_error`\n- 9 sites in `binary_writer` and `throw_on_discarded`\n- the two invalid UTF-8 sites in `serializer`\n- `input_adapters`' empty input\n- `to_json`'s `enum_key_duplicate`\n- `format_error` (std::format parsing)\n\n## Performance summary of stack #5841\n\nThe table compares the top of the stack (this PR, which contains all eleven PRs) with `develop` (4e294f4b1).\n- Every row is the best of 3 alternating rounds, and each round already takes the best of 5\u201315 repetitions.\n- Compilers: Apple clang 21 (`-O2 -DNDEBUG`, arm64) and GCC 16 (`-O2 -DNDEBUG`, Docker on the same machine).\n- Documents: nativejson-benchmark's citm_catalog, twitter and canada.\n\n| PR | Operation | clang: develop \u2192 stack | GCC 16: develop \u2192 stack |\n|---|---|---|---|\n| #5834 | `ordered_json::flatten()` citm | 257 \u2192 2.4 ms (**\u221299 %**) | 264 \u2192 3.7 ms (**\u221299 %**) |\n| #5834 | `json::flatten()` citm | 5.49 \u2192 4.82 ms (\u221212 %) | 7.82 \u2192 6.88 ms (\u221212 %) |\n| #5836 | `json_pointer(string)` | 199 \u2192 101 ns (\u221249 %) | 286 \u2192 136 ns (\u221252 %) |\n| #5836 | `json_pointer::to_string()` | 243 \u2192 111 ns (\u221254 %) | 380 \u2192 82 ns (\u221278 %) |\n| #5836 | `at(json_pointer)` | 77 \u2192 58 ns (\u221225 %) | 123 \u2192 75 ns (\u221239 %) |\n| #5836 | `contains(json_pointer)` | 102 \u2192 54 ns (\u221247 %) | 160 \u2192 75 ns (\u221253 %) |\n| #5836 | `unflatten()` citm | 21.8 \u2192 13.3 ms (\u221239 %) | 32.7 \u2192 20.0 ms (\u221239 %) |\n| #5833 | `get<std::vector<int>>`, per element | 4.45 \u2192 0.95 ns (\u221279 %) | 1.55 \u2192 0.96 ns (\u221238 %) |\n| #5833 | canada `get<vector<vector<vector<double>>>>` | 1.96 \u2192 1.32 ms (\u221233 %) | 1.53 \u2192 1.47 ms (\u22124 %) |\n| #5837 | `json(std::move(vector<string>))`, 200k | 14.3 \u2192 9.2 ms (\u221236 %) | 22.0 \u2192 10.7 ms (\u221251 %) |\n| #5832 | `JSON_DIAGNOSTICS`: `ordered_json` 100k `push_back` | 1564 \u2192 1.5 ms (**\u221299.9 %**) | 1643 \u2192 1.1 ms (**\u221299.9 %**) |\n| #5832 | `JSON_DIAGNOSTICS`: `ordered_json::update()`, 20k keys | 765 \u2192 582 ms (\u221224 %) \u00b9 | 773 \u2192 544 ms (\u221230 %) \u00b9 |\n| #5832 | `JSON_DIAGNOSTICS`: copy citm | 1.73 \u2192 1.56 ms (\u221210 %) | 2.98 \u2192 2.51 ms (\u221216 %) |\n| #5840 | copy a scalar `json` | 2.88 \u2192 0.95 ns (\u221267 %) | 2.88 \u2192 1.92 ns (\u221233 %) |\n| #5840 | `j == 5` | 3.52 \u2192 0.64 ns (\u221282 %) | 2.88 \u2192 1.91 ns (\u221234 %) |\n| #5840 | `std::vector<json>` of 1M ints, build + destroy | 2.52 \u2192 2.24 ms (\u221212 %) | 1.06 \u2192 0.93 ms (\u221212 %) |\n| #5840 | canada `==` canada | 0.52 \u2192 0.31 ms (\u221240 %) | 0.52 \u2192 0.50 ms (\u22124 %) |\n| #5840 / #5835 | copy canada | 3.08 \u2192 2.94 ms (\u22125 %) | 4.25 \u2192 3.78 ms (\u221211 %) |\n| #5838 | `get_ref<const std::string&>()` | 1.16 \u2192 0.32 ns (\u221273 %) | 0.32 \u2192 0.32 ns (\u00b10) |\n| #5838 | `at(i)` | 1.31 \u2192 0.65 ns (\u221251 %) | 0.70 \u2192 0.54 ns (\u221222 %) |\n| #5838 | non-const `arr[i]` | 1.59 \u2192 0.87 ns (\u221245 %) | 0.83 \u2192 0.66 ns (\u221221 %) |\n| #5838 / #5835 | `std::sort` of 1M json ints | 132 \u2192 95 ms (\u221228 %) | 122 \u2192 82 ms (\u221233 %) |\n| #5835 | range-for over an array, per element | 2.53 \u2192 1.27 ns (\u221250 %) | 1.12 \u2192 0.96 ns (\u221214 %) |\n| #5835 | reverse iteration, per element | 3.48 \u2192 1.58 ns (\u221255 %) | 1.12 \u2192 0.96 ns (\u221214 %) |\n| #5835 | copy + destroy object of 100k ints | 5.75 \u2192 3.32 ms (\u221242 %) | 5.18 \u2192 3.01 ms (\u221242 %) |\n| #5835 | `diff({}, citm)` | 3.24 \u2192 1.50 ms (\u221254 %) | 5.46 \u2192 2.17 ms (\u221260 %) |\n| #5835 | copy + destroy citm | 1.59 \u2192 1.50 ms (\u22126 %) | 2.58 \u2192 2.19 ms (\u221215 %) |\n| #5831 | `parse()` citm with callback | 4.21 \u2192 3.97 ms (\u22126 %) | 7.00 \u2192 6.54 ms (\u22127 %) |\n| #5839 | `from_cbor` / `from_msgpack` / `from_ubjson` / `from_bson` citm | \u22124 \u2026 \u22127 % | \u221210 \u2026 \u221216 % |\n| #5839 | `from_bjdata` twitter | 1.55 \u2192 1.49 ms (\u22124 %) | 2.73 \u2192 2.60 ms (\u22125 %) |\n| #5842 | `patch(diff(a, b))` citm | \u22126.6 % (see above) | \u22129.5 % (see above) |\n\n\u00b9 The rest is `ordered_map`'s linear key lookup, not the diagnostics. Without `JSON_DIAGNOSTICS` the same `update()` takes 269 ms on clang. The diagnostics overhead on top of it dropped from about 37 % to about 20 %.\n\n**Regression guard**, parse/accept/dump on all three documents:\n- **clang:** within \u00b12 %, except parse of citm and canada, which is about 4 % faster.\n- **GCC:** within \u00b12 %, except parse of citm, which is 10 % faster.\n\n**Slower on GCC, small:** `citm == citm` +3 %, `diff(citm, citm)` +4 %, `ordered_json` parse of citm with `JSON_DIAGNOSTICS` +3 %. The clang run-to-run spread on these rows is 2\u20138 %. #5840 describes the GCC `==` effect on large documents.\n\nThe benchmark source is standalone (one `.cpp` file, no Google Benchmark) and can be posted on request.\n\n## Breaking changes\n\nNo breaking changes. The new helpers are in `nlohmann::detail`, and exception types, ids and messages are unchanged.\n\n\ud83e\udd16 Generated with [Claude Code](https://claude.com/claude-code)\n\n",
+ "comments": [],
+ "created_at": "2026-10-15T06:33:40Z",
+ "fetched_at": "2026-11-17T20:09:34Z",
+ "head_sha": "8c1e549e5c92b5ddadb950e3c5b4d9403e734965",
+ "labels": [
+  "\ud83d\ude80 ready to merge",
+  "performance"
+ ],
+ "linked_issues": [],
+ "merge_commit_sha": "6261d1e432413a1051906e21957b6ee2158566c9",
+ "merged_at": "2026-10-15T18:01:35Z",
+ "number": 5842,
+ "referenced_numbers": [
+  5838,
+  5839,
+  5841,
+  5834,
+  5836,
+  5833,
+  5837,
+  5832,
+  5840,
+  5835,
+  5831
+ ],
+ "repo": "nlohmann/json",
+ "review_comments": [],
+ "state": "closed",
+ "title": "Construct the JSON Patch exceptions out of line",
+ "transport": "gh",
+ "user": {
+  "login": "nlohmann",
+  "type": "User"
+ }
+}

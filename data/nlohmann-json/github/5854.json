@@ -1,0 +1,30 @@
+{
+ "base_ref": "perf/lexer-simd-strings",
+ "base_sha": "186d5fc0428600109b346ebb3c5a371b321b93ab",
+ "body": "## Summary\n\nTwo costs that every token pays, found in the assembly of the token dispatch:\n\n- **A stack canary on every token.** `scan_after_whitespace()` built the expected text of `true`, `false` and `null` in local `std::array` objects. With `-fstack-protector-strong`, which is the default of Ubuntu's GCC and of other distributions, any local array makes the compiler protect the whole function. So the canary was set and checked for every token, not only for literals: the `%fs:0x28` load alone was 11 % of the function's samples.\n  - `scan_literal()` now takes the text after the first character as a string literal, with its length as a template parameter.\n  - For contiguous input it compares the rest at once and falls back to the byte loop on a mismatch, so errors are reported at the same character.\n  - It is out of line, which keeps the token dispatch small. Inlined, Clang's dispatch grew from 233 to 278 instructions and became slower.\n- **`std::vector<bool>` for the parser's nesting state.** GCC calls its `push_back()` out of line. It is a `std::vector<std::uint8_t>` now.\n\nStacked on the previous PR.\n\n## Performance\n\nChange of the best-of-runs time against the previous PR (the first: against #5828), negative is faster. *accept* is `json::accept()` (no allocations), *parse* is `json::parse()`. Apple M1 Max: Apple Clang 21 and Homebrew GCC 16; x86-64 (Haswell VM): GCC 13, and Clang 18 with `-falign-loops=64 -falign-functions=64` on both sides (without it, code placement alone moves Clang's numbers by up to \u00b15 % between builds). Improvements of 3 % or more are bold.\n\n| file | M1 Clang accept | M1 Clang parse | M1 GCC 16 accept | M1 GCC 16 parse | x86 GCC accept | x86 Clang accept |\n|---|--:|--:|--:|--:|--:|--:|\n| `canada.json` | **\u22124.2 %** | \u22121.8 % | \u22121.7 % | \u22120.8 % | **\u221210.5 %** | **\u22124.9 %** |\n| `citm_catalog.json` | \u22122.9 % | \u22121.4 % | \u22122.3 % | \u22122.4 % | \u22120.7 % | +0.0 % |\n| `twitter.json` | \u22122.3 % | \u22122.1 % | **\u22126.0 %** | +0.3 % | **\u22125.7 %** | \u22121.9 % |\n| `numbers.json` | +2.8 % | +0.7 % | \u22122.5 % | \u22122.8 % | \u22122.9 % | \u22122.6 % |\n| `long_strings.json` | \u22120.9 % | \u22122.7 % | +0.0 % | \u22121.3 % | \u22122.8 % | \u22122.0 % |\n| `twitterescaped.json` | +1.2 % | +0.3 % | \u22121.0 % | \u22122.6 % | \u22122.5 % | +1.9 % |\n| `mesh.json` | \u22121.7 % | **\u22123.3 %** | \u22122.5 % | \u22121.6 % | **\u22126.2 %** | \u22121.8 % |\n\n## Tests\n\n- **New test case \"lexer literal fast path\"** in `unit-class_lexer.cpp`: every truncation and every wrong character (lower and upper case) of each literal, at the end of the input and followed by more text, gives the byte path's value or error. A mutation that compares only the first character is caught.\n- **More literal cases in `unit-stream-bulk-scan.cpp`:** `[true,false,null]`, `nulL`, `truex`, `[fals e]`, `t`, `true1`, `null null`, `[false]`. That corpus is read with get areas of 1 to 4096 bytes, so literals also span stream windows.\n- **Differential check against #5828's head** (string, `std::istream`, `FILE*`; M1 and x86-64): identical.\n- **Full test suite:** passes under ASan/UBSan on macOS and Linux x86-64.\n\n## Breaking changes\n\nNone. Only private lexer and parser internals change.\n\n\ud83e\udd16 Generated with [Claude Code](https://claude.com/claude-code)\n",
+ "comments": [],
+ "created_at": "2026-10-15T17:44:30Z",
+ "fetched_at": "2026-11-17T20:09:16Z",
+ "head_sha": "0d4374b8dfb389bb7d6c7facd9346a285bb102a6",
+ "labels": [
+  "L",
+  "tests",
+  "performance"
+ ],
+ "linked_issues": [],
+ "merge_commit_sha": "fa37b952df2f6da3178e549e56123800336e242a",
+ "merged_at": "2026-10-21T18:00:53Z",
+ "number": 5854,
+ "referenced_numbers": [
+  5828
+ ],
+ "repo": "nlohmann/json",
+ "review_comments": [],
+ "state": "closed",
+ "title": "Match literals without a stack array and keep parser states in bytes",
+ "transport": "gh",
+ "user": {
+  "login": "nlohmann",
+  "type": "User"
+ }
+}

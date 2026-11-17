@@ -1,0 +1,38 @@
+{
+ "base_ref": "develop",
+ "base_sha": "e32051125faf95dc64d49a129959b6742b9ffee9",
+ "body": "## Summary\n\nRemoves runtime checks in the binary reader and writer that an earlier check on the same path already decides, so they can never fire. Each condition was shown dead by branch coverage and by a build that aborts on the removed side (see below).\n\nBinary reader (`binary_reader.hpp`):\n\n- `check_bson_document_size()`: `document_size < 0` \u2014 the size was rejected below 5 before it was stored.\n- `get_ubjson_ndarray_size()`: `second != 'N'` \u2014 'N' is rejected as a type marker before `second` can be set.\n- `bjd_type_name(dtype) == nullptr` for an ND-array dtype \u2014 every marker `is_valid_optimized_type()` accepts for BJData has a name. Kept as a `JSON_ASSERT`.\n- The early `is_bjd_excluded_optimized_type()` check in `get_ubjson_size_type()` \u2014 `is_valid_optimized_type()` a few lines later rejects the same eight markers with the same error. A 1.6M-input differential run (generated BJData/UBJSON/BSON, original vs. patched headers) found no difference in results or messages. With its only caller gone, `is_bjd_excluded_optimized_type()` itself is removed. The test in `unit-bjdata.cpp` that tied its list to the writer's `is_bjdata_excluded_type_marker()` now checks `is_valid_optimized_type()` of a BJData reader against the same markers instead.\n- `input_format == bjdata` next to `is_ndarray`, next to bit 8 of the type, and next to a 'B', 'u', 'm' or 'M' marker \u2014 these only arise for BJData. The unused `bjdata` local goes with them.\n- `first != npos` next to bit 8 \u2014 the bit is only set after a count was read.\n\nBinary writer (`binary_writer.hpp`):\n\n- MessagePack: the `<= max` halves of the negative int8/int16/int32 ladder \u2014 the ladder is in the `else` branch of `n >= 0`, after `n >= -32`.\n\nThe comments of `check_bson_document_size()` and `is_valid_optimized_type()` now describe where the removed checks are done instead.\n\nNet: 24 insertions, 52 deletions in `include/`. The only test change is the lookup-table test above. Every other test still passes, and no line of the removed code was ever executed by a test.\n\n## How the checks were found and verified\n\n1. Branch coverage of the whole test suite (clang `-fprofile-instr-generate`) plus 24,380 mutated JSON and binary inputs through the `tests/src/fuzzer-*.cpp` drivers listed the branch sides never taken in `include/nlohmann/`.\n2. Each candidate was read for the invariant that makes it dead and the line that establishes it (the commit message names them).\n3. A copy of the tree with `abort()` on the supposedly dead side of every check was run through the full test suite under ASan/UBSan, the fuzz corpora and dedicated drivers: no trap fired. (One claim was disproved this way and is not part of these PRs.)\n4. With the checks removed, the full test suite passes under ASan/UBSan, and a wide translation unit compiles without a new warning under the CI clang flag set (C++11 and C++17, with and without `JSON_DIAGNOSTICS` / `JSON_DIAGNOSTIC_POSITIONS`).\n\nThe full list of findings, including checks that are dead only in the shipped configurations and were left in place, is in a separate report; this PR covers the high-confidence items of its area only.\n\n## Breaking changes\n\nNo breaking changes. All removed checks are in `detail::binary_reader` and `detail::binary_writer`, and no input or value reaches a removed side, so every output, error message and exception stays the same.\n\n\ud83e\udd16 Generated with [Claude Code](https://claude.com/claude-code)\n\n",
+ "comments": [
+  {
+   "body": "### Performance check\n\n**Neutral to slightly positive.** Most removed checks are per container (UBJSON/BJData size/type and ndarray tests) or per integer in the msgpack writer.\n\n- **Generated code** (clang, arm64): 14 `binary_reader` functions differ. `get_ubjson_array()`, `get_ubjson_object()`, `get_ubjson_size_type()` and `parse_ubjson_typed_run()` each get one 16-byte block shorter in both adapter instantiations. Nothing grows. The msgpack writer's negative-integer path is identical: clang already dropped the redundant upper-bound compares.\n- **Instruction counts**:\n\n| case | clang/arm64 PR/base | GCC/x86-64 (callgrind, exact) PR/base |\n|---|---:|---:|\n| `to_msgpack` 20k negative ints of all widths | 0.9971 | 1.00000 |\n| `from_ubjson` canada | n/a* | 1.00113 |\n| `from_ubjson` canada, size+type optimized | 0.9922 | 0.99931 |\n| `from_bjdata` canada | n/a* | 1.00113 |\n| `from_bjdata` canada, size+type optimized | 0.9922 | **0.98994** |\n| `from_bjdata` citm_catalog, size+type optimized | 0.9939 | 0.99900 |\n| `to_bjdata` canada, size+type optimized | 0.9975 | \u2013 |\n\n  \\* On macOS the non-optimized canada rows showed a \u00b13\u20134 % malloc artifact. It also appears in PRs whose code is identical, so I used only the exact GCC counts there. The +0.11 % on GCC is 112k instructions on about 56k small arrays, roughly 2 per array, presumably from the reordered `get_ubjson_array()`. The optimized-container path, where the removed checks actually sit, gets up to 1 % cheaper.\n\n<details><summary>Method</summary>\n\n- PR head vs. its base (merge base), both compiled into one binary (namespaces renamed per copy) with the same workload: DOM parse (string, stream, callback), copy/destroy, `==`/`<`, iteration, `dump()`, msgpack/UBJSON/BJData read and write, `json_document` parse/`dump()`/`==`/`get<std::int64_t>()` on twitter, citm_catalog, canada and small_signed_ints.\n- **Generated code**: both variants disassembled (Apple clang 21, `-O3`, arm64), names and addresses masked, compared function by function.\n- **Instruction counts**: Apple M1 Max, instructions retired per repetition (minimum of 3 runs, setup subtracted). Rows whose machine code is identical vary by about \u00b10.4 %, which is the noise floor. Where a hot path changes, also GCC 13.3 `-O3` on x86-64 under callgrind, which gives exact counts (built with `-falign-functions=64 -falign-loops=64` unless a row says otherwise).\n</details>\n\n---\n*Written by Claude Code on behalf of @nlohmann.*\n",
+   "created_at": "2026-11-02T08:24:46Z",
+   "user": {
+    "login": "nlohmann",
+    "type": "User"
+   }
+  }
+ ],
+ "created_at": "2026-11-02T06:11:37Z",
+ "fetched_at": "2026-11-17T20:07:42Z",
+ "head_sha": "28cb669b1fb4acaa16a62b8031d29a2eac7505c6",
+ "labels": [
+  "aspect: binary formats",
+  "review needed",
+  "L",
+  "tests"
+ ],
+ "linked_issues": [],
+ "merge_commit_sha": "e48800f09d6f5e31320371da7ebdda7f7c6e911e",
+ "merged_at": "2026-11-04T22:42:17Z",
+ "number": 6001,
+ "referenced_numbers": [],
+ "repo": "nlohmann/json",
+ "review_comments": [],
+ "state": "closed",
+ "title": "Binary reader and writer: remove checks that invariants make dead",
+ "transport": "gh",
+ "user": {
+  "login": "nlohmann",
+  "type": "User"
+ }
+}

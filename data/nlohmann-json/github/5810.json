@@ -1,0 +1,31 @@
+{
+ "base_ref": "claude/lazy-line-column-tracking-868c65",
+ "base_sha": "1d4dfc3af05bdc69001786c54e8b6567d6d1cc6b",
+ "body": "Stacked on #5809, which derives the lexer position lazily for seekable input. Only the top commit belongs to this PR.\n\n## What\n\nPretty-printed JSON indents every line with a run of spaces, and `skip_whitespace()` read them one character at a time. For contiguous input (`bulk_scan`: pointers, `std::string`, `std::vector<char>` and similar), the lexer now skips the spaces after a newline in 8-byte steps, directly in the input buffer. `lexer::skip_indentation()` loads 8 bytes, XORs them with `0x2020\u202620` and skips whole words of spaces. On the first word that is not all spaces, it also skips that word's leading spaces using a count of trailing zeros. Tabs, `\\r`, the last 7 bytes of the input and anything that is not a space go through the existing byte loop.\n\nThe skip bypasses `get()`. That is safe because `bulk_scan` implies `lazy_position` from #5809: the position comes from the adapter, so nothing has to be counted per character. Streams, files, wide strings and user-defined adapters are unchanged.\n\nThe idea comes from Glaze's `skip_matching_ws`, which compares against the previous line's indentation. Comparing against spaces is simpler (no state) and handles any indent width.\n\nChanges:\n- `detail/input/lexer.hpp`: adds `skip_indentation()`, called after `'\\n'` in `skip_whitespace()`.\n- `detail/bit_ops.hpp`: adds `count_trailing_zeros()`, using `__builtin_ctzll` or a portable fallback (the fallback was checked against the builtin for 640k values).\n- `docs/home/architecture.md`: one sentence about the bulk-scan interface.\n\n## Performance\n\nMedians of 60 runs, in \u00b5s. \"Lazy\" is #5809 and \"this\" is this PR. The x86 machine is a VPS with some background load, so differences under about 4% are noise there.\n\n| file | | GCC 13 x86-64<br>lazy \u2192 this | clang 18 x86-64<br>lazy \u2192 this | Apple clang 21 arm64<br>lazy \u2192 this |\n|---|---|---|---|---|\n| twitter, indent 2 | parse | 5151 \u2192 5032 (\u22122%) | 5150 \u2192 5145 (0%) | 1863 \u2192 1758 (\u22126%) |\n| | accept | 1334 \u2192 1261 (\u22125%) | 1253 \u2192 1253 (0%) | 661 \u2192 580 (\u221212%) |\n| twitter, indent 4 | parse | 5270 \u2192 5001 (\u22125%) | 5455 \u2192 4930 (\u221210%) | 1915 \u2192 1790 (\u22127%) |\n| | accept | 1567 \u2192 1297 (\u221217%) | 1486 \u2192 1201 (\u221219%) | 770 \u2192 602 (\u221222%) |\n| citm_catalog, indent 2 | parse | 7795 \u2192 7585 (\u22123%) | 7900 \u2192 7240 (\u22128%) | 3157 \u2192 3008 (\u22125%) |\n| | accept | 2438 \u2192 2126 (\u221213%) | 2185 \u2192 1928 (\u221212%) | 1189 \u2192 993 (\u221216%) |\n| citm_catalog, indent 4 | parse | 8360 \u2192 7726 (\u22128%) | 8234 \u2192 7159 (\u221213%) | 3470 \u2192 3068 (\u221212%) |\n| | accept | 3106 \u2192 2164 (\u221230%) | 2533 \u2192 1985 (\u221222%) | 1424 \u2192 1041 (\u221227%) |\n| twitter, minified | parse | 4767 \u2192 4851 | 4786 \u2192 4702 | 1726 \u2192 1719 |\n| | accept | 1160 \u2192 1123 | 1041 \u2192 1130 | 564 \u2192 563 |\n| citm_catalog, minified | parse | 7226 \u2192 7101 | 6763 \u2192 6734 | 2860 \u2192 2943 |\n| | accept | 1835 \u2192 1699 | 1554 \u2192 1533 | 915 \u2192 903 |\n\nMinified input never reaches the new code and is unchanged within noise. On x86, the minified accept cells varied by 4\u20138% between sweeps.\n\nI also measured a version that skips only whole 8-byte words. It was 5\u201312% slower on `accept` and gave nothing on 2-space indentation, where runs are often shorter than a word. That is why the partial word is finished with the trailing-zero count.\n\n## Tests\n\n- New test case in `unit-deserialization.cpp`. For indentation runs of 0 to 33 spaces, it checks that contiguous and stream input give the same result, byte offset and message in seven layouts: a value after the indent, an error after it, the run ending at the end of the input, tab/CR mixed in, a comment after the indent, and an unexpected second value. Two cases also have fixed expected messages. Mutants that skip one byte too many or start one byte late fail this test.\n- `count_trailing_zeros()` gets checks next to the existing `count_leading_zeros()` test in `unit-class_lexer.cpp`.\n- Differential check against #5809, run locally and not committed. It covered 89k inputs and found byte-identical results, error messages, SAX events and positions, and diagnostic positions:\n  - 742 corpus files, also re-indented with 1, 2, 4, 8, 9 and 16 spaces and with tabs\n  - truncations and byte mutations of those files, half of them inside indentation\n  - 42k generated edge cases\n  - each input parsed as pointer range, `std::string`, `std::string_view`, vector and stream, with comments off and on, and with `JSON_DIAGNOSTIC_POSITIONS` off and on\n  - also run under ASan/UBSan, with no findings\n\n## Breaking changes\n\nNone. This only changes how fast whitespace in contiguous input is skipped. Results, error messages and positions are identical. `count_trailing_zeros()` is a new `detail` helper.\n\n\ud83e\udd16 Generated with [Claude Code](https://claude.com/claude-code)\n",
+ "comments": [],
+ "created_at": "2026-10-13T07:20:15Z",
+ "fetched_at": "2026-11-17T20:09:52Z",
+ "head_sha": "da4ce8b8a3ee5d48583774df07bc5951a7a89804",
+ "labels": [
+  "documentation",
+  "L",
+  "tests",
+  "\ud83d\ude80 ready to merge"
+ ],
+ "linked_issues": [],
+ "merge_commit_sha": "aa9620fb1505a92fd6db93ca48a9145b8a96c0b3",
+ "merged_at": "2026-10-13T15:16:54Z",
+ "number": 5810,
+ "referenced_numbers": [
+  5809
+ ],
+ "repo": "nlohmann/json",
+ "review_comments": [],
+ "state": "closed",
+ "title": "Skip the indentation after a newline 8 bytes at a time",
+ "transport": "gh",
+ "user": {
+  "login": "nlohmann",
+  "type": "User"
+ }
+}

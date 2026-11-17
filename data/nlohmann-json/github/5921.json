@@ -1,0 +1,38 @@
+{
+ "base_ref": "json-view/5869-2-big-endian",
+ "base_sha": "95d12597f68464f007e38b5588600a1acb9516bd",
+ "body": "Part of the #5869 cleanup before 3.13.0, stacked on #5920. Suggested by @gregmarr in #5628 ([comment](https://github.com/nlohmann/json/pull/5628#discussion_r4331340096)): one SIMD macro set for the library and the view.\n\n## What changes\n\n- **`JSON_NO_SIMD` also turns off the view's vector code.** `JSON_VIEW_NO_SIMD` is removed. The view now follows the macro that the lexer and the float writer already use (#5853), and so it shares its ABI tag `_ns`.\n- **`JSON_VIEW_USE_SSSE3` is removed, with no replacement.** Like the lexer, the view skips the runtime CPU check of SSSE3 when the code is compiled for SSSE3 anyway (`__SSSE3__`, e.g. `-mssse3` or `-march=native`). A build that knows its CPU has SSSE3 but doesn't pass `-mssse3` pays one `cpuid` per process and a predicted branch. That isn't worth a macro with its own ABI tag. (The issue had floated a shared `JSON_USE_SSSE3`; #5853 never added one.)\n- The ABI tags `_vns` and `_vssse3` go away, along with their macro pages and references. `nlohmann_json.natvis` is regenerated, and the generator examples and the `check_amalgamation` natvis step use `_ns`.\n\nThis leaves `JSON_NO_SIMD`, the existing `JSON_USE_SIMDUTF`, and the compiler's own `-mssse3`.\n\n## Breaking changes\n\nNone for released versions: `JSON_VIEW_NO_SIMD` and `JSON_VIEW_USE_SSSE3` were added on `develop` for 3.13.0 and never released. Code on `develop` that defines `JSON_VIEW_NO_SIMD` should define `JSON_NO_SIMD` instead, which also affects the lexer and the float writer. `JSON_VIEW_USE_SSSE3` becomes a no-op; `-mssse3` has the same effect.\n\n## Tests\n\n- `test-json_view_builder_portable` builds with `JSON_NO_SIMD`. `test-json_view_builder_ssse3` builds with `-mssse3` only.\n- The ABI config tests no longer expect `_vns`/`_vssse3`.\n- Checked by preprocessing: NEON code is in the view by default and absent with `JSON_NO_SIMD`. On baseline x86-64, the lexer and the view both do the CPU check by default, and neither does it with `-mssse3`.\n- The natvis generator options step of `check_amalgamation.yml` passes when replicated locally.\n\n\ud83e\udd16 Generated with [Claude Code](https://claude.com/claude-code)\n",
+ "comments": [],
+ "created_at": "2026-10-25T15:13:37Z",
+ "fetched_at": "2026-11-17T20:08:44Z",
+ "head_sha": "46e99311e3d28cfee7bdcfd3ef6b2e4843b16408",
+ "labels": [
+  "documentation",
+  "L",
+  "CI",
+  "tests",
+  "CMake",
+  "python",
+  "\ud83d\ude80 ready to merge",
+  "aspect: json_view"
+ ],
+ "linked_issues": [],
+ "merge_commit_sha": "5a2819c9400cfc352dc8623cccbbecf63d5ac932",
+ "merged_at": "2026-10-26T19:13:35Z",
+ "number": 5921,
+ "referenced_numbers": [
+  5869,
+  5920,
+  5628,
+  5853
+ ],
+ "repo": "nlohmann/json",
+ "review_comments": [],
+ "state": "closed",
+ "title": "json_view: one SIMD macro set with the library",
+ "transport": "gh",
+ "user": {
+  "login": "nlohmann",
+  "type": "User"
+ }
+}

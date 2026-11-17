@@ -1,0 +1,27 @@
+{
+ "base_ref": "develop",
+ "base_sha": "d20c4dcd894728cd6a25e8e96533adf85fd17223",
+ "body": "## Problem\n\ndevelop has been red since #5890 merged. #5919 replaced the `bool Editable` template parameter of `basic_json_view` by `view_mode Mode` and defines `is_editable` from `Mode`. #5890 was written before that and added a second `static constexpr bool is_editable = Editable;` to the private section. Together they do not compile (\"duplicate member `is_editable`\", \"undeclared identifier `Editable`\"), so every job that builds the json_view tests fails: macOS (`macos-15`, `macos-26`, `xcode_standards`), Windows (MSVC, clang-cl, clang, `ci_module_cpp20`) and the CodeQL build. The `source()` errors in `unit-json_view.cpp` in those logs are follow-on errors from the broken class.\n\n## Change\n\nRemove the duplicate member and its comment from `include/nlohmann/json_view.hpp` and regenerate `single_include/nlohmann/json_view.hpp` (`make amalgamate`). Nothing else changes.\n\n## Testing\n\n`unit-json_view` and `unit-json_view_compare` build with clang++ (C++11) and pass locally.\n\n## Breaking changes\n\nNo breaking changes: the removed member was private and did not compile.\n\n\ud83e\udd16 Generated with [Claude Code](https://claude.com/claude-code)",
+ "comments": [],
+ "created_at": "2026-10-30T15:46:51Z",
+ "fetched_at": "2026-11-17T20:08:33Z",
+ "head_sha": "1851da31644bdfe9b47b71f932ed720345383089",
+ "labels": [],
+ "linked_issues": [],
+ "merge_commit_sha": "755bb16d7a80436646380b5f871b93c6a443a3b7",
+ "merged_at": "2026-10-30T15:48:31Z",
+ "number": 5966,
+ "referenced_numbers": [
+  5890,
+  5919
+ ],
+ "repo": "nlohmann/json",
+ "review_comments": [],
+ "state": "closed",
+ "title": "Fix the red CI on develop: remove the duplicate is_editable in basic_json_view",
+ "transport": "gh",
+ "user": {
+  "login": "nlohmann",
+  "type": "User"
+ }
+}

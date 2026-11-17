@@ -1,0 +1,32 @@
+{
+ "base_ref": "develop",
+ "base_sha": "bd067fd08c8a90fcfc918526adf3c87a306f5abe",
+ "body": "Fixes the compile error on `develop` (3354436, #6006 and later):\n\n```\ninclude/nlohmann/json.hpp:5550: error: use of undeclared identifier 'null_result'\n```\n\n## Cause\n\n#6005 consisted of three commits. When the stack #5997 \u2190 #6004 \u2190 #6005 \u2190 #6006 was restacked for the atomic stack merge, only the last commit of #6005 (\"Drop the null_result parameter JSON_IMPLEMENT_OPERATOR no longer uses\") was replayed. The two commits it depends on were lost, so `develop` has the parameter removal without the change that made it unused:\n\n- `2ac0851` basic_json, iterators, serializer: remove checks that invariants make dead\n- `7196bc5` iter_impl: keep the type-dependent initialization in the constructor\n\n## Change\n\nThis PR cherry-picks exactly these two commits (unchanged) onto `develop`. They apply without conflicts.\n\nChecked locally: `make amalgamate` leaves no diff; `unit-comparison`, `unit-allocator`, `unit-iterators1`, `unit-serialization`, `unit-ordered_json` and `unit-json_view` build with clang++ -std=c++11 and pass.\n\n## Breaking changes\n\nNo breaking changes: the commits remove internal checks and an unused internal macro parameter.\n\n\ud83e\udd16 Generated with [Claude Code](https://claude.com/claude-code)\n",
+ "comments": [],
+ "created_at": "2026-11-02T17:22:18Z",
+ "fetched_at": "2026-11-17T20:07:58Z",
+ "head_sha": "d2d25e4e437576b6f93725c26cbde00a8c577ac9",
+ "labels": [
+  "S",
+  "\ud83d\ude80 ready to merge"
+ ],
+ "linked_issues": [],
+ "merge_commit_sha": "100f676b3e9d85cedbf90e2995cadf9473b6b0e5",
+ "merged_at": "2026-11-02T17:23:44Z",
+ "number": 6012,
+ "referenced_numbers": [
+  6006,
+  6005,
+  5997,
+  6004
+ ],
+ "repo": "nlohmann/json",
+ "review_comments": [],
+ "state": "closed",
+ "title": "Restore the two commits of #6005 that the stack merge dropped (fixes the build of develop)",
+ "transport": "gh",
+ "user": {
+  "login": "nlohmann",
+  "type": "User"
+ }
+}

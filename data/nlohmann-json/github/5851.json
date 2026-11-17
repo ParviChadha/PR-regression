@@ -1,0 +1,53 @@
+{
+ "base_ref": "develop",
+ "base_sha": "4da932f518feb262d29b08aedec10ec0c45fa501",
+ "body": "## Summary\n\nParsing numbers from contiguous input scanned every digit twice. `scan_number_bulk_contiguous()` validated the token one byte at a time and copied it into `token_buffer`. The conversion then went through two out-of-line functions that read the digits again:\n\n- `parse_float_native()` called `parse_float_significand()`, which returned its result through memory and called `std::any_of` twice per number (GCC does not inline it).\n- `parse_integer_signed()` divided by ten on every digit for its overflow check.\n\nThis PR accumulates the value while the digits are validated:\n\n- Digits are taken **eight at a time** where at least eight bytes remain: `is_eight_digits()` tests them and `parse_eight_digits()` converts them, as in fast_float.\n- **Floats with at most 19 digits** go straight to `decimal_to_float()` (Clinger's fast path or Eisel\u2013Lemire), so the float fast path has no calls left.\n- **Integers with at most 18 digits** are stored without an overflow check. A narrower `number_integer_t`/`number_unsigned_t` still rejects values that do not round-trip, as before.\n- **Longer tokens, and float formats other than binary32/binary64** (e.g. x87 `long double`), take the existing path. It is unchanged, except that `has_nonzero_digit()` is now a plain loop and `parse_float_significand()` is always inlined.\n\nThe stream windows of #5828 are handled like the existing fast path: a number that reaches the end of a window falls back to `scan_number()`, and the terminator is read and ungotten.\n\nThis is the first of five stacked PRs from an assembly review of the number and string parsing; the stack is based on #5828.\n\n## Performance\n\nChange of the best-of-runs time against the previous PR (the first: against #5828), negative is faster. *accept* is `json::accept()` (no allocations), *parse* is `json::parse()`. Apple M1 Max: Apple Clang 21 and Homebrew GCC 16; x86-64 (Haswell VM): GCC 13, and Clang 18 with `-falign-loops=64 -falign-functions=64` on both sides (without it, code placement alone moves Clang's numbers by up to \u00b15 % between builds). Improvements of 3 % or more are bold.\n\n| file | M1 Clang accept | M1 Clang parse | M1 GCC 16 accept | M1 GCC 16 parse | x86 GCC accept | x86 Clang accept |\n|---|--:|--:|--:|--:|--:|--:|\n| `canada.json` | **\u221218.8 %** | **\u22129.8 %** | **\u221217.2 %** | **\u22129.3 %** | **\u221211.5 %** | **\u221220.7 %** |\n| `citm_catalog.json` | **\u22126.8 %** | **\u22123.0 %** | **\u22128.3 %** | \u22121.9 % | \u22121.3 % | +3.1 % |\n| `twitter.json` | \u22120.3 % | \u22120.3 % | \u22121.0 % | +0.1 % | +4.7 % | +0.8 % |\n| `numbers.json` | **\u221225.1 %** | **\u221222.7 %** | **\u221220.4 %** | **\u221220.1 %** | **\u221218.4 %** | **\u221224.7 %** |\n| `long_strings.json` | \u22120.2 % | +1.6 % | \u22121.9 % | \u22121.6 % | \u22121.4 % | +0.7 % |\n| `twitterescaped.json` | \u22120.7 % | +0.1 % | \u22120.9 % | \u22120.3 % | +6.4 % | +1.0 % |\n| `mesh.json` | **\u221218.6 %** | **\u221213.5 %** | **\u221214.9 %** | **\u221212.4 %** | **\u221213.7 %** | **\u221216.1 %** |\n\nThis PR does not touch the string code; the x86-64 GCC rows for twitter.json and twitterescaped.json (+5 to +6 %) come from code placement and from the shared machine, which was under load during this run (the M1 rows for these files are within \u00b11 %).\n\n## Tests\n\n- **New section \"digits accumulated while scanning\"** in `unit-class_lexer.cpp`:\n  - covers every digit count from 1 to 25, in the integer and the fraction part, with and without sign and exponent, with leading zeros, and with exponents beyond every range;\n  - compares each case with the byte path. The reference input is a `std::list<char>`: since #5828, a `std::stringstream` takes the bulk path as well, so it is no longer an independent reference.\n- **New section for narrower number types:** a `basic_json` with 32-bit integers checks the round-trip check.\n- **Mutation check:** raising either digit limit by one makes these tests fail.\n- **Differential check against #5828's head:** identical DOM output, error messages, `accept()` results and SAX events (including the float text), for 737 files of json_test_data and 500k generated inputs. Each input is parsed from a string, an `std::istream` and a `FILE*`. Run on Apple M1 (Clang) and x86-64 (GCC 13, Clang 18).\n- **Full test suite:** passes under ASan/UBSan on macOS (Clang) and Linux x86-64 (GCC).\n\n## Breaking changes\n\nNone. Only internal functions in `nlohmann::detail` change. Values, exceptions and error positions are the same, as the differential check above shows.\n\n\ud83e\udd16 Generated with [Claude Code](https://claude.com/claude-code)\n",
+ "comments": [],
+ "created_at": "2026-10-15T17:44:17Z",
+ "fetched_at": "2026-11-17T20:09:20Z",
+ "head_sha": "2dfda27f28690dee69988acaa6b5fc059e3f252f",
+ "labels": [
+  "L",
+  "tests",
+  "performance"
+ ],
+ "linked_issues": [],
+ "merge_commit_sha": "e13e9768018aebe2998da3724669fa67ae5f24bb",
+ "merged_at": "2026-10-21T10:26:47Z",
+ "number": 5851,
+ "referenced_numbers": [
+  5828
+ ],
+ "repo": "nlohmann/json",
+ "review_comments": [
+  {
+   "body": "Is this repeated code that could use a helper?",
+   "created_at": "2026-10-20T23:05:54Z",
+   "diff_hunk": "@@ -275,13 +275,53 @@ JSON_HEDLEY_ALWAYS_INLINE std::uint32_t parse_eight_digits(std::uint64_t v) noex\n     return static_cast<std::uint32_t>(((v & 0x0000FFFF0000FFFFu) * 42949672960001u) >> 32u);\n }\n \n-/// whether [first, last) contains a digit other than '0'\n-inline bool has_nonzero_digit(const char* first, const char* last) noexcept\n+/// whether the eight bytes in @a v (see read_eight_bytes()) are all ASCII\n+/// digits (after fast_float)\n+JSON_HEDLEY_ALWAYS_INLINE bool is_eight_digits(std::uint64_t v) noexcept\n {\n-    return std::any_of(first, last, [](char c) noexcept\n+    return ((v & 0xF0F0F0F0F0F0F0F0u) | (((v + 0x0606060606060606u) & 0xF0F0F0F0F0F0F0F0u) >> 4u)) == 0x3333333333333333u;\n+}\n+\n+/*!\n+@brief skip the ASCII digits starting at data[i] and accumulate their value\n+\n+Eight digits are taken at a time while at least eight bytes remain. @a w wraps\n+around after 19 digits; the caller only uses it for shorter digit runs.\n+\n+@return the index of the first byte at or after @a i that is not a digit\n+*/\n+JSON_HEDLEY_ALWAYS_INLINE std::size_t accumulate_digits(const char* data, std::size_t i, std::size_t avail, std::uint64_t& w) noexcept\n+{\n+    while (avail - i >= 8)\n+    {\n+        const std::uint64_t v = read_eight_bytes(data + i);\n+        if (!is_eight_digits(v))\n+        {\n+            break;\n+        }\n+        w = (w * 100000000u) + parse_eight_digits(v);\n+        i += 8;\n+    }\n+    while (i < avail && data[i] >= '0' && data[i] <= '9')\n     {\n-        return c != '0';\n-    });\n+        w = (w * 10u) + static_cast<std::uint64_t>(data[i] - '0');",
+   "line": 307,
+   "path": "include/nlohmann/detail/input/number_parse.hpp",
+   "user": {
+    "login": "gregmarr",
+    "type": "User"
+   }
+  },
+  {
+   "body": "Yes, though not quite this loop: the integer part and the fraction in `parse_float_significand()` ran the same eight-digits-then-one-digit loop. In 2dfda27f2 they share `accumulate_significant_digits()`, and clang -O2 emits the same code as before. `accumulate_digits()` stays separate because it checks each byte for a digit and has no 19-digit cap, so a shared helper would need both as parameters.\n\n\u2014 posted by Claude Code on behalf of @nlohmann",
+   "created_at": "2026-10-21T07:20:47Z",
+   "diff_hunk": "@@ -275,13 +275,53 @@ JSON_HEDLEY_ALWAYS_INLINE std::uint32_t parse_eight_digits(std::uint64_t v) noex\n     return static_cast<std::uint32_t>(((v & 0x0000FFFF0000FFFFu) * 42949672960001u) >> 32u);\n }\n \n-/// whether [first, last) contains a digit other than '0'\n-inline bool has_nonzero_digit(const char* first, const char* last) noexcept\n+/// whether the eight bytes in @a v (see read_eight_bytes()) are all ASCII\n+/// digits (after fast_float)\n+JSON_HEDLEY_ALWAYS_INLINE bool is_eight_digits(std::uint64_t v) noexcept\n {\n-    return std::any_of(first, last, [](char c) noexcept\n+    return ((v & 0xF0F0F0F0F0F0F0F0u) | (((v + 0x0606060606060606u) & 0xF0F0F0F0F0F0F0F0u) >> 4u)) == 0x3333333333333333u;\n+}\n+\n+/*!\n+@brief skip the ASCII digits starting at data[i] and accumulate their value\n+\n+Eight digits are taken at a time while at least eight bytes remain. @a w wraps\n+around after 19 digits; the caller only uses it for shorter digit runs.\n+\n+@return the index of the first byte at or after @a i that is not a digit\n+*/\n+JSON_HEDLEY_ALWAYS_INLINE std::size_t accumulate_digits(const char* data, std::size_t i, std::size_t avail, std::uint64_t& w) noexcept\n+{\n+    while (avail - i >= 8)\n+    {\n+        const std::uint64_t v = read_eight_bytes(data + i);\n+        if (!is_eight_digits(v))\n+        {\n+            break;\n+        }\n+        w = (w * 100000000u) + parse_eight_digits(v);\n+        i += 8;\n+    }\n+    while (i < avail && data[i] >= '0' && data[i] <= '9')\n     {\n-        return c != '0';\n-    });\n+        w = (w * 10u) + static_cast<std::uint64_t>(data[i] - '0');",
+   "line": 307,
+   "path": "include/nlohmann/detail/input/number_parse.hpp",
+   "user": {
+    "login": "nlohmann",
+    "type": "User"
+   }
+  }
+ ],
+ "state": "closed",
+ "title": "Accumulate number digits while scanning them",
+ "transport": "gh",
+ "user": {
+  "login": "nlohmann",
+  "type": "User"
+ }
+}

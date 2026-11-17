@@ -1,0 +1,62 @@
+{
+ "base_ref": "fix/view-image-full-float",
+ "base_sha": "78d17d64ad9d61b9c5d1619bbdfa731283dfce00",
+ "body": "Stacked on #6084 (merge that first).\n\n# Do not compare an edited NaN equal to itself in json_view\n\n`operator==` of two views returned `true` for a NaN that an edit wrote (`set()`, `push_back()`, `insert()`): `v[0] == v[0]`, `root == root` and `root == other_root` were all `true`, while `json(NaN) == json(NaN)` and `view == json` are `false`. `a == b` and `a == b.materialize()` therefore disagreed for the same document. This contradicts the documented rule that views compare as `materialize()` would. A NaN can only enter a document through an edit (parsed text cannot hold one), and `json_view` is new in 3.13.0, so nothing released is affected.\n\n## Cause\n\nTwo float nodes with equal tokens were taken as equal without reading the value, and an edit stores a NaN as the token text `nan`. In addition, `certainly_equal` returned `true` for the same node of the same document, which is wrong for a NaN and for any array or object that contains one.\n\n## Change\n\n- The equal-token shortcut excludes the edited `nan` token. Edited floats are recorded without a digit layout (`extra == 0xFFFF`), which identifies the token; the check runs only for editable documents (a read-only document cannot hold a NaN, so equal tokens are an equal value there).\n- The same-node shortcut is kept for read-only documents and for editable documents that were never edited (no edit storage yet); a document with edits is walked.\n- Docs: `basic_json_view/operator_eq.md` says that a NaN written by an edit, and a view of anything containing one, is not equal to itself.\n- Infinities, which compare equal as in `basic_json`, are unchanged.\n\n## Tests\n\n`unit-json_view_edit_values.cpp`, section \"a NaN written by an edit is not equal to itself\". It fails on develop (7 failed checks: `d.root() == d.root()`, `d.root()[0] == d.root()[0]`, `d.root() == other.root()`, ...) and passes with the change. A check for a never-edited editable document (`root == root` stays true) is included. Also run under ASan/UBSan together with `unit-json_view_compare` and `unit-json_view_compare_values`.\n\n## Measurements\n\n`view == view` of two separately parsed, equal documents, clang -O2, Apple silicon, `/usr/bin/time -l`, 200 compares per run, five runs each, parse time included (about 194M instructions for canada, 136M citm, 57M twitter). The float comparison is dispatched on the document mode with a tag (as `scalar_values_only` is), so the read-only walk is the code it was before. Instructions in millions (median), then cycles (median):\n\n| input / case | instr. develop | instr. this PR | cycles develop | cycles this PR |\n|---|---|---|---|---|\n| canada, read-only | 3112.6 | 3112.4 (+-0 %) | 521.4 | 518.9 (noise) |\n| canada, editable == editable | 3357.7 | 3425.3 (+2.0 %) | 534.3 | 540.9 (within noise, runs spread 526-543 and 530-565) |\n| citm, read-only / editable | 844.9 / 996.5 | 844.9 / 995.8 | 162.6 / 179.7 | 162.2 / 178.3 |\n| twitter, read-only / editable | 1473.0 / 1535.1 | 1473.1 / 1534.8 | 277.8 / 293.7 | 277.7 / 293.9 |\n\nThe editable overhead is one comparison per equal float, which the NaN check needs.\n\nA comparison of a view with itself in an editable document that has edits is now linear instead of constant time (canada about 16M instructions, citm 4.3M, twitter 7.4M per compare); never-edited and read-only documents keep the constant-time shortcut.\n\n## Breaking changes\n\nNone. `json_view` has not been released; for released API there is no change.\n",
+ "comments": [],
+ "created_at": "2026-11-11T18:38:01Z",
+ "fetched_at": "2026-11-17T20:07:27Z",
+ "head_sha": "5d219d52b521d26f1936ae8b2bc4f36e3d5a5f25",
+ "labels": [
+  "\ud83d\ude80 ready to merge"
+ ],
+ "linked_issues": [],
+ "merge_commit_sha": "02d57db31ebb10a9ea96ca06d61b1fc07eae00b2",
+ "merged_at": "2026-11-11T21:36:56Z",
+ "number": 6085,
+ "referenced_numbers": [
+  6084
+ ],
+ "repo": "nlohmann/json",
+ "review_comments": [
+  {
+   "body": "Why not check the other side?  Is there a guarantee that if one is edited and one is not, the edited one is side a?",
+   "created_at": "2026-11-11T18:54:20Z",
+   "diff_hunk": "@@ -839,9 +858,9 @@ bool certainly_equal(const view_side<BasicJsonType, ViewA>& a, const view_side<B\n     {\n         return false;\n     }\n-    if (na == nb)\n+    if (na == nb && (!view_side<BasicJsonType, ViewA>::nav::editable() || a.document().edits == nullptr))",
+   "line": 861,
+   "path": "include/nlohmann/detail/view/compare.hpp",
+   "user": {
+    "login": "gregmarr",
+    "type": "User"
+   }
+  },
+  {
+   "body": "No guarantee is needed: checking either side gives the same answer here. `na == nb` is the same node, and documents have distinct nodes, so `a.document()` and `b.document()` are the same document with the same `edits`. If `ViewA` is the read-only side, that document has no edits: a view converts only from read-only to editable (`is_widening_mode`), and `json_view v = editable_view;` does not compile, so an edited document never has a read-only view.\n\nThe same holds in `same_float()` and `floats_equal()`: the NaN test runs only after the two tokens and their `extra` compared equal, so a's token is `nan` exactly when b's is, and a read-only side never holds one. I checked it on this head: an edited NaN compares unequal to itself (`e0 == e0`, `e == e`, `e[0] == e[0]` are all false), and comparisons between read-only and editable views of an unedited value still give `true` in both orders.\n\n*(Written by Claude Code on behalf of @nlohmann.)*",
+   "created_at": "2026-11-11T19:50:57Z",
+   "diff_hunk": "@@ -839,9 +858,9 @@ bool certainly_equal(const view_side<BasicJsonType, ViewA>& a, const view_side<B\n     {\n         return false;\n     }\n-    if (na == nb)\n+    if (na == nb && (!view_side<BasicJsonType, ViewA>::nav::editable() || a.document().edits == nullptr))",
+   "line": 861,
+   "path": "include/nlohmann/detail/view/compare.hpp",
+   "user": {
+    "login": "nlohmann",
+    "type": "User"
+   }
+  },
+  {
+   "body": "Okay, didn't see enough of the context and realize that `na == nb` was that level of comparison.  I thought it was a value-based comparison.",
+   "created_at": "2026-11-11T19:56:57Z",
+   "diff_hunk": "@@ -839,9 +858,9 @@ bool certainly_equal(const view_side<BasicJsonType, ViewA>& a, const view_side<B\n     {\n         return false;\n     }\n-    if (na == nb)\n+    if (na == nb && (!view_side<BasicJsonType, ViewA>::nav::editable() || a.document().edits == nullptr))",
+   "line": 861,
+   "path": "include/nlohmann/detail/view/compare.hpp",
+   "user": {
+    "login": "gregmarr",
+    "type": "User"
+   }
+  }
+ ],
+ "state": "closed",
+ "title": "Do not compare an edited NaN equal to itself in json_view",
+ "transport": "gh",
+ "user": {
+  "login": "nlohmann",
+  "type": "User"
+ }
+}

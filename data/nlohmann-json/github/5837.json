@@ -1,0 +1,125 @@
+{
+ "base_ref": "perf/accessor-speedups",
+ "base_sha": "01452b353108293c8ad7080799508ec8373d013e",
+ "body": "`json j = std::move(container)` now moves the elements instead of copying them. Previously the only generic `to_json` overloads took `const CompatibleArrayType&` / `const CompatibleObjectType&`, so every string in a `std::vector<std::string>` was copied.\n\n## Change\n- New `to_json(j, C&&)` overloads for array-like and object-like containers, which build the array/object via `std::make_move_iterator` (`external_constructor::construct_moving`).\n- Constrained to non-lvalue, non-const types with the same compatibility traits as the `const&` overloads. Excluded: `array_t`/`object_t` (have their own rvalue overloads), `std::vector<bool>`, `std::filesystem::path` and `std::u8string` (dedicated overloads), range views, enum-keyed maps.\n- `std::valarray`: its existing overload only moves a `const` object and still copies. It is untouched and still copies (a valarray rvalue goes through that overload, not the new one).\n- Map keys are `const` and still copied. `std::map::extract` (C++17) to move keys too was not pursued.\n\n## Measurements\n`std::vector<std::string>` (100k \u00d7 40 chars): 4.7 \u2192 2.3 ms; `std::map<std::string,std::string>`: \u221218 %; `vector<int>`, nested vectors, `vector<json>`: unchanged.\n\n## Public API\nNo breaking changes to the API: it is additive (no signature removed or changed), and the new overloads are only selected for rvalue containers. Two **behaviour** changes for code converting rvalue containers:\n1. **Moved-from source:** after `json j = std::move(v);` the elements of `v` are in a valid but unspecified state (previously untouched). Lvalues and `const` rvalues are still copied and unchanged.\n2. **Exception guarantee:** the JSON value is still unchanged on failure, but if an exception is thrown mid-conversion (e.g. allocation failure), the source may be partially moved-from, so the strong guarantee no longer holds for the source of an rvalue conversion.\n\nBoth are documented in `basic_json.md` (constructor 3 and its exception-safety section) and in the release notes page.\n\n## Tests\nNew `unit-to_json-rvalue.cpp` (move-tracking element type; lvalue/const rvalue copy and are untouched; deque, list, forward_list, array, set, vector<bool>, valarray, maps, `path`/`u8string`, a user type with its own `to_json(json&, T&&)`). Verified with clang in C++11/17/20; full unit suite builds and passes at C++17, and the affected suites (udt, udt_macro, constructor1/2, regression1/2, alt-string, conversions1/2, ordered_*, \u2026) at C++11 and C++20. A first prototype regressed `std::filesystem::path` and `std::u8string` (caught by unit-conversions2); fixed here.\n\n\ud83e\udd16 Generated with [Claude Code](https://claude.com/claude-code)\n",
+ "comments": [
+  {
+   "body": "Decision on the two behaviour changes: **accepted as documented** (the moved-from source and the strong exception guarantee that no longer covers the source of an rvalue conversion).\n\n- **Moved-from source:** the new overloads are only selected for non-const rvalues. That is either a temporary, which nobody can observe afterwards, or an explicit `std::move(v)`, which already means the caller is done with `v`.\n- **Consistent with the existing overloads:** rvalue `string_t`, `binary_t`, `array_t` and `object_t` have long had moving `to_json` overloads, so `json j = std::move(str)` already empties `str`. Copying a `std::vector<std::string>` while moving a `std::string` was the inconsistent part.\n- **Exception guarantee:** this cannot be kept cheaply. Each string element needs its own heap allocation when it becomes a `basic_json`, so a `move_if_noexcept`-style fallback would always copy and remove the speedup. The standard library behaves the same way: constructing a `std::vector` from move iterators leaves the source partially moved-from if it throws. The JSON value itself keeps the strong guarantee.\n- **Affected code:** only code that reads a container after `std::move`-ing it into a `json`, which clang-tidy's `bugprone-use-after-move` already flags.\n\nOne small thing: `releases.md` gets a plain `## Unreleased` heading, while the page's own note says unreleased changes are shown as a version number followed by the \"unreleased\" badge. Not a blocker.\n\n*Written by Claude Code.*\n",
+   "created_at": "2026-10-15T07:05:34Z",
+   "user": {
+    "login": "nlohmann",
+    "type": "User"
+   }
+  }
+ ],
+ "created_at": "2026-10-14T20:25:18Z",
+ "fetched_at": "2026-11-17T20:09:42Z",
+ "head_sha": "abd279e08a841098616df3526106d7844070de78",
+ "labels": [
+  "\ud83d\ude80 ready to merge",
+  "performance"
+ ],
+ "linked_issues": [],
+ "merge_commit_sha": "ca7740fef207a7338a75c93bdf2233b4bf89e987",
+ "merged_at": "2026-10-15T18:01:28Z",
+ "number": 5837,
+ "referenced_numbers": [],
+ "repo": "nlohmann/json",
+ "review_comments": [
+  {
+   "body": "astyle strikes again",
+   "created_at": "2026-10-15T05:44:37Z",
+   "diff_hunk": "@@ -354,6 +376,45 @@ inline void to_json(BasicJsonType& j, const CompatibleArrayType& arr)\n     external_constructor<value_t::array>::construct(j, arr);\n }\n \n+#if defined(__cpp_lib_char8_t)\n+// std::basic_string<char8_t> is converted to a string by a dedicated to_json overload\n+template<typename T>\n+struct is_u8string : std::false_type {};\n+\n+template<typename Tr, typename Allocator>\n+struct is_u8string<std::basic_string<char8_t, Tr, Allocator>> : std::true_type {};\n+#endif\n+\n+// rvalue containers: their elements are moved instead of copied\n+template < typename BasicJsonType, typename CompatibleArrayType,",
+   "line": 389,
+   "path": "include/nlohmann/detail/conversions/to_json.hpp",
+   "user": {
+    "login": "gregmarr",
+    "type": "User"
+   }
+  },
+  {
+   "body": "astyle even more. :D\n",
+   "created_at": "2026-10-15T05:45:07Z",
+   "diff_hunk": "@@ -427,6 +488,21 @@ inline void to_json(BasicJsonType& j, const EnumKeyedMap& map)\n }\n #endif\n \n+template < typename BasicJsonType, typename CompatibleObjectType,",
+   "line": 491,
+   "path": "include/nlohmann/detail/conversions/to_json.hpp",
+   "user": {
+    "login": "gregmarr",
+    "type": "User"
+   }
+  },
+  {
+   "body": "I think you mentioned that \"line ends with <\" causes the expansion.",
+   "created_at": "2026-10-15T15:48:09Z",
+   "diff_hunk": "@@ -427,6 +509,20 @@ inline void to_json(BasicJsonType& j, const EnumKeyedMap& map)\n }\n #endif\n \n+// rvalue object-like containers\n+template<typename BasicJsonType, typename T>\n+using is_rvalue_object_to_json = conjunction <",
+   "line": 514,
+   "path": "include/nlohmann/detail/conversions/to_json.hpp",
+   "user": {
+    "login": "gregmarr",
+    "type": "User"
+   }
+  },
+  {
+   "body": "`conjunction<negation<a>, negation<b>, ...>` is the same as `negation<disjunction<a, b, ...>>`\n\nI think you mentioned that \"line ends with <\" causes the expansion.\n",
+   "created_at": "2026-10-15T15:50:42Z",
+   "diff_hunk": "@@ -354,6 +376,66 @@ inline void to_json(BasicJsonType& j, const CompatibleArrayType& arr)\n     external_constructor<value_t::array>::construct(j, arr);\n }\n \n+// types that have a dedicated to_json overload and must not be treated as generic containers\n+template<typename T>\n+struct has_dedicated_to_json : std::false_type {};\n+\n+#if JSON_HAS_FILESYSTEM || JSON_HAS_EXPERIMENTAL_FILESYSTEM\n+template<>\n+struct has_dedicated_to_json<std_fs::path> : std::true_type {};\n+#endif\n+\n+#if defined(__cpp_lib_char8_t)\n+template<typename Tr, typename Allocator>\n+struct has_dedicated_to_json<std::basic_string<char8_t, Tr, Allocator>> : std::true_type {};\n+#endif\n+\n+#if JSON_HAS_RANGE_VIEW_CONVERSION\n+template<typename T>\n+struct is_range_view_type : is_compatible_range_view<T> {};\n+#else\n+template<typename T>\n+struct is_range_view_type : std::false_type {};\n+#endif\n+\n+#if JSON_USE_OBJECTS_FOR_ENUM_KEYED_MAPS\n+template<typename T>\n+struct is_enum_keyed_map_type : is_enum_keyed_map<T> {};\n+#else\n+template<typename T>\n+struct is_enum_keyed_map_type : std::false_type {};\n+#endif\n+\n+// rvalue (non-const) container: the generic to_json takes its elements by move\n+template<typename T>\n+using is_movable_container_rvalue = conjunction <",
+   "line": 411,
+   "path": "include/nlohmann/detail/conversions/to_json.hpp",
+   "user": {
+    "login": "gregmarr",
+    "type": "User"
+   }
+  },
+  {
+   "body": "I don't see why astyle is expanding this one.",
+   "created_at": "2026-10-15T15:51:32Z",
+   "diff_hunk": "@@ -354,6 +376,66 @@ inline void to_json(BasicJsonType& j, const CompatibleArrayType& arr)\n     external_constructor<value_t::array>::construct(j, arr);\n }\n \n+// types that have a dedicated to_json overload and must not be treated as generic containers\n+template<typename T>\n+struct has_dedicated_to_json : std::false_type {};\n+\n+#if JSON_HAS_FILESYSTEM || JSON_HAS_EXPERIMENTAL_FILESYSTEM\n+template<>\n+struct has_dedicated_to_json<std_fs::path> : std::true_type {};\n+#endif\n+\n+#if defined(__cpp_lib_char8_t)\n+template<typename Tr, typename Allocator>\n+struct has_dedicated_to_json<std::basic_string<char8_t, Tr, Allocator>> : std::true_type {};\n+#endif\n+\n+#if JSON_HAS_RANGE_VIEW_CONVERSION\n+template<typename T>\n+struct is_range_view_type : is_compatible_range_view<T> {};\n+#else\n+template<typename T>\n+struct is_range_view_type : std::false_type {};\n+#endif\n+\n+#if JSON_USE_OBJECTS_FOR_ENUM_KEYED_MAPS\n+template<typename T>\n+struct is_enum_keyed_map_type : is_enum_keyed_map<T> {};\n+#else\n+template<typename T>\n+struct is_enum_keyed_map_type : std::false_type {};\n+#endif\n+\n+// rvalue (non-const) container: the generic to_json takes its elements by move\n+template<typename T>\n+using is_movable_container_rvalue = conjunction <\n+                                    negation<std::is_lvalue_reference<T>>,\n+                                    negation<std::is_const<T>>,\n+                                    negation<has_dedicated_to_json<T>>,\n+                                    negation<is_basic_json<T>>,\n+                                    negation<is_range_view_type<T>>,\n+                                    negation<is_enum_keyed_map_type<T>>,\n+                                    negation<std::is_same<T, std::vector<bool>>> >;\n+\n+// rvalue array-like containers\n+template<typename BasicJsonType, typename T>\n+using is_rvalue_array_to_json = conjunction <\n+                                is_movable_container_rvalue<T>,\n+                                negation<std::is_same<T, typename BasicJsonType::array_t>>,\n+                                negation<std::is_same<T, typename BasicJsonType::binary_t>>,\n+                                is_compatible_array_type<BasicJsonType, T>,\n+                                negation<is_compatible_object_type<BasicJsonType, T>>,\n+                                negation<is_compatible_string_type<BasicJsonType, T>>,\n+                                negation<is_compatible_binary_type<BasicJsonType, T>> >;\n+\n+// rvalue containers: their elements are moved instead of copied\n+template < typename BasicJsonType, typename CompatibleArrayType,\n+           enable_if_t < is_rvalue_array_to_json<BasicJsonType, CompatibleArrayType>::value, int > = 0 >",
+   "line": 433,
+   "path": "include/nlohmann/detail/conversions/to_json.hpp",
+   "user": {
+    "login": "gregmarr",
+    "type": "User"
+   }
+  },
+  {
+   "body": "Done in 3daed3f95: `is_movable_container_rvalue` is now `negation<disjunction<...>>`, and `is_rvalue_array_to_json` uses one `negation<disjunction<...>>` for its five exclusions. The first argument stays on the opening line.\n\n*Written by Claude Code.*",
+   "created_at": "2026-10-15T15:56:20Z",
+   "diff_hunk": "@@ -354,6 +376,66 @@ inline void to_json(BasicJsonType& j, const CompatibleArrayType& arr)\n     external_constructor<value_t::array>::construct(j, arr);\n }\n \n+// types that have a dedicated to_json overload and must not be treated as generic containers\n+template<typename T>\n+struct has_dedicated_to_json : std::false_type {};\n+\n+#if JSON_HAS_FILESYSTEM || JSON_HAS_EXPERIMENTAL_FILESYSTEM\n+template<>\n+struct has_dedicated_to_json<std_fs::path> : std::true_type {};\n+#endif\n+\n+#if defined(__cpp_lib_char8_t)\n+template<typename Tr, typename Allocator>\n+struct has_dedicated_to_json<std::basic_string<char8_t, Tr, Allocator>> : std::true_type {};\n+#endif\n+\n+#if JSON_HAS_RANGE_VIEW_CONVERSION\n+template<typename T>\n+struct is_range_view_type : is_compatible_range_view<T> {};\n+#else\n+template<typename T>\n+struct is_range_view_type : std::false_type {};\n+#endif\n+\n+#if JSON_USE_OBJECTS_FOR_ENUM_KEYED_MAPS\n+template<typename T>\n+struct is_enum_keyed_map_type : is_enum_keyed_map<T> {};\n+#else\n+template<typename T>\n+struct is_enum_keyed_map_type : std::false_type {};\n+#endif\n+\n+// rvalue (non-const) container: the generic to_json takes its elements by move\n+template<typename T>\n+using is_movable_container_rvalue = conjunction <",
+   "line": 411,
+   "path": "include/nlohmann/detail/conversions/to_json.hpp",
+   "user": {
+    "login": "nlohmann",
+    "type": "User"
+   }
+  },
+  {
+   "body": "Fixed in 3daed3f95: the first argument is on the opening line now, so the `<` is no longer at the end of the line.\n\n*Written by Claude Code.*",
+   "created_at": "2026-10-15T15:56:22Z",
+   "diff_hunk": "@@ -427,6 +509,20 @@ inline void to_json(BasicJsonType& j, const EnumKeyedMap& map)\n }\n #endif\n \n+// rvalue object-like containers\n+template<typename BasicJsonType, typename T>\n+using is_rvalue_object_to_json = conjunction <",
+   "line": 514,
+   "path": "include/nlohmann/detail/conversions/to_json.hpp",
+   "user": {
+    "login": "nlohmann",
+    "type": "User"
+   }
+  },
+  {
+   "body": "astyle doesn't add those spaces here. It just keeps them when they're already in the source, and I had copied the spaced form from the neighbouring overloads. When I write it compact, astyle leaves it compact. Changed in 3daed3f95 for both rvalue overloads.\n\n*Written by Claude Code.*",
+   "created_at": "2026-10-15T15:56:23Z",
+   "diff_hunk": "@@ -354,6 +376,66 @@ inline void to_json(BasicJsonType& j, const CompatibleArrayType& arr)\n     external_constructor<value_t::array>::construct(j, arr);\n }\n \n+// types that have a dedicated to_json overload and must not be treated as generic containers\n+template<typename T>\n+struct has_dedicated_to_json : std::false_type {};\n+\n+#if JSON_HAS_FILESYSTEM || JSON_HAS_EXPERIMENTAL_FILESYSTEM\n+template<>\n+struct has_dedicated_to_json<std_fs::path> : std::true_type {};\n+#endif\n+\n+#if defined(__cpp_lib_char8_t)\n+template<typename Tr, typename Allocator>\n+struct has_dedicated_to_json<std::basic_string<char8_t, Tr, Allocator>> : std::true_type {};\n+#endif\n+\n+#if JSON_HAS_RANGE_VIEW_CONVERSION\n+template<typename T>\n+struct is_range_view_type : is_compatible_range_view<T> {};\n+#else\n+template<typename T>\n+struct is_range_view_type : std::false_type {};\n+#endif\n+\n+#if JSON_USE_OBJECTS_FOR_ENUM_KEYED_MAPS\n+template<typename T>\n+struct is_enum_keyed_map_type : is_enum_keyed_map<T> {};\n+#else\n+template<typename T>\n+struct is_enum_keyed_map_type : std::false_type {};\n+#endif\n+\n+// rvalue (non-const) container: the generic to_json takes its elements by move\n+template<typename T>\n+using is_movable_container_rvalue = conjunction <\n+                                    negation<std::is_lvalue_reference<T>>,\n+                                    negation<std::is_const<T>>,\n+                                    negation<has_dedicated_to_json<T>>,\n+                                    negation<is_basic_json<T>>,\n+                                    negation<is_range_view_type<T>>,\n+                                    negation<is_enum_keyed_map_type<T>>,\n+                                    negation<std::is_same<T, std::vector<bool>>> >;\n+\n+// rvalue array-like containers\n+template<typename BasicJsonType, typename T>\n+using is_rvalue_array_to_json = conjunction <\n+                                is_movable_container_rvalue<T>,\n+                                negation<std::is_same<T, typename BasicJsonType::array_t>>,\n+                                negation<std::is_same<T, typename BasicJsonType::binary_t>>,\n+                                is_compatible_array_type<BasicJsonType, T>,\n+                                negation<is_compatible_object_type<BasicJsonType, T>>,\n+                                negation<is_compatible_string_type<BasicJsonType, T>>,\n+                                negation<is_compatible_binary_type<BasicJsonType, T>> >;\n+\n+// rvalue containers: their elements are moved instead of copied\n+template < typename BasicJsonType, typename CompatibleArrayType,\n+           enable_if_t < is_rvalue_array_to_json<BasicJsonType, CompatibleArrayType>::value, int > = 0 >",
+   "line": 433,
+   "path": "include/nlohmann/detail/conversions/to_json.hpp",
+   "user": {
+    "login": "nlohmann",
+    "type": "User"
+   }
+  }
+ ],
+ "state": "closed",
+ "title": "Move elements when converting rvalue containers to JSON",
+ "transport": "gh",
+ "user": {
+  "login": "nlohmann",
+  "type": "User"
+ }
+}

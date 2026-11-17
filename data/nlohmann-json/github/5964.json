@@ -1,0 +1,32 @@
+{
+ "base_ref": "develop",
+ "base_sha": "ea8a05484b97fa3fa686e915f553d71fb7ca4d37",
+ "body": "#5634 made `dump()` write integers below 10^16 eight digits at a time; larger ones still took the two-digits-per-division loop and `count_digits()`. Random 64-bit integers almost all have 17 to 20 digits (99.9 % of `signed_ints.json` and `unsigned_ints.json`), so `Dump/signed_ints` and `Dump/unsigned_ints` gained only 1.4\u00d7 over 3.12.0, against 2.3\u00d7 for small integers.\n\n## Change\n\nA 64-bit magnitude with 17 to 20 digits is now written as its first one to four digits and two groups of eight, with the same `eight_digit_bytes()`/`store_msb_first()` helpers as the 16-digit path.\n\n- Wider magnitudes (`__int128` and class types, #5805) keep the loop. Number types of at most 64 bits are selected by type, so no compiler reports the comparison as always true. Other types compare the value.\n- The sign handling of #1447/#5815 (`remove_sign()` into `number_magnitude_t`) is unchanged.\n- New test: every digit count from 1 to 20 (powers of ten, \u00b11, all 9s), the int64/uint64 limits, and 20,000 pseudo-random values of every bit length, signed and unsigned, compared with `std::to_string`.\n\n## Measurements\n\nA/B harness: both versions in one binary, alternating samples, six code layouts. Each value is `dump()` of the whole document, B/A, where < 1 is faster.\n\n| document | instructions, GCC 13 x86-64 (callgrind) | instructions, Apple clang (M1 Max) | time, Apple clang (M1 Max) | time, GCC 13 x86-64 (Haswell VPS) |\n|---|---|---|---|---|\n| `signed_ints.json` | 0.503 | 0.588 | 0.689 | 0.805 |\n| `unsigned_ints.json` | 0.484 | 0.576 | 0.481 | 0.577 |\n| `small_signed_ints.json` | 0.991 | 0.994 | 1.008 | 0.989 |\n| `twitter.json` | 0.992 | 0.988 | 0.998 | 0.990 |\n| `citm_catalog.json` | 0.993 | 1.008 | 1.000 | 0.994 |\n| `canada.json` | 1.000 | 0.999 | 1.004 | 1.000 |\n\nTimings are geometric means over six layouts. The A/A noise floor is about \u00b11.5 % on the Mac and \u00b11 % on the VPS.\n\nTests: full suite with ASan/UBSan on macOS (182/182).\n\n## Breaks the public API?\n\nNo. The output of `dump()` is unchanged; only how integers with 17 to 20 digits are written.\n\n\ud83e\udd16 Generated with [Claude Code](https://claude.com/claude-code)\n",
+ "comments": [],
+ "created_at": "2026-10-30T14:13:40Z",
+ "fetched_at": "2026-11-17T20:08:30Z",
+ "head_sha": "a6ab196ad5ca170f93cfa32c7c53402d53f14d15",
+ "labels": [
+  "L",
+  "tests",
+  "performance"
+ ],
+ "linked_issues": [],
+ "merge_commit_sha": "9c349b1d7c393c6bc6dbbe4191e332e3bb4100b8",
+ "merged_at": "2026-10-31T12:54:46Z",
+ "number": 5964,
+ "referenced_numbers": [
+  5634,
+  5805,
+  1447
+ ],
+ "repo": "nlohmann/json",
+ "review_comments": [],
+ "state": "closed",
+ "title": "Write integers of 17 to 20 digits eight digits at a time in dump()",
+ "transport": "gh",
+ "user": {
+  "login": "nlohmann",
+  "type": "User"
+ }
+}

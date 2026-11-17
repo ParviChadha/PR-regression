@@ -1,0 +1,48 @@
+{
+ "base_ref": "develop",
+ "base_sha": "367336c83d47e26c3a36b8a58ef829ad43b3c217",
+ "body": "Takes over #5518 by @ayush-singh-0601 (thank you!), rebased on `develop` and with the open review comments addressed.\n\n`to_cbor`, `to_msgpack`, `to_ubjson` and `to_bjdata` recursed once per nesting level. Parsing doesn't recurse, so a value the library happily builds could still overflow the stack when serialized. This is the crash in OSS-Fuzz issue 566583014 (`parse_cbor_fuzzer`, stack overflow in `binary_writer::write_cbor`).\n\nEach writer now uses the same bounded descent as `dump()`: it recurses as before up to `detail::recursion_depth_limit()` levels and writes anything deeper with an explicit heap stack. The output is the same bytes as before.\n\n## Commits\n\n1. **Stop binary writers overflowing the stack on deep values.** The author's commit cf65ac438, cherry-picked with authorship kept and conflicts with `develop` resolved (`write_cbor_head` from #5583, `to_msgpack_length` from #5584, `is_bjdata_excluded_type_marker` from #5555). The author's second commit 7301b06ee isn't included because it only changed CBOR prefix helpers that `write_cbor_head` replaces.\n2. **Redesign the iterative binary writers around a shared recursion depth limit.** Addresses the open review comments:\n   - Uses `detail::recursion_depth_limit()` instead of a new limit, and `write_cbor_head` instead of the CBOR prefix helpers.\n   - MessagePack array and map headers are written by one helper per container type, shared by both paths, through `to_msgpack_length` (`out_of_range.412` above `UINT32_MAX`).\n   - Frames hold only containers, and a container's header is written when its frame is pushed, like `bson_frame`. There is no `started` flag. The UBJSON frame stores only the value, `prefix_required` and the iterator.\n   - `is_bjdata_ndarray()` is shared by the recursive path and the iterative path.\n   - Discarded values throw `type_error.321` on both paths. Strict UTF-8 key checks report the same diagnostics context on both paths.\n   - The doc comments refer to the public `to_*` functions instead of to themselves.\n   - Tests: round trips instead of size checks. Byte-exact output at depths limit\u22121 to limit+2 for CBOR, MessagePack and UBJSON. A deep object, a deep BJData ND-array and a deep discarded value. The OSS-Fuzz regression (200,000 nested arrays) for CBOR and MessagePack.\n\nBSON isn't in this PR. Its writer stopped recursing in #5553.\n\n## Verification\n\n- Output is byte-identical to `develop` on random `json` and `ordered_json` values nested 120\u2013140 levels deep, for CBOR, MessagePack, UBJSON and BJData in every `use_size`/`use_type` combination.\n- 1,000,000-deep arrays and objects serialize with all four writers on a 1 MiB stack.\n- `unit-large_json.cpp` passes in C++11 and C++17 on a 1 MiB stack. No `-Weverything` warnings in `binary_writer.hpp`.\n\n## Public API\n\nNo breaking changes. Serialization output is unchanged. Values nested deeper than the recursion limit no longer crash.\n\nCI on this PR is expected to fail until #5779 fixes `develop`.\n\nCloses #5392\nCloses #5518\n\n---\n\n\ud83e\udd16 Generated with [Claude Code](https://claude.com/claude-code)\n",
+ "comments": [],
+ "created_at": "2026-10-07T07:56:36Z",
+ "fetched_at": "2026-11-17T20:10:16Z",
+ "head_sha": "3f8fee07d3b2345a6c20b7b54551284c0b0b1369",
+ "labels": [
+  "aspect: binary formats",
+  "L",
+  "tests",
+  "\ud83d\ude80 ready to merge"
+ ],
+ "linked_issues": [
+  {
+   "body": "## Summary\n\nThe binary format **writers** (`binary_writer.hpp`) recurse once per nesting level with no depth limit, so serializing a deeply nested value crashes the process. This is the counterpart of #5104, which covers the binary *readers*; both directions are affected, and neither is fixed.\n\nThe text parser is iterative, so `json::parse` accepts input of any depth. A value that the library happily builds can therefore crash it on the way back out.\n\n## Affected functions\n\n- `json::to_cbor()`\n- `json::to_msgpack()`\n- `json::to_ubjson()` (and BJData)\n- `json::to_bson()`\n\n## Reproduction\n\nAgainst `develop` (734fd305a), on macOS/arm64 with the default 8 MB stack:\n\n```cpp\n#include <nlohmann/json.hpp>\n#include <string>\n\nint main()\n{\n    const std::size_t depth = 200000;\n    const nlohmann::json j = nlohmann::json::parse(\n        std::string(depth, '[') + \"0\" + std::string(depth, ']'));\n\n    const auto v = nlohmann::json::to_cbor(j);   // SIGSEGV\n    return static_cast<int>(v.size());\n}\n```\n\n| function | `-O0` | `-O2` |\n|---|---|---|\n| `to_cbor` | crashes at depth 100,000 | crashes at depth 200,000 |\n| `to_msgpack` | crashes at depth 100,000 | crashes at depth 200,000 |\n| `to_ubjson` | crashes at depth 100,000 | crashes at depth 100,000 |\n| `to_bson` | crashes at depth 100,000 | crashes at depth 100,000 |\n\nThe depth needed varies with build and stack size, as usual for stack exhaustion; CBOR and MessagePack survive depth 100,000 at `-O2` on this machine and fail at 200,000. BSON is measured with a nested object, since BSON requires an object at the root.\n\n## Root cause\n\nEach writer calls itself for every element:\n\n- **CBOR**: `write_cbor()` (binary_writer.hpp:96) \u2192 binary_writer.hpp:303 (array), :405/:406 (object)\n- **MessagePack**: `write_msgpack()` (:420) \u2192 :614 (array), :727/:728 (object)\n- **UBJSON/BJData**: `write_ubjson()` (:747) \u2192 :842 (array), :944 (object)\n- **BSON**: `write_bson_element()` (:1238) \u2192 `write_bson_object()` (:1302) / `write_bson_array()` (:1160) \u2192 `write_bson_element()` (:1306/:1166)\n\n**BSON recurses twice over the same value.** Besides writing, it computes each document's length up front through a second, independent recursive walk: `calc_bson_element_size()` (:1190) \u2192 `calc_bson_object_size()` (:1285) / `calc_bson_array_size()` (:1133) \u2192 `calc_bson_element_size()` (:1290/:1139). Both walks need bounding, which makes BSON the most involved of the four.\n\n## Suggested fix\n\nThe same shape used for the destructor in #1436 and for copying, serializing and comparing in #5389 / #5285 / #5390: descend a bounded number of levels, then finish the rest on an explicit stack. That keeps the fast path for ordinary values and removes the limit on depth, without a new exception or a new macro.\n\nCBOR, MessagePack and UBJSON are structurally similar and could share an approach. BSON's size pass is separate work and may be worth its own change.\n\n## Related\n\n- #5104 \u2014 the same problem in the binary *readers*\n- #5387 \u2014 the same problem in the copy constructor and `dump()`\n- #1436 \u2014 where the destructor was fixed this way\n\n---\n\nWritten by Claude Code.\n",
+   "labels": [
+    "solution: proposed fix",
+    "aspect: binary formats"
+   ],
+   "number": 5392,
+   "state": "closed",
+   "title": "Stack overflow in binary format writers (CBOR/MessagePack/UBJSON/BSON) due to unbounded recursion"
+  }
+ ],
+ "merge_commit_sha": "43fe8928e1a7a38569c2497e26fbd067d6d40810",
+ "merged_at": "2026-10-07T17:18:20Z",
+ "number": 5781,
+ "referenced_numbers": [
+  5518,
+  5583,
+  5584,
+  5555,
+  5553,
+  5779,
+  5392
+ ],
+ "repo": "nlohmann/json",
+ "review_comments": [],
+ "state": "closed",
+ "title": "Stop binary writers overflowing the stack on deep values",
+ "transport": "gh",
+ "user": {
+  "login": "nlohmann",
+  "type": "User"
+ }
+}
