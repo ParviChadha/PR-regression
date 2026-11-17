@@ -34,7 +34,7 @@ import re
 import sys
 from collections import Counter
 
-from pipeline.common import Target, git, write_jsonl
+from pipeline.common import Target, git, write_jsonl, write_text
 
 CPP_EXT = {".c", ".cc", ".cpp", ".cxx", ".c++", ".h", ".hh", ".hpp", ".hxx", ".h++",
            ".ipp", ".inl", ".tcc", ".tpp"}
@@ -146,7 +146,7 @@ def cpp_attributes(t):
     path = t.cache / "gitattributes-cpp"
     if not path.exists():
         path.parent.mkdir(parents=True, exist_ok=True)
-        path.write_text("".join(f"*{e} diff=cpp\n" for e in sorted(CPP_EXT)))
+        write_text(path, "".join(f"*{e} diff=cpp\n" for e in sorted(CPP_EXT)))
     return path
 
 
@@ -167,7 +167,7 @@ def analyze(t, c):
     deleted_main = [f["path"] for f in files
                     if f["status"][0] == "D" and is_main_source(f["path"], t["main_source"], t.get("generated_paths", []))]
     paths = main + deleted_main
-    diff = git(t.repo, "-c", f"core.attributesFile={cpp_attributes(t)}", "diff", "-U0", "-M",
+    diff = git(t.repo, "-c", f"core.attributesFile={cpp_attributes(t).as_posix()}", "diff", "-U0", "-M",
                c["sha_old"], c["sha_new"], "--", *paths) if paths else ""
     info = parse_diff(diff)
     c.update(files=files, main_files=main, deleted_main_files=deleted_main, n_files=len(files),
@@ -257,7 +257,7 @@ def main(argv=None):
 
     write_jsonl(t.data / "prs_scanned.jsonl", scanned)
     write_jsonl(t.data / "prs.jsonl", selected)
-    (t.data / "collect_summary.json").write_text(json.dumps(summary, indent=2) + "\n")
+    write_text(t.data / "collect_summary.json", json.dumps(summary, indent=2) + "\n")
 
     print(json.dumps(summary, indent=2))
     print(f"\nwrote {len(selected)} PRs to {t.data / 'prs.jsonl'}")

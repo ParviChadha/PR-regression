@@ -23,6 +23,8 @@ import time
 import urllib.error
 import urllib.request
 
+from pipeline.common import write_text
+
 API = "https://api.github.com"
 PER_PAGE = 100
 
@@ -106,7 +108,7 @@ def gh_ready():
 
 def get_gh(path):
     r = subprocess.run(["gh", "api", "-H", "Accept: application/vnd.github+json", path],
-                       capture_output=True, text=True)
+                       capture_output=True, text=True, encoding="utf-8", errors="replace")
     if r.returncode != 0:
         err = (r.stderr or r.stdout).strip()
         if "rate limit" in err.lower() or "HTTP 429" in err:
@@ -175,7 +177,7 @@ def fetch_all(t, prs, refresh=False):
     for n in prs:
         path = out_dir / f"{n}.json"
         if path.exists() and not refresh:
-            results[n] = json.loads(path.read_text())
+            results[n] = json.loads(path.read_text(encoding="utf-8"))
         else:
             todo.append(n)
     print(f"github: {len(results)} cached, {len(todo)} to fetch via {transport}", file=sys.stderr)
@@ -189,7 +191,7 @@ def fetch_all(t, prs, refresh=False):
             break
         results[n] = rec
         if rec is not None:
-            (out_dir / f"{n}.json").write_text(json.dumps(rec, indent=1, sort_keys=True) + "\n")
+            write_text(out_dir / f"{n}.json", json.dumps(rec, indent=1, sort_keys=True) + "\n")
         if i % 10 == 0:
             print(f"github: {i}/{len(todo)}", file=sys.stderr)
     return results
