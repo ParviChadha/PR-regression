@@ -110,7 +110,9 @@ Risks: see final report.
 - Decision: exports via `git archive` of `include_dirs` into `cache/worktrees/<t>/<sha>/` (about 1 MB each) instead of `git worktree add`, so the upstream clone is only read
   (`git worktree add` writes `repos/<t>/.git/worktrees`, which CLAUDE.md treats as editing upstream). Header-only means no build, no ccache; tests compile against `-I<export>/include`.
   Exports are atomic (temp dir then rename, `.prh-ok` marker) and reused. Library targets will need a second build mode (and `.git` if their build reads it); not written.
-- Merge commit lookup for `--pr N`: `data/<t>/prs.jsonl` record (`number`, `merge_sha`, optional `parent_sha`; schema is a proposal for `collect.py`), else a squash-merge subject ending `(#N)`.
+- Merge commit lookup for `--pr N`: `data/<t>/prs.jsonl` record as written by `pipeline/collect.py` (`pr`, `sha_new` = merge commit, `sha_old` = its parent), else a squash-merge subject ending `(#N)`.
+  (2026-11-17: env.py first looked for `number`/`merge_sha`/`parent_sha`, a guess that never matched collect.py, so it silently used the fallback; fixed. Checked all records that exist in the local clone: sha_old/sha_new agree with git.)
+  Records newer than the clone's HEAD (82 of 122 on 2026-11-17: collect used `abbc299`, the clone is at `0e95fe8`) need `git -C repos/nlohmann-json fetch origin develop` before env.py can export them.
   nlohmann/json squash-merges, so parent = the single parent; multi-parent merges need `--parent`.
 - Verified with the VM's g++ 11.4 (NOT the pinned GCC 14): json #4958 and #5459 both resolve and smoke-compile at old and new; rerun is 0.07 s; upstream clone untouched (HEAD = pinned SHA, clean).
   On #4958: a type convertible to `std::string_view` used as `j[key]` compiles only on new (the PR's feature); `j.contains(key)` fails on both old and new (this is the regression #5689 later fixed).

@@ -21,8 +21,8 @@ CLI:   python3 pipeline/env.py <target> (--pr N | --merge SHA) [--parent SHA] [-
 Python: from env import prepare, compile_check   (run.py uses these)
         JOBS=<n> sets parallel compile jobs for cmake builds (default 4: duckdb unity TUs are memory-hungry).
 
-How the merge commit is found for --pr N: data/<t>/prs.jsonl if it has a record with "number" == N and
-"merge_sha" (optional "parent_sha"); otherwise a squash-merge subject ending in "(#N)" in the clone's history.
+How the merge commit is found for --pr N: data/<t>/prs.jsonl if it has a record with "pr" == N and
+"sha_new" (the merge commit; "sha_old" is its parent), as written by pipeline/collect.py; otherwise a squash-merge subject ending in "(#N)" in the clone's history.
 """
 import argparse, json, os, shlex, shutil, subprocess, sys
 from dataclasses import dataclass, asdict
@@ -83,7 +83,7 @@ def _from_prs_jsonl(target, pr):
         return None
     for line in path.read_text().splitlines():
         rec = json.loads(line) if line.strip() else {}
-        if rec.get("number") == pr and rec.get("merge_sha"):
+        if rec.get("pr") == pr and rec.get("sha_new"):
             return rec
     return None
 
@@ -93,7 +93,7 @@ def _from_subject(repo, pr):
     hits = [l.split("\t")[0] for l in out.splitlines() if l.endswith(f"(#{pr})")]
     if len(hits) != 1:
         die(f"PR #{pr}: expected exactly one squash-merge commit with subject ending '(#{pr})', found {len(hits)}; pass --merge")
-    return {"merge_sha": hits[0]}
+    return {"sha_new": hits[0]}
 
 
 def resolve_commits(target, repo, pr=None, merge=None, parent=None):
@@ -102,7 +102,7 @@ def resolve_commits(target, repo, pr=None, merge=None, parent=None):
         if pr is None:
             die("need pr or merge")
         rec = _from_prs_jsonl(target, pr) or _from_subject(repo, pr)
-        merge, parent = rec["merge_sha"], parent or rec.get("parent_sha")
+        merge, parent = rec["sha_new"], parent or rec.get("sha_old")
     merge = git(repo, "rev-parse", "--verify", f"{merge}^{{commit}}")
     if parent is None:
         parents = git(repo, "rev-list", "--parents", "-n", "1", merge).split()[1:]
