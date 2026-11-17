@@ -1,0 +1,102 @@
+"""Unit tests for collect.py's filters. Run: python3 -m unittest pipeline.test_collect"""
+import unittest
+
+from pipeline.collect import is_main_source, is_trivial_line, parse_diff, pr_number, verdict
+
+MAIN, GEN = ["include", "src"], ["single_include"]
+
+
+class PrNumber(unittest.TestCase):
+    def test_squash(self):
+        self.assertEqual(pr_number("Fix key lookups (#5689)"), 5689)
+
+    def test_merge(self):
+        self.assertEqual(pr_number("Merge pull request #3210 from user/branch"), 3210)
+
+    def test_plain_commit(self):
+        self.assertIsNone(pr_number("Simplify hexfloat formatting"))
+
+    def test_issue_reference_mid_subject_is_not_a_pr(self):
+        self.assertIsNone(pr_number("Fix #123 by checking bounds"))
+
+
+class MainSource(unittest.TestCase):
+    def test_header_under_include(self):
+        self.assertTrue(is_main_source("include/nlohmann/json.hpp", MAIN, GEN))
+
+    def test_generated_amalgamation_excluded(self):
+        self.assertFalse(is_main_source("single_include/nlohmann/json.hpp", MAIN, GEN))
+
+    def test_test_paths_excluded(self):
+        self.assertFalse(is_main_source("src/testing/helper.cpp", MAIN, GEN))
+        self.assertFalse(is_main_source("tests/src/unit-udl.cpp", MAIN, GEN))
+
+    def test_non_cpp_excluded(self):
+        self.assertFalse(is_main_source("include/nlohmann/README.md", MAIN, GEN))
+
+    def test_outside_main_source(self):
+        self.assertFalse(is_main_source("docs/examples/at.cpp", MAIN, GEN))
+
+    def test_prefix_must_be_a_directory(self):
+        self.assertFalse(is_main_source("includes_extra/x.hpp", MAIN, GEN))
+
+
+class TrivialLines(unittest.TestCase):
+    def test_comments_and_blanks(self):
+        for s in ["", "   ", "// note", "/* block", " * @brief x", "*/", " *"]:
+            self.assertTrue(is_trivial_line(s), s)
+
+    def test_code(self):
+        for s in ["*p = 1;", "*this = other;", "return x; // why", "int a;"]:
+            self.assertFalse(is_trivial_line(s), s)
+
+
+DIFF_COMMENT_ONLY = """diff --git a/include/a.hpp b/include/a.hpp
+--- a/include/a.hpp
++++ b/include/a.hpp
+@@ -10 +10 @@ void f()
+-// old comment
++// new comment
+"""
+
+DIFF_CODE = """diff --git a/include/a.hpp b/include/a.hpp
+--- a/include/a.hpp
++++ b/include/a.hpp
+@@ -10,2 +10,2 @@ basic_json::at(const key_type& key)
+-    return m_data[key];
++    return m_data.at(key);
+@@ -20 +20 @@ basic_json::at(const key_type& key)
++    // comment
+"""
+
+
+class ParseDiff(unittest.TestCase):
+    def test_comment_only(self):
+        d = parse_diff(DIFF_COMMENT_ONLY)
+        self.assertTrue(d["comment_only"])
+        self.assertEqual((d["lines_added"], d["lines_removed"]), (1, 1))
+
+    def test_code_change_and_contexts_deduplicated(self):
+        d = parse_diff(DIFF_CODE)
+        self.assertFalse(d["comment_only"])
+        self.assertEqual(d["hunk_contexts"], ["basic_json::at(const key_type& key)"])
+        self.assertEqual((d["lines_added"], d["lines_removed"]), (2, 1))
+
+    def test_empty_diff_is_not_comment_only(self):
+        self.assertFalse(parse_diff("")["comment_only"])
+
+
+class Verdict(unittest.TestCase):
+    CODE = {"comment_only": False}
+
+    def test_order(self):
+        self.assertEqual(verdict("Bump actions/checkout", "dependabot[bot] <x>", ["a"], self.CODE, 3), "bot")
+        self.assertEqual(verdict("DOC: fix typo", "a <b>", ["a"], self.CODE, 3), "doc_title")
+        self.assertEqual(verdict("Fix x", "a <b>", [], self.CODE, 3), "no_main_source")
+        self.assertEqual(verdict("Fix x", "a <b>", list("abcd"), self.CODE, 3), "too_many_main_files")
+        self.assertEqual(verdict("Fix x", "a <b>", ["a"], {"comment_only": True}, 3), "comment_only")
+        self.assertEqual(verdict("Fix x", "a <b>", list("abc"), self.CODE, 3), "checked")
+
+
+if __name__ == "__main__":
+    unittest.main()

@@ -3,7 +3,8 @@
 Research harness: an LLM-based pipeline that detects behavioral regressions in
 pull requests to C++ libraries. Stage 0 = prove we can build and test a target
 (first: nlohmann/json) with coverage in a reproducible Linux container.
-Do not start later stages (PR mining, test generation, LLM calls) without a go-ahead.
+Stage 0 is done for nlohmann/json. Stage 1 (pipeline/) is in progress: PR collection (collect.py) is
+started; other stages follow the team plan, split between the two partners.
 
 ## Environment
 - Host is macOS on Apple Silicon; containers are **native arm64 Linux**. No amd64 emulation.
@@ -16,7 +17,8 @@ Do not start later stages (PR mining, test generation, LLM calls) without a go-a
 - `scripts/` small generic scripts taking a target name (build, test, coverage).
 - `docker/` shared toolchain base image, only if it separates cleanly.
 - `targets/<name>/` Dockerfile or target layer, one small config file, target notes. Committed.
-- `pipeline/` generic pipeline code (empty for now). `data/`, `results/` committed, empty for now.
+- `pipeline/` generic pipeline code (`python3 -m pipeline.<module> <target>`), unit tests as `pipeline/test_*.py`.
+- `data/<target>/` committed pipeline inputs (PR lists, GitHub metadata); `results/` committed outputs.
 - `repos/` upstream clones and `cache/` API/LLM caches: **git-ignored**.
 
 ## Rules
