@@ -38,3 +38,10 @@ seed_prs = [4958, 5459]                 # known answers, always collected (see N
 build_mode = "header-only"
 include_dirs = ["include"]              # roots passed as -I; relative to repo root
 smoke_header = "nlohmann/json.hpp"      # env.py --check compiles `#include <smoke_header>` against old and new
+
+# Used by pipeline/generate.py: library-specific rules appended to the test-generation prompt.
+prompt_notes = '''
+- Include the library with #include <nlohmann/json.hpp>. The public API is nlohmann::json (nlohmann::basic_json), nlohmann::ordered_json, json_pointer, json patch/merge_patch and the documented SAX and conversion interfaces. Never use the detail namespace.
+- It is a header-only library: nothing to link. Programs are compiled as C++17.
+- Print JSON values with dump() (compact) or dump(2). Keys of nlohmann::json objects print in sorted order, so output is deterministic; do not depend on insertion order except with ordered_json.
+'''

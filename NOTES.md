@@ -222,3 +222,26 @@ Spot checks: #6100 ("Fix develop CI") is correctly comment_only (only NOLINT/com
 - `--github` not yet run: this cloud workspace cannot reach api.github.com. Run it on a Mac (with `gh auth login`
   for speed) and commit `data/nlohmann-json/github/`.
 - QuantLib and duckdb need their own target.toml collection fields (`main_source` = `ql` / `src`+`extension`?).
+
+## pipeline/llm.py + generate.py (LLM test generation)
+- Model decision: Gemini free tier. Default `gemini-3.5-flash-lite` (reported 15 RPM / 500 RPD) for the scale run;
+  `gemini-3.8-flash` (reported 5 RPM / 20 RPD) only for seed PRs #4958 and #5459 to compare quality. Model is one
+  value: `--model` or env `PRH_LLM_MODEL`. The limits are third-party-reported, **verify at
+  https://aistudio.google.com/rate-limit** and override with `PRH_LLM_RPM` / `PRH_LLM_RPD` if different. Paid 3.8 Flash
+  would be roughly $40 for ~1,000 calls over 240 PRs (est.).
+- Key: `GEMINI_API_KEY` from the environment, else from the git-ignored `.env` at the repo root (`GEMINI_API_KEY=...`;
+  only that name is read, nothing else is loaded). Sent in header `x-goog-api-key`; never logged or cached (tested).
+- `llm.call` caches by request hash in `cache/llm/responses/` (git-ignored), so reruns cost nothing and work without a
+  key. Daily use is counted per Pacific day in `cache/llm/usage.json`; the client stops before the daily budget
+  (`QuotaExhausted`, generate.py exits 3), spaces requests for RPM, retries 429/500/503 using `retryDelay`.
+- generate.py: one request returns N (default 20) standalone C++17 programs as structured JSON, written to
+  `data/<t>/tests/<pr>/gen_NN.cpp` plus `generated.json` (name, intent, round) and `generate.prompt.txt` for audit.
+  Programs without `main` or duplicates are dropped; stale gen files are removed on regeneration.
+- Leak filter: prompt uses only merge-time information (comments with created_at <= merged_at; later discussion is
+  dropped), so later regressions are not handed to the model. Checked: #4958 prompt has no mention of #5689.
+- Hooks for Person A: `data/<t>/changes/<pr>.json` ({"functions":[{"name","access"}]}) replaces the interim git
+  hunk-header hint; `data/<t>/context/<pr>.txt` is appended as extra context.
+- `--refine` feeds uncovered changed lines from coverage_loop back to the model (`--refine-n` programs per round).
+- Tests: `python3 -m unittest pipeline.test_generate` (13 tests, fake transport, no network/key/quota).
+- **Untested against the live API**: request shape (camelCase generationConfig, `responseSchema` with uppercase types).
+  First real call must be run on the Mac; if Gemini rejects the schema, fix in llm.py.
