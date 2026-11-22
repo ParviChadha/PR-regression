@@ -8,7 +8,8 @@ Output: data/<target>/tests/<key>/results.json, plus a summary on stdout.
 Per-test status:
   same          compiles on both, stable on both, identical stdout + exit code
   output_diff   compiles on both, stable on both, outputs differ        -> candidate behavioral change
-  compile_diff  compiles on exactly one side (compile_failed_on says which) -> candidate API change;
+  compile_diff  compiles on exactly one side (compile_failed_on says which), or fails on both sides with a different
+                first compiler error (compile_failed_on = "both") -> candidate API change;
                 fix.py should not "repair" it, the failure is the signal
   flaky         outputs differ between reruns on the same version       -> dropped
   invalid       fails to compile on both, or times out on both          -> dropped (fix.py may repair compile errors)
@@ -21,7 +22,7 @@ in the container, and generated tests link against it). The same file runs insid
 (`--worker`, internal), so both modes share one code path. Flaky detection compares (timeout, exit code,
 sha256 of stdout); stderr is kept (first run) for fix.py but not compared.
 """
-import argparse, hashlib, json, os, signal, subprocess, sys, tempfile, time
+import argparse, hashlib, json, os, re, signal, subprocess, sys, tempfile, time
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 
@@ -64,6 +65,14 @@ def _run_once(exe, cwd, timeout):
             "seconds": round(time.time() - t0, 3), "stdout": text, "stderr": _read_capped(err)[2][:2000]}
 
 
+def _compile_errors(err, limit=4000):
+    """Compiler output for the record: the first `error:` lines (each clipped, template dumps are huge) so the root
+    cause survives; falls back to the tail when the text has no `error:` line (linker errors, crashes)."""
+    lines = [l[:400] for l in err.splitlines() if "error" in l.lower()]
+    text = "\n".join(lines)
+    return text[:limit] if text else err[-limit:]
+
+
 def _compile(src, exe, flags, std, timeout, extra=(), link=()):
     t0 = time.time()
     try:
@@ -72,7 +81,7 @@ def _compile(src, exe, flags, std, timeout, extra=(), link=()):
         ok, err = cp.returncode == 0, cp.stderr
     except subprocess.TimeoutExpired:
         ok, err = False, f"compile timed out after {timeout}s"
-    return ok, err[-4000:], round(time.time() - t0, 2)
+    return ok, _compile_errors(err), round(time.time() - t0, 2)
 
 
 def worker(a):
@@ -101,9 +110,23 @@ def worker(a):
 
 
 # ---------------------------------------------------------------- host: orchestrate + classify
+def error_signature(stderr):
+    """First compiler error with the location, quoted names and numbers removed, so only its kind is compared."""
+    for line in stderr.splitlines():
+        if "error" in line.lower():
+            msg = line.split("error:", 1)[-1]
+            msg = re.sub(r"‘[^’]*’|'[^']*'|\"[^\"]*\"", "''", msg)
+            return re.sub(r"\d+", "N", msg).strip()
+    return ""
+
+
 def classify(old, new):
     """-> (status, compile_failed_on or None) for one test's old/new worker results."""
     if not old["compile_ok"] and not new["compile_ok"]:
+        # same failure on both sides is a broken test; a different first error means the change altered what the
+        # compiler reports for this program (e.g. a clean "no match" before, a hard error inside the library after)
+        if error_signature(old["compile_stderr"]) != error_signature(new["compile_stderr"]):
+            return "compile_diff", "both"
         return "invalid", None
     if old["compile_ok"] != new["compile_ok"]:
         return "compile_diff", "old" if not old["compile_ok"] else "new"

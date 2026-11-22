@@ -1,0 +1,54 @@
+{
+  "target": "nlohmann-json",
+  "pr": 5459,
+  "model": "gemini-3.5-flash-lite",
+  "prompt_sha256": "9dc50e5bc5f645111f7fd046099ba6a820b0dd824cdbe21e213945ac4bdf0a4b",
+  "clusters": [
+    {
+      "id": "C1",
+      "status": "output_diff",
+      "failed_on": null,
+      "programs": [
+        "gen_01.cpp"
+      ],
+      "verdict": "intended",
+      "confidence": "high",
+      "reason": "The PR fixes intransitive mixed integer/float comparisons near 2^63 where values like 2^63-2 and 2^63-1 previously incorrectly compared equal to 2^63."
+    },
+    {
+      "id": "C2",
+      "status": "output_diff",
+      "failed_on": null,
+      "programs": [
+        "gen_02.cpp"
+      ],
+      "verdict": "intended",
+      "confidence": "high",
+      "reason": "The PR ensures exact comparison between large integers and floats instead of lossy widening, so 2^63-1 correctly compares less than 2^63 instead of being rounded up and treated as equal."
+    }
+  ],
+  "clusters_not_shown": 0,
+  "counts": {
+    "same": 18,
+    "invalid": 0,
+    "flaky": 0,
+    "superseded": 0,
+    "missing": 0
+  },
+  "pr_verdict": {
+    "regression_candidate": false,
+    "unintended_clusters": []
+  },
+  "usage": {
+    "promptTokenCount": 5144,
+    "candidatesTokenCount": 176,
+    "totalTokenCount": 5320,
+    "promptTokensDetails": [
+      {
+        "modality": "TEXT",
+        "tokenCount": 5144
+      }
+    ],
+    "serviceTier": "standard"
+  }
+}

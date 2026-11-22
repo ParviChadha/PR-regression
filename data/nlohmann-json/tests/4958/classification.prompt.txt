@@ -1,0 +1,631 @@
+[system]
+You judge behavior differences found by differential testing of one pull request to a C++ library.
+Each test program was compiled and run against the library before the PR (OLD) and after it (NEW). You are shown groups
+("clusters") of programs that behave the same way, and you decide for each cluster whether the PR intended that change.
+
+Verdicts:
+- intended: the PR text (title, description, commit message, linked issue, comments before merge) or the diff makes clear
+  this behavior change is the purpose of the PR or a deliberate consequence of it.
+- unintended: the change contradicts what the PR says it does, breaks behavior that worked before and that the PR does not
+  mention changing, or is a side effect the author evidently did not consider. Code that compiled and ran on OLD but
+  fails to compile or crashes on NEW is a strong candidate unless the PR says that API was removed or tightened on purpose.
+- unclear: the merge-time information does not settle it. Prefer unclear to guessing.
+
+Rules: judge only from the text and evidence given. Quote or cite the specific statement or diff line your reason rests on.
+"Fails to compile on OLD only" means NEW accepts something OLD rejected, which is a new capability: intended if the PR
+describes it, otherwise unclear. A difference in error text on a program that fails on both versions is a change in how
+the library reports the problem. Be concise: one or two sentences per reason.
+
+[user]
+# Pull request #4958: Enable string_view keys in operator[] by updating is_usable_as_basic_json_key_type (#3912)
+
+## Description
+This pull request adds std::string_view support for operator[] to improve usability with modern C++ (C++17 and later). The behavior now matches the existing std::string overloads. Additionally, the exception messages were updated for consistency when operator[] is used with non-object types and a string_view key.
+
+This change addresses and fixes issue #3912.
+
+- [x] The changes are described in detail, both the what and why.
+- [x] An existing issue is referenced (Fixes #3912).
+- [x] The Code coverage remains at 100%.. A test case for every new line of code.
+- [ ] If applicable, the [documentation](https://json.nlohmann.me) is updated.
+- [x] The source code is amalgamated by running `make amalgamate`.
+
+Read the [Contribution Guidelines](https://github.com/nlohmann/json/blob/develop/.github/CONTRIBUTING.md) for detailed information.
+
+## Commit message
+Signed-off-by: khloodelhossiny <khloood.elhossiny@gmail.com>
+Co-authored-by: khloodelhossiny <khloood.elhossiny@gmail.com>
+
+## Linked issue #3912: inconsistency with string/string_view lookups
+### Description
+
+`operator string_view()` isn't used, whereas `operator string()` _is_.
+
+### Reproduction steps
+
+https://godbolt.org/z/MYEYG3Gao
+
+### Expected vs. actual results
+
+compiles
+
+### Minimal code example
+
+```c++
+#include <iostream>
+#include <string>
+#include "nlohmann/json.hpp"
+
+using json = nlohmann::json;
+
+struct Foo {
+	operator std::string() const { return "foo"; }
+};
+
+struct Bar {
+	operator std::string_view() const { return "bar"; }
+};
+
+int main() {
+
+	json js {
+		{ "foo", "string" },
+		{ "bar", "string_view" },
+	};
+
+	std::cout << js[std::string{"foo"}] << "\n";
+	std::cout << js[Foo{}] << "\n";
+
+	std::cout << js[std::string_view{"bar"}] << "\n";
+	std::cout << js[Bar{}] << "\n";
+}
+```
+
+
+### Error messages
+
+```Shell
+<source>: In function 'int main()':
+<source>:26:24: error: no match for 'operator[]' (operand types are 'json' {aka 'nlohmann::json_abi_v3_11_2::basic_json<>'} and 'Bar')
+   26 |         std::cout << js[Bar{}] << "\n";
+      |                        ^
+```
+```
+
+
+### Compiler and operating system
+
+linux gcc 12.2
+
+### Library version
+
+trunk
+
+### Validation
+
+- [x] The bug also occurs if the latest version from the [`develop`](https://github.com/nlohmann/json/tree/develop) branch is used.
+- [ ] I can successfully [compile and run the unit tests](https://github.com/nlohmann/json#execute-unit-tests).
+
+## Discussion before merge
+- gregmarr: `string_view` support already exists through this function:
+
+```
+    /// @brief access specified object element
+    /// @sa https://json.nlohmann.me/api/basic_json/operator%5B%5D/
+    template<class KeyType, detail::enable_if_t<
+                 detail::is_usable_as_basic_json_key_type<basic_json_t, KeyType>::value, int > = 0 >
+    reference operator[](KeyType && key)
+```
+https://github.com/nlohmann/json/pull/3423
+
+As you can see from the godbolt link in the original issue, the issue isn't that `string_view` doesn't work, it's that the compiler doesn't pick up that the `operator string_view()` from the type should allow it to work.
+
+The thing that should really be updated is `is_usable_as_basic_json_key_type`, and then all of the existing functions will work.  I think it currently asks "can this type be used as a key" when this scenario needs it to ask "can this type be converted to a type that can be used as a key".
+
+You can update the test code like this to see the missing piece.
+```
+	std::cout << js[static_cast<std::string_view>(Bar{})] << "\n";  // Okay
+	std::cout << js[Bar{}] << "\n"; // Not okay
+```
+- khloodelhossiny: @gregmarr 
+Yes, I understand that `string_view` is supported through the existing template function, and the issue arises with js[Bar{}] due to ambiguity between the two overloads, causing the compiler to fail. 
+
+My idea is to add specific `string_view` overloads for operator[] to guide the compiler in choosing the correct one, resolving the ambiguity.
+- github-actions[bot]: ## 🔴 Amalgamation check failed! 🔴
+The source code has not been amalgamated. @khloodelhossiny
+ Please read and follow the [Contribution Guidelines](https://github.com/nlohmann/json/blob/develop/.github/CONTRIBUTING.md#files-to-change).
+- gregmarr: >My idea is to add specific string_view overloads for operator[] to guide the compiler in choosing the correct one, resolving the ambiguity.
+
+Okay, that's not what your PR description says, so it wasn't clear that you knew that.  
+
+I'd be worried about the compiler potentially having a problem selecting between `operator[](KeyType && key)` and `operator[](std::string_view key)` and there also being unnecessary duplication.  I still think that making  `is_usable_as_basic_json_key_type` work with it is a better route here, but @nlohmann may be okay with the new functions.
+- nlohmann: I think a cleaner approach would be indeed to fix `is_usable_as_basic_json_key_type` to also work with string views.
+- khloodelhossiny: > > My idea is to add specific string_view overloads for operator[] to guide the compiler in choosing the correct one, resolving the ambiguity.
+> 
+> Okay, that's not what your PR description says, so it wasn't clear that you knew that.
+> 
+> I'd be worried about the compiler potentially having a problem selecting between `operator[](KeyType && key)` and `operator[](std::string_view key)` and there also being unnecessary duplication. I still think that making `is_usable_as_basic_json_key_type` work with it is a better route here, but @nlohmann may be okay with the new functions.
+
+Thanks a lot for the explanation. I see your point, and I’ll update the code to follow that approach.
+
+## Changed functions (from git hunk headers (rough hint))
+- using is_usable_as_basic_json_key_type = typename std::conditional <
+
+## Diff of the library source (before -> after)
+```diff
+diff --git a/include/nlohmann/detail/meta/type_traits.hpp b/include/nlohmann/detail/meta/type_traits.hpp
+index 4a1f346f9..3299549fb 100644
+--- a/include/nlohmann/detail/meta/type_traits.hpp
++++ b/include/nlohmann/detail/meta/type_traits.hpp
+@@ -636,11 +636,14 @@ using is_usable_as_key_type = typename std::conditional <
+ template<typename BasicJsonType, typename KeyTypeCVRef, bool RequireTransparentComparator = true,
+          bool ExcludeObjectKeyType = RequireTransparentComparator, typename KeyType = uncvref_t<KeyTypeCVRef>>
+ using is_usable_as_basic_json_key_type = typename std::conditional <
+-    is_usable_as_key_type<typename BasicJsonType::object_comparator_t,
+-    typename BasicJsonType::object_t::key_type, KeyTypeCVRef,
+-    RequireTransparentComparator, ExcludeObjectKeyType>::value
+-    && !is_json_iterator_of<BasicJsonType, KeyType>::value,
+-    std::true_type,
++    (is_usable_as_key_type<typename BasicJsonType::object_comparator_t,
++     typename BasicJsonType::object_t::key_type, KeyTypeCVRef,
++     RequireTransparentComparator, ExcludeObjectKeyType>::value
++     && !is_json_iterator_of<BasicJsonType, KeyType>::value)
++#ifdef JSON_HAS_CPP_17
++    || std::is_convertible<KeyType, std::string_view>::value
++#endif
++    , std::true_type,
+     std::false_type >::type;
+ 
+ template<typename ObjectType, typename KeyType>
+```
+
+# Observed behavior differences, grouped
+
+## Cluster C1: Compiles on OLD but FAILS to compile on NEW (code that used to build no longer builds).
+Programs (1): gen_25.cpp
+
+### Example gen_25.cpp: Ensures that nlohmann::ordered_json also correctly handles custom types convertible to std::string_view in operator[].
+```cpp
+#include <iostream>
+#include <string_view>
+#include <type_traits>
+#include <nlohmann/json.hpp>
+
+struct OrdKey {
+    operator std::string_view() const { return "ord"; }
+};
+
+template <class J, class K, class = void> struct can_use : std::false_type {};
+template <class J, class K>
+struct can_use<J, K, std::void_t<decltype(std::declval<J&>()[std::declval<K>()])>> : std::true_type {};
+
+template <class J, class K> void probe(J& j, K&& k) {
+    std::cout << "supported: " << can_use<J, K>::value << "\n";
+    if constexpr (can_use<J, K>::value) {
+        try {
+            std::cout << j[k] << "\n";
+        } catch (const std::exception& e) {
+            std::cout << e.what() << "\n";
+        }
+    }
+}
+
+int main() {
+    nlohmann::ordered_json j = {{"ord", 3.14}};
+    OrdKey ok;
+    probe(j, ok);
+}
+```
+OLD: compiles and runs
+NEW: does not compile
+```
+json.hpp:2213:57: error: no matching function for call to ‘nlohmann::json_abi_v3_12_0::ordered_map<std::__cxx11::basic_string<char>, nlohmann::json_abi_v3_12_0::basic_json<nlohmann::json_abi_v3_12_0::ordered_map>, std::less<void>, std::allocator<std::pair<const std::__cxx11::basi
+ordered_map.hpp:68:95: error: no type named ‘type’ in ‘struct std::enable_if<false, int>’
+```
+
+## Cluster C2: Fails to compile on BOTH versions, but with a different first error on each.
+Programs (1): gen_03.cpp
+
+### Example gen_03.cpp: Ensures that const reference operator[] works correctly with types convertible to std::string_view.
+```cpp
+#include <iostream>
+#include <string_view>
+#include <nlohmann/json.hpp>
+
+struct ViewHolder {
+    std::string val;
+    operator std::string_view() const { return val; }
+};
+
+int main() {
+    const nlohmann::json j = {{"hello", "world"}};
+    ViewHolder v{"hello"};
+    try {
+        std::cout << j[v].dump() << "\n";
+    } catch (const std::exception& e) {
+        std::cout << e.what() << "\n";
+    }
+}
+```
+OLD: does not compile
+```
+gen_03.cpp:16:23: error: no match for ‘operator[]’ (operand types are ‘const nlohmann::json_abi_v3_12_0::json’ {aka ‘const nlohmann::json_abi_v3_12_0::basic_json<>’} and ‘ViewHolder’)
+json.hpp:2199:98: error: no type named ‘type’ in ‘struct std::enable_if<false, int>’
+json.hpp:2223:98: error: no type named ‘type’ in ‘struct std::enable_if<false, int>’
+```
+NEW: does not compile
+```
+c++stl_tree.h:1303:53: error: no match for call to ‘(const std::less<void>) (const ViewHolder&, const std::__cxx11::basic_string<char>&)’
+c++stl_function.h:588:44: error: no match for ‘operator<’ (operand types are ‘const ViewHolder’ and ‘const std::__cxx11::basic_string<char>’)
+c++system_error:507:3: note: candidate: ‘bool std::operator<(const error_condition&, const error_condition&)’
+507 |   operator<(const error_condition& __lhs,
+c++system_error:507:36: note:   no known conversion for argume
+[... truncated, 109 more characters]
+```
+
+## Cluster C3: Compiles on both versions; the printed output (or exit status) differs.
+Programs (6): gen_21.cpp, gen_22.cpp, gen_24.cpp, gen_26.cpp, gen_27.cpp, gen_28.cpp
+
+### Example gen_21.cpp: Probes whether a custom type with an explicit conversion operator to std::string_view can be used directly as a key in operator[] lookup.
+```cpp
+#include <iostream>
+#include <string_view>
+#include <type_traits>
+#include <nlohmann/json.hpp>
+
+struct CustomStringViewable {
+    std::string_view sv;
+    operator std::string_view() const { return sv; }
+};
+
+template <class J, class K, class = void> struct can_use : std::false_type {};
+template <class J, class K>
+struct can_use<J, K, std::void_t<decltype(std::declval<J&>()[std::declval<K>()])>> : std::true_type {};
+
+template <class J, class K> void probe(J& j, K&& k) {
+    std::cout << "supported: " << can_use<J, K>::value << "\n";
+    if constexpr (can_use<J, K>::value) {
+        try {
+            std::cout << j[k] << "\n";
+        } catch (const std::exception& e) {
+            std::cout << e.what() << "\n";
+        }
+    }
+}
+
+int main() {
+    nlohmann::json j = {{"key_str", 42}};
+    CustomStringViewable cv{"key_str"};
+    probe(j, cv);
+}
+```
+OLD printed:
+```
+supported: 0
+```
+NEW printed:
+```
+supported: 1
+42
+```
+
+### Example gen_22.cpp: Tests if a class implicitly convertible to std::string_view works with basic_json operator[] for object element access.
+```cpp
+#include <iostream>
+#include <string_view>
+#include <type_traits>
+#include <nlohmann/json.hpp>
+
+class ImplicitView {
+    const char* s;
+public:
+    ImplicitView(const char* str) : s(str) {}
+    operator std::string_view() const { return std::string_view(s); }
+};
+
+template <class J, class K, class = void> struct can_use : std::false_type {};
+template <class J, class K>
+struct can_use<J, K, std::void_t<decltype(std::declval<J&>()[std::declval<K>()])>> : std::true_type {};
+
+template <class J, class K> void probe(J& j, K&& k) {
+    std::cout << "supported: " << can_use<J, K>::value << "\n";
+    if constexpr (can_use<J, K>::value) {
+        try {
+            std::cout << j[k] << "\n";
+        } catch (const std::exception& e) {
+            std::cout << e.what() << "\n";
+        }
+    }
+}
+
+int main() {
+    nlohmann::json j = {{"test", 100}};
+    ImplicitView iv("test");
+    probe(j, iv);
+}
+```
+OLD printed:
+```
+supported: 0
+```
+NEW printed:
+```
+supported: 1
+100
+```
+
+### Example gen_24.cpp: Probes whether write access via operator[] works correctly using a custom type convertible to std::string_view on an existing key.
+```cpp
+#include <iostream>
+#include <string_view>
+#include <type_traits>
+#include <nlohmann/json.hpp>
+
+struct KeyType {
+    operator std::string_view() const { return "target"; }
+};
+
+template <class J, class K, class = void> struct can_use : std::false_type {};
+template <class J, class K>
+struct can_use<J, K, std::void_t<decltype(std::declval<J&>()[std::declval<K>()])>> : std::true_type {};
+
+template <class J, class K> void probe(J& j, K&& k) {
+    std::cout << "supported: " << can_use<J, K>::value << "\n";
+    if constexpr (can_use<J, K>::value) {
+        try {
+            j[k] = 99;
+            std::cout << j["target"] << "\n";
+        } catch (const std::exception& e) {
+            std::cout << e.what() << "\n";
+        }
+    }
+}
+
+int main() {
+    nlohmann::json j = {{"target", 10}};
+    KeyType k;
+    probe(j, k);
+}
+```
+OLD printed:
+```
+supported: 0
+```
+NEW printed:
+```
+supported: 1
+99
+```
+
+## Cluster C4: Compiles on both versions; the printed output (or exit status) differs.
+Programs (1): gen_08.cpp
+
+### Example gen_08.cpp: Directly probes the type trait is_usable_as_basic_json_key_type with a user-defined type convertible to std::string_view.
+```cpp
+#include <iostream>
+#include <string_view>
+#include <nlohmann/json.hpp>
+
+struct ConvType {
+    operator std::string_view() const { return "test"; }
+};
+
+int main() {
+    constexpr bool usable = nlohmann::detail::is_usable_as_basic_json_key_type<nlohmann::json, ConvType>::value;
+    std::cout << (usable ? "true" : "false") << "\n";
+}
+```
+OLD printed:
+```
+false
+```
+NEW printed:
+```
+true
+```
+
+## Cluster C5: Compiles on both versions; the printed output (or exit status) differs.
+Programs (1): gen_23.cpp
+
+### Example gen_23.cpp: Checks the exception message behavior when operator[] with a string_view convertible custom type is called on a non-object json value.
+```cpp
+#include <iostream>
+#include <string_view>
+#include <type_traits>
+#include <nlohmann/json.hpp>
+
+struct MyKey {
+    operator std::string_view() const { return "abc"; }
+};
+
+template <class J, class K, class = void> struct can_use : std::false_type {};
+template <class J, class K>
+struct can_use<J, K, std::void_t<decltype(std::declval<J&>()[std::declval<K>()])>> : std::true_type {};
+
+template <class J, class K> void probe(J& j, K&& k) {
+    std::cout << "supported: " << can_use<J, K>::value << "\n";
+    if constexpr (can_use<J, K>::value) {
+        try {
+            auto val = j[k];
+            std::cout << val << "\n";
+        } catch (const std::exception& e) {
+            std::cout << e.what() << "\n";
+        }
+    }
+}
+
+int main() {
+    nlohmann::json j = 123;
+    MyKey k;
+    probe(j, k);
+}
+```
+OLD printed:
+```
+supported: 0
+```
+NEW printed:
+```
+supported: 1
+[json.exception.type_error.305] cannot use operator[] with a string argument with number
+```
+
+## Cluster C6: Compiles on both versions; the printed output (or exit status) differs.
+Programs (1): gen_29.cpp
+
+### Example gen_29.cpp: Verifies overloading resolution and unambiguous behavior when multiple distinct user-defined types convertible to std::string_view are used.
+```cpp
+#include <iostream>
+#include <string_view>
+#include <type_traits>
+#include <utility>
+#include <nlohmann/json.hpp>
+
+struct AlphaKey {
+    operator std::string_view() const { return "alpha"; }
+};
+
+struct BetaKey {
+    operator std::string_view() const { return "beta"; }
+};
+
+template <class J, class K, class = void> struct can_use : std::false_type {};
+template <class J, class K>
+struct can_use<J, K, std::void_t<decltype(std::declval<J&>()[std::declval<K>()])>> : std::true_type {};
+
+template <class J, class K1, class K2> void probe(J& j, K1&& k1, K2&& k2) {
+    std::cout << "supported1: " << can_use<J, K1>::value << ", supported2: " << can_use<J, K2>::value << "\n";
+    if constexpr (can_use<J, K1>::value && can_use<J, K2>::value) {
+        try {
+            std::cout << j[k1].dump() << " " << j[k2].dump() << "\n";
+        } catch (const std::exception& e) {
+            std::cout << e.what() << "\n";
+        }
+    }
+}
+
+int main() {
+    nlohmann::json j = {{"alpha", 1}, {"beta", 2}};
+    AlphaKey ak;
+    BetaKey bk;
+    probe(j, ak, bk);
+}
+```
+OLD printed:
+```
+supported1: 0, supported2: 0
+```
+NEW printed:
+```
+supported1: 1, supported2: 1
+1 2
+```
+
+## Cluster C7: Compiles on both versions; the printed output (or exit status) differs.
+Programs (1): gen_12.cpp
+
+### Example gen_12.cpp: Ensures that types having both bool conversion and string_view conversion do not break operator[] disambiguation.
+```cpp
+#include <iostream>
+#include <string_view>
+#include <nlohmann/json.hpp>
+
+struct ComplexKey {
+    operator bool() const { return true; }
+    operator std::string_view() const { return "key"; }
+};
+
+int main() {
+    nlohmann::json j = {{"key", 123}};
+    ComplexKey ck;
+    std::cout << j[ck] << "\n";
+}
+```
+OLD printed:
+```
+
+```
+NEW printed:
+```
+123
+```
+
+## Cluster C8: Fails to compile on OLD only; compiles and runs on NEW (NEW accepts something OLD rejected).
+Programs (6): gen_11.cpp, gen_16.cpp, gen_17.cpp, gen_18.cpp, gen_19.cpp, gen_20.cpp
+
+### Example gen_11.cpp: Tests a class hierarchy where the base class provides the operator std::string_view used for JSON key lookup.
+```cpp
+#include <iostream>
+#include <string_view>
+#include <nlohmann/json.hpp>
+
+struct BaseKey {
+    operator std::string_view() const { return "inherited"; }
+};
+
+struct DerivedKey : public BaseKey {};
+
+int main() {
+    nlohmann::json j = {{"inherited", 500}};
+    DerivedKey dk;
+    std::cout << j[dk] << "\n";
+}
+```
+OLD: does not compile
+```
+gen_11.cpp:16:19: error: no match for ‘operator[]’ (operand types are ‘nlohmann::json_abi_v3_12_0::json’ {aka ‘nlohmann::json_abi_v3_12_0::basic_json<>’} and ‘DerivedKey’)
+json.hpp:2199:98: error: no type named ‘type’ in ‘struct std::enable_if<false, int>’
+json.hpp:2223:98: error: no type named ‘type’ in ‘struct std::enable_if<false, int>’
+```
+NEW: compiles and runs
+
+### Example gen_16.cpp: Probes temporary lifetime handling when constructing a custom viewable key inline within operator[].
+```cpp
+#include <iostream>
+#include <string_view>
+#include <nlohmann/json.hpp>
+
+struct TempKey {
+    const char* data;
+    operator std::string_view() const { return data; }
+};
+
+int main() {
+    nlohmann::json j = {{"temp", 777}};
+    std::cout << j[TempKey{"temp"}] << "\n";
+}
+```
+OLD: does not compile
+```
+gen_16.cpp:14:19: error: no match for ‘operator[]’ (operand types are ‘nlohmann::json_abi_v3_12_0::json’ {aka ‘nlohmann::json_abi_v3_12_0::basic_json<>’} and ‘TempKey’)
+json.hpp:2199:98: error: no type named ‘type’ in ‘struct std::enable_if<false, int>’
+json.hpp:2223:98: error: no type named ‘type’ in ‘struct std::enable_if<false, int>’
+```
+NEW: compiles and runs
+
+### Example gen_17.cpp: Tests operator[] lookup using a custom type convertible to an empty std::string_view.
+```cpp
+#include <iostream>
+#include <string_view>
+#include <nlohmann/json.hpp>
+
+struct EmptyKey {
+    operator std::string_view() const { return ""; }
+};
+
+int main() {
+    nlohmann::json j = {{"", "empty_val"}};
+    EmptyKey ek;
+    std::cout << j[ek] << "\n";
+}
+```
+OLD: does not compile
+```
+gen_17.cpp:14:19: error: no match for ‘operator[]’ (operand types are ‘nlohmann::json_abi_v3_12_0::json’ {aka ‘nlohmann::json_abi_v3_12_0::basic_json<>’} and ‘EmptyKey’)
+json.hpp:2199:98: error: no type named ‘type’ in ‘struct std::enable_if<false, int>’
+json.hpp:2223:98: error: no type named ‘type’ in ‘struct std::enable_if<false, int>’
+```
+NEW: compiles and runs
+
+# Task
+For every cluster above return an item in the "clusters" array with "cluster" (its id, e.g. C1), "verdict" (intended, unintended or unclear) and "reason" (one or two sentences citing the PR text or diff).
