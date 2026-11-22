@@ -1,14 +1,18 @@
 #!/usr/bin/env python3
-"""Scale driver: run the whole pipeline (generate -> run -> fix -> classify, then report) over many PRs, resumably.
+"""Scale driver: run the whole pipeline (generate -> refine -> run -> fix -> classify, then report) over many PRs, resumably.
 
 Usage:  python3 pipeline/batch.py <target> (--all | --prs N [N ...]) [--limit K] [--docker] [--dry-run]
-                                  [--model M] [--classify-model M] [--redo generate,run,fix,classify]
-                                  [--max-failures 5] [--no-report]
+                                  [--model M] [--classify-model M] [--redo generate,refine,run,fix,classify]
+                                  [--max-failures 5] [--no-refine] [--no-report]
 Needs GEMINI_API_KEY (in .env or exported). Run it in a terminal you can leave open; it prints one line per stage.
 
 Resumable: a stage is skipped when its output is current, so rerunning after a quota stop, a crash or a Ctrl-C continues
 where it stopped (LLM responses are also cached by request, so an interrupted stage costs nothing to repeat).
   generate  done when generated.json exists
+  refine    done when coverage.json exists. Measures changed-line coverage of the generated programs and makes ONE more
+            request for programs aimed at the lines nobody reached (no request if everything measurable is covered).
+            Without it a PR whose programs never reach the change looks like "no difference"; #6078's did. Skipped for
+            targets coverage_loop cannot measure (cmake library builds) and with --no-refine.
   run       done when results.json covers every *.cpp in the PR folder
   fix       done when fix.py has run (manifest "fix") or made repairs, or nothing is left to repair
   classify  done when classification.json was made from the current results.json (fingerprint match)
@@ -21,8 +25,9 @@ A PR that fails any other way is recorded, skipped, and retried on the next run;
 failing systematically before it spends the day's quota.
 
 Order: seeded PRs first (they have a known answer), then prs.jsonl order. --limit K stops after K PRs that needed work.
---redo generate also redoes everything after it (it deletes repairs); --redo run/fix/classify redo just that stage.
-Requests per PR: 1 generate + up to 2 fix + 1 classify = at most 4 (the plan's 10 to 25 was a guess).
+--redo generate also redoes everything after it (it deletes repairs); --redo refine/run/fix/classify redo that stage
+and, because its output changed, the ones after it.
+Requests per PR: 1 generate + 1 refine + up to 2 fix + 1 classify = at most 5 (the plan's 10 to 25 was a guess).
 """
 import argparse
 import hashlib
@@ -40,8 +45,8 @@ from pipeline.common import Target, read_jsonl  # noqa: E402
 import fix  # noqa: E402
 import llm  # noqa: E402
 
-STAGES = ("generate", "run", "fix", "classify")
-LLM_STAGES = {"generate": 1, "fix": 2, "classify": 1}  # worst-case requests per PR
+STAGES = ("generate", "refine", "run", "fix", "classify")
+LLM_STAGES = {"generate": 1, "refine": 1, "fix": 2, "classify": 1}  # worst-case requests per PR
 
 
 def load(path):
@@ -57,6 +62,9 @@ def stage_done(stage, tests_dir):
     manifest, results = load(d / "generated.json"), load(d / "results.json")
     if stage == "generate":
         return manifest is not None
+    if stage == "refine":
+        cov = load(d / "coverage.json")
+        return bool(manifest and cov and cov.get("history"))
     if stage == "run":
         return bool(manifest and results) and {p.name for p in d.glob("*.cpp")} <= set(results["tests"])
     if stage == "fix":
@@ -81,12 +89,12 @@ def nothing_to_fix(tests_dir):
     return not (manifest and results) or not fix.pick(manifest, results["tests"], 1)
 
 
-def pending_stages(tests_dir, redo=()):
+def pending_stages(tests_dir, redo=(), stages=STAGES):
     """Stages that must run for this PR, in order (each stage that runs makes all later ones run)."""
     redo, out, forced = set(redo), [], False
     if "generate" in redo:
-        redo |= {"run", "fix", "classify"}
-    for st in STAGES:
+        redo |= set(STAGES)
+    for st in stages:
         if forced or st in redo or not stage_done(st, tests_dir):
             out.append(st)
             forced = True
@@ -111,10 +119,12 @@ def commits_present(repo, rec):
 # ---------------------------------------------------------------- running
 def command(stage, target, pr, args):
     py = sys.executable
-    base = {"generate": ["generate.py", "--model", args.model], "run": ["run.py"], "fix": ["fix.py", "--model", args.model],
+    base = {"generate": ["generate.py", "--model", args.model],
+            "refine": ["generate.py", "--refine-only", "--model", args.model], "run": ["run.py"],
+            "fix": ["fix.py", "--model", args.model],
             "classify": ["classify.py", "--model", args.classify_model or args.model]}[stage]
     cmd = [py, str(HERE / base[0]), target, "--pr", str(pr), *base[1:]]
-    if args.docker and stage in ("run", "fix"):
+    if args.docker and stage in ("refine", "run", "fix"):
         cmd.append("--docker")
     return cmd
 
@@ -143,13 +153,14 @@ def batch(t, rows, args, runner=run_stage, say=print, data_dir=None, log_dir=Non
     log_dir = Path(log_dir or ROOT / "cache" / "logs" / t.name)
     out = {"ok": [], "failed": {}, "skipped": {}, "quota_stop": False, "ran": 0}
     redo = [s for s in (args.redo or "").split(",") if s]
+    stages = tuple(st for st in STAGES if st != "refine" or not (args.no_refine or t.get("build_mode") == "cmake"))
     plan = []
     for r in rows:
         td = data_dir / "tests" / str(r["pr"])
         if not args.skip_commit_check and not commits_present(t.repo, r):
             out["skipped"][r["pr"]] = "commit missing locally: git -C repos/<target> fetch origin"
             continue
-        st = pending_stages(td, redo)
+        st = pending_stages(td, redo, stages)
         if st:
             plan.append((r["pr"], td, st))
     if args.limit:
@@ -206,9 +217,10 @@ def main():
     ap.add_argument("--model", default=llm.DEFAULT_MODEL, help="generation and fix model")
     ap.add_argument("--classify-model", help="model for classify.py (default: --model)")
     ap.add_argument("--docker", action="store_true", help="compile and run in the prh-<target> container")
-    ap.add_argument("--redo", help="comma list of stages to redo: generate,run,fix,classify")
+    ap.add_argument("--redo", help="comma list of stages to redo: generate,refine,run,fix,classify")
     ap.add_argument("--max-failures", type=int, default=5)
     ap.add_argument("--dry-run", action="store_true", help="show what would run, run nothing")
+    ap.add_argument("--no-refine", action="store_true", help="skip the coverage/refine stage (saves 1 request per PR)")
     ap.add_argument("--no-report", action="store_true")
     ap.add_argument("--skip-commit-check", action="store_true", help=argparse.SUPPRESS)
     a = ap.parse_args()

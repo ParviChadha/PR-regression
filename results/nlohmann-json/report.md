@@ -1,21 +1,23 @@
 # Report: nlohmann-json
 
-2 PR(s) checked, 40 programs generated, 40 in use (9 repaired by fix.py). Numbers come only from the files on disk; see the module docstring of pipeline/report.py for each definition.
+5 PR(s) checked, 115 programs generated, 115 in use (17 repaired by fix.py). Numbers come only from the files on disk; see the module docstring of pipeline/report.py for each definition.
 
 ## Summary
 
 | Measure | Value |
 |---|---|
-| PRs checked | 2 |
-| Compile success, as generated (new / both versions) | 95.0% / 60.0% |
-| Compile success, after fix.py (new / both versions) | 95.0% / 80.0% |
-| Deterministic on both versions | 32 of 32 compiled-on-both programs (100.0%) |
-| PRs with at least one behavioral difference | 2 of 2 (100.0%) |
-| Differences by verdict (clusters / programs) | intended 7 / 18, unintended 2 / 2, unclear 0 / 0 |
-| Regression candidates | 1 of 2 classified: #4958 |
-| Changed-line coverage before / after the loop (mean over 1 PRs) | 100.0% / 100.0% |
-| LLM calls (estimated) | 6 total, 3.0 per PR |
-| Wall time of the run.py stage | 41.0 s |
+| PRs checked | 5 |
+| Compile success, as generated (new / both versions) | 95.7% / 80.9% |
+| Compile success, after fix.py (new / both versions) | 95.7% / 90.4% |
+| Deterministic on both versions | 104 of 104 compiled-on-both programs (100.0%) |
+| PRs with at least one behavioral difference | 4 of 5 (80.0%) |
+| Differences by verdict (clusters / programs) | intended 13 / 24, unintended 3 / 5, unclear 0 / 0 |
+| Regression candidates | 2 of 5 classified: #4958, #6121 |
+| Changed-line coverage measured | 5 of 5 PRs; at least 80% reached for 3 |
+| Clean results that are INCONCLUSIVE (coverage missing or low) | 1: #6078 |
+| Changed-line coverage before / after the loop (mean over 4 PRs) | 86.0% / 88.1% |
+| LLM calls (estimated) | 18 total, 3.6 per PR |
+| Wall time of the run.py stage | 98.1 s |
 
 ## Seeded PRs with a known answer
 
@@ -34,6 +36,9 @@ Recall on seeded regressions: 1/1
 |---|---|---|---|---|---|---|---|
 | #4958 | 20 (20) | 18/20 / 12/20 | compile_diff 8, output_diff 10, same 2 | 18 | REGRESSION CANDIDATE | n/a | 4 |
 | #5459 | 20 (20) | 20/20 / 20/20 | output_diff 2, same 18 | 2 | no regression flagged | 100% of 20 lines | 2 |
+| #6076 | 25 (25) | 25/25 / 25/25 | output_diff 5, same 20 | 5 | no regression flagged | 99% of 119 lines | 3 |
+| #6078 | 25 (25) | 25/25 / 25/25 | same 25 | 0 | no regression flagged, INCONCLUSIVE: only 55% of changed lines reached | 55% of 22 lines | 3 |
+| #6121 | 25 (25) | 22/25 / 22/25 | compile_diff 3, output_diff 1, same 21 | 4 | REGRESSION CANDIDATE | 99% of 70 lines | 6 |
 
 ## PR #4958: clusters
 
@@ -69,3 +74,33 @@ Breaks usage of ordered_json with transparent comparators when using keys that c
 |---|---|---|---|
 | C1 output_diff | 1 | intended (high) | The PR fixes intransitive mixed integer/float comparisons near 2^63 where values like 2^63-2 and 2^63-1 previously incorrectly compared equal to 2^63. |
 | C2 output_diff | 1 | intended (high) | The PR ensures exact comparison between large integers and floats instead of lossy widening, so 2^63-1 correctly compares less than 2^63 instead of being rounded up and treated as equal. |
+
+## PR #6076: clusters
+
+| Cluster | Programs | Verdict | Reason |
+|---|---|---|---|
+| C1 output_diff | 1 | intended (high) | Linked issue #6105 explicitly describes this bug in ordered_json where overlapping keys overwrite values instead of throwing type_error.313, and the PR diff adds the check to throw type_error.313 when non-null values conflict. |
+| C2 output_diff | 1 | intended (high) | The PR diff explicitly states that if the conflicting later assignment is a null value, it leaves the existing structure as is (as when the shorter key comes first), which is demonstrated here. |
+| C3 output_diff | 1 | intended (high) | This is another case of overlapping keys (root vs /x) in ordered_json addressed by linked issue #6105, now correctly throwing type_error.313 instead of silently overwriting. |
+| C4 output_diff | 1 | intended (high) | This is an array-element overlapping key case covered by linked issue #6105, which now correctly rejects overlapping JSON pointers with type_error.313. |
+| C5 output_diff | 1 | intended (high) | Subsequent null assignments to parent paths allow the existing nested structure to remain intact as per the new check logic added in the PR. |
+
+## PR #6078: clusters
+
+| Cluster | Programs | Verdict | Reason |
+|---|---|---|---|
+
+## PR #6121: clusters
+
+| Cluster | Programs | Verdict | Reason |
+|---|---|---|---|
+| C1 compile_diff [both] | 3 | unintended (high) | The test uses invalid SFINAE probes (accessing `::head` rather than checking member existence via type traits properly) which fail to compile on the new version. |
+| C2 output_diff | 1 | intended (high) | The PR explicitly truncates long tokens in error messages and inserts '...' when they exceed 8192 characters. |
+
+### Finding: PR #6121 C1 (unintended, high)
+
+The test uses invalid SFINAE probes (accessing `::head` rather than checking member existence via type traits properly) which fail to compile on the new version.
+
+- Example program: `data/nlohmann-json/tests/6121/gen_29.cpp` (3 in cluster)
+- Old version: compile error: ‘token_text_buffer’ in namespace ‘nlohmann::json_abi_v3_12_0::detail’ does not name a template type; did you mean ‘token_carry_buffer’?
+- New version: compile error: ‘head’ in ‘class nlohmann::json_abi_v3_12_0::detail::token_text_buffer<wchar_t>’ does not name a type

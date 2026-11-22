@@ -306,3 +306,36 @@ Spot checks: #6100 ("Fix develop CI") is correctly comment_only (only NOLINT/com
 - json: 120 PRs need work (the 2 seeds are done): at most 480 requests vs ~488 left on a fresh day for Flash-Lite.
 - fix.py now writes `manifest["fix"]`; classify.py writes `results_sha256` (older classification files fall back to mtime).
 - Tests: `python3 -m unittest pipeline.test_batch pipeline.test_report pipeline.test_classify pipeline.test_fix pipeline.test_generate` (62).
+
+## Double-check of the first batch (#6076, #6078, #6121) and the refine stage
+- Verified: report numbers recounted from results.json (95/81% as generated, 97/91% after fix.py, 91 of 91 deterministic);
+  logs clean (one retried 503, request counts consistent); #6076 verdicts correct (its PR text includes the #6105
+  overlapping-keys fix, which is exactly what the 5 clusters show); #6121 plausible (token truncation is the PR title).
+- PROBLEM FOUND: #6078 (UBJSON valueless-array limit) had 20 programs and zero differences, which is a false negative.
+  11 of 20 were rejected identically by both versions at byte 1 (the model's UBJSON bytes lacked the opening '['), most
+  others failed a few bytes later, and `to_ubjson(j)` was called without the optimized flags. Coverage of the changed lines
+  on 10 of the programs: 54.5%; the core new check ("excessive number of elements without payload") and the writer's
+  valueless-array accounting were never executed. Identical errors on both sides hide this, so "same" does not mean
+  "tested". The batch had no coverage step, so nothing flagged it.
+- Fix: batch.py has a `refine` stage after generate (default on, `--no-refine` to skip): `generate.py --refine-only`
+  runs coverage_loop and ONE refine request aimed at the uncovered lines; the refine prompt now warns about malformed
+  inputs. Demonstrated on a scratch copy: one well-formed program (two valueless arrays of 600000 elements) moves
+  coverage 54.5% -> 93.3%, reaches the new check, and differs old/new (parsed vs out_of_range.408).
+- report.py: a clean result is now labeled INCONCLUSIVE when coverage is missing or below 80% (it said "no regression
+  flagged" before). Summary shows how many PRs had coverage measured.
+- Known limits, not fixed: (1) clustering splits one behavior into several clusters when the output text differs (#6076:
+  5 clusters, one behavior); (2) output comparison cannot see performance fixes (#6076's main change is linear-time
+  unflatten); (3) data/nlohmann-json/tests/4958/coverage.json predates the batch (hand-written probes, trait-only change,
+  so n/a) and counts as "measured"; (4) refine uses 1 round; a PR whose coverage stays low stays INCONCLUSIVE.
+- Worst case is now 5 requests per PR (generate, refine, up to 2 fix, classify): 120 json PRs = up to 600 requests, so
+  expect two days on Flash-Lite's 500/day.
+- Tests: 68 (`python3 -m unittest pipeline.test_batch pipeline.test_report pipeline.test_classify pipeline.test_fix pipeline.test_generate`).
+
+## Hand labels (pipeline/labels.py)
+Purpose: measure classifier precision/recall and inter-labeler agreement (Testora-style metrics).
+- Unit = cluster (what classify.py judges). Items keyed `<pr>-<cluster id>` with a fingerprint of the cluster's programs; eval skips labels whose fingerprint no longer matches (pipeline reruns change clusters), and reports how many it skipped.
+- Sampling: every cluster the classifier called unintended/unclear, plus a seeded random sample of intended (`--intended-sample`, default 20). eval reports raw and weighted precision/recall (weight = available/exported per classifier verdict) because the intended stratum is subsampled.
+- Blind: items.md shows PR link, changed files, old/new behavior and one representative program, in shuffled order, with no classifier verdict or reason. Labelers use merge-time information only.
+- Commands: `labels.py export|check|reconcile|eval <target>`. Outputs in data/<t>/labels/ (items.json, items.md, labels_<name>.csv, reconciled.csv, eval.json).
+- Decision: export only after the full batch (with refine) has finished, since reruns change clusters.
+- Problem: first version had a nested-quote f-string (invalid before Python 3.12); fixed by precomputing the string.

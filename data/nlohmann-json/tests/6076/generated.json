@@ -1,0 +1,172 @@
+{
+  "target": "nlohmann-json",
+  "pr": 6076,
+  "model": "gemini-3.5-flash-lite",
+  "prompt_sha256": "4164a0c9e926ee339a3638e5f26c0f3cf3d97d638ab151d1fb4f4fa72ec74576",
+  "n_requested": 20,
+  "dropped": 0,
+  "usage": {
+    "promptTokenCount": 8949,
+    "candidatesTokenCount": 3831,
+    "totalTokenCount": 12780,
+    "promptTokensDetails": [
+      {
+        "modality": "TEXT",
+        "tokenCount": 8949
+      }
+    ],
+    "serviceTier": "standard"
+  },
+  "tests": [
+    {
+      "file": "gen_01.cpp",
+      "name": "unflatten_long_key_array_tokens",
+      "intent": "Probes unflatten behavior on a deeply nested key consisting of thousands of /0 tokens to verify linearity.",
+      "round": 0
+    },
+    {
+      "file": "gen_02.cpp",
+      "name": "ordered_json_overlapping_keys_prefix",
+      "intent": "Probes ordered_json unflatten error handling when a shorter key is processed after its extension, triggering a type_error.",
+      "round": 0
+    },
+    {
+      "file": "gen_03.cpp",
+      "name": "ordered_json_overlapping_keys_null_override",
+      "intent": "Probes ordered_json unflatten allowing a null value to override an existing container branch gracefully.",
+      "round": 0
+    },
+    {
+      "file": "gen_04.cpp",
+      "name": "unflatten_short_limit_boundary",
+      "intent": "Probes unflatten around the 64-byte boundary for token prefix hashing versus tree storage.",
+      "round": 0
+    },
+    {
+      "file": "gen_05.cpp",
+      "name": "unflatten_shuffled_keys_ordered_json",
+      "intent": "Probes ordered_json unflatten with mixed array and object tokens in shuffled order.",
+      "round": 0
+    },
+    {
+      "file": "gen_06.cpp",
+      "name": "unflatten_empty_key_conflict",
+      "intent": "Probes unflatten error behavior when an empty key conflicts with a non-null root path.",
+      "round": 0
+    },
+    {
+      "file": "gen_07.cpp",
+      "name": "standard_json_overlapping_keys",
+      "intent": "Probes standard nlohmann::json behavior on overlapping keys which naturally sorts shorter keys first.",
+      "round": 0
+    },
+    {
+      "file": "gen_08.cpp",
+      "name": "unflatten_array_index_prefix_conflict",
+      "intent": "Probes unflatten throwing type_error when an array index prefix overlaps with a primitive value assignment.",
+      "round": 0
+    },
+    {
+      "file": "gen_09.cpp",
+      "name": "unflatten_escaped_tokens",
+      "intent": "Probes prefix tree and hash set handling of escaped characters in json pointer tokens during unflatten.",
+      "round": 0
+    },
+    {
+      "file": "gen_10.cpp",
+      "name": "unflatten_deep_mixed_structure",
+      "intent": "Probes unflatten correctness on a deeply interleaved array and object path structure.",
+      "round": 0
+    },
+    {
+      "file": "gen_11.cpp",
+      "name": "unflatten_multiple_same_hash_short_keys",
+      "intent": "Probes hash collisions in short prefix map by injecting multiple short keys.",
+      "round": 0
+    },
+    {
+      "file": "gen_12.cpp",
+      "name": "unflatten_empty_object",
+      "intent": "Probes unflatten on an empty json object input.",
+      "round": 0
+    },
+    {
+      "file": "gen_13.cpp",
+      "name": "unflatten_non_object_input",
+      "intent": "Probes unflatten behavior when called on a non-object json value such as an array or primitive.",
+      "round": 0
+    },
+    {
+      "file": "gen_14.cpp",
+      "name": "unflatten_numeric_string_tokens",
+      "intent": "Probes unflatten distinction between array index '0' and numeric-looking object keys like '00' or '1'.",
+      "round": 0
+    },
+    {
+      "file": "gen_15.cpp",
+      "name": "unflatten_large_number_of_unique_long_keys",
+      "intent": "Probes prefix tree memory and performance scaling with thousands of unique long keys.",
+      "round": 0
+    },
+    {
+      "file": "gen_16.cpp",
+      "name": "unflatten_consecutive_identical_prefixes",
+      "intent": "Probes optimization paths where consecutive keys share identical prefix spans.",
+      "round": 0
+    },
+    {
+      "file": "gen_17.cpp",
+      "name": "unflatten_array_prefix_without_zero",
+      "intent": "Probes unflatten behavior when a key has multiple tokens but no '0' token, ensuring it builds an object.",
+      "round": 0
+    },
+    {
+      "file": "gen_18.cpp",
+      "name": "unflatten_invalid_pointer_syntax",
+      "intent": "Probes unflatten behavior when keys do not start with a slash separator.",
+      "round": 0
+    },
+    {
+      "file": "gen_19.cpp",
+      "name": "unflatten_multiple_null_overrides_ordered",
+      "intent": "Probes ordered_json unflatten with multiple null overrides in conflicting positions.",
+      "round": 0
+    },
+    {
+      "file": "gen_20.cpp",
+      "name": "unflatten_roundtrip_flatten",
+      "intent": "Probes roundtrip consistency of flatten and unflatten on a complex nested structure.",
+      "round": 0
+    },
+    {
+      "file": "gen_21.cpp",
+      "name": "test_prefix_tree_walk_chain_shrink",
+      "intent": "Exercises prefix_tree chain shrinking when a subsequent key shares a shorter common prefix than the previous key's walk chain.",
+      "round": 1
+    },
+    {
+      "file": "gen_22.cpp",
+      "name": "test_prefix_tree_lower_bound_walk",
+      "intent": "Exercises prefix_tree walk lower_bound logic where an earlier lookup walked further and requires retrieving an intermediate step from the chain via lower_bound.",
+      "round": 1
+    },
+    {
+      "file": "gen_23.cpp",
+      "name": "test_prefix_tree_hash_collision_chain",
+      "intent": "Exercises prefix_tree child lookup hash collision resolution loop when multiple distinct long tokens map to the same hash bucket slot.",
+      "round": 1
+    },
+    {
+      "file": "gen_24.cpp",
+      "name": "test_array_prefix_set_empty_and_short_limit",
+      "intent": "Exercises array_prefix_set empty() checking both hash table and prefix_tree, along with short_limit boundary conditions.",
+      "round": 1
+    },
+    {
+      "file": "gen_25.cpp",
+      "name": "test_prefix_tree_deep_nested_structure",
+      "intent": "Exercises deep prefix tree construction, vector allocations, node re-hashing and table growth during unflatten with extensive long reference tokens.",
+      "round": 1
+    }
+  ]
+}
