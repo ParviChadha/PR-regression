@@ -1,0 +1,88 @@
+{
+  "target": "nlohmann-json",
+  "pr": 6076,
+  "model": "gemini-3.5-flash-lite",
+  "prompt_sha256": "cfa24391c7f55904423ff9654d34617e55b8190ed69527b32551dea37d62f4fb",
+  "results_sha256": "58ea2c7f88229e32479cd7d41e9ce9877d576d7dc3711716670681fc18bae046",
+  "clusters": [
+    {
+      "id": "C1",
+      "status": "output_diff",
+      "failed_on": null,
+      "programs": [
+        "gen_02.cpp"
+      ],
+      "verdict": "intended",
+      "confidence": "high",
+      "reason": "Linked issue #6105 explicitly describes this bug in ordered_json where overlapping keys overwrite values instead of throwing type_error.313, and the PR diff adds the check to throw type_error.313 when non-null values conflict."
+    },
+    {
+      "id": "C2",
+      "status": "output_diff",
+      "failed_on": null,
+      "programs": [
+        "gen_03.cpp"
+      ],
+      "verdict": "intended",
+      "confidence": "high",
+      "reason": "The PR diff explicitly states that if the conflicting later assignment is a null value, it leaves the existing structure as is (as when the shorter key comes first), which is demonstrated here."
+    },
+    {
+      "id": "C3",
+      "status": "output_diff",
+      "failed_on": null,
+      "programs": [
+        "gen_06.cpp"
+      ],
+      "verdict": "intended",
+      "confidence": "high",
+      "reason": "This is another case of overlapping keys (root vs /x) in ordered_json addressed by linked issue #6105, now correctly throwing type_error.313 instead of silently overwriting."
+    },
+    {
+      "id": "C4",
+      "status": "output_diff",
+      "failed_on": null,
+      "programs": [
+        "gen_08.cpp"
+      ],
+      "verdict": "intended",
+      "confidence": "high",
+      "reason": "This is an array-element overlapping key case covered by linked issue #6105, which now correctly rejects overlapping JSON pointers with type_error.313."
+    },
+    {
+      "id": "C5",
+      "status": "output_diff",
+      "failed_on": null,
+      "programs": [
+        "gen_19.cpp"
+      ],
+      "verdict": "intended",
+      "confidence": "high",
+      "reason": "Subsequent null assignments to parent paths allow the existing nested structure to remain intact as per the new check logic added in the PR."
+    }
+  ],
+  "clusters_not_shown": 0,
+  "counts": {
+    "same": 20,
+    "invalid": 0,
+    "flaky": 0,
+    "superseded": 0,
+    "missing": 0
+  },
+  "pr_verdict": {
+    "regression_candidate": false,
+    "unintended_clusters": []
+  },
+  "usage": {
+    "promptTokenCount": 9774,
+    "candidatesTokenCount": 397,
+    "totalTokenCount": 10171,
+    "promptTokensDetails": [
+      {
+        "modality": "TEXT",
+        "tokenCount": 9774
+      }
+    ],
+    "serviceTier": "standard"
+  }
+}

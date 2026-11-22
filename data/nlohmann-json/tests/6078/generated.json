@@ -1,0 +1,194 @@
+{
+  "target": "nlohmann-json",
+  "pr": 6078,
+  "model": "gemini-3.5-flash-lite",
+  "prompt_sha256": "d201523fbe0b4ed760be625cc271f14cd52abff6be1de78b44e953e32adb3900",
+  "n_requested": 20,
+  "dropped": 0,
+  "usage": {
+    "promptTokenCount": 6074,
+    "candidatesTokenCount": 5694,
+    "totalTokenCount": 11768,
+    "promptTokensDetails": [
+      {
+        "modality": "TEXT",
+        "tokenCount": 6074
+      }
+    ],
+    "serviceTier": "standard"
+  },
+  "tests": [
+    {
+      "file": "gen_01.cpp",
+      "name": "ubjson_valueless_single_array_limit",
+      "intent": "Probes whether a single valueless UBJSON array exceeding max_valueless_container_size throws out_of_range exception.",
+      "round": 0
+    },
+    {
+      "file": "gen_02.cpp",
+      "name": "ubjson_valueless_cumulative_limit",
+      "intent": "Probes whether multiple smaller valueless UBJSON arrays exceeding the cumulative rate limit per byte are rejected.",
+      "round": 0,
+      "superseded_by": "gen_21.cpp"
+    },
+    {
+      "file": "gen_03.cpp",
+      "name": "ubjson_noop_array_empty",
+      "intent": "Probes whether an optimized array of no-ops is reported and stored as empty regardless of a large declared count.",
+      "round": 0
+    },
+    {
+      "file": "gen_04.cpp",
+      "name": "ubjson_writer_fallback_valueless",
+      "intent": "Probes whether to_ubjson falls back to unoptimized form when valueless elements exceed the threshold.",
+      "round": 0
+    },
+    {
+      "file": "gen_05.cpp",
+      "name": "ubjson_valueless_type_t",
+      "intent": "Probes whether type 'T' (true) valueless arrays are correctly bounded by the cumulative element check.",
+      "round": 0
+    },
+    {
+      "file": "gen_06.cpp",
+      "name": "ubjson_valueless_type_f",
+      "intent": "Probes whether type 'F' (false) valueless arrays are correctly bounded by the cumulative element check.",
+      "round": 0
+    },
+    {
+      "file": "gen_07.cpp",
+      "name": "ubjson_sax_noop_count",
+      "intent": "Probes SAX parser behavior for no-op arrays, checking if start_array receives 0 elements.",
+      "round": 0
+    },
+    {
+      "file": "gen_08.cpp",
+      "name": "ubjson_payload_array_unaffected",
+      "intent": "Probes whether arrays with payload types (like int32 'l') are governed by standard size constraints rather than valueless cumulative limits.",
+      "round": 0
+    },
+    {
+      "file": "gen_09.cpp",
+      "name": "ubjson_small_valueless_array_base_allowed",
+      "intent": "Probes whether a small valueless array within the base limit is successfully accepted at the start of input.",
+      "round": 0
+    },
+    {
+      "file": "gen_10.cpp",
+      "name": "ubjson_objects_unaffected_by_valueless_limit",
+      "intent": "Probes whether JSON objects with many keys do not trigger valueless element charges.",
+      "round": 0
+    },
+    {
+      "file": "gen_11.cpp",
+      "name": "ubjson_valueless_exact_max_container_size",
+      "intent": "Probes a valueless array with exactly max_valueless_container_size (1048576) elements at the start of input.",
+      "round": 0
+    },
+    {
+      "file": "gen_12.cpp",
+      "name": "ubjson_valueless_one_over_max_container_size",
+      "intent": "Probes a valueless array with max_valueless_container_size + 1 elements, expecting an out_of_range exception.",
+      "round": 0
+    },
+    {
+      "file": "gen_13.cpp",
+      "name": "ubjson_multiple_small_valueless_arrays_within_rate",
+      "intent": "Probes multiple small valueless arrays whose total sum remains within the allowed rate per input byte.",
+      "round": 0
+    },
+    {
+      "file": "gen_14.cpp",
+      "name": "ubjson_mixed_valueless_and_payload_arrays",
+      "intent": "Probes an input containing both valueless typed arrays and payload-bearing arrays.",
+      "round": 0
+    },
+    {
+      "file": "gen_15.cpp",
+      "name": "ubjson_writer_cumulative_valueless_limit",
+      "intent": "Probes binary writer chunking mechanism when serializing multiple arrays of nulls sequentially.",
+      "round": 0
+    },
+    {
+      "file": "gen_16.cpp",
+      "name": "ubjson_noop_large_count_no_throw",
+      "intent": "Probes whether a no-op array with an extremely large count does not trigger an out_of_range exception.",
+      "round": 0
+    },
+    {
+      "file": "gen_17.cpp",
+      "name": "ubjson_empty_valueless_array",
+      "intent": "Probes an empty valueless array with zero count.",
+      "round": 0
+    },
+    {
+      "file": "gen_18.cpp",
+      "name": "ubjson_valueless_unoptimized_roundtrip",
+      "intent": "Probes round-trip serialization and deserialization of a manually constructed unoptimized valueless array representation.",
+      "round": 0
+    },
+    {
+      "file": "gen_19.cpp",
+      "name": "ubjson_valueless_multiple_types_cumulative",
+      "intent": "Probes cumulative element counting across different valueless types ('Z', 'T', 'F') in a single input.",
+      "round": 0,
+      "superseded_by": "gen_22.cpp"
+    },
+    {
+      "file": "gen_20.cpp",
+      "name": "ubjson_valueless_invalid_type_marker",
+      "intent": "Probes reader behavior when encountering an invalid or unexpected type marker in optimized array header.",
+      "round": 0
+    },
+    {
+      "file": "gen_21.cpp",
+      "name": "ubjson_valueless_cumulative_limit_fixed",
+      "intent": "Probes whether multiple smaller valueless UBJSON arrays exceeding the cumulative rate limit per byte are rejected.",
+      "round": 1,
+      "fixes": "gen_02.cpp",
+      "kind": "compile"
+    },
+    {
+      "file": "gen_22.cpp",
+      "name": "ubjson_valueless_multiple_types_cumulative_fixed",
+      "intent": "Probes cumulative element counting across different valueless types ('Z', 'T', 'F') in a single input.",
+      "round": 1,
+      "fixes": "gen_19.cpp",
+      "kind": "compile"
+    },
+    {
+      "file": "gen_23.cpp",
+      "name": "test_saturating_limit_branch",
+      "intent": "Exercises the saturating limit branch when chars_read is extremely large so that limit calculation uses max_size.",
+      "round": 2
+    },
+    {
+      "file": "gen_24.cpp",
+      "name": "test_charge_valueless_elements_failure",
+      "intent": "Triggers out_of_range exception for excessive number of valueless elements exceeding the cumulative rate limit per byte read.",
+      "round": 2
+    },
+    {
+      "file": "gen_25.cpp",
+      "name": "test_enter_array_failure_hook",
+      "intent": "Exercises the enter_array failure path by providing invalid array framing or malformed continuation structure in UBJSON reader.",
+      "round": 2
+    },
+    {
+      "file": "gen_26.cpp",
+      "name": "test_binary_writer_valueless_fallback",
+      "intent": "Exercises binary writer valueless_array_fits and valueless_elements_written tracking by serializing arrays of nulls exceeding max_valueless_container_size in total.",
+      "round": 2
+    },
+    {
+      "file": "gen_27.cpp",
+      "name": "test_binary_writer_valueless_array_fits_inline",
+      "intent": "Directly evaluates binary writer serialization behavior on nested arrays of nulls to exercise the valueless type writing and fitting checks.",
+      "round": 2
+    }
+  ],
+  "fix": {
+    "rounds_max": 2,
+    "model": "gemini-3.5-flash-lite"
+  }
+}

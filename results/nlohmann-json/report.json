@@ -2,18 +2,18 @@
   "target": "nlohmann-json",
   "summary": {
     "prs_checked": 5,
-    "generated": 100,
+    "generated": 115,
     "compile_success": {
-      "raw_new": 95.0,
-      "raw_both": 81.0,
-      "final_new": 97.0,
-      "final_both": 91.0
+      "raw_new": 95.7,
+      "raw_both": 80.9,
+      "final_new": 95.7,
+      "final_both": 90.4
     },
-    "in_use": 100,
-    "repairs": 13,
+    "in_use": 115,
+    "repairs": 17,
     "deterministic": {
-      "programs": 91,
-      "of_compiled_both": 91,
+      "programs": 104,
+      "of_compiled_both": 104,
       "pct": 100.0
     },
     "prs_with_difference": {
@@ -23,37 +23,36 @@
     "verdicts": {
       "clusters": {
         "intended": 13,
-        "unintended": 2
+        "unintended": 3
       },
       "programs": {
         "intended": 24,
-        "unintended": 2
+        "unintended": 5
       },
       "prs_classified": 5
     },
     "regression_candidates": [
-      4958
-    ],
-    "coverage_measured": {
-      "prs": 2,
-      "of": 5,
-      "at_least_80": 1
-    },
-    "inconclusive_prs": [
-      6076,
-      6078,
+      4958,
       6121
     ],
+    "coverage_measured": {
+      "prs": 5,
+      "of": 5,
+      "at_least_80": 3
+    },
+    "inconclusive_prs": [
+      6078
+    ],
     "coverage": {
-      "prs": 1,
-      "first_mean": 100.0,
-      "last_mean": 100.0
+      "prs": 4,
+      "first_mean": 86.0,
+      "last_mean": 88.1
     },
     "llm_calls": {
-      "total_est": 14,
-      "per_pr_mean": 2.8
+      "total_est": 18,
+      "per_pr_mean": 3.6
     },
-    "wall_seconds_total": 75.4,
+    "wall_seconds_total": 98.1,
     "seeded": {
       "rows": [
         {
@@ -278,22 +277,22 @@
     {
       "pr": 6076,
       "model": "gemini-3.5-flash-lite",
-      "generated": 20,
-      "raw_compile_new": 20,
-      "raw_compile_both": 20,
-      "in_use": 20,
-      "final_compile_new": 20,
-      "final_compile_both": 20,
-      "deterministic": 20,
-      "compiled_both_in_use": 20,
+      "generated": 25,
+      "raw_compile_new": 25,
+      "raw_compile_both": 25,
+      "in_use": 25,
+      "final_compile_new": 25,
+      "final_compile_both": 25,
+      "deterministic": 25,
+      "compiled_both_in_use": 25,
       "status": {
-        "same": 15,
+        "same": 20,
         "output_diff": 5
       },
       "differing": 5,
       "repairs": 0,
-      "llm_calls_est": 2,
-      "wall_seconds": 10.6,
+      "llm_calls_est": 3,
+      "wall_seconds": 27.3,
       "classification": {
         "clusters": [
           {
@@ -305,7 +304,7 @@
             ],
             "verdict": "intended",
             "confidence": "high",
-            "reason": "The PR fixes issue #6105 where ordered_json::unflatten() would silently overwrite a nested value when a key is a prefix of an earlier key, instead of throwing type_error.313 as documented.",
+            "reason": "Linked issue #6105 explicitly describes this bug in ordered_json where overlapping keys overwrite values instead of throwing type_error.313, and the PR diff adds the check to throw type_error.313 when non-null values conflict.",
             "old": "output: {\"a\":1}",
             "new": "output: [json.exception.type_error.313] invalid value to unflatten"
           },
@@ -318,7 +317,7 @@
             ],
             "verdict": "intended",
             "confidence": "high",
-            "reason": "As part of fixing overlapping keys in ordered_json::unflatten(), assigning a null value over an existing nested structure is handled as a non-conflicting overwrite, matching the documentation.",
+            "reason": "The PR diff explicitly states that if the conflicting later assignment is a null value, it leaves the existing structure as is (as when the shorter key comes first), which is demonstrated here.",
             "old": "output: {\"a\":null}",
             "new": "output: {\"a\":{\"b\":2}}"
           },
@@ -331,7 +330,7 @@
             ],
             "verdict": "intended",
             "confidence": "high",
-            "reason": "The PR correctly detects overlapping keys (root vs /x) in ordered_json::unflatten() and throws type_error.313 instead of silently overwriting the root.",
+            "reason": "This is another case of overlapping keys (root vs /x) in ordered_json addressed by linked issue #6105, now correctly throwing type_error.313 instead of silently overwriting.",
             "old": "output: 2",
             "new": "output: [json.exception.type_error.313] invalid value to unflatten"
           },
@@ -344,7 +343,7 @@
             ],
             "verdict": "intended",
             "confidence": "high",
-            "reason": "The PR enforces non-overlapping JSON pointers for ordered_json::unflatten(), throwing type_error.313 when a shorter key attempts to overwrite a pre-existing nested array element.",
+            "reason": "This is an array-element overlapping key case covered by linked issue #6105, which now correctly rejects overlapping JSON pointers with type_error.313.",
             "old": "output: {\"a\":[2]}",
             "new": "output: [json.exception.type_error.313] invalid value to unflatten"
           },
@@ -357,7 +356,7 @@
             ],
             "verdict": "intended",
             "confidence": "high",
-            "reason": "Overwriting nested structures with null values is explicitly permitted by the fix for overlapping keys in ordered_json::unflatten(), leaving the nested object intact.",
+            "reason": "Subsequent null assignments to parent paths allow the existing nested structure to remain intact as per the new check logic added in the PR.",
             "old": "output: {\"a\":null}",
             "new": "output: {\"a\":{\"b\":{\"c\":10}}}"
           }
@@ -365,57 +364,84 @@
         "regression_candidate": false,
         "unintended_clusters": []
       },
-      "coverage": null
+      "coverage": {
+        "first": 0.958,
+        "last": 0.992,
+        "rounds": 2,
+        "changed": 285,
+        "measurable": 119
+      }
     },
     {
       "pr": 6078,
       "model": "gemini-3.5-flash-lite",
-      "generated": 20,
-      "raw_compile_new": 18,
-      "raw_compile_both": 18,
-      "in_use": 20,
-      "final_compile_new": 20,
-      "final_compile_both": 20,
-      "deterministic": 20,
-      "compiled_both_in_use": 20,
+      "generated": 25,
+      "raw_compile_new": 23,
+      "raw_compile_both": 23,
+      "in_use": 25,
+      "final_compile_new": 25,
+      "final_compile_both": 25,
+      "deterministic": 25,
+      "compiled_both_in_use": 25,
       "status": {
-        "same": 20
+        "same": 25
       },
       "differing": 0,
       "repairs": 2,
-      "llm_calls_est": 2,
-      "wall_seconds": 11.7,
+      "llm_calls_est": 3,
+      "wall_seconds": 15.9,
       "classification": {
         "clusters": [],
         "regression_candidate": false,
         "unintended_clusters": []
       },
-      "coverage": null
+      "coverage": {
+        "first": 0.545,
+        "last": 0.545,
+        "rounds": 2,
+        "changed": 111,
+        "measurable": 22
+      }
     },
     {
       "pr": 6121,
       "model": "gemini-3.5-flash-lite",
-      "generated": 20,
-      "raw_compile_new": 19,
-      "raw_compile_both": 19,
-      "in_use": 20,
-      "final_compile_new": 19,
-      "final_compile_both": 19,
-      "deterministic": 19,
-      "compiled_both_in_use": 19,
+      "generated": 25,
+      "raw_compile_new": 24,
+      "raw_compile_both": 21,
+      "in_use": 25,
+      "final_compile_new": 22,
+      "final_compile_both": 22,
+      "deterministic": 22,
+      "compiled_both_in_use": 22,
       "status": {
-        "same": 18,
+        "same": 21,
         "output_diff": 1,
-        "invalid": 1
+        "compile_diff": 3
       },
-      "differing": 1,
-      "repairs": 2,
-      "llm_calls_est": 4,
-      "wall_seconds": 12.1,
+      "differing": 4,
+      "repairs": 6,
+      "llm_calls_est": 6,
+      "wall_seconds": 13.9,
       "classification": {
         "clusters": [
           {
             "id": "C1",
+            "status": "compile_diff",
+            "failed_on": "both",
+            "programs": [
+              "gen_29.cpp",
+              "gen_30.cpp",
+              "gen_31.cpp"
+            ],
+            "verdict": "unintended",
+            "confidence": "high",
+            "reason": "The test uses invalid SFINAE probes (accessing `::head` rather than checking member existence via type traits properly) which fail to compile on the new version.",
+            "old": "compile error: \u2018token_text_buffer\u2019 in namespace \u2018nlohmann::json_abi_v3_12_0::detail\u2019 does not name a template type; did you mean \u2018token_carry_buffer\u2019?",
+            "new": "compile error: \u2018head\u2019 in \u2018class nlohmann::json_abi_v3_12_0::detail::token_text_buffer<wchar_t>\u2019 does not name a type"
+          },
+          {
+            "id": "C2",
             "status": "output_diff",
             "failed_on": null,
             "programs": [
@@ -423,15 +449,23 @@
             ],
             "verdict": "intended",
             "confidence": "high",
-            "reason": "The PR specifically introduces a mechanism to truncate very long tokens in error messages using '...' when they exceed 8192 characters, which directly matches the test program's observation of 'truncated' instead of 'full'.",
+            "reason": "The PR explicitly truncates long tokens in error messages and inserts '...' when they exceed 8192 characters.",
             "old": "output: full",
             "new": "output: truncated"
           }
         ],
-        "regression_candidate": false,
-        "unintended_clusters": []
+        "regression_candidate": true,
+        "unintended_clusters": [
+          "C1"
+        ]
       },
-      "coverage": null
+      "coverage": {
+        "first": 0.938,
+        "last": 0.986,
+        "rounds": 2,
+        "changed": 155,
+        "measurable": 70
+      }
     }
   ]
 }

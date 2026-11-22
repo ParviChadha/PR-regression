@@ -1,0 +1,657 @@
+[system]
+You write test programs that probe a C++ library for behavioral changes made by one pull request.
+Each program is compiled and run twice, once against the library before the change and once after, and the two
+outputs are compared. Your job is to produce programs whose output reveals whether the change altered behavior,
+including side effects the author did not intend.
+
+Rules for every program:
+- It is standalone: one file with its own int main(), compiled as C++17, printing results to stdout.
+- Use only the library's documented public API. Never include internal headers or use detail/impl namespaces,
+  private members or undocumented macros.
+- Do not judge results (no assert, no expected-value comparisons): just print what the library returns. Print
+  enough to make differences visible, one fact per line.
+- Output must be deterministic. Never print pointers or addresses, uninitialized data, the order of
+  hash-based containers, timings, thread ids, random values, file paths or environment data. Print floating point
+  values with an explicit precision. No input, files, network, threads, clocks or randomness.
+- Wrap calls that may throw in try/catch and print the exception's type and message, so an exception is an
+  observable result. Do not crash on purpose.
+- Aim at the code the diff changes. Prefer calls that compile against both the old and the new library; one or two
+  programs may use an API the PR adds. Cover ordinary inputs and edge cases (empty, minimum and maximum values,
+  boundaries, special values, nesting, unusual types) and also neighbouring behavior the change could disturb.
+- When the diff changes which types or inputs an API accepts or rejects (constraints, overloads, traits,
+  conversions), test it with the detection idiom (std::void_t or requires) and `if constexpr`, so the program
+  compiles against both versions, prints whether the expression is well-formed, and exercises it when it is.
+  Accepting an input is not enough: also use it through every entry point that should follow (const and
+  non-const, read, write, insert, erase, lookup, nested use), because a change that admits new inputs can leave
+  later code unable to handle them.
+- If the changed code is internal (a detail, impl or internal namespace, a trait, a helper), do not name it in the
+  program. Reach it through the public API that depends on it, using detection (as above) where needed.
+- Use the exact types and values the diff is about (the new trait's argument types, the new overload's
+  parameters), not stand-ins.
+- Spread the programs over distinct public entry points and overloads, one main idea per program. Do not write
+  several programs that only rename a type or change a literal.
+- Make the programs differ from each other: different inputs, different entry points, different features.
+
+Rules specific to this library:
+- Include the library with #include <nlohmann/json.hpp>. The public API is nlohmann::json (nlohmann::basic_json), nlohmann::ordered_json, json_pointer, json patch/merge_patch and the documented SAX and conversion interfaces. Never use the detail namespace.
+- It is a header-only library: nothing to link. Programs are compiled as C++17.
+- Print JSON values with dump() (compact) or dump(2). Keys of nlohmann::json objects print in sorted order, so output is deterministic; do not depend on insertion order except with ordered_json.
+
+[user]
+# Pull request #6121: Keep only the beginning and the end of a long token for error messages
+
+## Description
+Fixes #6120.
+
+## Problem
+
+For error messages (`last read: '...'`), the lexer keeps the text of the token it is reading. The token start moves only at strings and numbers, so after a string or number everything that follows (whitespace, structural characters, literals) still belongs to that token. Input that cannot be read again copies it while parsing: the `std::istream` and `FILE*` adapters in their carry buffer on every buffer refill, and the lexer in `token_string` for iterator and other input. Valid input such as `1` followed by 100,000,000 newlines therefore peaked at about 225 MB for `std::istream`, `FILE*` and input iterators (3.12.0: the same), and the raw text of a long string was kept a second time next to the parsed value.
+
+## Change
+
+The text is only used for error messages, so it does not need to be kept in full:
+
+- `token_text_buffer<CharType>` (in `input_adapters.hpp`, outside the `JSON_NO_IO` guard) replaces the char-only `token_carry_buffer` (now an alias of `token_text_buffer<char>`) and the lexer's `std::vector<char_type> token_string`. It keeps the first 4096 and at least the last 4112 characters of a token. When it is full and holds more than 12,320 characters, it drops the characters in between instead of growing. That happens in `make_room()`, the out-of-line path that previously reallocated, so appending a character is still one comparison and a store. The capacity never exceeds 12,320 characters.
+- `get_token_string()` shows a token of more than 8192 characters as its first 4096 characters, `...`, and its last 4096 characters. For contiguous input, which rebuilds the token from positions, it copies only these two parts instead of the whole range.
+- `exceptions.md` (parse_error.101) describes the shortened token.
+
+Tokens of up to 8192 characters are shown exactly as before. Messages for longer tokens are the same for every kind of input; the test below checks this for `std::string`, `std::istream`, `FILE*` and `std::list<char>`.
+
+## Measurements
+
+Peak resident memory for valid input of `1` followed by 100,000,000 newlines (reproducer in #6120, Apple clang 21 `-O2`):
+
+| input | develop | this PR |
+|---|---:|---:|
+| `std::istream` | 224.8 MB | 1.8 MB |
+| `FILE*` | 225.3 MB | 1.8 MB |
+| input iterator | 225.3 MB | 1.7 MB |
+
+The same input with a `?` at the end (a parse error) peaks at 2.4 to 2.7 MB, and its `what()` has 65,684 bytes for all three inputs.
+
+Parsing speed, instructions retired (develop vs. this PR, 20 parses each; `std::list<char>` 5), Apple clang 21 `-O2 -DNDEBUG`, arm64:
+
+| input | canada | citm_catalog | twitter |
+|---|---:|---:|---:|
+| `std::string` | -0.06 % | +0.02 % | -0.12 % |
+| `std::istream` | +0.03 % | -0.08 % | +0.06 % |
+| `FILE*` | -0.03 % | -0.07 % | -0.01 % |
+| `std::list<char>` | -16.97 % | -12.89 % | -14.11 % |
+
+The iterator path gets cheaper because the buffer's `push_back` does less than `std::vector::push_back`. A first version that kept `std::vector` and added a capacity check before each character cost +5 % to +22 % there, so it was dropped.
+
+On Linux (GCC 15.2, `-O2 -DNDEBUG`, x86-64), exact instruction counts with callgrind (3 parses each):
+
+| input | canada | citm_catalog | twitter |
+|---|---:|---:|---:|
+| `std::string` | +39 | −42 | −5 |
+| `std::istream` | +92 | +105 | +99 |
+| `FILE*` | −3,175 | −2,247 | −657 |
+| `std::list<char>` | −4.42 % | −3.19 % | −1.11 % |
+
+(for `std::string`, `std::istream` and `FILE*` these are instructions out of 70 to 420 million, i.e. below 0.001 %). Wall times on the same machine varied by ±4 % in both directions between identical builds, so they are not given.
+
+## Tests
+
+- `unit-class_lexer.cpp`: `token_text_buffer` directly, with characters added one by one and in pieces of different sizes (around the 4112-character boundary and larger than the capacity): the first 4096 and the last 4112 characters are kept, the size stays within the limit, `pop_back()` after dropping works, and `clear()` starts a new token.
+- `unit-class_parser.cpp`: t
+[... truncated, 1061 more characters]
+
+## Commit message
+* Keep only the beginning and the end of a long token for error messages
+
+For "last read" in parse errors, the lexer keeps the text of the token it
+reads. The token start moves only at strings and numbers, so everything
+after a string or number belongs to it until the next one starts. Input
+that cannot be read again copies that text while parsing (the istream and
+FILE* adapters in their carry buffer, the lexer in token_string for
+iterators), so valid input of 1 followed by 100,000,000 newlines peaked
+at about 225 MB, and a long string was kept a second time.
+
+Replace the carry buffer and token_string by token_text_buffer, which
+keeps the first 4096 and at least the last 4112 characters of a token and
+drops the characters in between where it would otherwise grow, so
+appending stays as cheap as before. get_token_string() shows a token of
+more than 8192 characters as its first and last 4096 characters around
+"...", the same for every kind of input; contiguous input copies only
+these parts.
+
+The example input now peaks at 1.8 MB. Instruction counts of parsing
+from std::string, std::istream and FILE* are unchanged (clang 21 and
+GCC 15); parsing from std::list<char> needs 1 to 17 % fewer.
+
+Fixes #6120.
+
+Signed-off-by: Niels Lohmann <mail@nlohmann.me>
+
+* Suppress an Infer false positive in the token text buffer test
+
+Signed-off-by: Niels Lohmann <mail@nlohmann.me>
+
+---------
+
+Signed-off-by: Niels Lohmann <mail@nlohmann.me>
+
+## Linked issue #6120: Valid input from a stream or input iterator keeps all whitespace after a string or number in memory (token text for error messages)
+### Description
+
+For error messages ("last read: '...'"), the lexer keeps the text of the token it is reading. The token start is only moved by `reset()`, which only strings and numbers call, so after a string or number everything that follows (whitespace, structural characters, literals) still belongs to that "token" until the next string or number starts. For contiguous input this costs nothing, because the text is rebuilt from positions on error. For the other inputs it is copied while parsing:
+
+- `std::istream` and `FILE*`: the adapters keep the token themselves; on every refill of the stream buffer the token's part of the old buffer is appended to a carry buffer ([`input_adapters.hpp`](https://github.com/nlohmann/json/blob/5bad6c518bf6663b69f505511a19c98c91f77c3a/include/nlohmann/detail/input/input_adapters.hpp), `save_token_segment()`).
+- input iterators and other adapters that cannot be read again: the lexer copies every character into `token_string` ([`lexer.hpp`](https://github.com/nlohmann/json/blob/5bad6c518bf6663b69f505511a19c98c91f77c3a/include/nlohmann/detail/input/lexer.hpp), `capture_char()`).
+
+So **valid** input with a long run of whitespace after a string or number keeps all of it in memory, and the same holds for the raw text of a long string (kept once more next to the parsed value).
+
+The text is only used for error messages (and the `last_token` of `parse_error()` in SAX), and a message that shows several megabytes of input is not useful anyway.
+
+**Since when:** 3.12.0 behaves the same (225 MB for each of the three inputs with 100,000,000 newlines); there it is the lexer's `token_string`, which copied every character for all of them.
+**Security:** Memory amplification on valid input, linear (about 2.25 bytes per input byte, from vector doubling): a sender can make a server that parses JSON from a socket stream or a file hold as much memory as it sends, beyond the parsed value.
+**Related:** #6109 (the size of the message itself after a parse erro
+[... truncated, 3000 more characters]
+
+## Discussion before merge
+- github-advanced-security[bot]: ## Flawfinder / Does not check for buffer overflows when copying to destination (CWE-120).
+
+buffer/memcpy:Does not check for buffer overflows when copying to destination (CWE-120).
+
+[Show more details](https://github.com/nlohmann/json/security/code-scanning/1169)
+- github-advanced-security[bot]: ## Flawfinder / Does not check for buffer overflows when copying to destination (CWE-120).
+
+buffer/memcpy:Does not check for buffer overflows when copying to destination (CWE-120).
+
+[Show more details](https://github.com/nlohmann/json/security/code-scanning/1170)
+- github-advanced-security[bot]: ## Flawfinder / Does not check for buffer overflows when copying to destination (CWE-120).
+
+buffer/memcpy:Does not check for buffer overflows when copying to destination (CWE-120).
+
+[Show more details](https://github.com/nlohmann/json/security/code-scanning/1171)
+- github-advanced-security[bot]: ## Flawfinder / Function tmpfile() has a security flaw on some systems (e.g., older System V systems) (CWE-377).
+
+tmpfile/tmpfile:Function tmpfile() has a security flaw on some systems (e.g., older System V systems) (CWE-377).
+
+[Show more details](https://github.com/nlohmann/json/security/code-scanning/1168)
+
+## Changed functions (from git hunk headers (rough hint))
+- inline const char* empty_input_message() noexcept
+- A growable array of characters for the part of a token that an input adapter
+- is room.
+- class token_carry_buffer
+- class lexer : public lexer_base<BasicJsonType>
+
+## Diff of the library source (before -> after)
+```diff
+diff --git a/include/nlohmann/detail/input/input_adapters.hpp b/include/nlohmann/detail/input/input_adapters.hpp
+index b4c998259..bc491222a 100644
+--- a/include/nlohmann/detail/input/input_adapters.hpp
++++ b/include/nlohmann/detail/input/input_adapters.hpp
+@@ -110,87 +110,164 @@ inline const char* empty_input_message() noexcept
+     return "attempting to parse an empty input; check that your input string or stream contains the expected JSON";
+ }
+ 
+-////////////////////
+-// input adapters //
+-////////////////////
+-
+-#ifndef JSON_NO_IO
+ /*!
++@brief the characters of the last read token, kept for error messages
++
+ A growable array of characters for the part of a token that an input adapter
+-copied out of its window: unlike std::vector<char>::push_back(), appending a
+-character takes no reference to a local, and is a few instructions when there
+-is room.
++copied out of its window, or that the lexer copies while it scans input it
++cannot read again: unlike std::vector::push_back(), appending a character
++takes no reference to a local, and is a few instructions when there is room.
++
++The token is only needed for error messages, which show its first head()
++characters and its last head() characters (see lexer::get_token_string). The
++buffer therefore keeps the first head() and at least the last tail()
++characters: when it is full and holds more than limit() characters, it drops
++the characters in between instead of growing. That happens where it would
++otherwise reallocate, so appending stays as cheap as before, and a long string
++or a long run of whitespace read from a stream is not kept a second time.
+ */
+-class token_carry_buffer
++template<typename CharType>
++class token_text_buffer
+ {
+   public:
+-    token_carry_buffer() = default;
+-    token_carry_buffer(const token_carry_buffer&) = delete;
+-    token_carry_buffer& operator=(const token_carry_buffer&) = delete;
+-    token_carry_buffer(token_carry_buffer&& rhs) noexcept
++    static constexpr std::size_t head() noexcept
++    {
++        return 4096;
++    }
++    /// a little more than head(), as the last character may be handed back
++    static constexpr std::size_t tail() noexcept
++    {
++        return head() + 16;
++    }
++    static constexpr std::size_t limit() noexcept
++    {
++        return head() + (2 * tail());
++    }
++
++    token_text_buffer() = default;
++    token_text_buffer(const token_text_buffer&) = delete;
++    token_text_buffer& operator=(const token_text_buffer&) = delete;
++    token_text_buffer(token_text_buffer&& rhs) noexcept
+         : m_data(std::move(rhs.m_data)), m_end(rhs.m_end), m_capacity_end(rhs.m_capacity_end)
+     {
+         rhs.m_end = rhs.m_capacity_end = nullptr;
+     }
+-    token_carry_buffer& operator=(token_carry_buffer&&) = delete;
+-    ~token_carry_buffer() = default;
++    token_text_buffer& operator=(token_text_buffer&& rhs) noexcept
++    {
++        m_data = std::move(rhs.m_data);
++        m_end = rhs.m_end;
++        m_capacity_end = rhs.m_capacity_end;
++        rhs.m_end = rhs.m_capacity_end = nullptr;
++        return *this;
++    }
++    ~token_text_buffer() = default;
+ 
+     void clear() noexcept
+     {
+         m_end = m_data.get();
+     }
+ 
+-    void push_back(char c)
++    bool empty() const noexcept
++    {
++        return m_end == m_data.get();
++    }
++
++    void push_back(CharType c)
+     {
+         if (JSON_HEDLEY_UNLIKELY(m_end == m_capacity_end))
+         {
+-            grow(1);
++            make_room(1);
+         }
+         *m_end++ = c;
+     }
+ 
+-    void append(const char* first, const char* last)
++    /// drop the last character
++    void pop_back() noexcept
++    {
++        JSON_ASSERT(!empty());
++        --m_end;
++    }
++
++    void append(const CharType* first, const CharType* last)
+     {
+         const auto n = static_cast<std::size_t>(last - first);
+         const auto room = static_cast<std::size_t>(m_capacity_end - m_end);
+-        if (n > room)
++        if (JSON_HEDLEY_UNLIKELY(n > room))
+         {
+-            grow(n);
++            append_long(first, n);
++            return;
+         }
+         if (n != 0)
+         {
+-            std::memcpy(m_end, first, n);
++            std::memcpy(m_end, first, n * sizeof(CharType));
+         }
+         m_end += n;
+     }
+ 
+     /// replace the contents of @a out
+-    void copy_to(std::vector<char>& out) const
++    void copy_to(std::vector<CharType>& out) const
+     {
+         out.assign(m_data.get(), m_end);
+     }
+ 
+   private:
+-    /// make room for @a extra more characters
+-    JSON_HEDLEY_NEVER_INLINE void grow(std::size_t extra)
+-    {
+-        const auto size = static_cast<std::size_t>(m_end - m_data.get());
+-        const auto capacity = static_cast<std::size_t>(m_capacity_end - m_data.get());
+-        const std::size_t new_capacity = (std::max)(capacity < 32 ? static_cast<std::size_t>(32) : 2 * capacity, size + extra);
+-        std::unique_ptr<char[]> data(new char[new_capacity]); // NOLINT(cppcoreguidelines-avoid-c-arrays,hicpp-avoid-c-arrays,modernize-avoid-c-arrays)
+-        if (size != 0)
++    /// append @a n characters that do not fit, in pieces of at most tail()
++    /// characters, so that dropping the middle keeps the last tail() of them
++    JSON_HEDLEY_NEVER_INLINE void append_long(const CharType* first, std::size_t n)
++    {
++        while (n != 0)
++        {
++            const std::size_t piece = n < tail() ? n : tail();
++            make_room(piece);
++            std::memcpy(m_end, first, piece * sizeof(CharType));
++            m_end += piece;
++            first += piece;
++            n -= piece;
++        }
++    }
++
++    /// make room for @a extra (at most tail()) more characters: drop the
++    /// middle of a long token instead of growing beyond limit()
++    JSON_HEDLEY_NEVER_INLINE void make_room(std::size_t extra)
++    {
++        // nothing is allocated before the first character
++        std::size_t size = m_data ? static_cast<std::size_t>(m_end - m_data.get()) : 0;
++        if (size + extra > limit() && size > head() + tail())
++        {
++            std::memmove(m_data.get() + head(), m_end - tail(), tail() * sizeof(CharType));
++            m_end = m_data.get() + head() + tail();
++            size = head() + tail();
++        }
++        const std::size_t capacity = m_data ? static_cast<std::size_t>(m_capacity_end - m_data.get()) : 0;
++        if (size + extra > capacity)
+         {
+-            std::memcpy(data.get(), m_data.get(), size);
++            // never more than limit(): from there on, the middle is dropped
++            const std::size_t doubled = capacity < 32 ? static_cast<std::size_t>(32) : 2 * capacity;
++            const std::size_t new_capacity = (std::max)(doubled < limit() ? doubled : limit(), size + extra);
++            std::unique_ptr<CharType[]> data(new CharType[new_capacity]); // NOLINT(cppcoreguidelines-avoid-c-arrays,hicpp-avoid-c-arrays,modernize-avoid-c-arrays)
++            if (size != 0)
++            {
++                std::memcpy(data.get(), m_data.get(), size * sizeof(CharType));
++            }
++            m_data = std::move(data);
++            m_end = m_data.get() + size;
++            m_capacity_end = m_data.get() + new_capacity;
+         }
+-        m_data = std::move(data);
+-        m_end = m_data.get() + size;
+-        m_capacity_end = m_data.get() + new_capacity;
+     }
+ 
+-    std::unique_ptr<char[]> m_data{}; // NOLINT(cppcoreguidelines-avoid-c-arrays,hicpp-avoid-c-arrays,modernize-avoid-c-arrays,readability-redundant-member-init)
+-    char* m_end = nullptr;
+-    char* m_capacity_end = nullptr;
++    std::unique_ptr<CharType[]> m_data{}; // NOLINT(cppcoreguidelines-avoid-c-arrays,hicpp-avoid-c-arrays,modernize-avoid-c-arrays,readability-redundant-member-init)
++    CharType* m_end = nullptr;
++    CharType* m_capacity_end = nullptr;
+ };
++
++/// the part of a token that an input adapter copied out of its window
++using token_carry_buffer = token_text_buffer<char>;
++
++////////////////////
++// input adapters //
++////////////////////
++
++#ifndef JSON_NO_IO
+ /*!
+ Input adapter for stdio file access. The file is locked for the lifetime of the
+ adapter and read with the unlocked stdio functions (see
+diff --git a/include/nlohmann/detail/input/lexer.hpp b/include/nlohmann/detail/input/lexer.hpp
+index 1e1d4e8af..54420867b 100644
+--- a/include/nlohmann/detail/input/lexer.hpp
++++ b/include/nlohmann/detail/input/lexer.hpp
+@@ -494,7 +494,10 @@ class lexer : public lexer_base<BasicJsonType>
+     /// streaming adapter: capture the characters
+     void bulk_track_token(const char* data, std::size_t n, std::false_type /*lazy*/)
+     {
+-        token_string.insert(token_string.end(), data, data + n);
++        for (std::size_t i = 0; i < n; ++i)
++        {
++            token_string.push_back(static_cast<char_type>(data[i]));
++        }
+     }
+ 
+     /// streaming input: no bulk fast path
+@@ -2237,15 +2240,28 @@ scan_number_done:
+         const std::size_t stop = ia.get_consumed_count() - (pending_real_unget ? 1u : 0u);
+         if (JSON_HEDLEY_LIKELY(stop >= token_string_start))
+         {
+-            ia.copy_consumed_range(token_string_start, stop, out);
++            // only the beginning and the end of a long token are shown (see
++            // get_token_string), so copy only these
++            constexpr std::size_t head = token_text_buffer<char_type>::head();
++            constexpr std::size_t tail = token_text_buffer<char_type>::tail();
++            if (stop - token_string_start > head + tail)
++            {
++                ia.copy_consumed_range(token_string_start, token_string_start + head, out);
++                ia.copy_consumed_range(stop - tail, stop, out);
++            }
++            else
++            {
++                ia.copy_consumed_range(token_string_start, stop, out);
++            }
+         }
+         return out;
+     }
+ 
+     /// streaming adapter: the token was copied eagerly while scanning
+-    const std::vector<char_type>& collect_token_chars(std::vector<char_type>& /*out*/, std::false_type /*lazy*/) const
++    const std::vector<char_type>& collect_token_chars(std::vector<char_type>& out, std::false_type /*lazy*/) const
+     {
+-        return token_string;
++        token_string.copy_to(out);
++        return out;
+     }
+ 
+     /// return the last read token (for errors only).  Will never contain EOF
+@@ -2256,10 +2272,32 @@ scan_number_done:
+         std::vector<char_type> reconstructed;
+         const std::vector<char_type>& chars = collect_token_chars(reconstructed, std::integral_constant<bool, lazy_token_string> {});
+ 
+-        // escape control characters
++        // a long token is shown by its first and its last head() characters;
++        // the buffers that keep it while it is read keep no more than these
++        // and a few more (see token_text_buffer)
++        constexpr std::size_t shown = token_text_buffer<char_type>::head();
+         std::string result;
+-        for (const auto c : chars)
++        if (chars.size() > 2 * shown)
++        {
++            append_escaped(result, chars.begin(), chars.begin() + static_cast<std::ptrdiff_t>(shown));
++            result += "...";
++            append_escaped(result, chars.end() - static_cast<std::ptrdiff_t>(shown), chars.end());
++        }
++        else
+         {
++            append_escaped(result, chars.begin(), chars.end());
++        }
++        return result;
++    }
++
++  private:
++    /// append the characters [first, last) to @a result, escaping control characters
++    template<typename Iterator>
++    static void append_escaped(std::string& result, Iterator first, Iterator last)
++    {
++        for (; first != last; ++first)
++        {
++            const auto c = *first;
+             if (static_cast<unsigned char>(c) <= '\x1F')
+             {
+                 // escape control characters
+@@ -2273,10 +2311,10 @@ scan_number_done:
+                 result.push_back(static_cast<std::string::value_type>(c));
+             }
+         }
+-
+-        return result;
+     }
+ 
++  public:
++
+     /// return syntax error message
+     JSON_HEDLEY_RETURNS_NON_NULL
+     constexpr const char* get_error_message() const noexcept
+@@ -2525,7 +2563,7 @@ scan_number_done:
+ 
+     /// raw input token string for error messages; only populated for streaming
+     /// adapters (seekable adapters reconstruct it lazily via token_string_start)
+-    std::vector<char_type> token_string {};
++    token_text_buffer<char_type> token_string {};
+ 
+     /// start offset of the current token within the input, used to reconstruct
+     /// the last read token on error for seekable adapters (see collect_token_chars)
+```
+
+# Programs to repair
+
+## gen_22.cpp (compile)
+Intent: Verify SAX parser interface correctly propagates truncated last tokens in parse errors.
+COMPILE ERROR. The program fails to compile, the same way against the old and the new library. Fix the error (wrong or missing include, typo, misuse of the public API) and keep the intent: the call under test must stay. Include only headers that exist; if you are unsure a header exists, use the library's main header.
+Compiler errors:
+```
+gen_22.cpp:14:10: error: ‘bool dummy_sax::binary(const nlohmann::json_abi_v3_12_0::json_sax<nlohmann::json_abi_v3_12_0::basic_json<> >::binary_t&)’ marked ‘override’, but does not override
+gen_22.cpp:30:15: error: cannot declare variable ‘sax’ to be of abstract type ‘dummy_sax’
+```
+Source:
+```cpp
+#include <nlohmann/json.hpp>
+#include <iostream>
+
+class dummy_sax : public nlohmann::json::json_sax_t {
+public:
+    bool null() override { return true; }
+    bool boolean(bool) override { return true; }
+    bool number_integer(number_integer_t) override { return true; }
+    bool number_unsigned(number_unsigned_t) override { return true; }
+    bool number_float(number_float_t, const string_t&) override { return true; }
+    bool string(string_t&) override { return true; }
+    bool binary(const binary_t&) override { return true; }
+    bool start_object(std::size_t) override { return true; }
+    bool key(string_t&) override { return true; }
+    bool end_object() override { return true; }
+    bool start_array(std::size_t) override { return true; }
+    bool end_array() override { return true; }
+    bool parse_error(std::size_t, const std::string&, const nlohmann::json::exception& ex) override {
+        std::cout << "SAX error:" << (ex.what() ? "yes" : "no") << std::endl;
+        return false;
+    }
+};
+
+int main() {
+    std::string s = "1";
+    s.append(10000, ' ');
+    s.push_back('?');
+    dummy_sax sax;
+    nlohmann::json::sax_parse(s, &sax);
+    return 0;
+}
+```
+
+## gen_23.cpp (detect)
+Intent: Instantiate token_text_buffer<wchar_t> explicitly via move assignment and copy/move constructors to cover move assignment and data members.
+DETECTION REWRITE. The program fails to compile against the OLD library because the API or type it uses is not accepted there; it compiles against the NEW one. Rewrite it so it compiles against both. Check whether the expression is well-formed with the detection idiom (std::void_t or requires), print that result, and use the expression ONLY inside a function template that depends on the types involved, guarded by `if constexpr`. This matters: `if constexpr` in a plain function such as main() does NOT discard the other branch, so the old library would still fail to compile. Call that function template from main. When the expression is supported, exercise it fully (print every result, wrap throwing calls in try/catch). Keep the same types and inputs. Skeleton:
+```cpp
+template <class J, class K, class = void> struct can_use : std::false_type {};
+template <class J, class K>
+struct can_use<J, K, std::void_t<decltype(std::declval<J&>()[std::declval<K>()])>> : std::true_type {};
+template <class J, class K> void probe(J& j, K&& k) {
+    std::cout << "supported: " << can_use<J, K>::value << "\n";
+    if constexpr (can_use<J, K>::value) { /* use j[k] here, print results */ }
+}
+```
+(Replace the decltype expression with the one under test.)
+Compiler errors:
+```
+gen_23.cpp:7:27: error: ‘token_text_buffer’ is not a member of ‘nlohmann::json_abi_v3_12_0::detail’; did you mean ‘token_carry_buffer’?
+gen_23.cpp:7:45: error: expected primary-expression before ‘wchar_t’
+gen_23.cpp:8:9: error: ‘buf1’ was not declared in this scope
+gen_23.cpp:9:27: error: ‘token_text_buffer’ is not a member of ‘nlohmann::json_abi_v3_12_0::detail’; did you mean ‘token_carry_buffer’?
+gen_23.cpp:9:45: error: expected primary-expression before ‘wchar_t’
+gen_23.cpp:10:9: error: ‘buf2’ was not declared in this scope
+```
+Source:
+```cpp
+#include <nlohmann/json.hpp>
+#include <iostream>
+int main() {
+    try {
+        nlohmann::detail::token_text_buffer<wchar_t> buf1;
+        buf1.push_back(L'a');
+        nlohmann::detail::token_text_buffer<wchar_t> buf2;
+        buf2 = std::move(buf1);
+        nlohmann::detail::token_text_buffer<wchar_t> buf3(std::move(buf2));
+        std::wcout << L"Success" << std::endl;
+    } catch (const std::exception& e) {
+        std::cout << "Exception: " << e.what() << std::endl;
+    }
+    return 0;
+}
+```
+
+## gen_24.cpp (detect)
+Intent: Trigger block-level append in token_text_buffer where n > room and memcpy is directly invoked with multiple character slices.
+DETECTION REWRITE. The program fails to compile against the OLD library because the API or type it uses is not accepted there; it compiles against the NEW one. Rewrite it so it compiles against both. Check whether the expression is well-formed with the detection idiom (std::void_t or requires), print that result, and use the expression ONLY inside a function template that depends on the types involved, guarded by `if constexpr`. This matters: `if constexpr` in a plain function such as main() does NOT discard the other branch, so the old library would still fail to compile. Call that function template from main. When the expression is supported, exercise it fully (print every result, wrap throwing calls in try/catch). Keep the same types and inputs. Skeleton:
+```cpp
+template <class J, class K, class = void> struct can_use : std::false_type {};
+template <class J, class K>
+struct can_use<J, K, std::void_t<decltype(std::declval<J&>()[std::declval<K>()])>> : std::true_type {};
+template <class J, class K> void probe(J& j, K&& k) {
+    std::cout << "supported: " << can_use<J, K>::value << "\n";
+    if constexpr (can_use<J, K>::value) { /* use j[k] here, print results */ }
+}
+```
+(Replace the decltype expression with the one under test.)
+Compiler errors:
+```
+gen_24.cpp:8:27: error: ‘token_text_buffer’ is not a member of ‘nlohmann::json_abi_v3_12_0::detail’; did you mean ‘token_carry_buffer’?
+gen_24.cpp:8:45: error: expected primary-expression before ‘char’
+gen_24.cpp:10:9: error: ‘buf’ was not declared in this scope
+```
+Source:
+```cpp
+#include <nlohmann/json.hpp>
+#include <iostream>
+#include <vector>
+int main() {
+    try {
+        nlohmann::detail::token_text_buffer<char> buf;
+        std::vector<char> large_block(5000, 'x');
+        buf.append(large_block.data(), large_block.data() + large_block.size());
+        std::cout << "Appended large block successfully" << std::endl;
+    } catch (const std::exception& e) {
+        std::cout << "Exception: " << e.what() << std::endl;
+    }
+    return 0;
+}
+```
+
+## gen_25.cpp (detect)
+Intent: Trigger memmove inside token_text_buffer make_room by pushing enough characters beyond limit() so that the middle section gets dropped and memmove runs.
+DETECTION REWRITE. The program fails to compile against the OLD library because the API or type it uses is not accepted there; it compiles against the NEW one. Rewrite it so it compiles against both. Check whether the expression is well-formed with the detection idiom (std::void_t or requires), print that result, and use the expression ONLY inside a function template that depends on the types involved, guarded by `if constexpr`. This matters: `if constexpr` in a plain function such as main() does NOT discard the other branch, so the old library would still fail to compile. Call that function template from main. When the expression is supported, exercise it fully (print every result, wrap throwing calls in try/catch). Keep the same types and inputs. Skeleton:
+```cpp
+template <class J, class K, class = void> struct can_use : std::false_type {};
+template <class J, class K>
+struct can_use<J, K, std::void_t<decltype(std::declval<J&>()[std::declval<K>()])>> : std::true_type {};
+template <class J, class K> void probe(J& j, K&& k) {
+    std::cout << "supported: " << can_use<J, K>::value << "\n";
+    if constexpr (can_use<J, K>::value) { /* use j[k] here, print results */ }
+}
+```
+(Replace the decltype expression with the one under test.)
+Compiler errors:
+```
+gen_25.cpp:7:27: error: ‘token_text_buffer’ is not a member of ‘nlohmann::json_abi_v3_12_0::detail’; did you mean ‘token_carry_buffer’?
+gen_25.cpp:7:45: error: expected primary-expression before ‘char’
+gen_25.cpp:9:13: error: ‘buf’ was not declared in this scope
+```
+Source:
+```cpp
+#include <nlohmann/json.hpp>
+#include <iostream>
+int main() {
+    try {
+        nlohmann::detail::token_text_buffer<char> buf;
+        for (int i = 0; i < 20000; ++i) {
+            buf.push_back(static_cast<char>('0' + (i % 10)));
+        }
+        std::cout << "Pushed 20000 chars, memmove triggered" << std::endl;
+    } catch (const std::exception& e) {
+        std::cout << "Exception: " << e.what() << std::endl;
+    }
+    return 0;
+}
+```
+
+# Task
+Return JSON with a "fixes" array: one item per program above, with "file" (exactly as given) and "code" (the complete repaired program, standalone, with its own int main). Do not return programs you cannot repair.
