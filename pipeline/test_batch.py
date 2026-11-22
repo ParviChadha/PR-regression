@@ -23,7 +23,7 @@ BROKEN = {"status": "invalid", "compile_failed_on": None,
           "new": {"compile_ok": False, "compile_stderr": "x.cpp:1: error: boom", "stable": True, "runs": []}}
 
 
-def make_pr(data, pr, stages=("generate", "run", "fix", "classify"), broken=False, fixed=False):
+def make_pr(data, pr, stages=("generate", "refine", "run", "fix", "classify"), broken=False, fixed=False):
     d = Path(data) / "tests" / str(pr)
     d.mkdir(parents=True, exist_ok=True)
     if "generate" in stages:
@@ -33,6 +33,8 @@ def make_pr(data, pr, stages=("generate", "run", "fix", "classify"), broken=Fals
         if fixed:
             manifest["fix"] = {"rounds_max": 2}
         (d / "generated.json").write_text(json.dumps(manifest))
+    if "refine" in stages:
+        (d / "coverage.json").write_text(json.dumps({"history": [{"round": 0, "exec_coverage": 1.0}]}))
     if "run" in stages:
         (d / "results.json").write_text(json.dumps({"tests": {"gen_01.cpp": BROKEN if broken else SAME}}))
     if "classify" in stages:
@@ -50,7 +52,7 @@ class DoneTests(unittest.TestCase):
 
     def test_fresh_and_complete(self):
         d = make_pr(self.data, 1, stages=())
-        self.assertEqual(batch.pending_stages(d), ["generate", "run", "fix", "classify"])
+        self.assertEqual(batch.pending_stages(d), ["generate", "refine", "run", "fix", "classify"])
         d = make_pr(self.data, 2)
         self.assertEqual(batch.pending_stages(d), [])
 
@@ -65,18 +67,25 @@ class DoneTests(unittest.TestCase):
         self.assertEqual(batch.pending_stages(d), ["classify"])
 
     def test_fix_is_pending_only_when_something_can_be_repaired_and_has_not_run(self):
-        d = make_pr(self.data, 5, stages=("generate", "run"), broken=True)
+        d = make_pr(self.data, 5, stages=("generate", "refine", "run"), broken=True)
         self.assertEqual(batch.pending_stages(d), ["fix", "classify"])
         d = make_pr(self.data, 6, broken=True, fixed=True)           # fix.py already ran: do not spend requests again
         self.assertEqual(batch.pending_stages(d), [])
-        d = make_pr(self.data, 7, stages=("generate", "run", "classify"))  # nothing to repair
+        d = make_pr(self.data, 7, stages=("generate", "refine", "run", "classify"))  # nothing to repair
         self.assertEqual(batch.pending_stages(d), [])
 
     def test_redo(self):
         d = make_pr(self.data, 8)
         self.assertEqual(batch.pending_stages(d, ["classify"]), ["classify"])
         self.assertEqual(batch.pending_stages(d, ["run"]), ["run", "fix", "classify"])
-        self.assertEqual(batch.pending_stages(d, ["generate"]), ["generate", "run", "fix", "classify"])
+        self.assertEqual(batch.pending_stages(d, ["generate"]), ["generate", "refine", "run", "fix", "classify"])
+        self.assertEqual(batch.pending_stages(d, ["refine"]), ["refine", "run", "fix", "classify"])  # new programs need running
+
+    def test_missing_coverage_makes_refine_pending_and_everything_after_it(self):
+        d = make_pr(self.data, 20, stages=("generate", "run", "classify"))
+        self.assertEqual(batch.pending_stages(d), ["refine", "run", "fix", "classify"])
+        no_refine = tuple(st for st in batch.STAGES if st != "refine")
+        self.assertEqual(batch.pending_stages(d, stages=no_refine), [])
 
     def test_legacy_classification_without_fingerprint_uses_mtime(self):
         d = make_pr(self.data, 9)
@@ -99,6 +108,10 @@ class SelectTests(unittest.TestCase):
         self.assertNotIn("--docker", batch.command("generate", "t", 5, a))
         self.assertIn("--docker", batch.command("run", "t", 5, a))
         self.assertIn("--docker", batch.command("fix", "t", 5, a))
+        ref = batch.command("refine", "t", 5, a)
+        self.assertIn("--refine-only", ref)
+        self.assertIn("--docker", ref)
+        self.assertEqual(Path(ref[1]).name, "generate.py")
 
 
 class BatchTests(unittest.TestCase):
@@ -107,9 +120,10 @@ class BatchTests(unittest.TestCase):
         self.addCleanup(self.tmp.cleanup)
         self.data = Path(self.tmp.name) / "data"
         self.logs = Path(self.tmp.name) / "logs"
-        self.t = SimpleNamespace(name="t", repo=Path(self.tmp.name) / "no-repo", data=self.data)
+        self.cfg = {}
+        self.t = SimpleNamespace(name="t", repo=Path(self.tmp.name) / "no-repo", data=self.data, get=lambda k, d=None: self.cfg.get(k, d))
         self.args = argparse.Namespace(redo="", limit=None, max_failures=5, dry_run=False, model="m", classify_model=None,
-                                       docker=False, skip_commit_check=True)
+                                       docker=False, skip_commit_check=True, no_refine=False)
         self.calls, self.lines = [], []
         p = mock.patch.object(llm, "calls_today", return_value=0)
         q = mock.patch.object(llm, "limits", return_value=(15, 500))
@@ -139,7 +153,8 @@ class BatchTests(unittest.TestCase):
 
     def test_runs_every_pending_stage_in_order_for_every_pr(self):
         out = self.go(self.rows(1, 2))
-        self.assertEqual(self.calls, [(1, "generate"), (1, "run"), (1, "classify"), (2, "generate"), (2, "run"), (2, "classify")])
+        self.assertEqual(self.calls, [(1, "generate"), (1, "refine"), (1, "run"), (1, "classify"),
+                                      (2, "generate"), (2, "refine"), (2, "run"), (2, "classify")])
         # fix is skipped here: the fake runner writes no results, so there is nothing to repair
         self.assertEqual(out["ok"], [1, 2])
 
@@ -183,7 +198,18 @@ class BatchTests(unittest.TestCase):
 
     def test_header_reports_worst_case_requests(self):
         self.go(self.rows(1, 2), dry_run=True)
-        self.assertIn("at most 8 LLM requests", self.lines[0])  # (1 generate + 2 fix + 1 classify) x 2
+        self.assertIn("at most 10 LLM requests", self.lines[0])  # (1 generate + 1 refine + 2 fix + 1 classify) x 2
+
+    def test_refine_is_skipped_with_no_refine_and_for_cmake_targets(self):
+        self.go(self.rows(1), no_refine=True)
+        self.assertNotIn((1, "refine"), self.calls)
+        self.calls.clear()
+        shutil_rm = Path(self.data / "tests" / "2")
+        shutil_rm.mkdir(parents=True)
+        self.cfg["build_mode"] = "cmake"
+        self.go([{"pr": 2, "sha_old": "a", "sha_new": "b"}], no_refine=False)
+        self.assertNotIn((2, "refine"), self.calls)
+        self.assertIn((2, "generate"), self.calls)
 
 
 if __name__ == "__main__":

@@ -7,6 +7,7 @@ Reads, per PR in data/<t>/tests/<pr>/: generated.json, results.json, and when pr
 coverage.json. Optional data/<t>/seeded.json lists PRs with a known answer (used ONLY here, never in any prompt):
     {"seeded": [{"pr": 4958, "expected": "unintended", "note": "later regression reported in #5689"},
                 {"pr": 5459, "expected": "intended",   "note": "intended change"}]}
+If data/<t>/labels/eval.json exists (labels.py eval), a "Classifier vs hand labels" section is added.
 Writes results/<t>/report.md (tables + one finding per regression candidate) and results/<t>/report.json.
 
 Definitions (so the numbers can be defended):
@@ -18,6 +19,8 @@ Definitions (so the numbers can be defended):
   deterministic        in use, compiles on both versions, and is neither flaky nor a runtime timeout on both
   behavioral difference an in-use program with status output_diff or compile_diff
   regression candidate classify.py judged at least one cluster unintended
+  inconclusive         no regression flagged, but changed-line coverage is missing or below 80%: the programs may never
+                       have reached the change (a clean result is only trusted when they did)
   LLM calls            estimated from the files: 1 generation + one per refine round + one per fix round + 1 classification
   wall time            run.py's wall time for its last run (fix.py's re-runs are not added)
 """
@@ -38,6 +41,25 @@ def load(path):
         return json.loads(Path(path).read_text(encoding="utf-8"))
     except (OSError, ValueError):
         return None
+
+
+COVERAGE_OK = 0.8  # below this, "no difference found" does not mean "no regression": the programs did not reach the change
+
+
+def verdict_text(p):
+    """One cell for the per-PR table. A clean result is only called clean when the programs reached the changed lines."""
+    cls, cov = p["classification"], p["coverage"]
+    if not cls:
+        return "not classified"
+    if cls["regression_candidate"]:
+        return "REGRESSION CANDIDATE"
+    if cov is None:
+        return "no regression flagged, INCONCLUSIVE: coverage not measured"
+    if cov["last"] is None:
+        return "no regression flagged (no measurable changed lines)"
+    if cov["last"] < COVERAGE_OK:
+        return f"no regression flagged, INCONCLUSIVE: only {100 * cov['last']:.0f}% of changed lines reached"
+    return "no regression flagged"
 
 
 def pct(num, den):
@@ -112,6 +134,8 @@ def summarize(prs, seeded):
             verdict_clusters[c["verdict"]] = verdict_clusters.get(c["verdict"], 0) + 1
             verdict_programs[c["verdict"]] = verdict_programs.get(c["verdict"], 0) + len(c["programs"])
     cov = [p["coverage"] for p in prs if p["coverage"] and p["coverage"]["first"] is not None]
+    inconclusive = [p["pr"] for p in classified if not p["classification"]["regression_candidate"]
+                    and verdict_text(p).startswith("no regression flagged, INCONCLUSIVE")]
     by_pr = {p["pr"]: p for p in prs}
     seed_rows = []
     for s in seeded:
@@ -132,6 +156,10 @@ def summarize(prs, seeded):
         "prs_with_difference": {"count": sum(1 for p in prs if p["differing"]), "pct": pct(sum(1 for p in prs if p["differing"]), len(prs))},
         "verdicts": {"clusters": verdict_clusters, "programs": verdict_programs, "prs_classified": len(classified)},
         "regression_candidates": [p["pr"] for p in classified if p["classification"]["regression_candidate"]],
+        "coverage_measured": {"prs": sum(1 for p in prs if p["coverage"]), "of": len(prs),
+                              "at_least_80": sum(1 for p in prs if p["coverage"] and p["coverage"]["last"] is not None
+                                                 and p["coverage"]["last"] >= COVERAGE_OK)},
+        "inconclusive_prs": inconclusive,
         "coverage": None if not cov else {"prs": len(cov), "first_mean": round(100 * sum(c["first"] for c in cov) / len(cov), 1),
                                           "last_mean": round(100 * sum(c["last"] for c in cov) / len(cov), 1)},
         "llm_calls": {"total_est": sum_("llm_calls_est"), "per_pr_mean": round(sum_("llm_calls_est") / len(prs), 1) if prs else None},
@@ -141,7 +169,24 @@ def summarize(prs, seeded):
     }
 
 
-def render(target, prs, s):
+def labels_section(ev):
+    """Markdown lines for data/<t>/labels/eval.json (written by labels.py eval); empty when there is none."""
+    if not ev:
+        return []
+    f = lambda v: "n/a" if v is None else f"{v:.2f}"
+    raw, wt, pr = ev["unintended_raw"], ev["unintended_weighted"], ev["pr_level"]
+    return ["## Classifier vs hand labels", "",
+            f"{ev['items_scored']} clusters scored against reconciled hand labels ({len(ev['stale_labels_skipped'])} stale labels skipped). "
+            "Intended clusters were subsampled, so weighted figures correct for that; raw accuracy is biased.", "",
+            "| Measure | Value |", "|---|---|",
+            f"| Precision of \"unintended\" (raw / weighted) | {f(raw['precision'])} / {f(wt['precision'])} |",
+            f"| Recall of \"unintended\" (raw / weighted) | {f(raw['recall'])} / {f(wt['recall'])} |",
+            f"| Accuracy (raw) | {f(ev['accuracy_raw'])} |",
+            f"| PR level: true regressions caught / flagged PRs / fully labeled PRs | {pr['caught']}/{pr['true_regressions']} / {pr['flagged']} / {pr['prs']} |",
+            f"| Inter-labeler Cohen's kappa ({ev['labeler_pairs']} items) | {f(ev['labeler_kappa'])} |", ""]
+
+
+def render(target, prs, s, ev=None):
     L = [f"# Report: {target}", "",
          f"{s['prs_checked']} PR(s) checked, {s['generated']} programs generated, {s['in_use']} in use "
          f"({s['repairs']} repaired by fix.py). Numbers come only from the files on disk; see the module docstring of "
@@ -157,23 +202,32 @@ def render(target, prs, s):
             f"{k} {v['clusters'].get(k, 0)} / {v['programs'].get(k, 0)}" for k in ("intended", "unintended", "unclear")) + " |")
         L.append(f"| Regression candidates | {len(s['regression_candidates'])} of {v['prs_classified']} classified: "
                  f"{', '.join('#' + str(p) for p in s['regression_candidates']) or 'none'} |")
+    cm = s["coverage_measured"]
+    L.append(f"| Changed-line coverage measured | {cm['prs']} of {cm['of']} PRs; at least {int(100 * COVERAGE_OK)}% reached for {cm['at_least_80']} |")
+    if s["inconclusive_prs"]:
+        L.append(f"| Clean results that are INCONCLUSIVE (coverage missing or low) | {len(s['inconclusive_prs'])}: "
+                 f"{', '.join('#' + str(p) for p in s['inconclusive_prs'])} |")
     if s["coverage"]:
         L.append(f"| Changed-line coverage before / after the loop (mean over {s['coverage']['prs']} PRs) | "
                  f"{s['coverage']['first_mean']}% / {s['coverage']['last_mean']}% |")
     L += [f"| LLM calls (estimated) | {s['llm_calls']['total_est']} total, {s['llm_calls']['per_pr_mean']} per PR |",
           f"| Wall time of the run.py stage | {s['wall_seconds_total']} s |", ""]
+    by_pr_cov = {p["pr"]: p["coverage"] for p in prs}
     if s["seeded"]["rows"]:
         L += ["## Seeded PRs with a known answer", "", "A small set; recall here is not a general estimate.", "",
               "| PR | Expected | Pipeline | Match | Note |", "|---|---|---|---|---|"]
         for r in s["seeded"]["rows"]:
             pipe = "not checked" if not r["checked"] else ("unintended found" if r["flagged"] else "no regression flagged")
+            if r["checked"] and not r["flagged"] and by_pr_cov.get(r["pr"]) is None:
+                pipe += " (coverage not measured)"
             L.append(f"| #{r['pr']} | {r['expected']} | {pipe} | {'yes' if r['correct'] else ('no' if r['correct'] is False else 'n/a')} | {r.get('note', '')} |")
         L += ["", f"Recall on seeded regressions: {s['seeded']['recall'] or 'n/a'}", ""]
+    L += labels_section(ev)
     L += ["## Per PR", "", "| PR | Programs (in use) | Compile new / both | Status counts | Differing | Verdict | Coverage | Calls |",
           "|---|---|---|---|---|---|---|---|"]
     for p in sorted(prs, key=lambda p: p["pr"]):
         cls = p["classification"]
-        verdict = "not classified" if not cls else ("REGRESSION CANDIDATE" if cls["regression_candidate"] else "no regression flagged")
+        verdict = verdict_text(p)
         cov = "n/a" if not p["coverage"] or p["coverage"]["last"] is None else f"{100 * p['coverage']['last']:.0f}% of {p['coverage']['measurable']} lines"
         counts = ", ".join(f"{k} {n}" for k, n in sorted(p["status"].items()))
         L.append(f"| #{p['pr']} | {p['generated']} ({p['in_use']}) | {p['final_compile_new']}/{p['in_use']} / {p['final_compile_both']}/{p['in_use']} | "
@@ -202,7 +256,7 @@ def build(target_name, data_dir, out_dir, prs=None):
     s = summarize(recs, (seeded_doc or {}).get("seeded", []))
     out_dir = Path(out_dir)
     out_dir.mkdir(parents=True, exist_ok=True)
-    write_text(out_dir / "report.md", render(target_name, recs, s))
+    write_text(out_dir / "report.md", render(target_name, recs, s, load(data_dir / "labels" / "eval.json")))
     write_text(out_dir / "report.json", json.dumps({"target": target_name, "summary": s, "prs": recs}, indent=2) + "\n")
     return recs, s
 

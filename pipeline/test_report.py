@@ -130,12 +130,42 @@ class ReportTests(Fixture):
         self.assertIn("REGRESSION CANDIDATE", md)
         self.assertEqual(json.loads((self.root / "out" / "report.json").read_text())["summary"]["prs_checked"], 2)
 
+    def test_clean_results_are_inconclusive_without_coverage(self):
+        base = {"classification": {"regression_candidate": False, "unintended_clusters": [], "clusters": []}}
+        self.assertEqual(report.verdict_text({"classification": None, "coverage": None}), "not classified")
+        flagged = {"classification": {"regression_candidate": True}, "coverage": None}
+        self.assertEqual(report.verdict_text(flagged), "REGRESSION CANDIDATE")
+        self.assertIn("INCONCLUSIVE: coverage not measured", report.verdict_text({**base, "coverage": None}))
+        low = {**base, "coverage": {"first": 0.2, "last": 0.545}}
+        self.assertIn("INCONCLUSIVE: only 55% of changed lines reached", report.verdict_text(low))
+        self.assertEqual(report.verdict_text({**base, "coverage": {"first": 0.8, "last": 0.9}}), "no regression flagged")
+        self.assertIn("no measurable changed lines", report.verdict_text({**base, "coverage": {"first": None, "last": None}}))
+
+    def test_summary_lists_inconclusive_prs(self):
+        _, s = report.build("t", self.root, self.root / "out")
+        self.assertEqual(s["coverage_measured"], {"prs": 1, "of": 2, "at_least_80": 0})  # PR 1 reached 75%
+        self.assertEqual(s["inconclusive_prs"], [])  # PR 2 was never classified, PR 1 is a candidate
+        md = (self.root / "out" / "report.md").read_text()
+        self.assertIn("| Changed-line coverage measured | 1 of 2 PRs; at least 80% reached for 0 |", md)
+
     def test_percentages_handle_empty(self):
         self.assertIsNone(report.pct(0, 0))
         self.assertEqual(report.fmt_pct(None), "n/a")
         s = report.summarize([], [])
         self.assertEqual(s["prs_checked"], 0)
         self.assertIsNone(s["seeded"]["recall"])
+
+
+class LabelsSection(unittest.TestCase):
+    def test_section(self):
+        ev = {"items_scored": 4, "stale_labels_skipped": ["1-C1"], "accuracy_raw": 0.75,
+              "unintended_raw": {"precision": 0.5, "recall": 1.0}, "unintended_weighted": {"precision": None, "recall": 0.9},
+              "pr_level": {"caught": 1, "true_regressions": 1, "flagged": 2, "prs": 3}, "labeler_kappa": 0.556, "labeler_pairs": 4}
+        text = "\n".join(report.labels_section(ev))
+        self.assertIn("0.50 / n/a", text)
+        self.assertIn("1/1 / 2 / 3", text)
+        self.assertIn("0.56", text)
+        self.assertEqual(report.labels_section(None), [])
 
 
 if __name__ == "__main__":

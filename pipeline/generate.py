@@ -2,7 +2,7 @@
 """Test generation (pipeline stage "Generate tests"): ask the LLM for standalone C++ programs that probe one PR.
 
 Usage:  python3 pipeline/generate.py <target> --pr N [--n 20] [--model gemini-3.5-flash-lite] [--dry-run]
-                                      [--force] [--refine [--docker]] [--refine-n 5]
+                                      [--force] [--refine [--docker]] [--refine-only [--docker]] [--refine-n 5]
 Needs GEMINI_API_KEY (in .env at the repo root, or exported) (not for --dry-run or when every response is cached).
 
 One request returns --n programs (structured JSON: name, intent, code). They are written to
@@ -23,6 +23,9 @@ Inputs:
 
 --refine runs the coverage loop (coverage_loop.py) after generation: it measures which changed lines the tests
 reach and makes ONE more request, with the uncovered lines and surrounding source, for --refine-n extra programs.
+--refine-only does that step alone for a PR that already has programs (batch.py's "refine" stage). Why it matters:
+generated programs can be well aimed and still never reach the change (for example UBJSON byte strings missing the
+opening '[' are rejected identically by both versions), which looks like "no difference" but is really "not tested".
 """
 import argparse
 import hashlib
@@ -170,7 +173,10 @@ def build_refine_prompt(t, rec, gh, existing, context, k):
         f"{section}\n\n# Programs written so far\n{have}\n\n# Changed lines that no program reached\n"
         f"Lines marked >> are changed by the PR and were never executed by the programs above (\"NOT RUN\"), or have no "
         f"generated code at all (\"NO CODE / NOT INSTANTIATED\": for example a template that no program instantiated, or a "
-        f"macro body). For each marked line work out what input or call reaches it.\n\n```\n{context}\n```\n\n"
+        f"macro body). For each marked line work out what input or call reaches it. Some earlier programs may have used "
+        f"malformed input (a binary or text format with a missing marker, wrong length or wrong order) and been rejected "
+        f"before they reached the changed code; when you build such input, check every byte or token against the "
+        f"format's specification and make sure the program prints what happened.\n\n```\n{context}\n```\n\n"
         f"# Task\nWrite {k} NEW programs, different from those already written, that execute the marked lines. Return JSON "
         f"with a \"tests\" array; each item has \"name\", \"intent\" and \"code\".")
 
@@ -290,6 +296,19 @@ def make_refine(t, rec, gh, args, tests_dir, manifest):
     return refine
 
 
+def refine_round(t, args, tests_dir, manifest, rec, gh):
+    """Measure changed-line coverage of everything in tests_dir and make ONE refine request aimed at the uncovered lines."""
+    from env import prepare
+    import coverage_loop
+    env = prepare(t.name, args.pr, docker=args.docker)
+    rep = coverage_loop.loop(env, tests_dir, args, refine=make_refine(t, rec, gh, args, tests_dir, manifest), rounds=1)
+    write_text(tests_dir / "coverage.json", json.dumps(rep, indent=2) + "\n")
+    for h in rep["history"]:
+        print(f"coverage round {h['round']}: tests={h['tests']} covered={h['covered']} uncovered={h['uncovered']} "
+              f"macro={h['macro']} no_code={h['no_code']} exec_coverage={h['exec_coverage']}")
+    return rep
+
+
 def main():
     ap = argparse.ArgumentParser(description=__doc__.split("\n\n")[0])
     ap.add_argument("target")
@@ -299,8 +318,10 @@ def main():
     ap.add_argument("--dry-run", action="store_true", help="build and save the prompt, make no request")
     ap.add_argument("--force", action="store_true", help="ignore the response cache (costs a request)")
     ap.add_argument("--refine", action="store_true", help="then run one coverage-guided refine round")
+    ap.add_argument("--refine-only", action="store_true",
+                    help="skip generation: run the coverage loop and one refine round on the programs already in the folder")
     ap.add_argument("--refine-n", type=int, default=5)
-    ap.add_argument("--docker", action="store_true", help="with --refine: build/measure in the container")
+    ap.add_argument("--docker", action="store_true", help="with --refine/--refine-only: build/measure in the container")
     ap.add_argument("--std", default="c++17")
     ap.add_argument("--timeout", type=float, default=10)
     ap.add_argument("--compile-timeout", type=float, default=180)
@@ -308,17 +329,18 @@ def main():
     args = ap.parse_args()
     t = Target(args.target)
     try:
+        if args.refine_only:
+            tests_dir = t.data / "tests" / str(args.pr)
+            if not (tests_dir / "generated.json").is_file():
+                die(f"{tests_dir / 'generated.json'} is missing; generate first")
+            manifest = json.loads((tests_dir / "generated.json").read_text())
+            rec, gh = load_pr(t, args.pr)
+            refine_round(t, args, tests_dir, manifest, rec, gh)
+            return
         res = generate(t, args.pr, args)
         if res and args.refine:
             tests_dir, manifest, (rec, gh) = res
-            from env import prepare
-            import coverage_loop
-            env = prepare(args.target, args.pr, docker=args.docker)
-            rep = coverage_loop.loop(env, tests_dir, args, refine=make_refine(t, rec, gh, args, tests_dir, manifest), rounds=1)
-            write_text(tests_dir / "coverage.json", json.dumps(rep, indent=2) + "\n")
-            for h in rep["history"]:
-                print(f"coverage round {h['round']}: tests={h['tests']} covered={h['covered']} uncovered={h['uncovered']} "
-                      f"macro={h['macro']} no_code={h['no_code']} exec_coverage={h['exec_coverage']}")
+            refine_round(t, args, tests_dir, manifest, rec, gh)
     except llm.QuotaExhausted as e:
         print(f"generate.py: {e}", file=sys.stderr)
         sys.exit(3)

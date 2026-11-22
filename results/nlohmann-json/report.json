@@ -1,38 +1,48 @@
 {
   "target": "nlohmann-json",
   "summary": {
-    "prs_checked": 2,
-    "generated": 40,
+    "prs_checked": 5,
+    "generated": 100,
     "compile_success": {
       "raw_new": 95.0,
-      "raw_both": 60.0,
-      "final_new": 95.0,
-      "final_both": 80.0
+      "raw_both": 81.0,
+      "final_new": 97.0,
+      "final_both": 91.0
     },
-    "in_use": 40,
-    "repairs": 9,
+    "in_use": 100,
+    "repairs": 13,
     "deterministic": {
-      "programs": 32,
-      "of_compiled_both": 32,
+      "programs": 91,
+      "of_compiled_both": 91,
       "pct": 100.0
     },
     "prs_with_difference": {
-      "count": 2,
-      "pct": 100.0
+      "count": 4,
+      "pct": 80.0
     },
     "verdicts": {
       "clusters": {
-        "intended": 7,
+        "intended": 13,
         "unintended": 2
       },
       "programs": {
-        "intended": 18,
+        "intended": 24,
         "unintended": 2
       },
-      "prs_classified": 2
+      "prs_classified": 5
     },
     "regression_candidates": [
       4958
+    ],
+    "coverage_measured": {
+      "prs": 2,
+      "of": 5,
+      "at_least_80": 1
+    },
+    "inconclusive_prs": [
+      6076,
+      6078,
+      6121
     ],
     "coverage": {
       "prs": 1,
@@ -40,10 +50,10 @@
       "last_mean": 100.0
     },
     "llm_calls": {
-      "total_est": 6,
-      "per_pr_mean": 3.0
+      "total_est": 14,
+      "per_pr_mean": 2.8
     },
-    "wall_seconds_total": 41.0,
+    "wall_seconds_total": 75.4,
     "seeded": {
       "rows": [
         {
@@ -264,6 +274,164 @@
         "changed": 69,
         "measurable": 20
       }
+    },
+    {
+      "pr": 6076,
+      "model": "gemini-3.5-flash-lite",
+      "generated": 20,
+      "raw_compile_new": 20,
+      "raw_compile_both": 20,
+      "in_use": 20,
+      "final_compile_new": 20,
+      "final_compile_both": 20,
+      "deterministic": 20,
+      "compiled_both_in_use": 20,
+      "status": {
+        "same": 15,
+        "output_diff": 5
+      },
+      "differing": 5,
+      "repairs": 0,
+      "llm_calls_est": 2,
+      "wall_seconds": 10.6,
+      "classification": {
+        "clusters": [
+          {
+            "id": "C1",
+            "status": "output_diff",
+            "failed_on": null,
+            "programs": [
+              "gen_02.cpp"
+            ],
+            "verdict": "intended",
+            "confidence": "high",
+            "reason": "The PR fixes issue #6105 where ordered_json::unflatten() would silently overwrite a nested value when a key is a prefix of an earlier key, instead of throwing type_error.313 as documented.",
+            "old": "output: {\"a\":1}",
+            "new": "output: [json.exception.type_error.313] invalid value to unflatten"
+          },
+          {
+            "id": "C2",
+            "status": "output_diff",
+            "failed_on": null,
+            "programs": [
+              "gen_03.cpp"
+            ],
+            "verdict": "intended",
+            "confidence": "high",
+            "reason": "As part of fixing overlapping keys in ordered_json::unflatten(), assigning a null value over an existing nested structure is handled as a non-conflicting overwrite, matching the documentation.",
+            "old": "output: {\"a\":null}",
+            "new": "output: {\"a\":{\"b\":2}}"
+          },
+          {
+            "id": "C3",
+            "status": "output_diff",
+            "failed_on": null,
+            "programs": [
+              "gen_06.cpp"
+            ],
+            "verdict": "intended",
+            "confidence": "high",
+            "reason": "The PR correctly detects overlapping keys (root vs /x) in ordered_json::unflatten() and throws type_error.313 instead of silently overwriting the root.",
+            "old": "output: 2",
+            "new": "output: [json.exception.type_error.313] invalid value to unflatten"
+          },
+          {
+            "id": "C4",
+            "status": "output_diff",
+            "failed_on": null,
+            "programs": [
+              "gen_08.cpp"
+            ],
+            "verdict": "intended",
+            "confidence": "high",
+            "reason": "The PR enforces non-overlapping JSON pointers for ordered_json::unflatten(), throwing type_error.313 when a shorter key attempts to overwrite a pre-existing nested array element.",
+            "old": "output: {\"a\":[2]}",
+            "new": "output: [json.exception.type_error.313] invalid value to unflatten"
+          },
+          {
+            "id": "C5",
+            "status": "output_diff",
+            "failed_on": null,
+            "programs": [
+              "gen_19.cpp"
+            ],
+            "verdict": "intended",
+            "confidence": "high",
+            "reason": "Overwriting nested structures with null values is explicitly permitted by the fix for overlapping keys in ordered_json::unflatten(), leaving the nested object intact.",
+            "old": "output: {\"a\":null}",
+            "new": "output: {\"a\":{\"b\":{\"c\":10}}}"
+          }
+        ],
+        "regression_candidate": false,
+        "unintended_clusters": []
+      },
+      "coverage": null
+    },
+    {
+      "pr": 6078,
+      "model": "gemini-3.5-flash-lite",
+      "generated": 20,
+      "raw_compile_new": 18,
+      "raw_compile_both": 18,
+      "in_use": 20,
+      "final_compile_new": 20,
+      "final_compile_both": 20,
+      "deterministic": 20,
+      "compiled_both_in_use": 20,
+      "status": {
+        "same": 20
+      },
+      "differing": 0,
+      "repairs": 2,
+      "llm_calls_est": 2,
+      "wall_seconds": 11.7,
+      "classification": {
+        "clusters": [],
+        "regression_candidate": false,
+        "unintended_clusters": []
+      },
+      "coverage": null
+    },
+    {
+      "pr": 6121,
+      "model": "gemini-3.5-flash-lite",
+      "generated": 20,
+      "raw_compile_new": 19,
+      "raw_compile_both": 19,
+      "in_use": 20,
+      "final_compile_new": 19,
+      "final_compile_both": 19,
+      "deterministic": 19,
+      "compiled_both_in_use": 19,
+      "status": {
+        "same": 18,
+        "output_diff": 1,
+        "invalid": 1
+      },
+      "differing": 1,
+      "repairs": 2,
+      "llm_calls_est": 4,
+      "wall_seconds": 12.1,
+      "classification": {
+        "clusters": [
+          {
+            "id": "C1",
+            "status": "output_diff",
+            "failed_on": null,
+            "programs": [
+              "gen_02.cpp"
+            ],
+            "verdict": "intended",
+            "confidence": "high",
+            "reason": "The PR specifically introduces a mechanism to truncate very long tokens in error messages using '...' when they exceed 8192 characters, which directly matches the test program's observation of 'truncated' instead of 'full'.",
+            "old": "output: full",
+            "new": "output: truncated"
+          }
+        ],
+        "regression_candidate": false,
+        "unintended_clusters": []
+      },
+      "coverage": null
     }
   ]
 }

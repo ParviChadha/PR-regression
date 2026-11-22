@@ -148,6 +148,22 @@ class EnvFileTests(unittest.TestCase):
         self.assertNotIn("PRH_LLM_RPD", os.environ)
 
 
+class RefineOnlyTests(unittest.TestCase):
+    def test_refine_only_needs_existing_programs_and_makes_no_generation_request(self):
+        with mock.patch.object(sys, "argv", ["generate.py", "nlohmann-json", "--pr", "999999", "--refine-only"]), \
+                mock.patch.object(llm, "call") as call:
+            with self.assertRaises(SystemExit):
+                generate.main()
+        call.assert_not_called()
+
+    def test_refine_prompt_warns_about_malformed_inputs(self):
+        t = Target("nlohmann-json")
+        rec, gh = generate.load_pr(t, 4958)
+        _, prompt = generate.build_refine_prompt(t, rec, gh, [{"file": "gen_01.cpp", "intent": "x"}], ">> 1 foo", 5)
+        self.assertIn("malformed input", prompt)
+        self.assertIn("NOT RUN", prompt)
+
+
 class RunErrorsTests(unittest.TestCase):
     def test_compile_errors_keep_the_root_cause_under_a_template_dump(self):
         import run
