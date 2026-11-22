@@ -1,0 +1,269 @@
+{
+  "target": "nlohmann-json",
+  "summary": {
+    "prs_checked": 2,
+    "generated": 40,
+    "compile_success": {
+      "raw_new": 95.0,
+      "raw_both": 60.0,
+      "final_new": 95.0,
+      "final_both": 80.0
+    },
+    "in_use": 40,
+    "repairs": 9,
+    "deterministic": {
+      "programs": 32,
+      "of_compiled_both": 32,
+      "pct": 100.0
+    },
+    "prs_with_difference": {
+      "count": 2,
+      "pct": 100.0
+    },
+    "verdicts": {
+      "clusters": {
+        "intended": 7,
+        "unintended": 2
+      },
+      "programs": {
+        "intended": 18,
+        "unintended": 2
+      },
+      "prs_classified": 2
+    },
+    "regression_candidates": [
+      4958
+    ],
+    "coverage": {
+      "prs": 1,
+      "first_mean": 100.0,
+      "last_mean": 100.0
+    },
+    "llm_calls": {
+      "total_est": 6,
+      "per_pr_mean": 3.0
+    },
+    "wall_seconds_total": 41.0,
+    "seeded": {
+      "rows": [
+        {
+          "pr": 4958,
+          "expected": "unintended",
+          "note": "later regression reported in #5689 (string_view-convertible key types break lookups)",
+          "checked": true,
+          "flagged": true,
+          "correct": true
+        },
+        {
+          "pr": 5459,
+          "expected": "intended",
+          "note": "intended change; #5772 later fixed a hash inconsistency it caused (mixed case)",
+          "checked": true,
+          "flagged": false,
+          "correct": true
+        }
+      ],
+      "recall": "1/1"
+    }
+  },
+  "prs": [
+    {
+      "pr": 4958,
+      "model": "gemini-3.5-flash-lite",
+      "generated": 20,
+      "raw_compile_new": 18,
+      "raw_compile_both": 4,
+      "in_use": 20,
+      "final_compile_new": 18,
+      "final_compile_both": 12,
+      "deterministic": 12,
+      "compiled_both_in_use": 12,
+      "status": {
+        "compile_diff": 8,
+        "output_diff": 10,
+        "same": 2
+      },
+      "differing": 18,
+      "repairs": 9,
+      "llm_calls_est": 4,
+      "wall_seconds": 36.0,
+      "classification": {
+        "clusters": [
+          {
+            "id": "C1",
+            "status": "output_diff",
+            "failed_on": null,
+            "programs": [
+              "gen_21.cpp",
+              "gen_22.cpp",
+              "gen_23.cpp",
+              "gen_24.cpp",
+              "gen_26.cpp",
+              "gen_27.cpp",
+              "gen_28.cpp"
+            ],
+            "verdict": "intended",
+            "confidence": "high",
+            "reason": "The PR updates is_usable_as_basic_json_key_type to allow types convertible to std::string_view as keys, enabling custom string-viewable types to be used in operator[].",
+            "old": "output: supported: 0",
+            "new": "output: supported: 1 | 42"
+          },
+          {
+            "id": "C2",
+            "status": "compile_diff",
+            "failed_on": "old",
+            "programs": [
+              "gen_11.cpp",
+              "gen_16.cpp",
+              "gen_17.cpp",
+              "gen_18.cpp",
+              "gen_19.cpp",
+              "gen_20.cpp"
+            ],
+            "verdict": "intended",
+            "confidence": "high",
+            "reason": "Fixes compilation failures when passing classes with conversion to std::string_view into operator[], which is the main goal of issue #3912 and this PR.",
+            "old": "compile error: no match for \u2018operator[]\u2019 (operand types are \u2018nlohmann::json_abi_v3_12_0::json\u2019 {aka \u2018nlohmann::json_abi_v3_12_0::basic_json<>\u2019} and \u2018Derive",
+            "new": "output: 500"
+          },
+          {
+            "id": "C3",
+            "status": "compile_diff",
+            "failed_on": "both",
+            "programs": [
+              "gen_03.cpp"
+            ],
+            "verdict": "unintended",
+            "confidence": "medium",
+            "reason": "The test fails to compile on the new version due to an internal comparator type mismatch error when using a const json object with a custom string_view key.",
+            "old": "compile error: no match for \u2018operator[]\u2019 (operand types are \u2018const nlohmann::json_abi_v3_12_0::json\u2019 {aka \u2018const nlohmann::json_abi_v3_12_0::basic_json<>\u2019}",
+            "new": "compile error: no match for call to \u2018(const std::less<void>) (const ViewHolder&, const std::__cxx11::basic_string<char>&)\u2019"
+          },
+          {
+            "id": "C4",
+            "status": "output_diff",
+            "failed_on": null,
+            "programs": [
+              "gen_08.cpp"
+            ],
+            "verdict": "intended",
+            "confidence": "high",
+            "reason": "Directly tests the new type trait check std::is_convertible<KeyType, std::string_view>::value added in the PR, which evaluates to true for convertible types.",
+            "old": "output: false",
+            "new": "output: true"
+          },
+          {
+            "id": "C5",
+            "status": "output_diff",
+            "failed_on": null,
+            "programs": [
+              "gen_12.cpp"
+            ],
+            "verdict": "intended",
+            "confidence": "high",
+            "reason": "Enables successful map lookups using keys that convert to std::string_view instead of failing or picking an unintended conversion.",
+            "old": "exit -6, no output",
+            "new": "output: 123"
+          },
+          {
+            "id": "C6",
+            "status": "compile_diff",
+            "failed_on": "new",
+            "programs": [
+              "gen_25.cpp"
+            ],
+            "verdict": "unintended",
+            "confidence": "high",
+            "reason": "Breaks usage of ordered_json with transparent comparators when using keys that convert to std::string_view, leading to a substitution failure inside ordered_map.",
+            "old": "output: supported: 0",
+            "new": "compile error: no matching function for call to \u2018nlohmann::json_abi_v3_12_0::ordered_map<std::__cxx11::basic_string<char>, nlohmann::json_abi_v3_12_0::basi"
+          },
+          {
+            "id": "C7",
+            "status": "output_diff",
+            "failed_on": null,
+            "programs": [
+              "gen_29.cpp"
+            ],
+            "verdict": "intended",
+            "confidence": "high",
+            "reason": "Validates that multiple distinct custom keys supporting std::string_view conversion are now correctly recognized and usable in operator[].",
+            "old": "output: supported1: 0, supported2: 0",
+            "new": "output: supported1: 1, supported2: 1 | 1 2"
+          }
+        ],
+        "regression_candidate": true,
+        "unintended_clusters": [
+          "C3",
+          "C6"
+        ]
+      },
+      "coverage": {
+        "first": null,
+        "last": null,
+        "rounds": 1,
+        "changed": 6,
+        "measurable": 0
+      }
+    },
+    {
+      "pr": 5459,
+      "model": "gemini-3.5-flash-lite",
+      "generated": 20,
+      "raw_compile_new": 20,
+      "raw_compile_both": 20,
+      "in_use": 20,
+      "final_compile_new": 20,
+      "final_compile_both": 20,
+      "deterministic": 20,
+      "compiled_both_in_use": 20,
+      "status": {
+        "output_diff": 2,
+        "same": 18
+      },
+      "differing": 2,
+      "repairs": 0,
+      "llm_calls_est": 2,
+      "wall_seconds": 5.0,
+      "classification": {
+        "clusters": [
+          {
+            "id": "C1",
+            "status": "output_diff",
+            "failed_on": null,
+            "programs": [
+              "gen_01.cpp"
+            ],
+            "verdict": "intended",
+            "confidence": "high",
+            "reason": "The PR fixes intransitive mixed integer/float comparisons near 2^63 where values like 2^63-2 and 2^63-1 previously incorrectly compared equal to 2^63.",
+            "old": "output: x == y: 1 | y == z: 1 | x == z: 0 | x < z: 1",
+            "new": "output: x == y: 0 | y == z: 0 | x == z: 0 | x < z: 1"
+          },
+          {
+            "id": "C2",
+            "status": "output_diff",
+            "failed_on": null,
+            "programs": [
+              "gen_02.cpp"
+            ],
+            "verdict": "intended",
+            "confidence": "high",
+            "reason": "The PR ensures exact comparison between large integers and floats instead of lossy widening, so 2^63-1 correctly compares less than 2^63 instead of being rounded up and treated as equal.",
+            "old": "output: u < f: 0 | f > u: 0 | u == f: 1",
+            "new": "output: u < f: 1 | f > u: 1 | u == f: 0"
+          }
+        ],
+        "regression_candidate": false,
+        "unintended_clusters": []
+      },
+      "coverage": {
+        "first": 1.0,
+        "last": 1.0,
+        "rounds": 1,
+        "changed": 69,
+        "measurable": 20
+      }
+    }
+  ]
+}

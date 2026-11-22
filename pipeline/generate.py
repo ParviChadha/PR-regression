@@ -59,6 +59,18 @@ Rules for every program:
 - Aim at the code the diff changes. Prefer calls that compile against both the old and the new library; one or two
   programs may use an API the PR adds. Cover ordinary inputs and edge cases (empty, minimum and maximum values,
   boundaries, special values, nesting, unusual types) and also neighbouring behavior the change could disturb.
+- When the diff changes which types or inputs an API accepts or rejects (constraints, overloads, traits,
+  conversions), test it with the detection idiom (std::void_t or requires) and `if constexpr`, so the program
+  compiles against both versions, prints whether the expression is well-formed, and exercises it when it is.
+  Accepting an input is not enough: also use it through every entry point that should follow (const and
+  non-const, read, write, insert, erase, lookup, nested use), because a change that admits new inputs can leave
+  later code unable to handle them.
+- If the changed code is internal (a detail, impl or internal namespace, a trait, a helper), do not name it in the
+  program. Reach it through the public API that depends on it, using detection (as above) where needed.
+- Use the exact types and values the diff is about (the new trait's argument types, the new overload's
+  parameters), not stand-ins.
+- Spread the programs over distinct public entry points and overloads, one main idea per program. Do not write
+  several programs that only rename a type or change a literal.
 - Make the programs differ from each other: different inputs, different entry points, different features."""
 
 SCHEMA = {"type": "OBJECT", "properties": {"tests": {"type": "ARRAY", "items": {
@@ -164,6 +176,37 @@ def build_refine_prompt(t, rec, gh, existing, context, k):
 
 
 # ---------------------------------------------------------------- output
+def unflatten(code):
+    """Models occasionally double-escape: the whole program arrives on ONE line with a literal backslash-n between
+    lines (seen from Flash-Lite in fix.py). If there is no real newline but literal `\\n` sequences, turn the ones
+    outside string and char literals back into newlines (and `\\t` into tabs); escapes inside literals stay as C++."""
+    if "\n" in code.strip() or "\\n" not in code:
+        return code
+    out, i, quote = [], 0, None
+    while i < len(code):
+        c = code[i]
+        if quote:
+            out.append(c)
+            if c == "\\" and i + 1 < len(code):
+                out.append(code[i + 1])
+                i += 1
+            elif c == quote:
+                quote = None
+        elif c == '"' or (c == "'" and (code[i + 2:i + 3] == "'" or (code[i + 1:i + 2] == "\\" and code[i + 3:i + 4] == "'"))):
+            quote = c  # an apostrophe in a comment ("don't") is not a char literal
+            out.append(c)
+        elif c == "\\" and code[i + 1:i + 2] == "n":
+            out.append("\n")
+            i += 1
+        elif c == "\\" and code[i + 1:i + 2] == "t":
+            out.append("\t")
+            i += 1
+        else:
+            out.append(c)
+        i += 1
+    return "".join(out)
+
+
 def parse_tests(text):
     """-> (programs, number of items dropped as unusable)."""
     try:
@@ -172,7 +215,7 @@ def parse_tests(text):
         die(f"model did not return the expected JSON: {text[:300]!r}")
     progs, dropped, seen = [], 0, set()
     for it in items:
-        code = re.sub(r"^```[a-z+]*\n|\n```\s*$", "", (it.get("code") or "").strip()).strip() + "\n"
+        code = unflatten(re.sub(r"^```[a-z+]*\n|\n```\s*$", "", (it.get("code") or "").strip())).strip() + "\n"
         if not re.search(r"\bint\s+main\s*\(", code) or code in seen:
             dropped += 1
             continue

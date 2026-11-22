@@ -86,17 +86,22 @@ def worker(a):
         with tempfile.TemporaryDirectory() as td:
             exe = Path(td) / "t"
             ok, err, _ = _compile(Path(a.tests) / name, exe, a.flag, a.std, a.compile_timeout, extra=["--coverage"])
-            res = {"compiled": ok, "exit": None, "timeout": False, "covered": {}, "uncovered": {}}
+            res = {"compiled": ok, "exit": None, "timeout": False, "covered": {}, "uncovered": {}, "gcda": 0, "gcov_files": 0}
             if ok:
                 r = _run_once(exe, td, a.timeout)
                 res["exit"], res["timeout"] = r["exit"], r["timeout"]  # killed/aborted runs leave no .gcda: no coverage
                 cov, unc = {}, {}
                 for gcda in Path(td).glob("*.gcda"):
+                    res["gcda"] += 1
                     cp = subprocess.run(["gcov", "--json-format", "--stdout", str(gcda)], cwd=td,
                                         capture_output=True, text=True)
                     for doc in filter(None, cp.stdout.split("\n")):
-                        data = json.loads(doc)
+                        try:
+                            data = json.loads(doc)
+                        except ValueError:
+                            continue  # not GNU gcov JSON (e.g. Apple's llvm gcov): counted as no usable data below
                         for f in data.get("files", []):
+                            res["gcov_files"] += 1
                             path = os.path.normpath(os.path.join(data.get("current_working_directory", td), f["file"]))
                             rel = path[len(a.prefix):] if path.startswith(a.prefix) else None
                             if rel not in changed:
@@ -121,7 +126,13 @@ def measure(env, tests_dir, names, changed, a):
              "--std", a.std, "--timeout", str(a.timeout), "--compile-timeout", str(a.compile_timeout),
              "--jobs", str(a.jobs), "--prefix", env.new_dir + "/", "--changed-json", json.dumps(changed),
              "--names", *names]
-    return launch_worker(env, "new", tests_dir, "coverage_loop.py", wargs, a.docker)
+    per_test = launch_worker(env, "new", tests_dir, "coverage_loop.py", wargs, a.docker)
+    ran = [r for r in per_test.values() if r["compiled"] and not r["timeout"] and r["exit"] == 0]
+    if ran and not any(r["gcov_files"] for r in ran):
+        sys.exit("coverage_loop.py: " + str(len(ran)) + " programs ran cleanly but none produced usable gcov data "
+                 "(" + ("no .gcda files were written" if not any(r["gcda"] for r in ran) else "gcov output unreadable") +
+                 "). The host compiler/gcov is probably not GNU (Apple clang on macOS); rerun with --docker.")
+    return per_test
 
 
 def aggregate(env, changed, per_test):

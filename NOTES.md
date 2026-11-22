@@ -245,3 +245,64 @@ Spot checks: #6100 ("Fix develop CI") is correctly comment_only (only NOLINT/com
 - Tests: `python3 -m unittest pipeline.test_generate` (13 tests, fake transport, no network/key/quota).
 - **Untested against the live API**: request shape (camelCase generationConfig, `responseSchema` with uppercase types).
   First real call must be run on the Mac; if Gemini rejects the schema, fix in llm.py.
+
+## pipeline/fix.py (repair pass)
+- Reads `results.json` + `generated.json` of a PR and repairs two kinds of program with ONE request per round
+  (default 2 rounds): `compile` (invalid because it fails to compile identically on both versions: bad header, typo)
+  and `detect` (compile_diff that fails on OLD only: rewrite with the detection idiom + `if constexpr` so it compiles on
+  both and the new behavior is observed). Never touches the findings: fails-on-new, both-with-different-errors,
+  output_diff, flaky, runtime timeouts.
+- Repairs are new files (`gen_NN.cpp`); the manifest gets `fixes`/`kind` on them and `superseded_by` on the original.
+  Originals stay (evidence, coherent results.json); later stages skip superseded entries. Repairs run on both versions
+  immediately and are merged into results.json. Re-running generate.py discards repairs.
+- `--per-signature 4`: at most 4 detect repairs per kind of old-side error (14 programs failed the same way on #4958;
+  repairing all would only add near-duplicates). `--max-per-round 15`.
+- Prompt: merge-time PR section + each program with its compiler errors. Directories are stripped from errors so no host
+  paths go to the API (tested).
+- run.py classifier now also reports `compile_diff [both]` when both versions fail with a different first error
+  (`error_signature`), which exposed the #4958 const-lookup regression that used to be filed as invalid.
+- coverage_loop.py now fails loudly when programs run but gcov yields nothing (Apple clang on the Mac host): use `--docker`.
+- Tests: `python3 -m unittest pipeline.test_fix pipeline.test_generate`.
+
+## pipeline/classify.py (intended vs unintended)
+- Input: live programs (generated.json entries not superseded) whose result is output_diff or compile_diff. same/invalid/flaky are only counted.
+- Clusters by status + first differing output line pair (or exit-code change), or by the first compiler-error kind
+  (`run.error_signature`) per failing side. #4958: 18 differing programs -> 7 clusters; #5459: 2 programs -> 2 clusters.
+- ONE request per PR (temperature 0): merge-time PR section (same leak filter as generate.py) + each cluster with up to 2
+  representative sources and old/new outputs or compiler errors (host paths stripped, header comments stripped).
+  Model returns intended | unintended | unclear + confidence + reason per cluster; a missing/odd verdict becomes `unclear`.
+- Output `classification.json` (`pr_verdict.regression_candidate` = any cluster unintended) and `classify.prompt.txt`.
+- Model: `--model` (default Flash-Lite). Classification is a judgment call; 3.8 Flash's free 20/day covers the seed PRs
+  but not 240 PRs, so decide after seeing Flash-Lite's verdicts on #4958/#5459.
+- Tests: `python3 -m unittest pipeline.test_classify pipeline.test_fix pipeline.test_generate` (42, fake model).
+
+## pipeline/report.py (tables for the talk and final report)
+- `python3 pipeline/report.py <target> [--prs ...]` -> `results/<t>/report.md` + `report.json`. No LLM calls; reads
+  generated.json, results.json, classification.json, coverage.json per PR. Definitions are in the module docstring
+  (compile success as generated vs after fix.py, both "new" and "both versions"; deterministic; behavioral difference;
+  LLM calls are estimated from the files; wall time is run.py's last run only).
+- `data/<t>/seeded.json` lists PRs with a known answer (from the plan: #4958 unintended, later #5689; #5459 intended).
+  Used only by the report, never by a prompt. Recall on that set is tiny by construction (n=1) and is labeled as such.
+- Result on json so far (2 PRs): #4958 flagged as regression candidate (const lookup + ordered_json clusters), #5459
+  clean; compile success as generated 95% new / 60% both, after fix.py 95% / 80%; 6 LLM calls total (3 per PR).
+  Cross-checked by recounting results.json by hand.
+- Not yet measured: classifier precision against hand labels and inter-labeler agreement (needs labels from both of us),
+  recall beyond the seeded set, QuantLib/duckdb.
+- Tests: `python3 -m unittest pipeline.test_report pipeline.test_classify pipeline.test_fix pipeline.test_generate` (48).
+- Unexplained leftover: data/nlohmann-json/tests/4958/classification.prompt.txt (18:40, different prompt text, no code in
+  the repo writes that name; classify.py writes classify.prompt.txt). Not committed.
+
+## pipeline/batch.py (scale driver)
+- `python3 pipeline/batch.py <target> (--all | --prs N ...) [--limit K] [--docker] [--dry-run] [--model M] [--classify-model M]
+  [--redo generate,run,fix,classify] [--max-failures 5]`: generate -> run -> fix -> classify per PR, then report.
+- Resumable: a stage is skipped when its output is current (generate: generated.json; run: results.json covers every
+  .cpp; fix: manifest "fix" marker, repairs present, or nothing repairable; classify: classification.json carries the
+  sha256 of the results.json it judged). Any stage that runs makes the later ones run. `--redo generate` cascades.
+- Each stage is its own process (isolation); output in cache/logs/<target>/<pr>.log. Stage exit 3 = daily LLM quota spent
+  -> stop (resets midnight Pacific), still write the report. Other failures: recorded, PR skipped, retried next run;
+  `--max-failures` halts a systematically failing run before it burns the day's requests.
+- Order: seeded PRs first, then prs.jsonl order. Worst case 4 requests per PR (1 generate + 2 fix + 1 classify); the
+  header line prints the worst case and what is left of today's quota for the model.
+- json: 120 PRs need work (the 2 seeds are done): at most 480 requests vs ~488 left on a fresh day for Flash-Lite.
+- fix.py now writes `manifest["fix"]`; classify.py writes `results_sha256` (older classification files fall back to mtime).
+- Tests: `python3 -m unittest pipeline.test_batch pipeline.test_report pipeline.test_classify pipeline.test_fix pipeline.test_generate` (62).

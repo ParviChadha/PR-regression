@@ -86,6 +86,17 @@ class LlmTests(unittest.TestCase):
         self.assertEqual(post.call_count, 2)
         sleep.assert_any_call(8.0)
 
+    def test_503_and_timeout_are_retried_and_503_not_charged_to_daily_budget(self):
+        busy = json.dumps({"error": {"code": 503, "message": "The model is overloaded."}})
+        with mock.patch.object(llm, "_post", side_effect=[(503, busy), (0, "TimeoutError: timed out"),
+                                                          (200, OK_BODY)]) as post, \
+                mock.patch.object(llm.time, "sleep") as sleep:
+            llm.call("p", model="gemini-3.8-flash")
+        self.assertEqual(post.call_count, 3)
+        sleep.assert_any_call(30)
+        sleep.assert_any_call(60)
+        self.assertEqual(llm.calls_today("gemini-3.8-flash"), 2)  # the timeout and the success
+
     def test_rpm_spacing_waits(self):
         clock = [1000.0]
         slept = []
@@ -135,6 +146,49 @@ class EnvFileTests(unittest.TestCase):
     def test_dotenv_does_not_leak_other_variables_into_the_environment(self):
         self.key_from("GEMINI_API_KEY=k\nPRH_LLM_RPD=1\n")
         self.assertNotIn("PRH_LLM_RPD", os.environ)
+
+
+class RunErrorsTests(unittest.TestCase):
+    def test_compile_errors_keep_the_root_cause_under_a_template_dump(self):
+        import run
+        root = "a.cpp:9:3: error: no match for call to 'less<void>'"
+        noise = "\n".join("note: " + "x" * 300 for _ in range(60))
+        out = run._compile_errors(noise + "\n" + root + "\n" + "y" * 100 + " error: second\n" + noise)
+        self.assertTrue(out.startswith(root))
+        self.assertLess(len(out), 4001)
+        self.assertEqual(run._compile_errors("undefined reference to foo"), "undefined reference to foo")
+
+    def test_classify_both_fail_with_different_errors_is_a_compile_diff(self):
+        import run
+        def res(err):
+            return {"compile_ok": False, "compile_stderr": err, "stable": True, "runs": []}
+        clean = "t.cpp:15:24: error: no match for \u2018operator[]\u2019 (operand types are \u2018json\u2019 and \u2018MyView\u2019)"
+        hard = "stl_tree.h:1303:53: error: no match for call to \u2018(const std::less<void>) (const MyView&)\u2019"
+        self.assertEqual(run.classify(res(clean), res(hard)), ("compile_diff", "both"))
+        # same kind of error, different line numbers and type names: still a broken test
+        other = clean.replace("15:24", "99:1").replace("MyView", "Other")
+        self.assertEqual(run.classify(res(clean), res(other)), ("invalid", None))
+        ok = {"compile_ok": True, "compile_stderr": "", "stable": True,
+              "runs": [{"timeout": False, "exit": 0, "sha256": "x"}]}
+        self.assertEqual(run.classify(res(clean), ok), ("compile_diff", "old"))
+
+    def test_coverage_refuses_to_report_zeros_when_gcov_produced_nothing(self):
+        import coverage_loop
+        bad = {"a.cpp": {"compiled": True, "exit": 0, "timeout": False, "covered": {}, "uncovered": {},
+                         "gcda": 0, "gcov_files": 0}}
+        env = argparse.Namespace(flags=lambda w: [], new_dir="/x")
+        a = argparse.Namespace(std="c++17", timeout=1, compile_timeout=1, jobs=1, docker=False)
+        with mock.patch("run.launch_worker", return_value=bad):
+            with self.assertRaises(SystemExit) as cm:
+                coverage_loop.measure(env, Path("/t"), ["a.cpp"], {}, a)
+        self.assertIn("--docker", str(cm.exception))
+        good = {"a.cpp": {**bad["a.cpp"], "gcda": 1, "gcov_files": 3}}
+        with mock.patch("run.launch_worker", return_value=good):
+            self.assertEqual(coverage_loop.measure(env, Path("/t"), ["a.cpp"], {}, a), good)
+
+    def test_system_prompt_asks_for_detection_idiom_and_distinct_entry_points(self):
+        self.assertIn("detection idiom", generate.SYSTEM)
+        self.assertIn("distinct public entry points", generate.SYSTEM)
 
 
 class ParseTests(unittest.TestCase):

@@ -86,8 +86,9 @@ def _usage():
     return [c for c in calls if c["t"] > cutoff]
 
 
-def _record(calls, model):
-    calls.append({"t": time.time(), "model": model, "day": datetime.now(PACIFIC).date().isoformat()})
+def _record(calls, model, status=200):
+    calls.append({"t": time.time(), "model": model, "day": datetime.now(PACIFIC).date().isoformat(),
+                  "status": status})
     CACHE.mkdir(parents=True, exist_ok=True)
     tmp = CACHE / "usage.json.tmp"
     tmp.write_text(json.dumps({"calls": calls}))
@@ -95,8 +96,11 @@ def _record(calls, model):
 
 
 def calls_today(model):
+    """Requests that count against the daily budget. Server-side 5xx failures (model overloaded) are not counted;
+    they are still recorded so RPM spacing sees them. Timeouts (status 0) are counted: the server may have finished."""
     day = datetime.now(PACIFIC).date().isoformat()
-    return sum(1 for c in _usage() if c["model"] == model and c["day"] == day)
+    return sum(1 for c in _usage() if c["model"] == model and c["day"] == day
+               and not 500 <= c.get("status", 200) < 600)
 
 
 def _wait_for_rpm(calls, model, rpm):
@@ -110,14 +114,17 @@ def _wait_for_rpm(calls, model, rpm):
 
 
 def _post(model, payload, key):
-    """One HTTP call. -> (status, body text). Replaced by a fake in tests."""
+    """One HTTP call. -> (status, body text); status 0 = timeout or network error. Replaced by a fake in tests.
+    Thinking models (e.g. gemini-3.8-flash) asked for 20 programs can take many minutes, hence the long timeout."""
     req = urllib.request.Request(API.format(model=model), data=json.dumps(payload).encode(),
                                  headers={"Content-Type": "application/json", "x-goog-api-key": key})
     try:
-        with urllib.request.urlopen(req, timeout=300) as r:
+        with urllib.request.urlopen(req, timeout=float(os.environ.get("PRH_LLM_TIMEOUT", 900))) as r:
             return r.status, r.read().decode("utf-8", "replace")
     except urllib.error.HTTPError as e:
         return e.code, e.read().decode("utf-8", "replace")
+    except (TimeoutError, urllib.error.URLError, ConnectionError) as e:
+        return 0, f"{type(e).__name__}: {e}"
 
 
 def call(prompt, system=None, schema=None, model=None, temperature=0.2, max_output_tokens=32768, force=False):
@@ -147,16 +154,22 @@ def call(prompt, system=None, schema=None, model=None, temperature=0.2, max_outp
                                  f"Cached responses are kept, so rerun the same command then.")
         _wait_for_rpm(calls, model, rpm)
         status, body = _post(model, payload, key)
-        _record(_usage(), model)
+        _record(_usage(), model, status)
         if status == 200:
             break
         low = body.lower()
         if status == 429 and ("perday" in low.replace(" ", "").replace("_", "") or "per day" in low):
             raise QuotaExhausted(f"{model}: the API reports the daily quota is exhausted; rerun after midnight Pacific.")
-        if status in (429, 500, 503) and attempt < 5:
+        if status in (0, 429, 500, 502, 503, 504) and attempt < 5:
             m = re.search(r'"retryDelay"\s*:\s*"(\d+(?:\.\d+)?)s"', body)
-            pause = float(m.group(1)) + 1 if m else 10 * (attempt + 1)
-            print(f"llm: HTTP {status}, retrying in {pause:.0f}s", file=sys.stderr)
+            if m:
+                pause = float(m.group(1)) + 1
+            elif status == 429:
+                pause = 10 * (attempt + 1)
+            else:  # overloaded / timed out: back off exponentially so the model has time to recover
+                pause = min(30 * 2 ** attempt, 300)
+            what = "timeout/network error" if status == 0 else f"HTTP {status}"
+            print(f"llm: {what}, retrying in {pause:.0f}s ({body[:120].strip()})", file=sys.stderr)
             time.sleep(pause)
             continue
         raise SystemExit(f"llm: HTTP {status} from {model}: {body[:600]}")
