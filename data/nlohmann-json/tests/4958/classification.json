@@ -1,0 +1,123 @@
+{
+  "target": "nlohmann-json",
+  "pr": 4958,
+  "model": "gemini-3.5-flash-lite",
+  "prompt_sha256": "5e58b9681cafec055627b5ef8c8ea78e88dc2b55e03e0690cf88670c5ca832ae",
+  "clusters": [
+    {
+      "id": "C1",
+      "status": "output_diff",
+      "failed_on": null,
+      "programs": [
+        "gen_21.cpp",
+        "gen_22.cpp",
+        "gen_23.cpp",
+        "gen_24.cpp",
+        "gen_26.cpp",
+        "gen_27.cpp",
+        "gen_28.cpp"
+      ],
+      "verdict": "intended",
+      "confidence": "high",
+      "reason": "The PR updates is_usable_as_basic_json_key_type to allow types convertible to std::string_view as keys, enabling custom string-viewable types to be used in operator[]."
+    },
+    {
+      "id": "C2",
+      "status": "compile_diff",
+      "failed_on": "old",
+      "programs": [
+        "gen_11.cpp",
+        "gen_16.cpp",
+        "gen_17.cpp",
+        "gen_18.cpp",
+        "gen_19.cpp",
+        "gen_20.cpp"
+      ],
+      "verdict": "intended",
+      "confidence": "high",
+      "reason": "Fixes compilation failures when passing classes with conversion to std::string_view into operator[], which is the main goal of issue #3912 and this PR."
+    },
+    {
+      "id": "C3",
+      "status": "compile_diff",
+      "failed_on": "both",
+      "programs": [
+        "gen_03.cpp"
+      ],
+      "verdict": "unintended",
+      "confidence": "medium",
+      "reason": "The test fails to compile on the new version due to an internal comparator type mismatch error when using a const json object with a custom string_view key."
+    },
+    {
+      "id": "C4",
+      "status": "output_diff",
+      "failed_on": null,
+      "programs": [
+        "gen_08.cpp"
+      ],
+      "verdict": "intended",
+      "confidence": "high",
+      "reason": "Directly tests the new type trait check std::is_convertible<KeyType, std::string_view>::value added in the PR, which evaluates to true for convertible types."
+    },
+    {
+      "id": "C5",
+      "status": "output_diff",
+      "failed_on": null,
+      "programs": [
+        "gen_12.cpp"
+      ],
+      "verdict": "intended",
+      "confidence": "high",
+      "reason": "Enables successful map lookups using keys that convert to std::string_view instead of failing or picking an unintended conversion."
+    },
+    {
+      "id": "C6",
+      "status": "compile_diff",
+      "failed_on": "new",
+      "programs": [
+        "gen_25.cpp"
+      ],
+      "verdict": "unintended",
+      "confidence": "high",
+      "reason": "Breaks usage of ordered_json with transparent comparators when using keys that convert to std::string_view, leading to a substitution failure inside ordered_map."
+    },
+    {
+      "id": "C7",
+      "status": "output_diff",
+      "failed_on": null,
+      "programs": [
+        "gen_29.cpp"
+      ],
+      "verdict": "intended",
+      "confidence": "high",
+      "reason": "Validates that multiple distinct custom keys supporting std::string_view conversion are now correctly recognized and usable in operator[]."
+    }
+  ],
+  "clusters_not_shown": 0,
+  "counts": {
+    "same": 2,
+    "invalid": 0,
+    "flaky": 0,
+    "superseded": 9,
+    "missing": 0
+  },
+  "pr_verdict": {
+    "regression_candidate": true,
+    "unintended_clusters": [
+      "C3",
+      "C6"
+    ]
+  },
+  "usage": {
+    "promptTokenCount": 5998,
+    "candidatesTokenCount": 508,
+    "totalTokenCount": 6506,
+    "promptTokensDetails": [
+      {
+        "modality": "TEXT",
+        "tokenCount": 5998
+      }
+    ],
+    "serviceTier": "standard"
+  }
+}
