@@ -1,0 +1,87 @@
+{
+ "base_ref": "main",
+ "base_sha": "16917f94f9e0c0a0fc8be84d55edc10e712e4666",
+ "body": "Fixes: #27439 \nextend the CharacterIsInitialNumber check in base_tokenizer so that '.' starts a number only if the next character is a digit.\nBefore: \n<img width=\"1094\" height=\"226\" alt=\"image\" src=\"https://github.com/user-attachments/assets/de79e150-00f6-42f9-b8cb-86101632ecbe\" />\n\nAfter: \n<img width=\"1091\" height=\"181\" alt=\"image\" src=\"https://github.com/user-attachments/assets/8179ea73-95ef-4404-8020-5da87599abc9\" />\n",
+ "comments": [
+  {
+   "body": "Thanks!",
+   "created_at": "2026-10-20T08:39:28Z",
+   "user": {
+    "login": "Mytherin",
+    "type": "User"
+   }
+  },
+  {
+   "body": "Hi @RohinJoshi1, could you take a look at the CI failures? They seem related to your changes",
+   "created_at": "2026-11-06T08:00:54Z",
+   "user": {
+    "login": "DinosL",
+    "type": "User"
+   }
+  },
+  {
+   "body": "Hey @DinosL, I've added the patch for it. ",
+   "created_at": "2026-11-06T16:31:48Z",
+   "user": {
+    "login": "RohinJoshi1",
+    "type": "User"
+   }
+  }
+ ],
+ "created_at": "2026-10-19T05:06:02Z",
+ "fetched_at": "2026-11-23T20:34:47Z",
+ "head_sha": "51b290db95d9d11504df0a5fe2ef1d328735865f",
+ "labels": [
+  "Ready To Merge",
+  "backport v2.0-cyanoptera"
+ ],
+ "linked_issues": [
+  {
+   "body": "### What happens?\n\nIn DuckDB v2.0, `Parser::Tokenize` classifies the `.` that separates the parts of a qualified name (`t.a`, `db.main.t`, `\"My Table\".\"My Col\"`) as `NUMERIC_CONSTANT`. In v1.5.6 it's `OPERATOR`. This is visible through `duckdb.tokenize()` in Python, which returns `numeric_const` where v1.5.6 returned `operator`.\n\nNumbers that start or end with a dot (`.5`, `1.`) are `numeric_const` in both versions, as expected.\n\nThis looks unintended. It seems to come from the PEG tokenizer:\n- `Tokenizer::CharacterIsInitialNumber` accepts `.`, so `.5` can be lexed as a number (`src/parser/peg/tokenizer/base_tokenizer.cpp:81`).\n- So a lone `.` enters the `NUMERIC` state.\n- The next character, e.g. the `a` in `t.a`, ends the number. The `.` is then pushed as a `NUMBER_LITERAL` (`base_tokenizer.cpp:506`).\n- `Parser::Tokenize` maps that to `SIMPLIFIED_TOKEN_NUMERIC_CONSTANT` (`src/parser/parser.cpp:397`).\n\nParsing isn't affected, but anything that relies on token types is. That includes syntax highlighting, and tools that look for `identifier operator('.') identifier` to recognize qualified names.\n\nOther v2.0 changes to token types look deliberate, and they are improvements. For example, `::`, `->`, `->>`, `//` and `**` changed from `keyword` to `operator`, and `test/api/capi/v2/test_capi_v2_tokenizer.cpp` pins several of them. No test there covers `.`.\n\nThe source is unchanged on `main` (f2b0bad0eb3e) and `v2.0-cyanoptera`.\n\n### To Reproduce\n\nInstall each version in its own virtual environment, and run the script below in each:\n\n```sh\npip install duckdb==1.5.6\npip install duckdb==2.0.0.dev2610162032\n```\n\n```python\nimport duckdb\n\nprint(duckdb.__version__)\nfor sql in [\"select t.a from t\", \"select * from db.main.t\", \"use db.main\", \"select 1.5, .5, 1.\"]:\n    print(sql, [(pos, sql[pos], token_type.name) for pos, token_type in duckdb.tokenize(sql)])\n```\n\nv1.5.6 output:\n\n```\n1.5.6\nselect t.a from t [(0, 's', 'keyword'), (7, 't', 'identifier'), (8, '.', 'operator'), (9, 'a', 'identifier'), (11, 'f', 'keyword'), (16, 't', 'identifier')]\nselect * from db.main.t [(0, 's', 'keyword'), (7, '*', 'operator'), (9, 'f', 'keyword'), (14, 'd', 'identifier'), (16, '.', 'operator'), (17, 'm', 'identifier'), (21, '.', 'operator'), (22, 't', 'identifier')]\nuse db.main [(0, 'u', 'keyword'), (4, 'd', 'identifier'), (6, '.', 'operator'), (7, 'm', 'identifier')]\nselect 1.5, .5, 1. [(0, 's', 'keyword'), (7, '1', 'numeric_const'), (10, ',', 'operator'), (12, '.', 'numeric_const'), (14, ',', 'operator'), (16, '1', 'numeric_const')]\n```\n\nv2.0.0.dev2610162032 output:\n\n```\n2.0.0.dev2610162032\nselect t.a from t [(0, 's', 'keyword'), (7, 't', 'identifier'), (8, '.', 'numeric_const'), (9, 'a', 'identifier'), (11, 'f', 'keyword'), (16, 't', 'identifier')]\nselect * from db.main.t [(0, 's', 'keyword'), (7, '*', 'operator'), (9, 'f', 'keyword'), (14, 'd', 'identifier'), (16, '.', 'numeric_const'), (17, 'm', 'identifier'), (21, '.', 'numeric_const'), (22, 't', 'identifier')]\nuse db.main [(0, 'u', 'keyword'), (4, 'd', 'identifier'), (6, '.', 'numeric_const'), (7, 'm', 'identifier')]\nselect 1.5, .5, 1. [(0, 's', 'keyword'), (7, '1', 'numeric_const'), (10, ',', 'operator'), (12, '.', 'numeric_const'), (14, ',', 'operator'), (16, '1', 'numeric_const')]\n```\n\n### OS:\n\nmacOS 26.6.2, arm64\n\n### DuckDB Version:\n\n2.0.0.dev2610162032 (compared with 1.5.6)\n\n### DuckDB Client:\n\nPython\n\n### Hardware:\n\n_No response_\n\n### Full Name:\n\nJeff Raymakers\n\n### Affiliation:\n\nMotherDuck\n\n### Did you include all relevant configuration (e.g., CPU architecture, Linux distribution) to reproduce the issue?\n\n- [x] Yes, I have\n\n### Did you include all code required to reproduce the issue?\n\n- [x] Yes, I have\n\n### Did you include all relevant data sets for reproducing the issue?\n\nNot applicable - the reproduction does not require a data set",
+   "labels": [
+    "needs triage"
+   ],
+   "number": 27439,
+   "state": "closed",
+   "title": "Tokenizer returns the dot in a qualified name like t.a as a numeric constant in DuckDB v2.0 (an operator in v1.5.6)"
+  }
+ ],
+ "merge_commit_sha": "609fa5ac2025c981affb7591929233f20a114264",
+ "merged_at": "2026-11-11T18:03:23Z",
+ "number": 27453,
+ "referenced_numbers": [
+  27439
+ ],
+ "repo": "duckdb/duckdb",
+ "review_comments": [
+  {
+   "body": "Can we remove this C++ test? It seems this is sufficiently covered by the SQL test below",
+   "created_at": "2026-10-19T07:23:43Z",
+   "diff_hunk": "@@ -208,6 +208,20 @@ TEST_CASE(\"V2 tokenizer: operators and the trailing-plus trimming rule\", \"[capi_\n \t                                                    {OPERATOR, 5, 1}}));\n }\n \n+TEST_CASE(\"V2 tokenizer: qualifier dots are operators, leading decimals are numbers\", \"[capi_v2][tokenizer]\") {\n+\tEnvFixture fx;\n+\tREQUIRE(TokenizeAll(fx.conn, \"select t.a from t\") == Complete({{KEYWORD, 0, 6},\n+\t                                                               {IDENTIFIER, 7, 1},\n+\t                                                               {OPERATOR, 8, 1},\n+\t                                                               {IDENTIFIER, 9, 1},\n+\t                                                               {KEYWORD, 11, 4},\n+\t                                                               {IDENTIFIER, 16, 1}}));\n+\tREQUIRE(\n+\t    TokenizeAll(fx.conn, \"select 1.5, .5, 1.\") ==\n+\t    Complete(",
+   "line": 221,
+   "path": "test/api/capi/v2/test_capi_v2_tokenizer.cpp",
+   "user": {
+    "login": "Mytherin",
+    "type": "User"
+   }
+  },
+  {
+   "body": "Sure, will do ",
+   "created_at": "2026-10-19T17:17:15Z",
+   "diff_hunk": "@@ -208,6 +208,20 @@ TEST_CASE(\"V2 tokenizer: operators and the trailing-plus trimming rule\", \"[capi_\n \t                                                    {OPERATOR, 5, 1}}));\n }\n \n+TEST_CASE(\"V2 tokenizer: qualifier dots are operators, leading decimals are numbers\", \"[capi_v2][tokenizer]\") {\n+\tEnvFixture fx;\n+\tREQUIRE(TokenizeAll(fx.conn, \"select t.a from t\") == Complete({{KEYWORD, 0, 6},\n+\t                                                               {IDENTIFIER, 7, 1},\n+\t                                                               {OPERATOR, 8, 1},\n+\t                                                               {IDENTIFIER, 9, 1},\n+\t                                                               {KEYWORD, 11, 4},\n+\t                                                               {IDENTIFIER, 16, 1}}));\n+\tREQUIRE(\n+\t    TokenizeAll(fx.conn, \"select 1.5, .5, 1.\") ==\n+\t    Complete(",
+   "line": 221,
+   "path": "test/api/capi/v2/test_capi_v2_tokenizer.cpp",
+   "user": {
+    "login": "RohinJoshi1",
+    "type": "User"
+   }
+  }
+ ],
+ "state": "closed",
+ "title": "[Fix #27439] Tokenizer returns the dot in a qualified name like t.a as a numeric constant in DuckDB v2.0",
+ "transport": "gh",
+ "user": {
+  "login": "RohinJoshi1",
+  "type": "User"
+ }
+}

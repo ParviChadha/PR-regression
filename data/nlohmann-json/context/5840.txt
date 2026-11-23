@@ -1,0 +1,140 @@
+// Upstream tests at the PR's parent commit 4530d9681 that use the changed code.
+// Names searched (test lines using each): basic_json (35), JSON_IMPLEMENT_SCALAR_FAST (0), JSON_IMPLEMENT_SCALAR_CASES (0), JSON_IMPLEMENT_OPERATOR (0), format_as (23), to_string (97), operator<< (83), operator>> (79), operator!= (52), operator< (199), operator== (57), json_value (0), destroy (1), equal_structured (0), equal_leaf (0), init_owned (0), owns_memory (0), copy_owning (0), equal_general (0), less_general (0), equal_bounded (0), equal_dispatch (0), standard_object_t (0), equal_bounded_containers (0), destroy_owned (0), standard_array_t (0)
+
+// ---- tests/src/unit-allocator.cpp:110-134  (uses: destroy)
+    struct rebind
+    {
+        using other = my_allocator<U>;
+    };
+};
+
+// allows deletion of raw pointer, usually hold by json_value
+template<class T>
+void my_allocator_clean_up(T* p)
+{
+    assert(p != nullptr);
+    my_allocator<T> alloc;
+    alloc.destroy(p);
+    alloc.deallocate(p, 1);
+}
+} // namespace
+
+TEST_CASE("controlled bad_alloc")
+{
+    // create JSON type using the throwing allocator
+    using my_json = nlohmann::json::with_allocator_t<my_allocator>;
+
+    SECTION("class json_value")
+    {
+        SECTION("json_value(value_t)")
+
+// ---- tests/src/unit-comparison.cpp:73-85  (uses: operator!=, operator<, operator==)
+TEST_CASE("lexicographical comparison operators")
+{
+    constexpr auto f_ = false;
+    constexpr auto _t = true;
+    constexpr auto nan = std::numeric_limits<json::number_float_t>::quiet_NaN();
+#if JSON_HAS_THREE_WAY_COMPARISON
+    constexpr auto lt = std::partial_ordering::less;
+    constexpr auto gt = std::partial_ordering::greater;
+    constexpr auto eq = std::partial_ordering::equivalent;
+    constexpr auto un = std::partial_ordering::unordered;
+#endif
+
+#if JSON_HAS_THREE_WAY_COMPARISON
+
+// ---- tests/src/unit-comparison.cpp:127-147  (uses: operator!=, operator<, operator==)
+        SECTION("comparison: less")
+        {
+            REQUIRE(expected_lt.size() == j_types.size());
+            for (size_t i = 0; i < j_types.size(); ++i)
+            {
+                REQUIRE(expected_lt[i].size() == j_types.size());
+                for (size_t j = 0; j < j_types.size(); ++j)
+                {
+                    CAPTURE(i)
+                    CAPTURE(j)
+                    // check precomputed values
+#if JSON_HAS_THREE_WAY_COMPARISON
+                    // JSON_HAS_CPP_20 (do not remove; see note at top of file)
+                    CHECK((j_types[i] < j_types[j]) == expected_lt[i][j]);
+#else
+                    CHECK(operator<(j_types[i], j_types[j]) == expected_lt[i][j]);
+#endif
+                    CHECK(f(j_types[i], j_types[j]) == expected_lt[i][j]);
+                }
+            }
+        }
+
+// ---- tests/src/unit-deserialization.cpp:1271-1316  (uses: operator<<, operator>>, to_string)
+TEST_CASE("parse error positions are the same for contiguous and stream input")
+{
+    // contiguous input derives the position from the input on error, stream
+    // input counts it while reading (see lexer::lazy_position); the cases
+    // cover newlines before the error, ungetting a newline after a number,
+    // newlines inside a string, a comment, and reads at the end of input
+    struct test_case
+    {
+        std::string input;
+        std::size_t byte;
+        std::string message;
+    };
+    const std::vector<test_case> cases =
+    {
+        {"[\n  1,\n  2\n", 12, "[json.exception.parse_error.101] parse error at line 4, column 1: syntax error while parsing array - unexpected end of input; expected ']'"},
+        {"[1\n,2,\n]", 8, "[json.exception.parse_error.101] parse error at line 3, column 1: syntax error while parsing value - unexpected ']'; expected '[', '{', or a literal"},
+        {"[1\n x]", 5, "[json.exception.parse_error.101] parse error at line 2, column 2: syntax error while parsing array - invalid literal; last read: '1<U+000A> x'; expected ']'"},
+        {"1\n2", 3, "[json.exception.parse_error.101] parse error at line 2, column 1: syntax error while parsing value - unexpected number literal; expected end of input"},
+        {
+            "{\"a\":\n\"b\nc\"}", 9, R"([json.exception.parse_error.101] parse error at line 3, column 0: syntax error while parsing value - invalid string: control character U+000A (LF) must be escaped to \u000A or \n; last read: '"b<U+000A>')"
+        },
+        {"/* a\n b */\n x", 13, "[json.exception.parse_error.101] parse error at line 3, column 2: syntax error while parsing value - invalid literal; last read: '/* a<U+000A> b */<U+000A> x'"},
+        {"\n\n", 3, "[json.exception.parse_error.101] parse error at line 3, column 1: syntax error while parsing value - unexpected end of input; expected '[', '{', or a literal"},
+        {"[\"a\",\n 1e\n]", 10, "[json.exception.parse_error.101] parse error at line 3, column 0: syntax error while parsing value - invalid number; expected '+', '-', or digit after exponent; last read: '1e<U+000A>'"},
+        {"[tru\n]", 5, "[json.exception.parse_error.101] parse error at line 2, column 0: syntax error while parsing value - invalid literal; last read: '[tru<U+000A>'"},
+    };
+
+    for (const auto& c : cases)
+    {
+        CAPTURE(c.input)
+        const std::string expected = std::to_string(c.byte) + " " + c.message;
+
+        SaxErrorRecorder string_sax;
+        CHECK_FALSE(json::sax_parse(c.input, &string_sax, json::input_format_t::json, true, true));
+        CHECK(string_sax.error == expected);
+
+        SaxErrorRecorder pointer_sax;
+        CHECK_FALSE(json::sax_parse(c.input.data(), c.input.data() + c.input.size(), &pointer_sax, json::input_format_t::json, true, true));
+        CHECK(pointer_sax.error == expected);
+
+        std::istringstream is(c.input);
+        SaxErrorRecorder stream_sax;
+        CHECK_FALSE(json::sax_parse(is, &stream_sax, json::input_format_t::json, true, true));
+        CHECK(stream_sax.error == expected);
+    }
+}
+
+// ---- tests/src/unit-regression2.cpp:576-591  (uses: operator<<, operator==, operator>>)
+    SECTION("issue #1647 - compile error when deserializing enum if both non-default from_json and non-member operator== exists for other type")
+    {
+        // does not compile on ICPC when targeting C++20
+#if !(defined(__INTEL_COMPILER) && __cplusplus >= 202000)
+        {
+            const json j;
+            const NonDefaultFromJsonStruct x(j);
+            NonDefaultFromJsonStruct y;
+            CHECK(x == y);
+        }
+#endif
+
+        auto val = nlohmann::json("one").get<for_1647>();
+        CHECK(val == for_1647::one);
+        const json j = val;
+    }
+
+// ---- tests/src/unit-custom-object-type.cpp:447-451  (uses: operator!=, operator<, operator==)
+    SECTION("object_comparator_t falls back to default_object_comparator_t")
+    {
+        CHECK(std::is_same < no_key_compare_json::object_comparator_t,
+              no_key_compare_json::default_object_comparator_t >::value);
+    }

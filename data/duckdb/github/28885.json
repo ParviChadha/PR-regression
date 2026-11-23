@@ -1,0 +1,35 @@
+{
+ "base_ref": "main",
+ "base_sha": "b54bafed481c85bf170006a30004c60394eeab80",
+ "body": "Hi team, I notice reading from hive partitioned parquets doesn't always get the correct type; for example\n```sql\nmemory D COPY (\n             SELECT TIMESTAMP '2024-01-01 12:30:00' AS ts, TIME '12:30:00' AS t, DATE '2024-01-01' AS d, 1 AS v\n         ) TO '/tmp/hive_repro' (FORMAT parquet, PARTITION_BY (ts, t, d));\nmemory D SELECT typeof(ts), typeof(t), typeof(d)\n         FROM read_parquet('/tmp/hive_repro/**/*.parquet', hive_partitioning = true);\n\u250c\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u252c\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u252c\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2510\n\u2502 typeof(ts) \u2502 typeof(t) \u2502 typeof(d) \u2502\n\u2502  varchar   \u2502  varchar  \u2502  varchar  \u2502\n\u251c\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u253c\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u253c\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2524\n\u2502 VARCHAR    \u2502 VARCHAR   \u2502 DATE      \u2502\n\u2514\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2534\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2534\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2518\n```\nI think the root cause is\n- Hive partition type detection cast the raw, URL-encoded directory value, so TIMESTAMP partitions written by DuckDB were read back as VARCHAR\n- Detection now unescapes the value before trying the candidate casts, as In the [`HivePartitioning::GetValue`](https://github.com/duckdb/duckdb/blob/b54bafed481c85bf170006a30004c60394eeab80/src/common/hive_partitioning.cpp#L171) already does when reading\n\n",
+ "comments": [
+  {
+   "body": "Thanks!",
+   "created_at": "2026-11-16T14:52:55Z",
+   "user": {
+    "login": "Mytherin",
+    "type": "User"
+   }
+  }
+ ],
+ "created_at": "2026-11-16T14:34:41Z",
+ "fetched_at": "2026-11-23T20:34:07Z",
+ "head_sha": "9ea07dde4e0838e2b9160bee0bdb48024ca14c78",
+ "labels": [
+  "backport v2.0-cyanoptera"
+ ],
+ "linked_issues": [],
+ "merge_commit_sha": "0df17a77c6095760e479eb3851aeddf169fc86d3",
+ "merged_at": "2026-11-16T21:15:29Z",
+ "number": 28885,
+ "referenced_numbers": [],
+ "repo": "duckdb/duckdb",
+ "review_comments": [],
+ "state": "closed",
+ "title": "Detect hive partition types from unescaped values",
+ "transport": "gh",
+ "user": {
+  "login": "dentiny",
+  "type": "User"
+ }
+}

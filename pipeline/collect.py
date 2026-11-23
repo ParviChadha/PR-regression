@@ -11,7 +11,8 @@ old = the commit's first parent, new = the commit itself.
 Filters, in order (the first that fails is the PR's verdict):
     bot                  author or subject is a dependency/CI bot
     doc_title            title starts with "DOC" (Testora)
-    no_main_source       no C++ file changed under `main_source` (tests, docs, CI, generated paths excluded)
+    no_main_source       no C++ file changed under `main_source` (tests, docs, CI, generated files excluded:
+                         `generated_paths`, and with `generated_marker` any file whose first 20 lines match it)
     too_many_main_files  more than `max_main_files` main source files changed (Testora: 3)
     comment_only         every changed line in main source files is blank or a comment
 PRs passing all filters are "checked". PRs in `seed_prs` are always collected, whatever their verdict.
@@ -34,7 +35,8 @@ import re
 import sys
 from collections import Counter
 
-from pipeline.common import Target, git, write_jsonl, write_text
+sys.path.insert(0, str(pathlib.Path(__file__).resolve().parents[1]))   # also runnable as python3 pipeline/collect.py
+from pipeline.common import Target, git, write_jsonl, write_text  # noqa: E402
 
 CPP_EXT = {".c", ".cc", ".cpp", ".cxx", ".c++", ".h", ".hh", ".hpp", ".hxx", ".h++",
            ".ipp", ".inl", ".tcc", ".tpp"}
@@ -45,6 +47,8 @@ BOT_AUTHOR_RE = re.compile(r"\[bot\]|dependabot|github-actions|pre-commit-ci|ren
 BOT_SUBJECT_RE = re.compile(r"^(build|chore)\(deps|^bump |^\[pre-commit|pre-commit autoupdate|"
                             r"^update pre-commit", re.I)
 HUNK_RE = re.compile(r"^@@ -\d+(?:,\d+)? \+\d+(?:,\d+)? @@ ?(.*)$")
+
+GENERATED_MARKER_LINES = 20
 
 FIELD = "\x1f"
 RECORD = "\x1e"
@@ -159,19 +163,43 @@ def changed_files(repo, old, new):
     return files
 
 
+def is_generated_text(text, marker_re, lines=GENERATED_MARKER_LINES):
+    """True when the file's first `lines` lines carry a "this file is generated" marker."""
+    return bool(marker_re.search("\n".join(text.splitlines()[:lines])))
+
+
+def generated_by_marker(t, c, paths):
+    """The `paths` whose content (at the new commit, or the old one for a deleted file) starts with the target's
+    `generated_marker`. Generated registries (duckdb's enum_util.cpp is rewritten by ~60% of PRs) are not what a PR
+    changes by hand and would push most PRs over max_main_files."""
+    pattern = t.get("generated_marker")
+    if not pattern or not paths:
+        return set()
+    rx = re.compile(pattern, re.I)
+    out = set()
+    for f in paths:
+        sha = c["sha_old"] if f["status"][0] == "D" else c["sha_new"]
+        text = git(t.repo, "show", f"{sha}:{f['path']}", check=False)
+        if is_generated_text(text, rx, t.get("generated_marker_lines", GENERATED_MARKER_LINES)):
+            out.add(f["path"])
+    return out
+
+
 def analyze(t, c):
     """Fill in files, main files, diff stats and the verdict for one PR commit."""
     files = changed_files(t.repo, c["sha_old"], c["sha_new"])
-    main = [f["path"] for f in files
-            if f["status"][0] != "D" and is_main_source(f["path"], t["main_source"], t.get("generated_paths", []))]
-    deleted_main = [f["path"] for f in files
-                    if f["status"][0] == "D" and is_main_source(f["path"], t["main_source"], t.get("generated_paths", []))]
+    cand = [f for f in files if is_main_source(f["path"], t["main_source"], t.get("generated_paths", []))]
+    generated = generated_by_marker(t, c, cand)
+    main = [f["path"] for f in cand if f["status"][0] != "D" and f["path"] not in generated]
+    deleted_main = [f["path"] for f in cand if f["status"][0] == "D" and f["path"] not in generated]
     paths = main + deleted_main
     diff = git(t.repo, "-c", f"core.attributesFile={cpp_attributes(t).as_posix()}", "diff", "-U0", "-M",
                c["sha_old"], c["sha_new"], "--", *paths) if paths else ""
     info = parse_diff(diff)
     c.update(files=files, main_files=main, deleted_main_files=deleted_main, n_files=len(files),
              n_main=len(main), **info)
+    if generated:
+        c["generated_files"] = sorted(generated)
     c["verdict"] = verdict(c["subject"], c["author"], main + deleted_main, info, t["max_main_files"])
     return c
 

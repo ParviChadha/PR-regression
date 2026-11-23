@@ -1,0 +1,37 @@
+{
+ "base_ref": "main",
+ "base_sha": "988d97f31537cdcc394955850fc614f8d86ae914",
+ "body": "A plan that DuckDB versions before 2.0 serialized for `approx_quantile` over a DECIMAL column no longer deserializes: \"Failed to find function approx_quantile(BIGINT)\", or another integer type, depending on the DECIMAL's width.\n\nIn v1.x, `BindApproxQuantileDecimal` erased the quantile argument and then replaced the whole function with the one for the DECIMAL's physical type, which dropped `original_arguments`, so these plans record only the shortened argument list. v1.x read them through a fallback in `AggregateFunctionSet::GetFunctionByArguments` that took the first overload whose leading parameters had the recorded types; #25991 removed it. The existing `erased_arg_approx_quantile` case does not catch this, because its DECIMAL call does carry original arguments.\n\nFor an aggregate in a plan written before v2.0.0 without original arguments, when no overload matches, this selects the first overload whose leading parameter types and return type match the plan and completes the argument list with its remaining parameters. Matching the return type keeps a scalar call from picking a list overload. The new `erased_arg_approx_quantile_decimal` case was serialized by v1.5.6.\n\nThis is a regression for plans written by v1.x, could it get the `backport v2.0-cyanoptera` label?\n",
+ "comments": [
+  {
+   "body": "Thanks!",
+   "created_at": "2026-11-12T10:54:10Z",
+   "user": {
+    "login": "Mytherin",
+    "type": "User"
+   }
+  }
+ ],
+ "created_at": "2026-11-12T09:00:58Z",
+ "fetched_at": "2026-11-23T20:34:36Z",
+ "head_sha": "5751dd36f53f62a408a8971cec6620df5f81e843",
+ "labels": [
+  "backport v2.0-cyanoptera"
+ ],
+ "linked_issues": [],
+ "merge_commit_sha": "1d050a8403a92d0c90b213beccdd17430711e6df",
+ "merged_at": "2026-11-12T15:21:03Z",
+ "number": 28737,
+ "referenced_numbers": [
+  25991
+ ],
+ "repo": "duckdb/duckdb",
+ "review_comments": [],
+ "state": "closed",
+ "title": "Read v1.x plans of approx_quantile over DECIMAL",
+ "transport": "gh",
+ "user": {
+  "login": "ywelsch",
+  "type": "User"
+ }
+}

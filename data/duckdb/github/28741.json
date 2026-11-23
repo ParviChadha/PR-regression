@@ -1,0 +1,24 @@
+{
+ "base_ref": "main",
+ "base_sha": "bcd58e199f54926b6d724885fe14350066f2b0f7",
+ "body": "Two source fixes that restore building duckdb with MSVC (`cl`). CI no longer builds with `cl`, so nothing catches these.\n\n- `TYPE_COUNT` in `src/common/types.cpp` becomes `static constexpr`, so the lambda can use it without a capture (C3493).\n- The C++ API test target gets `/Zc:strictStrings` under MSVC. Without it `cl` converts a string literal to `void*` and `Instance(\":memory:\")` picks the private `Instance(void*)` constructor in `duckdb_cpp.hpp` (C2248).\n- No behaviour change for the clang builds that ship: the flag is applied only when the compiler ID is `MSVC`, and only to the test target.\n\n`/Zc:strictStrings` is a test-side workaround. Users of `duckdb_cpp.hpp` who build with `cl` hit the same error, so the `Instance(void*)` overload deserves a fix in the header, which I left to the API owners.\n",
+ "comments": [],
+ "created_at": "2026-11-12T10:18:58Z",
+ "fetched_at": "2026-11-23T20:34:21Z",
+ "head_sha": "ad28ca7021ad2d5068e373f7bea98472f4946b3f",
+ "labels": [],
+ "linked_issues": [],
+ "merge_commit_sha": "4acf2e06ade2a4f6f9c11dea7e712d986c8b0359",
+ "merged_at": "2026-11-13T14:52:16Z",
+ "number": 28741,
+ "referenced_numbers": [],
+ "repo": "duckdb/duckdb",
+ "review_comments": [],
+ "state": "closed",
+ "title": "Fix MSVC source compatibility: constexpr lambda capture and strict string literals",
+ "transport": "gh",
+ "user": {
+  "login": "autograaf",
+  "type": "User"
+ }
+}

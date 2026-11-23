@@ -1,0 +1,147 @@
+// Upstream tests at the PR's parent commit 43fe8928e that use the changed code.
+// Names searched (test lines using each): basic_json (0), operator() (31), hash (0), string_t (182), number_integer_t (111), number_unsigned_t (47)
+
+// ---- tests/src/unit-constructor1.cpp:308-329  (uses: number_integer_t, number_unsigned_t, string_t)
+        SECTION("std::tuple of references to elements")
+        {
+            const auto a = 1.0;
+            const auto* const b = "string";
+            const auto c = 42;
+            const size_t d = 1234;
+            const auto t = std::tie(a, b, c, d);
+            json const j(t);
+
+            auto t_out = j.get<std::tuple<const json::number_float_t&,
+                 const json::string_t&,
+                 const json::number_integer_t&,
+                 const json::number_unsigned_t&>>();
+            CHECK(&std::get<0>(t_out) == j[0].get_ptr<const json::number_float_t*>());
+            CHECK(&std::get<1>(t_out) == j[1].get_ptr<const json::string_t*>());
+            CHECK(&std::get<2>(t_out) == j[2].get_ptr<const json::number_integer_t*>());
+            CHECK(&std::get<3>(t_out) == j[3].get_ptr<const json::number_unsigned_t*>());
+            CHECK(std::get<0>(t_out) == a);
+            CHECK(std::get<1>(t_out) == b);
+            CHECK(std::get<2>(t_out) == c);
+            CHECK(std::get<3>(t_out) == d);
+        }
+
+// ---- tests/src/unit-pointer_access.cpp:16-43  (uses: number_integer_t, number_unsigned_t, string_t)
+    SECTION("pointer access to object_t")
+    {
+        using test_type = json::object_t;
+        json value = {{"one", 1}, {"two", 2}};
+
+        // check if pointers are returned correctly
+        const test_type* p1 = value.get_ptr<test_type*>();
+        CHECK(p1 == value.get_ptr<test_type*>());
+        CHECK(*p1 == value.get<test_type>());
+
+        const test_type* p2 = value.get_ptr<const test_type*>();
+        CHECK(p2 == value.get_ptr<const test_type*>());
+        CHECK(*p2 == value.get<test_type>());
+
+        const test_type* const p3 = value.get_ptr<const test_type* const>();
+        CHECK(p3 == value.get_ptr<const test_type* const>());
+        CHECK(*p3 == value.get<test_type>());
+
+        // check if null pointers are returned correctly
+        CHECK(value.get_ptr<json::object_t*>() != nullptr);
+        CHECK(value.get_ptr<json::array_t*>() == nullptr);
+        CHECK(value.get_ptr<json::string_t*>() == nullptr);
+        CHECK(value.get_ptr<json::boolean_t*>() == nullptr);
+        CHECK(value.get_ptr<json::number_integer_t*>() == nullptr);
+        CHECK(value.get_ptr<json::number_unsigned_t*>() == nullptr);
+        CHECK(value.get_ptr<json::number_float_t*>() == nullptr);
+        CHECK(value.get_ptr<json::binary_t*>() == nullptr);
+    }
+
+// ---- tests/src/unit-pointer_access.cpp:45-72  (uses: number_integer_t, number_unsigned_t, string_t)
+    SECTION("pointer access to const object_t")
+    {
+        using test_type = const json::object_t;
+        const json value = {{"one", 1}, {"two", 2}};
+
+        // check if pointers are returned correctly
+        test_type* p1 = value.get_ptr<test_type*>();
+        CHECK(p1 == value.get_ptr<test_type*>());
+        CHECK(*p1 == value.get<test_type>());
+
+        const test_type* p2 = value.get_ptr<const test_type*>();
+        CHECK(p2 == value.get_ptr<const test_type*>());
+        CHECK(*p2 == value.get<test_type>());
+
+        const test_type* const p3 = value.get_ptr<const test_type* const>();
+        CHECK(p3 == value.get_ptr<const test_type* const>());
+        CHECK(*p3 == value.get<test_type>());
+
+        // check if null pointers are returned correctly
+        CHECK(value.get_ptr<const json::object_t*>() != nullptr);
+        CHECK(value.get_ptr<const json::array_t*>() == nullptr);
+        CHECK(value.get_ptr<const json::string_t*>() == nullptr);
+        CHECK(value.get_ptr<const json::boolean_t*>() == nullptr);
+        CHECK(value.get_ptr<const json::number_integer_t*>() == nullptr);
+        CHECK(value.get_ptr<const json::number_unsigned_t*>() == nullptr);
+        CHECK(value.get_ptr<const json::number_float_t*>() == nullptr);
+        CHECK(value.get_ptr<const json::binary_t*>() == nullptr);
+    }
+
+// ---- tests/src/unit-reference_access.cpp:31-59  (uses: number_integer_t, number_unsigned_t, string_t)
+    SECTION("reference access to object_t")
+    {
+        using test_type = json::object_t;
+        json value = {{"one", 1}, {"two", 2}};
+
+        // check if references are returned correctly
+        auto& p1 = value.get_ref<test_type&>();
+        CHECK(&p1 == value.get_ptr<test_type*>());
+        CHECK(p1 == value.get<test_type>());
+
+        const auto& p2 = value.get_ref<const test_type&>();
+        CHECK(&p2 == value.get_ptr<const test_type*>());
+        CHECK(p2 == value.get<test_type>());
+
+        // check if mismatching references throw correctly
+        CHECK_NOTHROW(value.get_ref<json::object_t&>());
+        CHECK_THROWS_WITH_AS(value.get_ref<json::array_t&>(),
+                             "[json.exception.type_error.303] incompatible ReferenceType for get_ref, actual type is object", json::type_error&);
+        CHECK_THROWS_WITH_AS(value.get_ref<json::string_t&>(),
+                             "[json.exception.type_error.303] incompatible ReferenceType for get_ref, actual type is object", json::type_error&);
+        CHECK_THROWS_WITH_AS(value.get_ref<json::boolean_t&>(),
+                             "[json.exception.type_error.303] incompatible ReferenceType for get_ref, actual type is object", json::type_error&);
+        CHECK_THROWS_WITH_AS(value.get_ref<json::number_integer_t&>(),
+                             "[json.exception.type_error.303] incompatible ReferenceType for get_ref, actual type is object", json::type_error&);
+        CHECK_THROWS_WITH_AS(value.get_ref<json::number_unsigned_t&>(),
+                             "[json.exception.type_error.303] incompatible ReferenceType for get_ref, actual type is object", json::type_error&);
+        CHECK_THROWS_WITH_AS(value.get_ref<json::number_float_t&>(),
+                             "[json.exception.type_error.303] incompatible ReferenceType for get_ref, actual type is object", json::type_error&);
+    }
+
+// ---- tests/src/sax_countdown.hpp:34-58  (uses: number_unsigned_t)
+    }
+
+    bool boolean(bool /*unused*/)
+    {
+        return events_left-- > 0;
+    }
+
+    bool number_integer(json::number_integer_t /*unused*/)
+    {
+        return events_left-- > 0;
+    }
+
+    bool number_unsigned(json::number_unsigned_t /*unused*/)
+    {
+        return events_left-- > 0;
+    }
+
+    bool number_float(json::number_float_t /*unused*/, const std::string& /*unused*/)
+    {
+        return events_left-- > 0;
+    }
+
+    bool string(std::string& /*unused*/)
+    {
+        return events_left-- > 0;
+
+// ---- tests/src/unit-class_parser.cpp:2375-2375  (uses: operator())
+    SECTION("with callback") \

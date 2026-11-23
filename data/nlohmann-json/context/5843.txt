@@ -1,0 +1,135 @@
+// Upstream tests at the PR's parent commit dcb96e82f that use the changed code.
+// Names searched (test lines using each): format_as (23), to_string (103), operator<< (84), operator>> (79), operator!= (56), operator< (204), to_shortest (1)
+
+// ---- tests/src/unit-to_chars.cpp:659-683  (uses: to_shortest)
+}
+
+/// Check the representation of a positive finite double: it reads back as
+/// the same value, and no representation with fewer digits does.
+void check_shortest(double v)
+{
+    std::array<char, 33> buf{};
+    char* end = nlohmann::detail::to_chars(buf.data(), buf.data() + 32, v);
+    const std::string text(buf.data(), end);
+    CAPTURE(text)
+    CHECK(parse_double(text) == v);
+    // the layout is that of format_buffer() for the digits of Zmij
+    const auto sd = nlohmann::detail::zmij::to_shortest(reinterpret_bits<std::uint64_t>(v));
+    const std::uint64_t significand = sd.has_digit ? (sd.integral * 10) + sd.digit : sd.integral;
+    int exponent = sd.has_digit ? sd.exponent : sd.exponent + 1;
+    std::string significand_digits = std::to_string(significand);
+    while (significand_digits.size() > 1 && significand_digits.back() == '0')
+    {
+        significand_digits.pop_back();
+        ++exponent;
+    }
+    std::array<char, 64> reference{};
+    std::copy(significand_digits.begin(), significand_digits.end(), reference.begin());
+    const char* const reference_end = nlohmann::detail::dtoa_impl::format_buffer(reference.data(), static_cast<int>(significand_digits.size()), exponent, -4, 15);
+    CHECK(text == std::string(reference.data(), static_cast<std::size_t>(reference_end - reference.data())));
+
+// ---- tests/src/unit-deserialization.cpp:1271-1316  (uses: operator<<, operator>>, to_string)
+TEST_CASE("parse error positions are the same for contiguous and stream input")
+{
+    // contiguous input derives the position from the input on error, stream
+    // input counts it while reading (see lexer::lazy_position); the cases
+    // cover newlines before the error, ungetting a newline after a number,
+    // newlines inside a string, a comment, and reads at the end of input
+    struct test_case
+    {
+        std::string input;
+        std::size_t byte;
+        std::string message;
+    };
+    const std::vector<test_case> cases =
+    {
+        {"[\n  1,\n  2\n", 12, "[json.exception.parse_error.101] parse error at line 4, column 1: syntax error while parsing array - unexpected end of input; expected ']'"},
+        {"[1\n,2,\n]", 8, "[json.exception.parse_error.101] parse error at line 3, column 1: syntax error while parsing value - unexpected ']'; expected '[', '{', or a literal"},
+        {"[1\n x]", 5, "[json.exception.parse_error.101] parse error at line 2, column 2: syntax error while parsing array - invalid literal; last read: '1<U+000A> x'; expected ']'"},
+        {"1\n2", 3, "[json.exception.parse_error.101] parse error at line 2, column 1: syntax error while parsing value - unexpected number literal; expected end of input"},
+        {
+            "{\"a\":\n\"b\nc\"}", 9, R"([json.exception.parse_error.101] parse error at line 3, column 0: syntax error while parsing value - invalid string: control character U+000A (LF) must be escaped to \u000A or \n; last read: '"b<U+000A>')"
+        },
+        {"/* a\n b */\n x", 13, "[json.exception.parse_error.101] parse error at line 3, column 2: syntax error while parsing value - invalid literal; last read: '/* a<U+000A> b */<U+000A> x'"},
+        {"\n\n", 3, "[json.exception.parse_error.101] parse error at line 3, column 1: syntax error while parsing value - unexpected end of input; expected '[', '{', or a literal"},
+        {"[\"a\",\n 1e\n]", 10, "[json.exception.parse_error.101] parse error at line 3, column 0: syntax error while parsing value - invalid number; expected '+', '-', or digit after exponent; last read: '1e<U+000A>'"},
+        {"[tru\n]", 5, "[json.exception.parse_error.101] parse error at line 2, column 0: syntax error while parsing value - invalid literal; last read: '[tru<U+000A>'"},
+    };
+
+    for (const auto& c : cases)
+    {
+        CAPTURE(c.input)
+        const std::string expected = std::to_string(c.byte) + " " + c.message;
+
+        SaxErrorRecorder string_sax;
+        CHECK_FALSE(json::sax_parse(c.input, &string_sax, json::input_format_t::json, true, true));
+        CHECK(string_sax.error == expected);
+
+        SaxErrorRecorder pointer_sax;
+        CHECK_FALSE(json::sax_parse(c.input.data(), c.input.data() + c.input.size(), &pointer_sax, json::input_format_t::json, true, true));
+        CHECK(pointer_sax.error == expected);
+
+        std::istringstream is(c.input);
+        SaxErrorRecorder stream_sax;
+        CHECK_FALSE(json::sax_parse(is, &stream_sax, json::input_format_t::json, true, true));
+        CHECK(stream_sax.error == expected);
+    }
+}
+
+// ---- tests/src/unit-deserialization.cpp:97-109  (uses: operator<<, operator>>)
+TEST_CASE("deserialization")
+{
+    SECTION("successful deserialization")
+    {
+        SECTION("stream")
+        {
+            std::stringstream ss1;
+            std::stringstream ss2;
+            std::stringstream ss3;
+            ss1 << R"(["foo",1,2,3,false,{"one":1}])";
+            ss2 << R"(["foo",1,2,3,false,{"one":1}])";
+            ss3 << R"(["foo",1,2,3,false,{"one":1}])";
+            const json j = json::parse(ss1);
+
+// ---- tests/src/unit-precise-stream-position.cpp:88-100  (uses: operator<<, operator>>)
+TEST_CASE("JSON_PRECISE_STREAM_POSITION")
+{
+    SECTION("the macro is part of the ABI tag")
+    {
+        const std::string ns = STRINGIZE(NLOHMANN_JSON_NAMESPACE);
+        // other tags may come before it, e.g. json_abi_diag_psp
+        CHECK(ns.find("_psp") != std::string::npos);
+    }
+
+    SECTION("a number does not consume the character that terminates it")
+    {
+        // a number is only terminated by the character following it; that
+        // character must be given back so the stream is positioned right
+
+// ---- tests/src/unit-precise-stream-position.cpp:226-236  (uses: operator<<, operator>>)
+    SECTION("a streambuf that cannot put back is not needed")
+    {
+        // the terminating character is never consumed, so no putback
+        // position is required
+        no_putback_streambuf buf("1true");
+        std::istream is(&buf);
+        json j;
+        is >> j;
+        CHECK(j == json(1));
+        CHECK(remaining(is) == "true");
+    }
+
+// ---- tests/src/unit-comparison.cpp:1154-1166  (uses: operator!=, operator<)
+TEST_CASE("comparison of scalars (inline fast path)")
+{
+    const json::number_integer_t neg = -1;
+    const json::number_integer_t pos = 5;
+    const json::number_unsigned_t big = (std::numeric_limits<json::number_unsigned_t>::max)();
+
+    SECTION("same type")
+    {
+        CHECK(json(pos) == json(pos));
+        CHECK(json(pos) != json(neg));
+        CHECK(json(neg) < json(pos));
+        CHECK_FALSE(json(pos) < json(neg));
+        CHECK_FALSE(json(pos) < json(pos));

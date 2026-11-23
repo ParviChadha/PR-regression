@@ -1,0 +1,127 @@
+// Upstream tests at the PR's parent commit 21ec9bd80 that use the changed code.
+// Names searched (test lines using each): set (129), basic_json_document (7)
+
+// ---- tests/src/unit-json_view.cpp:278-306  (uses: basic_json_document)
+    SECTION("overflow of the floating-point type")
+    {
+        // the overflow is that of the document's number_float_t: 1e39
+        // overflows a float, the largest float 3.4028235e38 does not, but
+        // 3.4028236e38 rounds beyond it; a double document is not affected
+        using json_float = nlohmann::basic_json<std::map, std::vector, std::string, bool, std::int64_t, std::uint64_t, float>;
+        using float_document = nlohmann::basic_json_document<json_float>;
+        CHECK_FALSE(json_float::accept("1e39"));
+        CHECK(json_float::accept("3.4028235e38"));
+        CHECK_FALSE(json_float::accept("3.4028236e38"));
+        for (const char* text :
+                {
+                    "1e39", "-1e39", "[3.4028235e38]", "[3.4028236e38]", "{\"a\": [1e38, -3.4028235e38]}", "{\"a\": [1e-50, 1e39]}"
+                })
+        {
+            CAPTURE(text)
+            const bool accepted = json_float::accept(text);
+            CHECK(float_document::accept(text) == accepted);
+            CHECK(float_document::parse(text, false).is_discarded() == !accepted);
+            CHECK(json_document::accept(text));
+            if (accepted)
+            {
+                CHECK(materialized<float_document>(text) == json_float::parse(text));
+            }
+        }
+        float_document f;
+        CHECK_THROWS_WITH_AS(f = float_document::parse("1e39"), "[json.exception.out_of_range.406] number overflow parsing '1e39'", json::out_of_range&);
+        CHECK_THROWS_WITH_AS(f = float_document::parse("[3.4028236e38]"), "[json.exception.out_of_range.406] number overflow parsing '3.4028236e38'", json::out_of_range&);
+    }
+
+// ---- tests/src/unit-json_view.cpp:1451-1467  (uses: basic_json_document)
+            tokens.emplace_back(buf.data());
+        }
+        using json_float = nlohmann::basic_json<std::map, std::vector, std::string, bool, std::int64_t, std::uint64_t, float>;
+        for (const auto& token : tokens)
+        {
+            CAPTURE(token)
+            const std::string text = "[" + token + "]";
+            const double b = json::parse(text)[0].get<double>();
+            const json_document dd = json_document::parse(text);
+            CHECK(bits(dd.root()[0].get<double>()) == bits(b));
+            if (std::abs(b) < 1e38)
+            {
+                const nlohmann::basic_json_document<json_float> df = nlohmann::basic_json_document<json_float>::parse(text);
+                CHECK(bits(df.root()[0].get<float>()) == bits(json_float::parse(text)[0].get<float>()));
+            }
+        }
+    }
+
+// ---- tests/src/unit-json_view_dump.cpp:159-173  (uses: basic_json_document)
+            double x = 0;
+            std::memcpy(&x, &bits, sizeof(x));
+            if (std::isfinite(x))
+            {
+                many += (many.size() > 1 ? "," : "") + json(x).dump();
+            }
+        }
+        many += ']';
+        const json_document many_document = json_document::parse(many);
+        CHECK(many_document.root().dump() == json::parse(many).dump());
+
+        using json_float = nlohmann::basic_json<std::map, std::vector, std::string, bool, std::int64_t, std::uint64_t, float>;
+        const nlohmann::basic_json_document<json_float> float_document = nlohmann::basic_json_document<json_float>::parse("[0.1, 1.5e10, 3.4028235e38]");
+        CHECK(float_document.root().dump() == json_float::parse("[0.1, 1.5e10, 3.4028235e38]").dump());
+    }
+
+// ---- tests/src/unit-json_view_edit_values.cpp:81-95  (uses: basic_json_document)
+TEST_CASE("json_view modes")
+{
+    using nlohmann::basic_json_document;
+    using nlohmann::basic_json_view;
+    using nlohmann::ordered_json;
+    using nlohmann::view_mode;
+
+    SECTION("read-only is the default, and the shortcuts name the modes")
+    {
+        static_assert(std::is_same<basic_json_view<json>, basic_json_view<json, view_mode::read_only>>::value, "default mode");
+        static_assert(std::is_same<basic_json_document<json>, basic_json_document<json, view_mode::read_only>>::value, "default mode");
+        static_assert(std::is_same<nlohmann::json_view, basic_json_view<json, view_mode::read_only>>::value, "json_view");
+        static_assert(std::is_same<json_editable_view, basic_json_view<json, view_mode::editable>>::value, "json_editable_view");
+        static_assert(std::is_same<json_editable_document, basic_json_document<json, view_mode::editable>>::value, "json_editable_document");
+        static_assert(std::is_same<nlohmann::ordered_json_editable_view, basic_json_view<ordered_json, view_mode::editable>>::value, "ordered_json_editable_view");
+
+// ---- tests/src/unit-json_view_edit_values.cpp:205-216  (uses: basic_json_document)
+    SECTION("numbers of other float types")
+    {
+        // doubles have their own path to the output; other float types are
+        // written as basic_json writes them, non-finite values as null
+        using json_float = nlohmann::basic_json<std::map, std::vector, std::string, bool, std::int64_t, std::uint64_t, float>;
+        using document_float = nlohmann::basic_json_document<json_float, nlohmann::view_mode::editable>;
+        document_float d = document_float::parse("[1.5]");
+        d.push_back(d.root(), std::numeric_limits<float>::quiet_NaN());
+        d.push_back(d.root(), -std::numeric_limits<float>::infinity());
+        CHECK(d.root().dump() == "[1.5,null,null]");
+        CHECK(d.root().dump(2) == json_float::parse("[1.5, null, null]").dump(2));
+    }
+
+// ---- tests/src/unit-json_view_edit.cpp:387-411  (uses: set)
+            std::vector<ptr_t> paths;
+            collect(j, ptr_t(), paths);
+            const ptr_t p = paths[static_cast<std::size_t>(r(static_cast<int>(paths.size())))];
+            const ordered_json& target = j[p];
+            const ordered_json_editable_view tv = d.root().at(p);
+            const int op = r(12);
+            {
+                if (op == 0) // assign a scalar
+                {
+                    const ordered_json v = random_scalar();
+                    if (v.is_string() && r(2) == 0)
+                    {
+                        d.set(tv, v.get<std::string>());
+                    }
+                    else if (v.is_number_unsigned() && r(2) == 0)
+                    {
+                        d.set(tv, v.get<std::uint64_t>());
+                    }
+                    else
+                    {
+                        d.set(tv, v);
+                    }
+                    j[p] = v;
+                }
+                else if (op == 1) // assign a new array/object (or anything), sometimes via the pointer API

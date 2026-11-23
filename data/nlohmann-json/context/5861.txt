@@ -1,0 +1,136 @@
+// Upstream tests at the PR's parent commit 3e031b06a that use the changed code.
+// Names searched (test lines using each): patch_inplace (5), json_pointer (222), basic_json (52), diff (0), operator/ (0), operator<< (97), operator!= (59), operator< (210), operator== (64), unflatten (34), diff_object_keys (0), flatten (25), diff_array_tails (0), diff_add (0), diff_iteratively (0), diff_remove (0), diff_replace (0), diff_added (0), scan_key (0), resolve_plain (0), insert (280), contains (178), common_prefix_length (0), hash_of (0), append_index (0), diff_operation (0), diff_unequal (0), diff_key_path (0), diff_index_path (0), array_prefix_set (0), add_flattened (0), diff_append_index (0), diff_append_key (0), empty (158), grow (0), slot (0), diff_recursively (0), last_data (0), last_size (0), data (426), hash (62), size (1272), table (10), used (24), get_and_create (0), add_child (0), prefix_tree (0), is_array (65), parent (36), id (57), token (90)
+
+// ---- tests/src/unit-json_view.cpp:840-887  (uses: basic_json, contains, empty, is_array)
+    SECTION("errors are those of const basic_json")
+    {
+        for (const char* text :
+                {"null", "true", "42", "-1", "1.5", "\"s\"", "[]", "[1,2]", "{}", "{\"a\":1}"
+                })
+        {
+            CAPTURE(text)
+            const json_document d = json_document::parse(text);
+            const json_view v = d.root();
+            const json j = v.materialize();
+#if !defined(JSON_NOEXCEPTION)
+            if (!j.is_object())
+            {
+                CHECK(exception_of([&] { static_cast<void>(v["a"]); }) == exception_of([&] { static_cast<void>(j["a"]); }));
+            }
+            if (!j.is_array())
+            {
+                CHECK(exception_of([&] { static_cast<void>(v[0]); }) == exception_of([&] { static_cast<void>(j[0]); }));
+            }
+            CHECK(exception_of([&] { static_cast<void>(v.at("a")); }) == exception_of([&] { static_cast<void>(j.at("a")); }));
+            CHECK(exception_of([&] { static_cast<void>(v.at("missing")); }) == exception_of([&] { static_cast<void>(j.at("missing")); }));
+            CHECK(exception_of([&] { static_cast<void>(v.at(0)); }) == exception_of([&] { static_cast<void>(j.at(0)); }));
+            CHECK(exception_of([&] { static_cast<void>(v.at(5)); }) == exception_of([&] { static_cast<void>(j.at(5)); }));
+            if (!(j.is_object() && j.empty())) // (key() of an end iterator)
+            {
+                CHECK(exception_of([&] { static_cast<void>(v.begin().key()); }) == exception_of([&] { static_cast<void>(j.begin().key()); }));
+            }
+            if (!j.empty() || j.is_null())
+            {
+                CHECK(exception_of([&] { static_cast<void>(v.front()); }) == exception_of([&] { static_cast<void>(j.front()); }));
+                CHECK(exception_of([&] { static_cast<void>(v.back()); }) == exception_of([&] { static_cast<void>(j.back()); }));
+            }
+#endif
+            CHECK(v.contains("a") == j.contains("a"));
+            CHECK(v.count("a") == j.count("a"));
+            CHECK((v.find("a") == v.end()) == (j.find("a") == j.end())); // NOLINT(readability-container-contains): find() is what is tested
+        }
+
+        // where basic_json has undefined behavior, the view answers safely
+        const json_document d = json_document::parse(R"({"a":[]})");
+        CHECK(d.root()["b"].is_discarded());
+        CHECK(d.root()["a"][0].is_discarded());
+        CHECK_THROWS_WITH_AS(d.root()["a"].front(), "[json.exception.invalid_iterator.214] cannot get value", json::invalid_iterator&);
+        CHECK_THROWS_WITH_AS(d.root()["a"].back(), "[json.exception.invalid_iterator.214] cannot get value", json::invalid_iterator&);
+        const json_view invalid{};
+        CHECK(invalid.begin() == invalid.end());
+        CHECK(std::string(invalid.type_name()) == "discarded");
+    }
+
+// ---- tests/src/unit-json_view.cpp:1392-1423  (uses: contains, empty, flatten, json_pointer)
+    SECTION("every value of generated documents")
+    {
+        generator g;
+        for (int i = 0; i < 1000; ++i)
+        {
+            std::string text;
+            g.value(text, 0);
+            const ordered_json_document d = ordered_json_document::parse(text);
+            if (has_duplicate_keys(d.root()))
+            {
+                continue;
+            }
+            CAPTURE(text)
+            const ordered_json j = ordered_json::parse(text);
+            const ordered_json flat = j.flatten();
+            for (const auto& leaf : flat.items())
+            {
+                // the leaf and each of its parents
+                for (ordered_json::json_pointer p(leaf.key());; p = p.parent_pointer())
+                {
+                    CAPTURE(p.to_string())
+                    CHECK(d.root()[p].materialize() == j[p]);
+                    CHECK(d.root().at(p).materialize() == j.at(p));
+                    CHECK(d.root().contains(p));
+                    if (p.empty())
+                    {
+                        break;
+                    }
+                }
+            }
+        }
+    }
+
+// ---- tests/src/unit-ordered_json2.cpp:434-450  (uses: flatten, operator<, unflatten)
+TEST_CASE("ordered_json through flatten/unflatten")
+{
+    const ordered_json original = make_rich_ordered_json();
+    const std::vector<std::string> original_keys = collect_keys(original);
+    const std::vector<std::string> original_mango_keys = collect_keys(original["mango"]);
+
+    const ordered_json flat = original.flatten();
+    const ordered_json unflattened = flat.unflatten();
+
+    CHECK(unflattened == original);
+    // flatten() walks the value depth-first in iteration order and
+    // unflatten() re-inserts each flattened key via operator[] in the flat
+    // object's iteration order, so for ordered_json the original key order
+    // (both top-level and nested) is preserved end-to-end.
+    CHECK(collect_keys(unflattened) == original_keys);
+    CHECK(collect_keys(unflattened["mango"]) == original_mango_keys);
+}
+
+// ---- tests/src/unit-json_pointer.cpp:833-847  (uses: json_pointer, operator!=, operator<, operator==)
+    SECTION("less-than comparison")
+    {
+        auto ptr1 = json::json_pointer("/foo/a");
+        auto ptr2 = json::json_pointer("/foo/b");
+
+        CHECK(ptr1 < ptr2);
+        CHECK_FALSE(ptr2 < ptr1);
+
+        // build with C++20
+        // JSON_HAS_CPP_20
+#if JSON_HAS_THREE_WAY_COMPARISON
+        CHECK((ptr1 <=> ptr2) == std::strong_ordering::less); // *NOPAD*
+        CHECK(ptr2 > ptr1);
+#endif
+    }
+
+// ---- tests/src/unit-same-number-types.cpp:143-154  (uses: hash, operator!=, operator<, operator==)
+    SECTION("comparison and hashing")
+    {
+        const Json j1 = 1;
+        const Json j2 = 2u;
+        CHECK(j1 < j2);
+        CHECK(j1 != j2);
+        CHECK(j2 == 2);
+        CHECK(j2 == 2u);
+        CHECK(j1 < 1.5);
+        CHECK(Json(-1) < Json(0u));
+        CHECK(std::hash<Json> {}(Json(5u)) == std::hash<Json> {}(Json(5)));
+    }

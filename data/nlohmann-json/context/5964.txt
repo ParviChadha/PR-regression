@@ -1,0 +1,154 @@
+// Upstream tests at the PR's parent commit 367963f6b that use the changed code.
+// Names searched (test lines using each): format_as (23), to_string (166), operator<< (98), operator>> (94), operator!= (63), operator< (215), dump_integer (0), serializer (5), magnitude_fits_64_bits (0), magnitude_has_at_most_64_bits (0)
+
+// ---- tests/src/unit-serialization.cpp:809-850  (uses: operator<<, serializer)
+TEST_CASE("serializer buffers are flushed mid-string and mid-binary")
+{
+    SECTION("a long run of escaped characters")
+    {
+        // each character is escaped on its own, so the escape buffer fills up
+        const json newlines = std::string(600, '\n');
+        std::string expected = "\"";
+        for (int i = 0; i < 600; ++i)
+        {
+            expected += "\\n";
+        }
+        expected += '"';
+        CHECK(newlines.dump() == expected);
+
+        // every character is \u-escaped under ensure_ascii
+        std::string umlauts;
+        std::string escaped_umlauts = "\"";
+        for (int i = 0; i < 300; ++i)
+        {
+            umlauts += "\xC3\xA4";
+            escaped_umlauts += "\\u00e4";
+        }
+        escaped_umlauts += '"';
+        CHECK(json(umlauts).dump(-1, ' ', true) == escaped_umlauts);
+    }
+
+    SECTION("a large binary value")
+    {
+        std::vector<std::uint8_t> bytes(3000);
+        std::string expected_bytes;
+        std::string expected_pretty_bytes;
+        for (std::size_t i = 0; i < bytes.size(); ++i)
+        {
+            bytes[i] = static_cast<std::uint8_t>(i % 256);
+            expected_bytes += (i == 0 ? "" : ",") + std::to_string(i % 256);
+            expected_pretty_bytes += (i == 0 ? "" : ", ") + std::to_string(i % 256);
+        }
+        const json j = json::binary(bytes);
+        CHECK(j.dump() == "{\"bytes\":[" + expected_bytes + "],\"subtype\":null}");
+        CHECK(j.dump(2) == "{\n  \"bytes\": [" + expected_pretty_bytes + "],\n  \"subtype\": null\n}");
+    }
+}
+
+// ---- tests/src/unit-udt.cpp:685-701  (uses: operator<<, serializer)
+TEST_CASE("custom serializer for pods" * doctest::test_suite("udt"))
+{
+    using custom_json =
+        nlohmann::json::with_json_serializer_t<pod_serializer>;
+
+    auto p = udt::small_pod{42, '/', 42};
+    custom_json const j = p;
+
+    auto p2 = j.get<udt::small_pod>();
+
+    CHECK(p == p2);
+
+    auto np = udt::non_pod{{"non-pod"}};
+    custom_json const j2 = np;
+    auto np2 = j2.get<udt::non_pod>();
+    CHECK(np == np2);
+}
+
+// ---- tests/src/unit-udt.cpp:724-735  (uses: operator<<, serializer)
+TEST_CASE("custom serializer that does adl by default" * doctest::test_suite("udt"))
+{
+    auto me = udt::person{{23}, {"theo"}, udt::country::france};
+
+    json const j = me;
+    custom_json const cj = me;
+
+    CHECK(j.dump() == cj.dump());
+
+    CHECK(me == j.get<udt::person>());
+    CHECK(me == cj.get<udt::person>());
+}
+
+// ---- tests/src/unit-deserialization.cpp:1271-1316  (uses: operator<<, operator>>, to_string)
+TEST_CASE("parse error positions are the same for contiguous and stream input")
+{
+    // contiguous input derives the position from the input on error, stream
+    // input counts it while reading (see lexer::lazy_position); the cases
+    // cover newlines before the error, ungetting a newline after a number,
+    // newlines inside a string, a comment, and reads at the end of input
+    struct test_case
+    {
+        std::string input;
+        std::size_t byte;
+        std::string message;
+    };
+    const std::vector<test_case> cases =
+    {
+        {"[\n  1,\n  2\n", 12, "[json.exception.parse_error.101] parse error at line 4, column 1: syntax error while parsing array - unexpected end of input; expected ']'"},
+        {"[1\n,2,\n]", 8, "[json.exception.parse_error.101] parse error at line 3, column 1: syntax error while parsing value - unexpected ']'; expected '[', '{', or a literal"},
+        {"[1\n x]", 5, "[json.exception.parse_error.101] parse error at line 2, column 2: syntax error while parsing array - invalid literal; last read: '1<U+000A> x'; expected ']'"},
+        {"1\n2", 3, "[json.exception.parse_error.101] parse error at line 2, column 1: syntax error while parsing value - unexpected number literal; expected end of input"},
+        {
+            "{\"a\":\n\"b\nc\"}", 9, R"([json.exception.parse_error.101] parse error at line 3, column 0: syntax error while parsing value - invalid string: control character U+000A (LF) must be escaped to \u000A or \n; last read: '"b<U+000A>')"
+        },
+        {"/* a\n b */\n x", 13, "[json.exception.parse_error.101] parse error at line 3, column 2: syntax error while parsing value - invalid literal; last read: '/* a<U+000A> b */<U+000A> x'"},
+        {"\n\n", 3, "[json.exception.parse_error.101] parse error at line 3, column 1: syntax error while parsing value - unexpected end of input; expected '[', '{', or a literal"},
+        {"[\"a\",\n 1e\n]", 10, "[json.exception.parse_error.101] parse error at line 3, column 0: syntax error while parsing value - invalid number; expected '+', '-', or digit after exponent; last read: '1e<U+000A>'"},
+        {"[tru\n]", 5, "[json.exception.parse_error.101] parse error at line 2, column 0: syntax error while parsing value - invalid literal; last read: '[tru<U+000A>'"},
+    };
+
+    for (const auto& c : cases)
+    {
+        CAPTURE(c.input)
+        const std::string expected = std::to_string(c.byte) + " " + c.message;
+
+        SaxErrorRecorder string_sax;
+        CHECK_FALSE(json::sax_parse(c.input, &string_sax, json::input_format_t::json, true, true));
+        CHECK(string_sax.error == expected);
+
+        SaxErrorRecorder pointer_sax;
+        CHECK_FALSE(json::sax_parse(c.input.data(), c.input.data() + c.input.size(), &pointer_sax, json::input_format_t::json, true, true));
+        CHECK(pointer_sax.error == expected);
+
+        std::istringstream is(c.input);
+        SaxErrorRecorder stream_sax;
+        CHECK_FALSE(json::sax_parse(is, &stream_sax, json::input_format_t::json, true, true));
+        CHECK(stream_sax.error == expected);
+    }
+}
+
+// ---- tests/src/unit-convenience.cpp:90-114  (uses: serializer)
+        impl += c;
+        return *this;
+    }
+
+    std::string impl{}; // NOLINT(readability-redundant-member-init)
+};
+
+void check_escaped(const char* original, const char* escaped = "", bool ensure_ascii = false);
+void check_escaped(const char* original, const char* escaped, const bool ensure_ascii)
+{
+    std::stringstream ss;
+    nlohmann::detail::output_stream_adapter<char> adapter(ss);
+    json::serializer s(adapter, ' ', false, ensure_ascii);
+    s.dump_escaped(original);
+    s.flush(); // dump_escaped writes into the serializer's internal buffer
+    CHECK(ss.str() == escaped);
+}
+} // namespace
+
+TEST_CASE("convenience functions")
+{
+    SECTION("type name as string")
+    {
+        CHECK(std::string(json(json::value_t::null).type_name()) == "null");
+        CHECK(std::string(json(json::value_t::object).type_name()) == "object");

@@ -1,0 +1,82 @@
+{
+ "base_ref": "main",
+ "base_sha": "63e3197b0803ed890f4548e820a0426b343cf09e",
+ "body": "Compressed materialization now resolves its casts through the database's `CastFunctionSet`, like every other cast. User-registered casts apply here too.\n\n- `CreateStatsAwareCast` uses `AddCastToType`. `PropagateCastStatistics` and `ValuePreservingCastFits` use the registered cast set. If a registered cast cannot propagate statistics, the integral compression falls back to the dedicated compress functions.\n- `CMUtils::MarkCast` no longer asserts a default cast.\n- SQL export drops the compressed materialization cast and exports its child, so it no longer rejects a non-default one.\n- Compression assumes casts are correct for in-range values. An incorrect registered cast can produce wrong results here, as it can anywhere else.\n\nThis replaces the built-in-only casts that duckdb/duckdb#28757 kept for compressed materialization (`CreateDefaultStatsAwareCast`).\n",
+ "comments": [
+  {
+   "body": "CC @kryonix ",
+   "created_at": "2026-11-13T13:28:43Z",
+   "user": {
+    "login": "Mytherin",
+    "type": "User"
+   }
+  },
+  {
+   "body": "Thanks. Both points come from the same underlying issue. Compressed materialization adds casts the query never asked for. Using registered casts there exposes cast-free queries to whatever a user-registered cast does, so this is not \"as anywhere else\", as the description claims. The endpoint round trip and the statistics callback do not show that a cast preserves values or order, as your 0..100 example shows.\n\nI see three options:\n\n1. Keep CM on built-in casts only, i.e. the base's fresh built-in `CastFunctionSet` from #28757, and close this PR. CM is an internal rewrite, so the user's casts arguably should not apply to it.\n2. Use a registered cast only if it declares itself value- and order-preserving (an explicit flag on the cast function) and has a statistics callback. Otherwise use the built-in cast. The probe would also have to run only after these eligibility checks and treat any exception as \"not usable\", not only `ConversionException`. That is your second point.\n3. Keep the current behaviour and document the risk. I don't recommend this.\n\nI would go with 1, or 2 if registered casts in CM are actually needed. @Mytherin @kryonix, which do you prefer? I'll update the PR or close it accordingly.\n",
+   "created_at": "2026-11-13T18:25:21Z",
+   "user": {
+    "login": "Robinho-MR",
+    "type": "User"
+   }
+  },
+  {
+   "body": "I dont really see why sqlexport needs to differentiate between built-in and non-default casts at all. \n\nYes, you may end up with differing semantics/result if you export and re-execute a sql fragment where the casts have been overridden on either side, but thats also true for e.g. extension functions that REPLACE_ON_CONFLICT, settings, etc. I don't think its worthwhile trying to protect against this for just casts as there is so much other stuff that will be environment/config/extensions-loaded sensitive during both binding and execution anyway.",
+   "created_at": "2026-11-16T10:27:01Z",
+   "user": {
+    "login": "Maxxen",
+    "type": "User"
+   }
+  },
+  {
+   "body": "Agreed. This PR only removed the compressed-materialization case. The remaining distinction comes from two checks in `ExportCast` that predate it:\n\n- `default_cast_binding` rejects exporting a default-bound cast when a registered cast could override that conversion.\n- The aggregate-state branch rejects a cast when a registered cast could override either the state type or its storage type.\n\nAs far as I can tell, they protect only the plan-verification round-trip: a test that registers a cast overriding a built-in would re-bind the exported SQL to the override and mismatch. That is the same environment sensitivity you describe for `REPLACE_ON_CONFLICT` functions and settings, and we don't guard those. So I'd drop both checks and export casts as plain `CAST`/`TRY_CAST` regardless of where they came from. The aggregate-state check would keep its `TRY_CAST` rejection, which is about representability. Any test that deliberately overrides a built-in cast can opt out of the verification instead.\n\nHappy to open that as a follow-up PR. CC @kryonix since these came from the SQL-export work: is there a case I'm missing where the default/registered distinction matters beyond verification?\n",
+   "created_at": "2026-11-16T10:29:32Z",
+   "user": {
+    "login": "Robinho-MR",
+    "type": "User"
+   }
+  }
+ ],
+ "created_at": "2026-11-13T13:27:52Z",
+ "fetched_at": "2026-11-23T20:34:15Z",
+ "head_sha": "76fc6ae5c2d51780e94789c5450a88dd29f812ce",
+ "labels": [
+  "backport v2.0-cyanoptera"
+ ],
+ "linked_issues": [],
+ "merge_commit_sha": "05627314afbd122f5e761169147c720e1b10e4ae",
+ "merged_at": "2026-11-13T20:03:09Z",
+ "number": 28810,
+ "referenced_numbers": [],
+ "repo": "duckdb/duckdb",
+ "review_comments": [
+  {
+   "body": "CM changes cast-free results. Endpoints 0 and 100 round-trip, but compression changes 50; built-in restoration cannot recover it.\n\n```cpp\nstruct InteriorOp {\n\ttemplate <class SRC, class DST>\n\tstatic DST Operation(SRC input) {\n\t\treturn static_cast<DST>(input == 50 ? 51 : input);\n\t}\n};\n// registered for BIGINT -> TINYINT and BIGINT -> UTINYINT with a statistics callback keeping [min, max + 1]\n```\n\n```sql\nCREATE TABLE t AS SELECT i::BIGINT AS i FROM range(101) r(i);\nSELECT list(i)[49:53] FROM (SELECT i FROM t ORDER BY i);\n```\n\nCM on: [48,49,51,51,52]; disabled: [48,49,50,51,52]. This explicit cast returns 51 as requested:\n\n```sql\nSELECT 50::BIGINT::TINYINT;\n```\n\nInverse casts swapping 50/51 round-trip every value but return [48,49,51,50,52], because CM sorts compressed keys. Keep built-in compression/restoration or check an explicit value/order-preserving contract.",
+   "created_at": "2026-11-13T18:23:30Z",
+   "diff_hunk": "@@ -129,16 +128,13 @@ unique_ptr<LogicalProjection> CMHelper::CreateProjection(const Optimizer &optimi\n \treturn projection;\n }\n \n-unique_ptr<Expression> CMHelper::CreateDefaultStatsAwareCast(ClientContext &context, unique_ptr<Expression> input,\n-                                                             const LogicalType &target_type,\n-                                                             const BaseStatistics &input_stats,\n-                                                             unique_ptr<BaseStatistics> &result_stats) {\n-\t// compression and restoration must use the built-in casts, regardless of the registered casts\n-\tCastFunctionSet default_casts;\n-\tGetCastFunctionInput get_input(context);\n-\tget_input.query_location = input->GetQueryLocation();\n-\tauto bound_cast = default_casts.GetCastFunction(input->GetReturnType(), target_type, get_input);\n-\tauto result = BoundCastExpression::CreateDefault(std::move(input), target_type, std::move(bound_cast), false);\n+unique_ptr<Expression> CMHelper::CreateStatsAwareCast(ClientContext &context, unique_ptr<Expression> input,\n+                                                      const LogicalType &target_type, const BaseStatistics &input_stats,\n+                                                      unique_ptr<BaseStatistics> &result_stats) {\n+\tauto result = BoundCastExpression::AddCastToType(context, std::move(input), target_type);",
+   "line": 134,
+   "path": "src/optimizer/compressed_materialization.cpp",
+   "user": {
+    "login": "duckdb-bot",
+    "type": "User"
+   }
+  },
+  {
+   "body": "This endpoint check can fail a cast-free query even when CM would reject the cast. It executes registered casts during planning, before checking eligibility or requiring a statistics callback; the guard catches only `ConversionException`.\n\nWith registered BIGINT-to-TINYINT/UTINYINT casts that have no statistics callback and throw `InvalidInputException`, the same BIGINT 0..100 table gives:\n\n```sql\nSELECT list(i)[49:53] FROM (SELECT i FROM t ORDER BY i);\n```\n\nCM on fails with \u201cInvalid Input Error: registered cast called\u201d; disabled returns [48, 49, 50, 51, 52]. Decide eligibility before executing registered casts. Keeping the built-in casts would also avoid this failure.",
+   "created_at": "2026-11-13T18:23:30Z",
+   "diff_hunk": "@@ -265,15 +260,15 @@ LogicalType CMHelper::GetSameWidthIntegralType(const LogicalType &type, const bo\n \t}\n }\n \n-bool CMHelper::ValuePreservingCastFits(const Value &value, const LogicalType &source_type,\n+bool CMHelper::ValuePreservingCastFits(ClientContext &context, const Value &value, const LogicalType &source_type,\n                                        const LogicalType &target_type) {\n \toptional<Value> roundtrip_value;\n \ttry {\n-\t\tauto cast_value = value.DefaultTryCastAs(target_type, nullptr, true);\n+\t\tauto cast_value = value.TryCastAs(context, target_type, nullptr, true);",
+   "line": 267,
+   "path": "src/optimizer/compressed_materialization.cpp",
+   "user": {
+    "login": "duckdb-bot",
+    "type": "User"
+   }
+  }
+ ],
+ "state": "closed",
+ "title": "Let compressed materialization use registered casts",
+ "transport": "gh",
+ "user": {
+  "login": "Robinho-MR",
+  "type": "User"
+ }
+}

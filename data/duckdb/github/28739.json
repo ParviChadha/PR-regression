@@ -1,0 +1,38 @@
+{
+ "base_ref": "main",
+ "base_sha": "9cb95fcd8a737a15749304679c61496853975b8c",
+ "body": "A plan serialized by v1.x with a `MERGE INTO ... WHEN MATCHED THEN UPDATE SET col = DEFAULT` on a table of a catalog other than DuckDB's own, such as Iceberg or DuckLake, fails on 2.0 with \"INTERNAL Error: Attempting to initialize state of expression of unknown type!\".\n\nv1.x bound DEFAULT as a placeholder (BoundDefaultExpression), which the update operator replaced by the default of the column when it ran. Since #23033 the binder resolves defaults, but plans that still contain the placeholder are supported: PhysicalUpdate resolves it. Since #25228 the actions of other catalogs are planned through their regular INSERT/UPDATE/DELETE planning. The SET expressions of an update action are now evaluated in a projection before the catalog's update operator, so the placeholder ends up in the projection, where it can't be evaluated.\n\nThis PR replaces the placeholder with the bound default of its column before the projection. It mirrors the deprecated branch that #25228 kept for the insert action, which fills in the defaults of omitted columns of v1.x plans. \n\nCould this still be backported to v2.0?",
+ "comments": [
+  {
+   "body": "Thanks!",
+   "created_at": "2026-11-12T10:53:55Z",
+   "user": {
+    "login": "Mytherin",
+    "type": "User"
+   }
+  }
+ ],
+ "created_at": "2026-11-12T09:31:22Z",
+ "fetched_at": "2026-11-23T20:34:38Z",
+ "head_sha": "d31db23187dba71d942f1f5424474f9aac581ce3",
+ "labels": [
+  "backport v2.0-cyanoptera"
+ ],
+ "linked_issues": [],
+ "merge_commit_sha": "451e5859f61d8105e1aa07dd54172ff975a88230",
+ "merged_at": "2026-11-12T13:27:39Z",
+ "number": 28739,
+ "referenced_numbers": [
+  23033,
+  25228
+ ],
+ "repo": "duckdb/duckdb",
+ "review_comments": [],
+ "state": "closed",
+ "title": "Resolve SET col = DEFAULT of MERGE plans from before v2.0",
+ "transport": "gh",
+ "user": {
+  "login": "ThijsDreef",
+  "type": "User"
+ }
+}

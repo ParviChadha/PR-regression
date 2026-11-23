@@ -1,0 +1,105 @@
+// Upstream tests at the PR's parent commit e2cb15c47 that use the changed code.
+// Names searched (test lines using each): basic_json_view (10), load (0), back (105), count (70), dump (707), materialize (176), at (514), contains (186), find (198), erase (269), push_back (470), set (136), insert (293), operator== (68), operator[] (26), equal (13), members (0), check_float_ranges (0), view_side (0), json_side (0), scan_number_token (0), check_distinct_ranges (0), m_json (0), resolve_members (0), resolve_indices (0), same (0), bytes_equal (0), all_digits (0), sort_by_key (0), certainly_equal (0), lockstep (0), keys_differ_early (0), visits_in_order (0), bytes_less (0), digit_run (0), elements (0), plain_float_token (0), lockstep_path (0), same_keys (0), resume_array (0), record (0), reserve_more (0), first_keys (0), take (0), floats_equal (0), key_less (0), boolean (0), enter (0), floating (0), integer (0), unsigned_integer (0), scalar_values_only (0), budget (0), levels (0), document (0), float_token (0), value_node (0), cursor (0), entry (135), is_editable (0), document_order (0), array_a (0), array_b (0), base_a (0), base_b (0), cursor_a (0), cursor_b (0), index_a (0), index_b (0), index_mark (0), it (1722), number_float_t (108), number_integer_t (119), number_unsigned_t (55), string_view_t (1), m_a (0), m_b (0), m_ordered (0), m_path (0), nav_a (0), nav_b (0), a (2530), b (1106), element_a (0), element_b (0), index (177), length (190), next (50), nodes (13), resume (0), pos (54), nav (0), member (194), editor (0), elements_a (0), elements_b (0), members_a (3), members_b (0), key (774), position (54), value (2570)
+
+// ---- tests/src/unit-json_view.cpp:913-959  (uses: a, at, b, back, contains, count, dump, find, it, key, materialize, member, next, value)
+    SECTION("duplicate keys: lookups find the first member, iteration all")
+    {
+        const json_document d = json_document::parse(R"({"a":1,"b":2,"a":3})");
+        const json_view v = d.root();
+        CHECK(v.size() == 3);
+        CHECK(v["a"].materialize() == 1);
+        CHECK(v.at("a").materialize() == 1);
+        CHECK(v.find("a") == v.begin());
+        CHECK(v.find("a").value().materialize() == 1);
+        CHECK(v.find("b") == std::next(v.begin()));
+        CHECK(v.count("a") == 2); // every member, unlike materialize()
+        CHECK(v.count("b") == 1);
+        CHECK(v.contains("a"));
+        CHECK(v.value("a", 0) == 1);
+        CHECK(v.materialize()["a"] == 3); // materialize() keeps the last value, unlike the lookups
+        // JSON pointers resolve to the first member at every level
+        const json_document dp = json_document::parse(R"({"a":{"b":1},"a":{"b":2,"b":3}})");
+        CHECK(dp.root()[json::json_pointer("/a/b")].materialize() == 1);
+        CHECK(dp.root().at(json::json_pointer("/a/b")).materialize() == 1);
+        CHECK(dp.root().value(json::json_pointer("/a/b"), 0) == 1);
+        CHECK(dp.root().materialize()[json::json_pointer("/a/b")] == 3);
+        // get<map> keeps the last value, as materialize()
+        CHECK((v.get<std::map<std::string, int>>() == std::map<std::string, int> {{"a", 3}, {"b", 2}}));
+        // keys of every length class (the 16-byte short compare and memcmp)
+        for (const std::size_t n :
+                {
+                    0u, 1u, 3u, 7u, 8u, 15u, 16u, 17u, 40u
+                })
+        {
+            const std::string key(n, 'k');
+            const json_document dk = json_document::parse("{\"" + key + "\":1,\"" + key + "x\":2,\"" + key + "\":3,\"" + key + "\":4}"); // NOLINT(performance-inefficient-string-concatenation)
+            CAPTURE(n)
+            CHECK(dk.root()[key].materialize() == 1);
+            CHECK(dk.root().at(key).materialize() == 1);
+            CHECK(dk.root().find(key) == dk.root().begin());
+            CHECK(dk.root().value(key, 0) == 1);
+            CHECK(dk.root()[key + "x"].materialize() == 2);
+        }
+        std::string order;
+        for (auto it = v.begin(); it != v.end(); ++it)
+        {
+            order += std::string(it.key().data(), it.key().size()) + it->materialize().dump();
+        }
+        CHECK(order == "a1b2a3");
+        CHECK(v.back().materialize() == 3);
+        CHECK(v.materialize() == json::parse(R"({"a":1,"b":2,"a":3})")); // the last value, as parse()
+    }
+
+// ---- tests/src/unit-json_view_edit.cpp:727-771  (uses: a, at, b, back, contains, dump, find, materialize, push_back, set, value)
+TEST_CASE("json_view edits: an editable document before and after its first edit")
+{
+    // until the first edit, an editable document is read like a read-only one; views made before the edit
+    // keep working after it
+    const std::string text = R"({"a":[1,2,{"x":"y"},4],"b":{"c":true,"d":null},"e":"text","f":[]})";
+    const json_document read_only = json_document::parse(text);
+    json_editable_document d = json_editable_document::parse(text);
+    const auto root = d.root();
+    const auto same_as_read_only = [&]
+    {
+        CHECK(root.dump() == read_only.root().dump());
+        CHECK(root.dump(2) == read_only.root().dump(2));
+        CHECK(root.materialize() == read_only.root().materialize());
+        CHECK(root["a"][2]["x"].get_string() == "y");
+        CHECK(root["a"].at(3).get<int>() == 4);
+        CHECK(root["a"].back().get<int>() == 4);
+        CHECK(root.contains("b"));
+        CHECK(!root.contains("zz"));
+        CHECK(root.find("e")->get_string() == "text");
+        CHECK(root.find("zz") == root.end());
+        CHECK(root["b"]["c"].get<bool>());
+        CHECK(root.value("e", "none") == "text");
+        std::size_t count = 0;
+        for (const auto m : root["a"])
+        {
+            CHECK(m.materialize() == read_only.root()["a"][count].materialize());
+            ++count;
+        }
+        CHECK(count == 4);
+    };
+    same_as_read_only();
+    // an edit that changes a scalar in place, then one that moves an array
+    d.set(root["e"], "other");
+    CHECK(root["e"].get_string() == "other");
+    CHECK(root["a"][2]["x"].get_string() == "y");
+    CHECK(root["a"].back().get<int>() == 4);
+    d.push_back(root["f"], 7);
+    CHECK(root["f"][0].get<int>() == 7);
+    CHECK(root["f"].back().get<int>() == 7);
+    CHECK(root.dump() == R"({"a":[1,2,{"x":"y"},4],"b":{"c":true,"d":null},"e":"other","f":[7]})");
+    d.set(root["a"], 2, json::array({1, 2}));
+    CHECK(root["a"][2][1].get<int>() == 2);
+    CHECK(root["a"].dump() == "[1,2,[1,2],4]");
+    CHECK(root.materialize() == json::parse(R"({"a":[1,2,[1,2],4],"b":{"c":true,"d":null},"e":"other","f":[7]})"));
+}
+
+// ---- tests/src/unit-regression2.cpp:969-973  (uses: a, b, dump, key, member, value)
+    SECTION("brand new (non-duplicate) key, value rejected - member is fully absent")
+    {
+        const json j = json::parse(R"({"a":1,"b":2})", drop_value_2);
+        CHECK(j.dump() == "{\"a\":1}");
+    }

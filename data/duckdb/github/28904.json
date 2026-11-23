@@ -1,0 +1,35 @@
+{
+ "base_ref": "main",
+ "base_sha": "ad757f622c0b8cce2216488fc77c720780987fd2",
+ "body": "A batched `COPY ... TO` given `ROW_GROUP_SIZE_BYTES` without `ROW_GROUP_SIZE` fails:\n\n```sql\nSET threads=2;\nCREATE TABLE t AS FROM range(1000000);\nCOPY t TO 'out.csv' (ROW_GROUP_SIZE_BYTES '256KB');\n-- INTERNAL Error: Attempting to get the index of an optional_idx that is not set\n```\n\n`CorrectSizeForBatch` calls `batch_size.GetIndex()` without checking that a row target is set. It is\nreached for the leftover batch of a non-final repartition, so the error depends on timing: the\nquery above failed on every run at 2 threads here (tested on Linux x86_64; Apple ARM64).\n\nWith no row target, the byte target now decides, through `CopyFunctionBatchAnalyzer::IsAcceptable()`,\nas it does elsewhere. The new test\n(`test/sql/copy/csv/batched_write/batch_csv_row_group_size_bytes.test`) fails before the fix and\npasses after.\n\n## Demonstration\n\nOSX using a fresh install of v2.0:\n\n```bash\n(base) 13:01:00 (dtmcdonald@when):~$ md5 /Users/dtmcdonald/.duckdb/cli/latest/duckdb\nMD5 (/Users/dtmcdonald/.duckdb/cli/latest/duckdb) = b2fdfbcc753c7ad59e812516b4bb0c8a\n(base) 13:01:03 (dtmcdonald@when):~$ /Users/dtmcdonald/.duckdb/cli/latest/duckdb\nDuckDB v2.0.0 (Cyanoptera)\nEnter \".help\" for usage hints.\nmemory D SET threads=2;\nmemory D CREATE TABLE t AS FROM range(1000000);\nmemory D COPY t TO 'out.csv' (ROW_GROUP_SIZE_BYTES '256KB');\nINTERNAL Error:\nAttempting to get the index of an optional_idx that is not set\n\nStack Trace:\n\n0        duckdb::Exception::ToJSON(duckdb::ExceptionType, std::__1::basic_string<char, std::__1::char_traits<char>, std::__1::allocator<char>> const&) + 48\n1        duckdb::optional_idx::ThrowNotSet() + 112\n2        duckdb::PhysicalBatchCopyToFile::RepartitionBatches(duckdb::ClientContext&, duckdb::GlobalSinkState&, unsigned long long, bool) const + 3000\n3        duckdb::PhysicalBatchCopyToFile::AddLocalBatch(duckdb::ClientContext&, duckdb::GlobalSinkState&, duckdb::LocalSinkState&) const + 184\n4        duckdb::PhysicalBatchCopyToFile::NextBatch(duckdb::ExecutionContext&, duckdb::OperatorSinkNextBatchInput&) const + 44\n5        duckdb::PipelineExecutor::NextBatch(duckdb::OperatorPartitionData, bool, duckdb::optional_idx) + 372\n6        duckdb::PipelineExecutor::NextBatch(duckdb::DataChunk&, duckdb::PipelineExecutor::SourceFetchResult const&) + 392\n7        duckdb::PipelineExecutor::Execute(unsigned long long) + 492\n8        duckdb::PipelineTask::ExecuteTask(duckdb::TaskExecutionMode) + 324\n9        duckdb::ExecutorTask::Execute(duckdb::TaskExecutionMode) + 240\n10       duckdb::TaskScheduler::TryDequeueAndProcessTask(duckdb::DBConfig const&, duckdb::TaskSchedulerQueue&, duckdb::ConsumerToken&, duckdb::shared_ptr<duckdb::Task, true>&) + 120\n11       duckdb::TaskScheduler::ExecuteForever(std::__1::atomic<bool>*, duckdb::TaskSchedulerType) + 500\n12       void* std::__1::__thread_proxy[abi:ne200100]<std::__1::tuple<std::__1::unique_ptr<std::__1::__thread_struct, std::__1::default_delete<std::__1::__thread_struct>>, void (*)(duckdb::TaskScheduler*, std::__1::atomic<bool>*, duckdb::TaskSchedulerType), duckdb::TaskScheduler*, std::__1::atomic<bool>*, duckdb::TaskSchedulerType>>(void*) + 60\n13       _pthread_start + 136\n14       thread_start + 8\n\nThis error signals an assertion failure within DuckDB. This usually occurs due to unexpected conditions or errors in the program's logic.\nFor more information, see https://duckdb.org/docs/current/dev/internal_errors\n```\n\nLinux x86_64, fresh build of `v2.0-cyanoptera` from source:\n\n```bash\n(base) 13:07:05 (dtmcdonald@teedee):duckdb@v2.0-cyanoptera$ ./build/debug/duckdb\nDuckDB v2.0.0-dev89659 (Development Version, 0dac66f208)\nEnter \".help\" for usage hints.\nmemory D SET threads=2;\nmemory D CREATE TABLE t AS FROM range(1000000);\nmemory D COPY t TO 'out.csv' (ROW_GROUP_SIZE_BYTES '256KB');\nINTERNAL Error:\nAttempting to get the index of an optional_idx that is not set\n\nStack Trace:\n\n./build/debug/duckdb(+0x2b6576fd) [0x55a43bb906fd]\n./build/debug/duckdb(+0x2b65708d) [0x55a43bb9008d]\n./build/debug/duckdb(+0x2b656b4b) [0x55a43bb8fb4b]\n./build/debug/duckdb(+0x2b660230) [0x55a43bb99230]\n./build/debug/duckdb(+0x2b719edd) [0x55a43bc52edd]\n./build/debug/duckdb(+0x2633ad38) [0x55a436873d38]\n./build/debug/duckdb(+0x32f71866) [0x55a4434aa866]\n./build/debug/duckdb(+0x32f75695) [0x55a4434ae695]\n./build/debug/duckdb(+0x32f7983a) [0x55a4434b283a]\n./build/debug/duckdb(+0x32f7a375) [0x55a4434b3375]\n./build/debug/duckdb(+0x2cdc186d) [0x55a43d2fa86d]\n./build/debug/duckdb(+0x2cdbf13d) [0x55a43d2f813d]\n./build/debug/duckdb(+0x2cdc393e) [0x55a43d2fc93e]\n./build/debug/duckdb(+0x2cd6647f) [0x55a43d29f47f]\n./build/debug/duckdb(+0x2cd4c151) [0x55a43d285151]\n./build/debug/duckdb(+0x2cd59eff) [0x55a43d292eff]\n./build/debug/duckdb(+0x2c8b8a73) [0x55a43cdf1a73]\n./build/debug/duckdb(+0x2c9ad388) [0x55a43cee6388]\n./build/debug/duckdb(+0x2c8baeee) [0x55a43cdf3eee]\n./build/debug/duckdb(+0x2c896474) [0x55a43cdcf474]\n./build/debug/duckdb(+0x2c899e7e) [0x55a43cdd2e7e]\n./build/debug/duckdb(+0x2c8eaf33) [0x55a43ce23f33]\n./build/debug/duckdb(+0x262ec5b9) [0x55a4368255b9]\n./build/debug/duckdb(+0x262f0c4f) [0x55a436829c4f]\n./build/debug/duckdb(+0x2631d664) [0x55a436856664]\n./build/debug/duckdb(+0x263204b9) [0x55a4368594b9]\n./build/debug/duckdb(+0x26332509) [0x55a43686b509]\n./build/debug/duckdb(+0x262d3666) [0x55a43680c666]\n/lib/x86_64-linux-gnu/libc.so.6(+0x29ca8) [0x7f2ca7235ca8]\n/lib/x86_64-linux-gnu/libc.so.6(__libc_start_main+0x85) [0x7f2ca7235d65]\n./build/debug/duckdb(+0x262d30e1) [0x55a43680c0e1]\n\nThis error signals an assertion failure within DuckDB. This usually occurs due to unexpected conditions or errors in the program's logic.\nFor more information, see https://duckdb.org/docs/current/dev/internal_errors\n```\n\n\n",
+ "comments": [
+  {
+   "body": "Thanks!",
+   "created_at": "2026-11-17T09:36:12Z",
+   "user": {
+    "login": "Mytherin",
+    "type": "User"
+   }
+  }
+ ],
+ "created_at": "2026-11-16T20:09:40Z",
+ "fetched_at": "2026-11-23T20:33:58Z",
+ "head_sha": "93d42daaedc81986093781ee2a1855060080d736",
+ "labels": [
+  "backport v2.0-cyanoptera"
+ ],
+ "linked_issues": [],
+ "merge_commit_sha": "069eb90c9044b09dd3ecaa7de9978c79a8686c87",
+ "merged_at": "2026-11-17T09:56:44Z",
+ "number": 28904,
+ "referenced_numbers": [],
+ "repo": "duckdb/duckdb",
+ "review_comments": [],
+ "state": "closed",
+ "title": "Fix INTERNAL error in batched COPY with ROW_GROUP_SIZE_BYTES but no ROW_GROUP_SIZE",
+ "transport": "gh",
+ "user": {
+  "login": "wasade",
+  "type": "User"
+ }
+}

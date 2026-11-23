@@ -1,0 +1,146 @@
+// Upstream tests at the PR's parent commit 253e4c392 that use the changed code.
+// Names searched (test lines using each): json_pointer (260), operator/ (0), operator<< (105), operator!= (75), operator< (236), operator== (80), common_prefix_length (0), unflatten (49), array_prefix_set (0), empty (195), scan_key (0), walk (0), child (0), prefix_tree (0), hash_bytes (0), insert (314), reseed (0), slot_of (0), contains (189), mark (0), is_marked (0), bucket (0), node (103), step (5), seed (37), short_limit (0), tree (2), any_marked (0), index (185), chain (6), last_key (0), last_key_size (0), hash (67), marked (6), parent (45), token (143), token_size (0), nodes (13), end (1255), table (22), hash_of (0)
+
+// ---- tests/src/unit-json_view_image.cpp:1055-1098  (uses: empty, node, nodes)
+    SECTION("structure")
+    {
+        rejected(corrupted(image, 0, [](node & n)
+        {
+            n.next = 0;
+        }), true);
+        rejected(corrupted(image, 0, [](node & n)
+        {
+            n.next = 18; // beyond the image
+        }), true);
+        rejected(corrupted(image, 14, [](node & n)
+        {
+            n.next = 4; // beyond the enclosing object
+        }), true);
+        rejected(corrupted(image, 0, [](node & n)
+        {
+            n.len = 6; // member count
+        }), true);
+        rejected(corrupted(image, 14, [](node & n)
+        {
+            n.len = 3; // element count
+        }), true);
+        rejected(corrupted(image, 0, [](node & n)
+        {
+            n.next = 14; // the object ends after the key "a"
+            n.len = 7;
+        }), true);
+        rejected(corrupted(image, 0, [](node & n)
+        {
+            n.next = 13; // nodes after the root
+            n.len = 6;
+        }), true);
+        rejected(corrupted(image, 0, [](node & n)
+        {
+            n.kind = nlohmann::detail::view::node_kind::array; // an array: the "keys" are values, and the counts do not match
+        }), true);
+        const std::vector<std::uint8_t> as_array = corrupted(image, 16, [](node & n)
+        {
+            n.kind = nlohmann::detail::view::node_kind::array; // {} as []: fine
+        });
+        CHECK(load_result(as_array, image_check::full).empty());
+        const std::string expected_dump = R"({"s":"x\"y","i":-12,"u":7,"f":1.5e+300,"b":true,"n":null,"a":["t",[]]})";
+        CHECK(loaded_dump(as_array) == expected_dump);
+    }
+
+// ---- tests/src/unit-json_view_image.cpp:1248-1291  (uses: empty, node, nodes)
+    SECTION("nodes that share a range")
+    {
+        // [big string, then n strings made to point to the big string]: every
+        // node shares the one range (the check reads it once)
+        const std::size_t n = 200;
+        std::string long_text = "[\"" + std::string(5000, 'a') + "\"";
+        for (std::size_t k = 0; k < n; ++k)
+        {
+            long_text += ",\"x\"";
+        }
+        long_text += "]";
+        const std::vector<std::uint8_t> img = json_document::parse(long_text).save();
+        const node big = node_at(img, 1);
+        std::vector<std::uint8_t> b = img;
+        for (std::size_t k = 0; k < n; ++k)
+        {
+            set_node(b, 2 + k, big);
+        }
+        CHECK(load_result(b, image_check::full).empty());
+        const json_document d = json_document::load(b);
+        CHECK(d.root().size() == n + 1);
+        CHECK(d.root()[n].get<std::string>() == std::string(5000, 'a'));
+        CHECK(d.root().dump() == loaded_dump(b, image_check::none));
+
+        // the same for decoded strings and float tokens, with a node that
+        // records another digit layout than its token
+        const std::vector<std::uint8_t> img2 = json_document::parse(R"(["a\"b", "a\"b", 1.25, 1.25, 1.25e3])").save();
+        CHECK(load_result(img2, image_check::full).empty());
+        std::vector<std::uint8_t> same = img2;
+        set_node(same, 2, node_at(img2, 1));
+        set_node(same, 4, node_at(img2, 3));
+        CHECK(load_result(same, image_check::full).empty());
+        // (a raw string with a backslash must not be a macro argument: MSVC C2017)
+        const std::string expected_same = R"(["a\"b","a\"b",1.25,1.25,1250.0])";
+        CHECK(loaded_dump(same) == expected_same);
+        std::vector<std::uint8_t> layout = same;
+        node f4 = node_at(layout, 4);
+        f4.extra = 0x0100u; // the layout of "1.", and not that of "1.25"
+        set_node(layout, 4, f4);
+        rejected(layout, false);
+        f4.extra = 0xFFFFu; // "many" digits: fine, as compaction writes it
+        set_node(layout, 4, f4);
+        CHECK(load_result(layout, image_check::full).empty());
+    }
+
+// ---- tests/src/unit-json_pointer.cpp:976-1025  (uses: json_pointer, operator!=, operator<, operator==)
+    SECTION("equality comparison")
+    {
+        std::string ptr_string{"/foo/bar"};
+        auto ptr1 = json::json_pointer(ptr_string);
+        auto ptr2 = json::json_pointer(ptr_string);
+
+        // build with C++20 to test rewritten candidates
+        // JSON_HAS_CPP_20
+
+        CHECK(ptr1 == ptr2);
+
+        CHECK_FALSE(ptr1 != ptr2);
+
+#ifndef JSON_TEST_DEPRECATED_FUNCTIONS_DELETED
+        const char* ptr_cpstring = "/foo/bar";
+        const char ptr_castring[] = "/foo/bar"; // NOLINT(misc-const-correctness,hicpp-avoid-c-arrays,modernize-avoid-c-arrays,cppcoreguidelines-avoid-c-arrays)
+
+        CHECK(ptr1 == "/foo/bar");
+        CHECK(ptr1 == ptr_cpstring);
+        CHECK(ptr1 == ptr_castring);
+        CHECK(ptr1 == ptr_string);
+
+        CHECK("/foo/bar" == ptr1);
+        CHECK(ptr_cpstring == ptr1);
+        CHECK(ptr_castring == ptr1);
+        CHECK(ptr_string == ptr1);
+
+        CHECK_FALSE(ptr1 != "/foo/bar");
+        CHECK_FALSE(ptr1 != ptr_cpstring);
+        CHECK_FALSE(ptr1 != ptr_castring);
+        CHECK_FALSE(ptr1 != ptr_string);
+
+        CHECK_FALSE("/foo/bar" != ptr1);
+        CHECK_FALSE(ptr_cpstring != ptr1);
+        CHECK_FALSE(ptr_castring != ptr1);
+        CHECK_FALSE(ptr_string != ptr1);
+
+        SECTION("exceptions")
+        {
+            CHECK_THROWS_WITH_AS(ptr1 == "foo",
+                                 "[json.exception.parse_error.107] parse error at byte 1: JSON pointer must be empty or begin with '/' - was: 'foo'", json::parse_error&);
+            CHECK_THROWS_WITH_AS("foo" == ptr1,
+                                 "[json.exception.parse_error.107] parse error at byte 1: JSON pointer must be empty or begin with '/' - was: 'foo'", json::parse_error&);
+            CHECK_THROWS_WITH_AS(ptr1 == "/~~",
+                                 "[json.exception.parse_error.108] parse error: escape character '~' must be followed with '0' or '1'", json::parse_error&);
+            CHECK_THROWS_WITH_AS("/~~" == ptr1,
+                                 "[json.exception.parse_error.108] parse error: escape character '~' must be followed with '0' or '1'", json::parse_error&);
+        }
+#endif
+    }

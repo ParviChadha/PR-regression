@@ -1,0 +1,36 @@
+{
+ "base_ref": "main",
+ "base_sha": "7aa2df86be37f19ce09b9f3a8945b384a3d88986",
+ "body": "When an `UPDATE` rewrites rows by deleting and re-inserting them, the new rows are appended to the table. If one batch of rows didn't fit into the current row group, the batch is cut down to only the rows that spilled into the next row group, and the update then kept working with that shortened batch. As a result, `UPDATE \u2026 RETURNING` silently returned fewer rows than were updated. The fix slices the remaining rows into a local chunk that references the input and leaves the input untouched.",
+ "comments": [
+  {
+   "body": "Thanks!",
+   "created_at": "2026-11-13T12:32:34Z",
+   "user": {
+    "login": "Mytherin",
+    "type": "User"
+   }
+  }
+ ],
+ "created_at": "2026-11-12T10:32:27Z",
+ "fetched_at": "2026-11-23T20:34:16Z",
+ "head_sha": "fe3e8df0810309897f18482d927ea82e9ed6985a",
+ "labels": [
+  "Member",
+  "backport v2.0-cyanoptera"
+ ],
+ "linked_issues": [],
+ "merge_commit_sha": "be74590e7471973e2886c5d9eb81f83b0a1be08f",
+ "merged_at": "2026-11-13T19:13:31Z",
+ "number": 28742,
+ "referenced_numbers": [],
+ "repo": "duckdb/duckdb",
+ "review_comments": [],
+ "state": "closed",
+ "title": "Keep the input chunk intact when an append crosses a row group boundary",
+ "transport": "gh",
+ "user": {
+  "login": "DinosL",
+  "type": "User"
+ }
+}

@@ -1,0 +1,27 @@
+{
+ "base_ref": "main",
+ "base_sha": "452b8600d01cb411384dc168e21108c5fbb7cc9f",
+ "body": "Closes https://github.com/duckdblabs/duckdb-internal/issues/11281\r\n\r\nPR from https://github.com/duckdb-bot/duckdb/pull/107\r\n\r\nUpdating a `VARIANT` column with a nested JSON constant took time quadratic in the nesting depth, and deeper values failed with `VARIANT exceeds maximum recursion depth of 128`. Inserting the same value was not affected.\r\n\r\nThe optimizer folds the cast into a `VARIANT` constant. `RelationStatisticsHelper` then named each projection, group and aggregate column with `GetName()`, and for an unaliased constant that renders the value through `Value::ToSQLString`. Nothing reads these names except `RelationManager::PrintRelationStats`, and nothing calls that. This PR passes an empty `Identifier()` at the three call sites instead.\r\n\r\nAt 64 levels, the `UPDATE` drops from ~11 s to 0.03 s on a release build. The segfault in the JSON \u2192 VARIANT cast reported in the issue does not reproduce on `main` anymore.\r\n\r\nTests:\r\n- `test/optimizer/relation_statistics.cpp`: calls the projection and aggregate statistics helpers directly with a 1,000-level constant, and runs `UPDATE`, `first()`, `GROUP BY` and `INSERT ... SELECT` with it. The SQL test is skipped in debug builds, because `LogicalOperator::Verify` renders every plan expression there and fails at this depth.\r\n- `test/issues/general/test_25967.test`: the `UPDATE` from the issue, kept shallow enough for debug builds.\r\n\r\nNot in this PR: `EXPLAIN` and profiling still render the constant, so they are still slow on these values and fail on very deep ones.",
+ "comments": [],
+ "created_at": "2026-11-13T12:38:48Z",
+ "fetched_at": "2026-11-23T20:34:12Z",
+ "head_sha": "4b9fceb6213b04c67ec13a35ebacf866f5940d31",
+ "labels": [
+  "Ready To Merge",
+  "backport v2.0-cyanoptera"
+ ],
+ "linked_issues": [],
+ "merge_commit_sha": "b07ba1cc24efe817729924c0fe2fe92cc7bc66a7",
+ "merged_at": "2026-11-16T12:39:56Z",
+ "number": 28803,
+ "referenced_numbers": [],
+ "repo": "duckdb/duckdb",
+ "review_comments": [],
+ "state": "closed",
+ "title": "Stop rendering expressions as SQL to name relation statistics columns",
+ "transport": "gh",
+ "user": {
+  "login": "xproblematique",
+  "type": "User"
+ }
+}

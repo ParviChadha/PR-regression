@@ -1,0 +1,29 @@
+// Upstream tests at the PR's parent commit 6ba53e63d that use the changed code.
+// Names searched (test lines using each): to_json (0), external_constructor (1), construct_moving (0), is_movable_container_rvalue (0), is_rvalue_array_to_json (0), is_range_view_type (0), is_rvalue_object_to_json (0), has_dedicated_to_json (0), is_enum_keyed_map_type (0)
+
+// ---- tests/src/unit-allocator.cpp:753-777  (uses: external_constructor)
+        // themselves, and for the remaining compatible types
+        const std::string string = "new";
+        next_construct_fails = true;
+        CHECK_THROWS_AS(nlohmann::to_json(j, string), std::bad_alloc&);
+        CHECK(j == "old");
+
+        next_construct_fails = true;
+        CHECK_THROWS_AS(nlohmann::to_json(j, "new"), std::bad_alloc&);
+        CHECK(j == "old");
+
+        // to_json only moves a binary value that it converted from another
+        // container type, which my_json's std::vector<std::uint8_t> is not
+        using binary_constructor = nlohmann::detail::external_constructor<nlohmann::detail::value_t::binary>;
+        next_construct_fails = true;
+        CHECK_THROWS_AS(binary_constructor::construct(j, my_json::binary_t({1, 2})), std::bad_alloc&);
+        CHECK(j == "old");
+
+        my_json::array_t array = {1, 2};
+        next_construct_fails = true;
+        CHECK_THROWS_AS(nlohmann::to_json(j, array), std::bad_alloc&);
+        CHECK(j == "old");
+        next_construct_fails = true;
+        CHECK_THROWS_AS(nlohmann::to_json(j, std::move(array)), std::bad_alloc&);
+        CHECK(j == "old");
+

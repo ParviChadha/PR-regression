@@ -1,0 +1,38 @@
+{
+ "base_ref": "main",
+ "base_sha": "085f1df8eefe9c00b3eb2765b5bb103ce7169334",
+ "body": "IMDB 05c can report much higher intermediate cardinalities with an unchanged physical plan. Filtered scans and scans feeding nested join builds currently do not wait for ordinary runtime filter producers, so they can snapshot their filters before a small dimension build publishes its filter. In 05c, missing the `company_type_id = 2` filter makes the `movie_companies` scan emit 295,628 rows instead of 798.\n\nAllow these scans to wait when the producer's estimated build fits in one vector. Keep the existing build/probe size guard, cycle checks, and CTE disjunction scheduling behavior. The regression test checks the filtered nested build scan's cardinality with one and four threads, plus prepared executions after changing and emptying the dimension.\n\nReproduced the exact costs from [the failing CI job for #28750](https://github.com/duckdb/duckdb/actions/runs/43249792499/job/131303617671?pr=28750):\n\n| 05c measured cost | Before | After |\n| --- | ---: | ---: |\n| Total join output | 107,606 | 2,872 |\n| Build input | 296,506 | 1,676 |\n| Probe input | 190,121 | 2,843 |\n\nBoth results were stable over 30 tries against the same database. The physical plan and static filters were identical.\n\nnote: the IMDB cost plan regression is flaky so it sometimes blocked an unrelated PR from merging.",
+ "comments": [
+  {
+   "body": "Thanks! Codex found a small issue, which I was able to fix. LGTM now",
+   "created_at": "2026-11-13T08:52:25Z",
+   "user": {
+    "login": "lnkuiper",
+    "type": "User"
+   }
+  }
+ ],
+ "created_at": "2026-11-12T17:41:03Z",
+ "fetched_at": "2026-11-23T20:34:23Z",
+ "head_sha": "13da1d3315580413cfa42e1a10e93c9bfbbcf32f",
+ "labels": [
+  "Ready To Merge",
+  "Member"
+ ],
+ "linked_issues": [],
+ "merge_commit_sha": "5c8008b4cf8600d7d6b09bf874aa55b2d2b98c97",
+ "merged_at": "2026-11-13T11:34:20Z",
+ "number": 28768,
+ "referenced_numbers": [
+  28750
+ ],
+ "repo": "duckdb/duckdb",
+ "review_comments": [],
+ "state": "closed",
+ "title": "Order small runtime filter builds before filtered and nested scans",
+ "transport": "gh",
+ "user": {
+  "login": "smvv",
+  "type": "User"
+ }
+}

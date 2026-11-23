@@ -1,0 +1,169 @@
+// Upstream tests at the PR's parent commit 494a74c24 that use the changed code.
+// Names searched (test lines using each): get (790), arithmetic_value (0), rejects_boolean (0), boolean_as (0)
+
+// ---- tests/src/fuzzer-driver_afl.cpp:18-39  (uses: get)
+
+extern "C" int LLVMFuzzerTestOneInput(const uint8_t* data, size_t size);
+
+int main()
+{
+#ifdef __AFL_HAVE_MANUAL_CONTROL
+    while (__AFL_LOOP(1000))
+    {
+#endif
+        // copy stdin to byte vector
+        std::vector<uint8_t> vec;
+        char c = 0;
+        while (std::cin.get(c))
+        {
+            vec.push_back(static_cast<uint8_t>(c));
+        }
+
+        LLVMFuzzerTestOneInput(vec.data(), vec.size());
+#ifdef __AFL_HAVE_MANUAL_CONTROL
+    }
+#endif
+}
+
+// ---- tests/src/unit-algorithms.cpp:35-45  (uses: get)
+        SECTION("std::any_of")
+        {
+            CHECK(std::any_of(j_array.begin(), j_array.end(), [](const json & value)
+            {
+                return value.is_string() && value.get<std::string>() == "foo";
+            }));
+            CHECK(std::any_of(j_object.begin(), j_object.end(), [](const json & value)
+            {
+                return value.get<int>() > 1;
+            }));
+        }
+
+// ---- tests/src/unit-algorithms.cpp:47-57  (uses: get)
+        SECTION("std::none_of")
+        {
+            CHECK(std::none_of(j_array.begin(), j_array.end(), [](const json & value)
+            {
+                return value.empty();
+            }));
+            CHECK(std::none_of(j_object.begin(), j_object.end(), [](const json & value)
+            {
+                return value.get<int>() <= 0;
+            }));
+        }
+
+// ---- tests/src/unit-alt-string.cpp:185-209  (uses: get)
+    SECTION("binary formats")
+    {
+        alt_json doc;
+        doc["pi"] = 3.141;
+        doc["happy"] = true;
+        doc["list"] = {1, 2, 3};
+
+        CHECK(alt_json::from_cbor(alt_json::to_cbor(doc)) == doc);
+        CHECK(alt_json::from_msgpack(alt_json::to_msgpack(doc)) == doc);
+        CHECK(alt_json::from_bon8(alt_json::to_bon8(doc)) == doc);
+        // BSON is not covered: it additionally needs string_t::find(value_type),
+        // which alt_string does not provide
+        CHECK(alt_json::from_ubjson(alt_json::to_ubjson(doc)) == doc);
+
+        // a UBJSON high-precision number is parsed into a std::string that the
+        // reader has to hand to the SAX interface as an alt_string
+        const std::vector<uint8_t> high_precision =
+        {
+            'H', 'i', 0x16, '3', '.', '1', '4', '1', '5', '9', '2', '6', '5', '3',
+            '5', '8', '9', '7', '9', '3', '2', '3', '8', '4', '6'
+        };
+        const auto number = alt_json::from_ubjson(high_precision);
+        CHECK(number.is_number_float());
+        CHECK(number.get<double>() == doctest::Approx(3.14159265358979323846));
+    }
+
+// ---- tests/src/unit-alt-string.cpp:436-469  (uses: get)
+    SECTION("conversion between basic_json specializations (#2649)")
+    {
+        // explicit conversions are always possible
+        CHECK(std::is_constructible<nlohmann::json, alt_json>::value);
+        CHECK(std::is_constructible<alt_json, nlohmann::json>::value);
+        CHECK(std::is_constructible<nlohmann::json, nlohmann::ordered_json>::value);
+        CHECK(std::is_constructible<nlohmann::ordered_json, nlohmann::json>::value);
+
+        // specializations with the same string type are implicitly convertible
+        CHECK(std::is_convertible<nlohmann::ordered_json, nlohmann::json>::value);
+        CHECK(std::is_convertible<nlohmann::json, nlohmann::ordered_json>::value);
+
+        // specializations with different string types are only implicitly convertible
+        // if implicit conversions are enabled
+#if JSON_USE_IMPLICIT_CONVERSIONS
+        CHECK(std::is_convertible<alt_json, nlohmann::json>::value);
+        CHECK(std::is_convertible<nlohmann::json, alt_json>::value);
+#else
+        CHECK_FALSE(std::is_convertible<alt_json, nlohmann::json>::value);
+        CHECK_FALSE(std::is_convertible<nlohmann::json, alt_json>::value);
+#endif
+
+        // get<BasicJsonType>() works in either case
+        const nlohmann::json j = {{"foo", 1}, {"bar", true}};
+        CHECK(j.get<nlohmann::ordered_json>() == nlohmann::ordered_json(j));
+        // (only a number is converted here, as objects and strings are affected by #3425)
+        CHECK(nlohmann::json(42).get<alt_json>() == 42);
+        CHECK(alt_json(nlohmann::json(42)) == 42);
+
+        // get_to() also works in either case
+        alt_json a;
+        nlohmann::json(42).get_to(a);
+        CHECK(a == 42);
+    }
+
+// ---- tests/src/unit-binary_formats.cpp:323-347  (uses: get)
+
+    for (const auto& format : formats)
+    {
+        const std::string name = format.name;
+        INFO("format := ", name);
+        const auto roundtrip = [&format](const json & j)
+        {
+            return format.decode(format.encode(j), true);
+        };
+
+        // integers that fit keep their type
+        CHECK(roundtrip(json(-5)).is_number_integer());
+        CHECK(roundtrip(json(-5)).get<std::int32_t>() == -5);
+        CHECK(roundtrip(json(3000000000u)).is_number_unsigned());
+        CHECK(roundtrip(json(3000000000u)).get<std::uint32_t>() == 3000000000u);
+
+        // integers that fit neither integer type are stored as float
+        CHECK(roundtrip(json(5000000000u)).is_number_float());
+        CHECK(roundtrip(json(5000000000u)).get<float>() == 5000000000.0f);
+        if (name != "BON8") // BON8 cannot encode integers above INT64_MAX
+        {
+            CHECK(roundtrip(json(10000000000000000000u)).is_number_float());
+            CHECK(roundtrip(json(10000000000000000000u)).get<float>() == 10000000000000000000.0f);
+        }
+        CHECK(roundtrip(json(-3000000000LL)).is_number_float());
+
+// ---- tests/src/unit-binary_utf8_error_handler.cpp:47-71  (uses: get)
+}
+
+using eh = json::error_handler_t;
+std::vector<eh> all_handlers()
+{
+    return {eh::strict, eh::replace, eh::ignore, eh::keep};
+}
+
+// what dump()+parse() produces for a sanitizing error_handler; this is the
+// ground truth every binary writer/reader is checked against
+std::string dump_and_parse(const std::string& raw, eh error_handler)
+{
+    return json::parse(json(raw).dump(-1, ' ', false, error_handler)).get<std::string>();
+}
+
+// an object key type that is not string_t, but converts implicitly to it;
+// data() is only used when JSON_DIAGNOSTICS is enabled
+DOCTEST_CLANG_SUPPRESS_WARNING_PUSH
+DOCTEST_CLANG_SUPPRESS_WARNING("-Wunused-member-function")
+class converting_key
+{
+  public:
+    converting_key(const char* s) : m_value(s) {} // NOLINT(google-explicit-constructor,hicpp-explicit-conversions)
+    converting_key(std::string s) : m_value(std::move(s)) {} // NOLINT(google-explicit-constructor,hicpp-explicit-conversions)
+

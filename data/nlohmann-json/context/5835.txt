@@ -1,0 +1,123 @@
+// Upstream tests at the PR's parent commit 6a27b9acb that use the changed code.
+// Names searched (test lines using each): basic_json (35), begin (699), cbegin (195), cend (127), end (556), find (161), insert (257), diff (0), format_as (23), to_string (97), operator<< (83), operator>> (79), operator!= (54), operator< (201), diff_recursively (0), json_value (11), destroy_container (0), diff_iteratively (0), diff_frame (0), free_container (0), diff_object_keys (0), destroy_bounded (0), diff_unequal (0), all_children_leaves (0), destroy_walk (0), diff_added (0), added (3), target_values (0), added_ops (0), common_keys (0), next_common (0)
+
+// ---- tests/src/unit-json_patch.cpp:1936-1948  (uses: added, operator<)
+    SECTION("json: added key sorts before an existing common key")
+    {
+        const json source = {{"a", 1}, {"c", {{"x", 1}, {"y", 2}}}};
+        const json target = {{"a", 1}, {"b", 0}, {"c", {{"x", 1}, {"y", 2}}}};
+
+        const json patch = json::diff(source, target);
+
+        // only the new key is added; "a" and "c" are left alone instead of
+        // being removed and re-added
+        const json expected = R"([{"op": "add", "path": "/b", "value": 0}])"_json;
+        CHECK(patch == expected);
+        CHECK(source.patch(patch) == target);
+    }
+
+// ---- tests/src/unit-merge_diff.cpp:862-873  (uses: added, operator<)
+        SECTION("added members follow target order")
+        {
+            auto original = ordered_json::parse(R"({"b":1})");
+            auto result   = ordered_json::parse(R"({"b":1,"z":2,"a":3})");
+
+            auto patch = ordered_json::merge_diff(original, result);
+            CHECK(patch.dump() == R"({"z":2,"a":3})");
+
+            original.merge_patch(patch);
+            CHECK(original == result);
+            CHECK(original.dump() == R"({"b":1,"z":2,"a":3})");
+        }
+
+// ---- tests/src/unit-merge_diff.cpp:913-924  (uses: added)
+        SECTION("member added before existing ones is appended")
+        {
+            auto original = ordered_json::parse(R"({"b":1})");
+            auto result   = ordered_json::parse(R"({"a":0,"b":1})");
+
+            auto patch = ordered_json::merge_diff(original, result);
+            CHECK(patch.dump() == R"({"a":0})");
+
+            original.merge_patch(patch);
+            CHECK(original != result);
+            CHECK(original.dump() == R"({"b":1,"a":0})");
+        }
+
+// ---- tests/src/unit-deserialization.cpp:1271-1316  (uses: operator<<, operator>>, to_string)
+TEST_CASE("parse error positions are the same for contiguous and stream input")
+{
+    // contiguous input derives the position from the input on error, stream
+    // input counts it while reading (see lexer::lazy_position); the cases
+    // cover newlines before the error, ungetting a newline after a number,
+    // newlines inside a string, a comment, and reads at the end of input
+    struct test_case
+    {
+        std::string input;
+        std::size_t byte;
+        std::string message;
+    };
+    const std::vector<test_case> cases =
+    {
+        {"[\n  1,\n  2\n", 12, "[json.exception.parse_error.101] parse error at line 4, column 1: syntax error while parsing array - unexpected end of input; expected ']'"},
+        {"[1\n,2,\n]", 8, "[json.exception.parse_error.101] parse error at line 3, column 1: syntax error while parsing value - unexpected ']'; expected '[', '{', or a literal"},
+        {"[1\n x]", 5, "[json.exception.parse_error.101] parse error at line 2, column 2: syntax error while parsing array - invalid literal; last read: '1<U+000A> x'; expected ']'"},
+        {"1\n2", 3, "[json.exception.parse_error.101] parse error at line 2, column 1: syntax error while parsing value - unexpected number literal; expected end of input"},
+        {
+            "{\"a\":\n\"b\nc\"}", 9, R"([json.exception.parse_error.101] parse error at line 3, column 0: syntax error while parsing value - invalid string: control character U+000A (LF) must be escaped to \u000A or \n; last read: '"b<U+000A>')"
+        },
+        {"/* a\n b */\n x", 13, "[json.exception.parse_error.101] parse error at line 3, column 2: syntax error while parsing value - invalid literal; last read: '/* a<U+000A> b */<U+000A> x'"},
+        {"\n\n", 3, "[json.exception.parse_error.101] parse error at line 3, column 1: syntax error while parsing value - unexpected end of input; expected '[', '{', or a literal"},
+        {"[\"a\",\n 1e\n]", 10, "[json.exception.parse_error.101] parse error at line 3, column 0: syntax error while parsing value - invalid number; expected '+', '-', or digit after exponent; last read: '1e<U+000A>'"},
+        {"[tru\n]", 5, "[json.exception.parse_error.101] parse error at line 2, column 0: syntax error while parsing value - invalid literal; last read: '[tru<U+000A>'"},
+    };
+
+    for (const auto& c : cases)
+    {
+        CAPTURE(c.input)
+        const std::string expected = std::to_string(c.byte) + " " + c.message;
+
+        SaxErrorRecorder string_sax;
+        CHECK_FALSE(json::sax_parse(c.input, &string_sax, json::input_format_t::json, true, true));
+        CHECK(string_sax.error == expected);
+
+        SaxErrorRecorder pointer_sax;
+        CHECK_FALSE(json::sax_parse(c.input.data(), c.input.data() + c.input.size(), &pointer_sax, json::input_format_t::json, true, true));
+        CHECK(pointer_sax.error == expected);
+
+        std::istringstream is(c.input);
+        SaxErrorRecorder stream_sax;
+        CHECK_FALSE(json::sax_parse(is, &stream_sax, json::input_format_t::json, true, true));
+        CHECK(stream_sax.error == expected);
+    }
+}
+
+// ---- tests/src/unit-ordered_map.cpp:562-576  (uses: cbegin, cend, insert, to_string)
+        SECTION("insert(first, last)")
+        {
+            std::vector<std::pair<const std::string, counted>> values;
+            values.reserve(100);
+            for (int i = 0; i < 100; ++i)
+            {
+                values.emplace_back(std::to_string(i), counted(i));
+            }
+            value_copies = 0;
+
+            om.insert(values.cbegin(), values.cend());
+            // only the inserted values are copied
+            CHECK(value_copies == 100);
+            check_contents();
+        }
+
+// ---- tests/src/unit-algorithms.cpp:126-136  (uses: begin, end, operator!=, operator<)
+            SECTION("using user-defined comparison")
+            {
+                // compare objects only by size of its elements
+                json j_array2 = {13, 29, 3, {"Hello", "World"}, true, false, {{"one", 1}, {"two", 2}, {"three", 3}}, "foo", "baz"};
+                CHECK(!std::equal(j_array.begin(), j_array.end(), j_array2.begin()));
+                CHECK(std::equal(j_array.begin(), j_array.end(), j_array2.begin(),
+                                 [](const json & a, const json & b)
+                {
+                    return (a.size() == b.size());
+                }));
+            }

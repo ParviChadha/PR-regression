@@ -1,0 +1,172 @@
+// Upstream tests at the PR's parent commit ace103010 that use the changed code.
+// Names searched (test lines using each): accept (12), from_bjdata (0), from_bon8 (0), from_bson (0), from_cbor (0), from_msgpack (0), from_ubjson (0), parse (11), sax_parse (0), operator>> (94), get_character (1), input_stream_adapter (2), get_elements (0), after_refill (0), copy_token (1), save_token_segment (0), token_carry (0), get_character_slow (0), get_character_no_get_area (0), append (30), grow (0), token_carry_buffer (0), get_character_no_get_area_other (0), push_back (439), next_character (0), clear (31), copy_to (0), no_get_area (0), streambuf_access (0), m_capacity_end (0), m_data (123), m_end (0), bump (0), tracking_token (0)
+
+// ---- tests/src/unit-stream-bulk-scan.cpp:392-407  (uses: copy_token, get_character, input_stream_adapter)
+    SECTION("the adapter keeps no token unless the lexer starts one")
+    {
+        // the binary readers read through the same adapter, but never start a
+        // token; refilling the get area must then not collect the input
+        chunked_streambuf buf(std::string(1000, 'x'), 7);
+        std::istream is(&buf);
+        nlohmann::detail::input_stream_adapter ia(is);
+        for (int i = 0; i < 1000; ++i)
+        {
+            CHECK(ia.get_character() == 'x');
+        }
+
+        std::vector<char> token;
+        ia.copy_token(token, false);
+        CHECK(token.empty());
+    }
+
+// ---- tests/src/unit-precise-stream-position.cpp:240-248  (uses: input_stream_adapter)
+    SECTION("sax_parse with strict == false")
+    {
+        std::istringstream ss("1true");
+        json j;
+        nlohmann::detail::json_sax_dom_parser<json, nlohmann::detail::input_stream_adapter> sdp(j, true);
+        CHECK(json::sax_parse(ss, &sdp, nlohmann::detail::input_format_t::json, false));
+        CHECK(j == 1);
+        CHECK(remaining(ss) == "true");
+    }
+
+// ---- tests/src/unit-deserialization.cpp:183-198  (uses: operator>>, push_back)
+        SECTION("operator>> with a NUL byte after the value (issue #5530)")
+        {
+            // operator>> parses non-strictly (it does not require the whole
+            // stream to be consumed), so a NUL byte following a complete
+            // value is simply left unread on the stream and never reaches
+            // the "expected end of input" check that JSON_STRICT_NUL_HANDLING
+            // affects; this holds regardless of the macro (verified below for
+            // the opt-in state as well)
+            std::string data = "123";
+            data.push_back('\0');
+            std::istringstream ss(data);
+            json j;
+            ss >> j;
+            CHECK(j == json(123));
+            CHECK(ss.good());
+        }
+
+// ---- tests/src/unit-large_json_binary_writers.cpp:129-162  (uses: append, push_back)
+    SECTION("byte-exact across the switch-over")
+    {
+        // nested one-element arrays around the recursion bound: the exact
+        // bytes a writer produces do not depend on whether it stayed on the
+        // call stack or moved to the heap one partway through
+        for (const std::size_t depth :
+                {
+                    nlohmann::detail::recursion_depth_limit() - 1, nlohmann::detail::recursion_depth_limit(),
+                    nlohmann::detail::recursion_depth_limit() + 1, nlohmann::detail::recursion_depth_limit() + 2
+                })
+        {
+            CAPTURE(depth)
+            const json array = nested_array(depth, json(0));
+
+            std::vector<std::uint8_t> expected_cbor(depth, 0x81);
+            expected_cbor.push_back(0x00);
+            CHECK(json::to_cbor(array) == expected_cbor);
+
+            std::vector<std::uint8_t> expected_msgpack(depth, 0x91);
+            expected_msgpack.push_back(0x00);
+            CHECK(json::to_msgpack(array) == expected_msgpack);
+
+            std::string expected_ubjson(depth, '[');
+            expected_ubjson += "i";
+            expected_ubjson += '\0';
+            expected_ubjson.append(depth, ']');
+            const auto packed_ubjson = json::to_ubjson(array);
+            CHECK(std::string(packed_ubjson.begin(), packed_ubjson.end()) == expected_ubjson);
+
+            std::vector<std::uint8_t> expected_bon8(depth, 0x81);
+            expected_bon8.push_back(0x90);
+            CHECK(json::to_bon8(array) == expected_bon8);
+        }
+    }
+
+// ---- tests/src/unit-iterators1.cpp:1636-1668  (uses: clear, push_back)
+    SECTION("array: -- and rbegin/rend")
+    {
+        Json j = {1, 2, 3, 4};
+
+        const std::vector<int> reversed = {4, 3, 2, 1};
+        auto it = j.end();
+        std::vector<int> seen;
+        while (it != j.begin())
+        {
+            --it;
+            seen.push_back(it->template get<int>());
+        }
+        CHECK(seen == reversed);
+
+        auto it2 = j.end();
+        auto old = it2--;
+        CHECK(old == j.end());
+        CHECK(*it2 == 4);
+
+        seen.clear();
+        for (auto r = j.rbegin(); r != j.rend(); ++r)
+        {
+            seen.push_back(r->template get<int>());
+        }
+        CHECK(seen == reversed);
+
+        seen.clear();
+        for (auto r = j.crbegin(); r != j.crend(); ++r)
+        {
+            seen.push_back(r->template get<int>());
+        }
+        CHECK(seen == reversed);
+    }
+
+// ---- tests/src/unit-iterators1.cpp:1670-1701  (uses: clear, push_back)
+    SECTION("object: -- and rbegin/rend")
+    {
+        Json j = {{"a", 1}, {"b", 2}, {"c", 3}};
+        // order of keys depends on the object type; use the forward order as reference
+        std::vector<std::string> fwd;
+        for (auto it = j.begin(); it != j.end(); ++it)
+        {
+            fwd.push_back(it.key());
+        }
+        std::vector<std::string> rev(fwd.rbegin(), fwd.rend());
+
+        std::vector<std::string> seen;
+        auto it = j.end();
+        while (it != j.begin())
+        {
+            --it;
+            seen.push_back(it.key());
+        }
+        CHECK(seen == rev);
+
+        auto it2 = j.end();
+        auto old = it2--;
+        CHECK(old == j.end());
+        CHECK(it2.key() == rev.front());
+
+        seen.clear();
+        for (auto r = j.rbegin(); r != j.rend(); ++r)
+        {
+            seen.push_back(r.key());
+        }
+        CHECK(seen == rev);
+    }
+
+// ---- tests/src/unit-class_parser.cpp:1973-1979  (uses: parse)
+        SECTION("from std::vector")
+        {
+            std::vector<uint8_t> v = {'t', 'r', 'u', 'e'};
+            json j;
+            json::parser(nlohmann::detail::input_adapter(std::begin(v), std::end(v))).parse(true, j);
+            CHECK(j == json(true));
+        }
+
+// ---- tests/src/unit-class_parser.cpp:2008-2014  (uses: parse)
+        SECTION("from std::string")
+        {
+            std::string v = {'t', 'r', 'u', 'e'};
+            json j;
+            json::parser(nlohmann::detail::input_adapter(std::begin(v), std::end(v))).parse(true, j);
+            CHECK(j == json(true));
+        }

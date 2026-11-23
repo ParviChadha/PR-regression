@@ -1,0 +1,35 @@
+{
+ "base_ref": "main",
+ "base_sha": "33e5799424b68c1249a056a180575c847110c281",
+ "body": "A plan that DuckDB versions before 2.0 serialized for a struct with a `count(*)` field in a correlated subquery, for example `SELECT x, (SELECT {'y': t.y, 'n': count(*), 'b': t.b} FROM o WHERE o.k = t.x) FROM t`, no longer deserializes: \"Failed to find function struct_pack(VARCHAR,BIGINT,BOOLEAN)\", which \"takes no positional arguments\".\n\nPlans written before v2.0.0 carry the argument names of `struct_pack` only as the aliases of its arguments, and `RestoreNamesFromAliases` takes the names from the trailing aliases, stopping at the first argument without one. v1.x decorrelation (`RewriteCountAggregates`) replaces the reference to the count with `CASE WHEN x IS NULL THEN 0 ELSE x END` without keeping the reference's alias, so that argument has none and the arguments before it stay positional.\n\nThe fields of the recorded STRUCT return type are the argument names of a v1.x `struct_pack`, so for a function that takes only keyword arguments and returns a STRUCT with one field per argument, this takes the names from the return type. The new `struct_pack_count_subquery` case was serialized by v1.5.6.\n\nThis is a regression for plans written by v1.x, could it get the `backport v2.0-cyanoptera` label?\n",
+ "comments": [
+  {
+   "body": "Thanks!",
+   "created_at": "2026-11-12T10:53:21Z",
+   "user": {
+    "login": "Mytherin",
+    "type": "User"
+   }
+  }
+ ],
+ "created_at": "2026-11-12T10:16:28Z",
+ "fetched_at": "2026-11-23T20:34:35Z",
+ "head_sha": "01858f95a5f00ed4bdd770eeb39c6cf22c72ed89",
+ "labels": [
+  "backport v2.0-cyanoptera"
+ ],
+ "linked_issues": [],
+ "merge_commit_sha": "6bebc35103a923b7d07e9872a138aaa779cff086",
+ "merged_at": "2026-11-12T15:39:32Z",
+ "number": 28740,
+ "referenced_numbers": [],
+ "repo": "duckdb/duckdb",
+ "review_comments": [],
+ "state": "closed",
+ "title": "Read v1.x plans of struct_pack whose field lost its alias",
+ "transport": "gh",
+ "user": {
+  "login": "ywelsch",
+  "type": "User"
+ }
+}

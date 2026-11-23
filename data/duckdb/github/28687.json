@@ -1,0 +1,59 @@
+{
+ "base_ref": "main",
+ "base_sha": "769e2d823005400f5ce2cd7d7db3aad4811c7099",
+ "body": "A finished scan kept its read-ahead memory reservation with the `TemporaryMemoryManager` until the query ended. With `read_ahead_depth=-1` (the default), each read-ahead scan reserves at least `min(8MB \u00d7 threads, memory_limit / 16)` for its backlog, however small its table is. Joins and aggregates that ran after it were granted that much less memory and spilled when they did not need to.\n\n`ScanReadAhead` now releases its memory governor once the scan is exhausted, as `ManagedAsyncTaskQueue` and `ManagedAsyncWriteQueue` already do when they finish. A scan that stops early (e.g. under a `LIMIT`) still releases when it is destroyed, as before. For some scenarios with tight memory, this PR can benefit them as an example below. \n\n### Reproducer\n\nA fact table is joined to nine 100-row dimension tables, then grouped into 30M groups. Each dimension scan holds its read-ahead reservation until the query ends, so the aggregate gets about 576MB less memory and spills.\n\nSetup:\n\n```sql\n-- duckdb repro.db\nCREATE TABLE fact AS SELECT range AS g, range % 100 AS k, range * 3 AS x FROM range(30000000);\nCREATE TABLE d1 AS SELECT range AS k FROM range(100);\nCREATE TABLE d2 AS FROM d1; CREATE TABLE d3 AS FROM d1; CREATE TABLE d4 AS FROM d1; CREATE TABLE d5 AS FROM d1;\nCREATE TABLE d6 AS FROM d1; CREATE TABLE d7 AS FROM d1; CREATE TABLE d8 AS FROM d1; CREATE TABLE d9 AS FROM d1;\nCHECKPOINT;\n```\n\nQuery:\n\n```sql\nSET threads=8;\nSET async_threads=4;\nSET storage_block_prefetch='debug_force_always';\nSET memory_limit='1700MB';\nSET enable_profiling='json';\nSET profiling_output='profile.json';\nSET tracked_metrics=['system.total_bytes_spilled'];\n.timer on\nSELECT count(*), sum(s) FROM (\n\tSELECT g, sum(x) AS s\n\tFROM fact\n\tJOIN d1 USING (k) JOIN d2 USING (k) JOIN d3 USING (k) JOIN d4 USING (k) JOIN d5 USING (k)\n\tJOIN d6 USING (k) JOIN d7 USING (k) JOIN d8 USING (k) JOIN d9 USING (k)\n\tGROUP BY g\n);\n.timer off\nSET enable_profiling='no_output';\nSELECT system.total_bytes_spilled // 1000000 AS spilled_mb FROM read_json('profile.json');\n```\n\nThree runs each, on an 18-core Apple M5:\n| | Time | Spilled |\n|---|---|---|\n| main | 0.28\u20130.32s | 346\u2013379MB |\n| this PR | 0.19\u20130.22s | 0MB |",
+ "comments": [
+  {
+   "body": "Thanks! LGTM",
+   "created_at": "2026-11-11T14:10:40Z",
+   "user": {
+    "login": "Mytherin",
+    "type": "User"
+   }
+  },
+  {
+   "body": "@Mytherin Thanks! The CI workflows are waiting for maintainer approval since this is my first contribution. Could you approve them?",
+   "created_at": "2026-11-11T14:22:12Z",
+   "user": {
+    "login": "anhphanmd",
+    "type": "User"
+   }
+  },
+  {
+   "body": "The CI failures look unrelated: they're existing tests tripping the new `warnings_as_errors` config, and those are already fixed on main (#28694). Happy to merge main and re-run if you want a green check!",
+   "created_at": "2026-11-12T07:42:30Z",
+   "user": {
+    "login": "anhphanmd",
+    "type": "User"
+   }
+  },
+  {
+   "body": "It seems to be stuck at getting a approval again for CI to run. Would appreciate a stamp to let the CI run if anyone is available. ",
+   "created_at": "2026-11-12T15:25:41Z",
+   "user": {
+    "login": "anhphanmd",
+    "type": "User"
+   }
+  }
+ ],
+ "created_at": "2026-11-11T11:09:01Z",
+ "fetched_at": "2026-11-23T20:34:28Z",
+ "head_sha": "ec801f1cbb31e63905747cdce5b4c4b887e45e4f",
+ "labels": [
+  "backport v2.0-cyanoptera"
+ ],
+ "linked_issues": [],
+ "merge_commit_sha": "5d254ad870763a9724af68b937ebf4e1440ad040",
+ "merged_at": "2026-11-12T22:12:52Z",
+ "number": 28687,
+ "referenced_numbers": [],
+ "repo": "duckdb/duckdb",
+ "review_comments": [],
+ "state": "closed",
+ "title": "Release the read-ahead memory reservation when the scan is exhausted",
+ "transport": "gh",
+ "user": {
+  "login": "anhphanmd",
+  "type": "User"
+ }
+}

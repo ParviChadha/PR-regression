@@ -1,0 +1,170 @@
+// Upstream tests at the PR's parent commit 69874e454 that use the changed code.
+// Names searched (test lines using each): basic_json (70), with_allocator_t (0), with_array_t (0), with_base_class_t (0), with_binary_t (0), with_boolean_t (0), with_float_t (0), with_integers_t (0), with_json_serializer_t (0), with_object_t (0), with_string_t (0)
+
+// ---- tests/src/unit-allocator.cpp:48-62  (uses: basic_json)
+    SECTION("bad_alloc")
+    {
+        // create JSON type using the throwing allocator
+        using bad_json = nlohmann::basic_json<std::map,
+              std::vector,
+              std::string,
+              bool,
+              std::int64_t,
+              std::uint64_t,
+              double,
+              bad_allocator>;
+
+        // creating an object should throw
+        CHECK_THROWS_AS(bad_json(bad_json::value_t::object), std::bad_alloc&);
+    }
+
+// ---- tests/src/unit-allocator.cpp:129-144  (uses: basic_json)
+TEST_CASE("controlled bad_alloc")
+{
+    // create JSON type using the throwing allocator
+    using my_json = nlohmann::basic_json<std::map,
+          std::vector,
+          std::string,
+          bool,
+          std::int64_t,
+          std::uint64_t,
+          double,
+          my_allocator>;
+
+    SECTION("class json_value")
+    {
+        SECTION("json_value(value_t)")
+        {
+
+// ---- tests/src/unit-alt-string.cpp:154-178  (uses: basic_json)
+
+  private:
+    std::string str_impl {}; // NOLINT(readability-redundant-member-init)
+
+    friend bool operator<(const char* /*op1*/, const alt_string& /*op2*/) noexcept;
+};
+
+void int_to_string(alt_string& target, std::size_t value)
+{
+    target = std::to_string(value).c_str();
+}
+
+using alt_json = nlohmann::basic_json <
+                 std::map,
+                 std::vector,
+                 alt_string,
+                 bool,
+                 std::int64_t,
+                 std::uint64_t,
+                 double,
+                 std::allocator,
+                 nlohmann::adl_serializer >;
+
+bool operator<(const char* op1, const alt_string& op2) noexcept
+{
+
+// ---- tests/src/unit-alt-string.cpp:427-460  (uses: basic_json)
+    SECTION("conversion between basic_json specializations (#2649)")
+    {
+        // explicit conversions are always possible
+        CHECK(std::is_constructible<nlohmann::json, alt_json>::value);
+        CHECK(std::is_constructible<alt_json, nlohmann::json>::value);
+        CHECK(std::is_constructible<nlohmann::json, nlohmann::ordered_json>::value);
+        CHECK(std::is_constructible<nlohmann::ordered_json, nlohmann::json>::value);
+
+        // specializations with the same string type are implicitly convertible
+        CHECK(std::is_convertible<nlohmann::ordered_json, nlohmann::json>::value);
+        CHECK(std::is_convertible<nlohmann::json, nlohmann::ordered_json>::value);
+
+        // specializations with different string types are only implicitly convertible
+        // if implicit conversions are enabled
+#if JSON_USE_IMPLICIT_CONVERSIONS
+        CHECK(std::is_convertible<alt_json, nlohmann::json>::value);
+        CHECK(std::is_convertible<nlohmann::json, alt_json>::value);
+#else
+        CHECK_FALSE(std::is_convertible<alt_json, nlohmann::json>::value);
+        CHECK_FALSE(std::is_convertible<nlohmann::json, alt_json>::value);
+#endif
+
+        // get<BasicJsonType>() works in either case
+        const nlohmann::json j = {{"foo", 1}, {"bar", true}};
+        CHECK(j.get<nlohmann::ordered_json>() == nlohmann::ordered_json(j));
+        // (only a number is converted here, as objects and strings are affected by #3425)
+        CHECK(nlohmann::json(42).get<alt_json>() == 42);
+        CHECK(alt_json(nlohmann::json(42)) == 42);
+
+        // get_to() also works in either case
+        alt_json a;
+        nlohmann::json(42).get_to(a);
+        CHECK(a == 42);
+    }
+
+// ---- tests/src/unit-assert_macro.cpp:30-43  (uses: basic_json)
+    SECTION("basic_json(first, second)")
+    {
+        assert_counter = 0;
+        CHECK(assert_counter == 0);
+
+        const json::iterator it{};
+        json j;
+
+        // in case assertions do not abort execution, an exception is thrown
+        CHECK_THROWS_WITH_AS(json(it, j.end()), "[json.exception.invalid_iterator.201] iterators are not compatible", json::invalid_iterator);
+
+        // check that assertion actually happened
+        CHECK(assert_counter == 1);
+    }
+
+// ---- tests/src/unit-binary_formats.cpp:226-250  (uses: basic_json)
+        CHECK((100.0 * double(msgpack_size) / double(json_size)) == Approx(87.158));
+        CHECK((100.0 * double(ubjson_1_size) / double(json_size)) == Approx(88.153));
+        CHECK((100.0 * double(ubjson_2_size) / double(json_size)) == Approx(89.264));
+        CHECK((100.0 * double(ubjson_3_size) / double(json_size)) == Approx(89.450));
+    }
+}
+
+namespace
+{
+// the binary formats as function pointers for "Binary formats with narrow number types";
+// named functions rather than lambdas, because clang 3.5 cannot convert a lambda
+// to a function pointer in the braced initializer of the format table
+using narrow_json = nlohmann::basic_json<std::map, std::vector, std::string, bool, std::int32_t, std::uint32_t, float>;
+using bytes = std::vector<std::uint8_t>;
+
+bytes encode_cbor(const json& j)
+{
+    return json::to_cbor(j);
+}
+narrow_json decode_cbor(const bytes& v, bool allow_exceptions)
+{
+    return narrow_json::from_cbor(v, true, allow_exceptions);
+}
+
+bytes encode_msgpack(const json& j)
+
+// ---- tests/src/unit-bson.cpp:37-61  (uses: basic_json)
+class huge_binary_t : public std::vector<std::uint8_t>
+{
+  public:
+    using std::vector<std::uint8_t>::vector;
+
+    size_type size() const noexcept // NOLINT(readability-convert-member-functions-to-static)
+    {
+        // one byte more than the BSON length field can represent
+        return static_cast<size_type>((std::numeric_limits<std::int32_t>::max)()) + 1;
+    }
+};
+
+using huge_binary_json = nlohmann::basic_json <
+                         std::map, std::vector, std::string, bool, std::int64_t, std::uint64_t,
+                         double, std::allocator, nlohmann::adl_serializer, huge_binary_t, void >;
+
+// a string type that can be made to report a size beyond INT32_MAX without
+// allocating that much memory, so BSON length overflow can be tested for
+// strings and (embedded) documents as well, following the same idea as
+// huge_binary_t.
+//
+// Unlike huge_binary_t (which is only ever used as the BSON *value* type),
+// this type doubles as basic_json's StringType and is therefore also used
+// for *object keys* (e.g. "s" or "nested" below). Only the designated test
+// value is meant to lie about its size - if every huge_string_t (including

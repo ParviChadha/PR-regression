@@ -1,0 +1,158 @@
+// Upstream tests at the PR's parent commit fa37b952d that use the changed code.
+// Names searched (test lines using each): sax_parse (0), from_bson (0), from_cbor (0), from_msgpack (0), from_ubjson (0), from_bjdata (0), from_bon8 (0), key (195)
+
+// ---- tests/src/unit-alt-string.cpp:269-296  (uses: key)
+    SECTION("items")
+    {
+        auto doc = alt_json::parse(R"({"foo": "bar"})");
+
+        for (const auto& item : doc.items())
+        {
+            CHECK(item.key() == "foo");
+            CHECK(item.value() == "bar");
+        }
+
+        auto doc_array = alt_json::parse(R"(["foo", "bar"])");
+
+        for (const auto& item : doc_array.items())
+        {
+            if (item.key() == "0" )
+            {
+                CHECK( item.value() == "foo" );
+            }
+            else if (item.key() == "1" )
+            {
+                CHECK(item.value() == "bar");
+            }
+            else
+            {
+                CHECK(false);
+            }
+        }
+    }
+
+// ---- tests/src/unit-binary_utf8_error_handler.cpp:165-201  (uses: key)
+    SECTION("writers: object key")
+    {
+        for (const auto& c : ill_formed_cases())
+        {
+            CAPTURE(c.name)
+            json jobj;
+            jobj[c.bytes] = 1;
+
+            CHECK_THROWS_AS(json::to_cbor(jobj, eh::strict), json::type_error&);
+            CHECK_THROWS_AS(json::to_msgpack(jobj, eh::strict), json::type_error&);
+            CHECK_THROWS_AS(json::to_ubjson(jobj, false, false, eh::strict), json::type_error&);
+            CHECK_THROWS_AS(json::to_bjdata(jobj, false, false, json::bjdata_version_t::draft2, eh::strict), json::type_error&);
+            CHECK_THROWS_AS(json::to_bson(jobj, eh::strict), json::type_error&);
+
+            for (const auto h :
+                    {
+                        eh::replace, eh::ignore
+                    })
+            {
+                CAPTURE(static_cast<int>(h))
+                const std::string expected = dump_and_parse(c.bytes, h);
+
+                CHECK(json::from_cbor(json::to_cbor(jobj, h)).begin().key() == expected);
+                CHECK(json::from_msgpack(json::to_msgpack(jobj, h)).begin().key() == expected);
+                CHECK(json::from_ubjson(json::to_ubjson(jobj, false, false, h)).begin().key() == expected);
+                CHECK(json::from_bjdata(json::to_bjdata(jobj, false, false, json::bjdata_version_t::draft2, h)).begin().key() == expected);
+                CHECK(json::from_bson(json::to_bson(jobj, h)).begin().key() == expected);
+            }
+
+            // keep: object keys round-trip unchanged too
+            CHECK(json::from_cbor(json::to_cbor(jobj, eh::keep)).begin().key() == c.bytes);
+            CHECK(json::from_msgpack(json::to_msgpack(jobj, eh::keep)).begin().key() == c.bytes);
+            CHECK(json::from_ubjson(json::to_ubjson(jobj, false, false, eh::keep)).begin().key() == c.bytes);
+            CHECK(json::from_bjdata(json::to_bjdata(jobj, false, false, json::bjdata_version_t::draft2, eh::keep)).begin().key() == c.bytes);
+            CHECK(json::from_bson(json::to_bson(jobj, eh::keep)).begin().key() == c.bytes);
+        }
+    }
+
+// ---- tests/src/unit-binary_utf8_error_handler.cpp:259-300  (uses: key)
+    SECTION("readers: object key")
+    {
+        for (const auto& c : ill_formed_cases())
+        {
+            CAPTURE(c.name)
+
+            json jobj;
+            jobj[c.bytes] = 1;
+            const auto cbor_bytes = json::to_cbor(jobj, eh::keep);
+            const auto msgpack_bytes = json::to_msgpack(jobj);
+            const auto ubjson_bytes = json::to_ubjson(jobj, false, false, eh::keep);
+            const auto bjdata_bytes = json::to_bjdata(jobj, false, false, json::bjdata_version_t::draft2, eh::keep);
+            const auto bson_bytes = json::to_bson(jobj, eh::keep);
+
+            CHECK(json::from_cbor(cbor_bytes).begin().key() == c.bytes);
+            CHECK(json::from_msgpack(msgpack_bytes).begin().key() == c.bytes);
+            CHECK(json::from_ubjson(ubjson_bytes).begin().key() == c.bytes);
+            CHECK(json::from_bjdata(bjdata_bytes).begin().key() == c.bytes);
+            CHECK(json::from_bson(bson_bytes).begin().key() == c.bytes);
+
+            CHECK_THROWS_AS(utils::ignore_return_value(json::from_cbor(cbor_bytes, true, true, json::cbor_tag_handler_t::error, eh::strict)), json::parse_error&);
+            CHECK_THROWS_AS(utils::ignore_return_value(json::from_msgpack(msgpack_bytes, true, true, eh::strict)), json::parse_error&);
+            CHECK_THROWS_AS(utils::ignore_return_value(json::from_ubjson(ubjson_bytes, true, true, eh::strict)), json::parse_error&);
+            CHECK_THROWS_AS(utils::ignore_return_value(json::from_bjdata(bjdata_bytes, true, true, eh::strict)), json::parse_error&);
+            CHECK_THROWS_AS(utils::ignore_return_value(json::from_bson(bson_bytes, true, true, eh::strict)), json::parse_error&);
+
+            for (const auto h :
+                    {
+                        eh::replace, eh::ignore
+                    })
+            {
+                CAPTURE(static_cast<int>(h))
+                const std::string expected = dump_and_parse(c.bytes, h);
+
+                CHECK(json::from_cbor(cbor_bytes, true, true, json::cbor_tag_handler_t::error, h).begin().key() == expected);
+                CHECK(json::from_msgpack(msgpack_bytes, true, true, h).begin().key() == expected);
+                CHECK(json::from_ubjson(ubjson_bytes, true, true, h).begin().key() == expected);
+                CHECK(json::from_bjdata(bjdata_bytes, true, true, h).begin().key() == expected);
+                CHECK(json::from_bson(bson_bytes, true, true, h).begin().key() == expected);
+            }
+        }
+    }
+
+// ---- tests/src/unit-custom-base-class.cpp:264-288  (uses: key)
+}
+
+template <class Ptr, class Fnc>
+void visitor_adaptor::do_visit(const Ptr& ptr, const Fnc& fnc) const
+{
+    using value_t = nlohmann::detail::value_t;
+    const json_with_visitor_t& json = *static_cast<const json_with_visitor_t*>(this); // NOLINT(cppcoreguidelines-pro-type-static-cast-downcast)
+    switch (json.type())
+    {
+        case value_t::object:
+            for (const auto& entry : json.items())
+            {
+                entry.value().do_visit(ptr / entry.key(), fnc);
+            }
+            break;
+        case value_t::array:
+            for (std::size_t i = 0; i < json.size(); ++i)
+            {
+                json.at(i).do_visit(ptr / std::to_string(i), fnc);
+            }
+            break;
+        case value_t::discarded:
+            break;
+        case value_t::null:
+        case value_t::string:
+
+// ---- tests/src/unit-items.cpp:1346-1359  (uses: key)
+        SECTION("const reference")
+        {
+            json j = 1;
+            int counter = 1;
+
+            for (const auto& i : j.items())
+            {
+                ++counter;
+                CHECK(i.key() == "");
+                CHECK(i.value() == json(1));
+            }
+
+            CHECK(counter == 2);
+        }

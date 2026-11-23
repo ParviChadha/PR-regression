@@ -1,0 +1,152 @@
+// Upstream tests at the PR's parent commit 0c4e7c103 that use the changed code.
+// Names searched (test lines using each): patch_inplace (4), json_pointer (158), to_string (7), parent_pointer (3), diff (0), back (83), front (31), pop_back (17), pop_front (3), operator/ (0), operator<< (83), operator!= (52), operator< (197), operator== (57), unflatten (32), split (0), escape (1), parse_array_index (0), prefix_tree (0), get_checked (0), contains (140), get_checked_or_null (0), get_unchecked (0), unescape (3), throw_no_parent (0), throw_unresolved (0), equals_string (0), add_child (0), grow (0), escape_into (0), object_member (0), hash_of (0), get_and_create (0), slot (0), parent (30), hash (59), id (37), token (43), slots (0), used (20), find_child (0), children (1)
+
+// ---- tests/src/unit-unicode.cpp:333-361  (uses: escape, json_pointer, unescape)
+        SECTION("check JSON Pointers")
+        {
+            for (const auto& s : j)
+            {
+                // skip non-string JSON values
+                if (!s.is_string())
+                {
+                    continue;
+                }
+
+                auto ptr = s.get<std::string>();
+
+                // tilde must be followed by 0 or 1
+                if (ptr == "~")
+                {
+                    ptr += "0";
+                }
+
+                // JSON Pointers must begin with "/"
+                ptr.insert(0, "/");
+
+                CHECK_NOTHROW(json::json_pointer("/" + ptr));
+
+                // check escape/unescape roundtrip
+                auto escaped = nlohmann::detail::escape(ptr);
+                nlohmann::detail::unescape(escaped);
+                CHECK(escaped == ptr);
+            }
+        }
+
+// ---- tests/src/unit-alt-string.cpp:328-349  (uses: json_pointer, to_string, unflatten)
+    SECTION("JSON pointer")
+    {
+        // Direct conversion from a json literal to alt_json is not supported due to issue #3425:
+        // alt_json's string_t (alt_string) is not directly constructible from std::string, so the
+        // cross-basic_json conversion falls back to the array-conversion path, incorrectly representing
+        // objects as arrays of [key, value] pairs and strings as arrays of character codes.
+        // See https://github.com/nlohmann/json/issues/3425 for details.
+        // Workaround: use alt_json::parse() instead of implicit conversion.
+        auto j = alt_json::parse(R"({"foo": ["bar", "baz"]})");
+
+        CHECK(j.at(alt_json::json_pointer("/foo/0")) == j["foo"][0]);
+        CHECK(j.at(alt_json::json_pointer("/foo/1")) == j["foo"][1]);
+
+        // RFC 6901 escaping works without string_t::find(str, pos), replace(),
+        // and substr()
+        auto j2 = alt_json::parse(R"({"a/b": 1, "m~n": 2, "~/~~//": 3})");
+        CHECK(j2.at(alt_json::json_pointer("/a~1b")) == 1);
+        CHECK(j2.at(alt_json::json_pointer("/m~0n")) == 2);
+        CHECK(j2.at(alt_json::json_pointer("/~0~1~0~0~1~1")) == 3);
+        CHECK(alt_json::json_pointer("/~0~1~0~0~1~1").to_string() == alt_string("/~0~1~0~0~1~1"));
+        CHECK(j2.flatten().unflatten() == j2);
+    }
+
+// ---- tests/src/unit-regression2.cpp:1174-1178  (uses: children)
+    SECTION("container children in first and last position")
+    {
+        BasicJsonType root = BasicJsonType::array({BasicJsonType::array({1}), 2, 3, BasicJsonType::array({4})});
+        check_destroy_edge_case(root);
+    }
+
+// ---- tests/src/unit-json_pointer.cpp:33-57  (uses: json_pointer, parent, pop_back)
+    SECTION("errors")
+    {
+        CHECK_THROWS_WITH_AS(json::json_pointer("foo"),
+                             "[json.exception.parse_error.107] parse error at byte 1: JSON pointer must be empty or begin with '/' - was: 'foo'", json::parse_error&);
+
+        CHECK_THROWS_WITH_AS(json::json_pointer("/~~"),
+                             "[json.exception.parse_error.108] parse error: escape character '~' must be followed with '0' or '1'", json::parse_error&);
+
+        CHECK_THROWS_WITH_AS(json::json_pointer("/~"),
+                             "[json.exception.parse_error.108] parse error: escape character '~' must be followed with '0' or '1'", json::parse_error&);
+
+        json::json_pointer p;
+        CHECK_THROWS_WITH_AS(p.top(),
+                             "[json.exception.out_of_range.405] JSON pointer has no parent", json::out_of_range&);
+        CHECK_THROWS_WITH_AS(p.pop_back(),
+                             "[json.exception.out_of_range.405] JSON pointer has no parent", json::out_of_range&);
+
+        SECTION("array index error")
+        {
+            json v = {1, 2, 3, 4};
+            json::json_pointer const ptr("/10e");
+            CHECK_THROWS_WITH_AS(v[ptr],
+                                 "[json.exception.out_of_range.404] unresolved reference token '10e'", json::out_of_range&);
+        }
+    }
+
+// ---- tests/src/unit-delete_deprecated_functions.cpp:207-228  (uses: contains, json_pointer, to_string)
+    SECTION("the non-deprecated functions still work")
+    {
+        const json j = {{"a", {1, 2}}};
+        const auto cbor = json::to_cbor(j);
+        CHECK(json::from_cbor(cbor.data(), cbor.data() + cbor.size()) == j);
+
+        const json::json_pointer ptr("/a/1");
+        CHECK(ptr == json::json_pointer("/a/1"));
+        CHECK(ptr.to_string() == "/a/1");
+        CHECK(j[ptr] == 2);
+        CHECK(j.at(ptr) == 2);
+        CHECK(j.value(ptr, 0) == 2);
+        CHECK(j.contains(ptr));
+
+        std::ostringstream os;
+        os << j;
+        CHECK(os.str() == R"({"a":[1,2]})");
+        std::istringstream is(os.str());
+        json parsed;
+        is >> parsed;
+        CHECK(parsed == j);
+    }
+
+// ---- tests/src/unit-json_pointer.cpp:829-843  (uses: json_pointer, operator!=, operator<, operator==)
+    SECTION("less-than comparison")
+    {
+        auto ptr1 = json::json_pointer("/foo/a");
+        auto ptr2 = json::json_pointer("/foo/b");
+
+        CHECK(ptr1 < ptr2);
+        CHECK_FALSE(ptr2 < ptr1);
+
+        // build with C++20
+        // JSON_HAS_CPP_20
+#if JSON_HAS_THREE_WAY_COMPARISON
+        CHECK((ptr1 <=> ptr2) == std::strong_ordering::less); // *NOPAD*
+        CHECK(ptr2 > ptr1);
+#endif
+    }
+
+// ---- tests/src/unit-comparison.cpp:73-85  (uses: operator!=, operator<, operator==)
+TEST_CASE("lexicographical comparison operators")
+{
+    constexpr auto f_ = false;
+    constexpr auto _t = true;
+    constexpr auto nan = std::numeric_limits<json::number_float_t>::quiet_NaN();
+#if JSON_HAS_THREE_WAY_COMPARISON
+    constexpr auto lt = std::partial_ordering::less;
+    constexpr auto gt = std::partial_ordering::greater;
+    constexpr auto eq = std::partial_ordering::equivalent;
+    constexpr auto un = std::partial_ordering::unordered;
+#endif
+
+#if JSON_HAS_THREE_WAY_COMPARISON
+
+// ---- tests/src/unit-regression1.cpp:1034-1036  (uses: operator!=, operator<, operator==)
+    SECTION("issue #414 - compare with literal 0)")
+    {
+#define CHECK_TYPE(v) \

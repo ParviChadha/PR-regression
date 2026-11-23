@@ -1,0 +1,133 @@
+// Upstream tests at the PR's parent commit d540750f2 that use the changed code.
+// Names searched (test lines using each): to_bjdata (0), to_bon8 (0), to_bson (0), to_cbor (0), to_msgpack (0), binary_writer (0), write_ubjson (0), write_ubjson_iterative (0), object_key_string_t (0), sanitize_utf8_for_write (0), string_t (182)
+
+// ---- tests/src/unit-allocator.cpp:165-173  (uses: string_t)
+        SECTION("json_value(const string_t&)")
+        {
+            next_construct_fails = false;
+            const my_json::string_t v("foo");
+            CHECK_NOTHROW(my_allocator_clean_up(my_json::json_value(v).string));
+            next_construct_fails = true;
+            CHECK_THROWS_AS(my_json::json_value(v), std::bad_alloc&);
+            next_construct_fails = false;
+        }
+
+// ---- tests/src/unit-allocator.cpp:198-205  (uses: string_t)
+        SECTION("basic_json(const typename string_t::value_type*)")
+        {
+            next_construct_fails = false;
+            CHECK_NOTHROW(my_json("foo"));
+            next_construct_fails = true;
+            CHECK_THROWS_AS(my_json("foo"), std::bad_alloc&);
+            next_construct_fails = false;
+        }
+
+// ---- tests/src/unit-bjdata.cpp:4031-4066  (uses: string_t)
+        SECTION("ill-formed UTF-8 (see #5529, #5651)")
+        {
+            // none of the binary format specs requires a decoder to reject
+            // ill-formed UTF-8 in a text string, so a value whose bytes are
+            // not valid UTF-8 (0xC0 0xAE is an overlong encoding of '.')
+            // round-trips byte for byte as a string value; to_bjdata() writes
+            // the bytes unchanged, as before 3.13.0, unless
+            // JSON_STRICT_BINARY_UTF8 is enabled (see
+            // unit-binary_utf8_strict.cpp)
+            const std::vector<uint8_t> v = {'S', 'i', 2, 0xc0, 0xae};
+            json j;
+            CHECK_NOTHROW(j = json::from_bjdata(v));
+            REQUIRE(j.is_string());
+            CHECK(j.get_ref<const json::string_t&>() == std::string("\xc0\xae"));
+            CHECK_THROWS_AS(utils::ignore_return_value(j.dump()), json::type_error&);
+            CHECK(json::from_bjdata(json::to_bjdata(j)) == j);
+
+            // the same bytes as an object key round-trip as well
+            const std::vector<uint8_t> v_key = {'{', 'i', 2, 0xc0, 0xae, 'i', 1, '}'};
+            json j_key;
+            CHECK_NOTHROW(j_key = json::from_bjdata(v_key));
+            REQUIRE(j_key.is_object());
+            CHECK(j_key.contains(std::string("\xc0\xae")));
+            CHECK(json::from_bjdata(json::to_bjdata(j_key)) == j_key);
+
+            CHECK(json::from_bjdata(json::to_bjdata(json("\xFF"))) == json("\xFF"));
+            // a truncated multi-byte sequence
+            CHECK(json::from_bjdata(json::to_bjdata(json("\xC3"))) == json("\xC3"));
+            // an encoded surrogate half (U+D800)
+            CHECK(json::from_bjdata(json::to_bjdata(json("\xED\xA0\x80"))) == json("\xED\xA0\x80"));
+            // an overlong encoding of '.'
+            CHECK(json::from_bjdata(json::to_bjdata(json("\xC0\xAF"))) == json("\xC0\xAF"));
+
+            // an object key with ill-formed UTF-8 is kept the same way
+            CHECK(json::from_bjdata(json::to_bjdata(json{{"\xFF", 1}})) == json{{"\xFF", 1}});
+        }
+
+// ---- tests/src/unit-bson.cpp:211-246  (uses: string_t)
+    SECTION("ill-formed UTF-8 (see #5529, #5651)")
+    {
+        // a BSON document {"s": "\xC0\xAE"} (0xC0 0xAE is an overlong
+        // encoding of '.'); the BSON spec does not require a decoder to
+        // reject ill-formed UTF-8 in a string value, so the reader hands the
+        // bytes back unchanged
+        const std::vector<uint8_t> v =
+        {
+            0x0F, 0x00, 0x00, 0x00, // document length
+            0x02, 's', 0x00,        // type 0x02 (string), key "s"
+            0x03, 0x00, 0x00, 0x00, // string length (including null)
+            0xc0, 0xae, 0x00,       // string content and its null terminator
+            0x00                    // document terminator
+        };
+        json j;
+        CHECK_NOTHROW(j = json::from_bson(v));
+        REQUIRE(j.is_object());
+        REQUIRE(j.contains("s"));
+        CHECK(j["s"].get_ref<const json::string_t&>() == std::string("\xc0\xae"));
+        // dump() still requires valid UTF-8 and throws for such a value
+        CHECK_THROWS_AS(utils::ignore_return_value(j.dump()), json::type_error&);
+        // to_bson() writes the bytes back unchanged, as before 3.13.0,
+        // unless JSON_STRICT_BINARY_UTF8 is enabled (see unit-binary_utf8_strict.cpp)
+        CHECK(json::from_bson(json::to_bson(j)) == j);
+
+        CHECK(json::from_bson(json::to_bson(json{{"s", "\xFF"}})) == json{{"s", "\xFF"}});
+        // a truncated multi-byte sequence
+        CHECK(json::from_bson(json::to_bson(json{{"s", "\xC3"}})) == json{{"s", "\xC3"}});
+        // an encoded surrogate half (U+D800)
+        CHECK(json::from_bson(json::to_bson(json{{"s", "\xED\xA0\x80"}})) == json{{"s", "\xED\xA0\x80"}});
+        // an overlong encoding of '.'
+        CHECK(json::from_bson(json::to_bson(json{{"s", "\xC0\xAF"}})) == json{{"s", "\xC0\xAF"}});
+
+        // an object key with ill-formed UTF-8 is kept as well
+        CHECK(json::from_bson(json::to_bson(json{{"\xFF", 1}})) == json{{"\xFF", 1}});
+    }
+
+// ---- tests/src/unit-constructor1.cpp:146-152  (uses: string_t)
+        SECTION("std::map<json::string_t, json>")
+        {
+            std::map<json::string_t, json> const o {{"a", json(1)}, {"b", json(1u)}, {"c", json(2.2)}, {"d", json(false)}, {"e", json("string")}, {"f", json()}};
+            json const j(o);
+            CHECK(j.type() == json::value_t::object);
+            CHECK(j == j_reference);
+        }
+
+// ---- tests/src/unit-constructor1.cpp:175-181  (uses: string_t)
+        SECTION("std::multimap<json::string_t, json>")
+        {
+            std::multimap<json::string_t, json> const o {{"a", json(1)}, {"b", json(1u)}, {"c", json(2.2)}, {"d", json(false)}, {"e", json("string")}, {"f", json()}};
+            json const j(o);
+            CHECK(j.type() == json::value_t::object);
+            CHECK(j == j_reference);
+        }
+
+// ---- tests/src/unit-conversions1.cpp:72-77  (uses: string_t)
+        SECTION("std::map<json::string_t, json>")
+        {
+            const std::map<json::string_t, json> o =
+                j.get<std::map<json::string_t, json>>();
+            CHECK(json(o) == j);
+        }
+
+// ---- tests/src/unit-conversions1.cpp:79-84  (uses: string_t)
+        SECTION("std::multimap<json::string_t, json>")
+        {
+            const std::multimap<json::string_t, json> o =
+                j.get<std::multimap<json::string_t, json>>();
+            CHECK(json(o) == j);
+        }

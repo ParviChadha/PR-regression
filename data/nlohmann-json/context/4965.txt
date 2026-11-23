@@ -1,0 +1,182 @@
+// Upstream tests at the PR's parent commit e8b747e4b that use the changed code.
+// Names searched (test lines using each): basic_json (30), merge_diff (0), merge_diff_iteratively (0), merge_diff_recursively (0), merge_diff_added_members (0), merge_diff_frame (0), member (147), patch (396), source (94), target (106)
+
+// ---- tests/src/unit-json_patch.cpp:688-729  (uses: patch, source, target)
+        SECTION("documentation GIF")
+        {
+            {
+                // a JSON patch
+                json const p1 = R"(
+                     [{"op": "add", "path": "/GB", "value": "London"}]
+                    )"_json;
+
+                // a JSON value
+                json const source = R"(
+                      {"D": "Berlin", "F": "Paris"}
+                    )"_json;
+
+                // apply the patch
+                const json target = source.patch(p1);
+                // target = { "D": "Berlin", "F": "Paris", "GB": "London" }
+                CHECK(target == R"({ "D": "Berlin", "F": "Paris", "GB": "London" })"_json);
+
+                // create a diff from two JSONs
+                const json p2 = json::diff(target, source); // NOLINT(readability-suspicious-call-argument)
+                // p2 = [{"op": "delete", "path": "/GB"}]
+                CHECK(p2 == R"([{"op":"remove","path":"/GB"}])"_json);
+            }
+            {
+                // a JSON value
+                json j = {"good", "bad", "ugly"};
+
+                // a JSON pointer
+                auto ptr = json::json_pointer("/2");
+
+                // use to access elements
+                j[ptr] = {{"it", "cattivo"}};
+                CHECK(j == R"(["good","bad",{"it":"cattivo"}])"_json);
+
+                // use user-defined string literal
+                j["/2/en"_json_pointer] = "ugly";
+                CHECK(j == R"(["good","bad",{"en":"ugly","it":"cattivo"}])"_json);
+
+                const json flat = j.flatten();
+                CHECK(flat == R"({"/0":"good","/1":"bad","/2/en":"ugly","/2/it":"cattivo"})"_json);
+            }
+        }
+
+// ---- tests/src/unit-json_patch.cpp:1748-1767  (uses: patch, source, target)
+    SECTION("array shrunk to empty")
+    {
+        json const source = {0, 1, 2, 3, 4};
+        json const target = json::array();
+
+        json const patch = json::diff(source, target);
+
+        json const expected = R"(
+            [
+                {"op": "remove", "path": "/4"},
+                {"op": "remove", "path": "/3"},
+                {"op": "remove", "path": "/2"},
+                {"op": "remove", "path": "/1"},
+                {"op": "remove", "path": "/0"}
+            ]
+        )"_json;
+
+        CHECK(patch == expected);
+        CHECK(source.patch(patch) == target);
+    }
+
+// ---- tests/src/unit-regression2.cpp:628-634  (uses: patch, source, target)
+    SECTION("issue #1983 - JSON patch diff for op=add formation is not as per standard (RFC 6902)")
+    {
+        const auto source = R"({ "foo": [ "1", "2" ] })"_json;
+        const auto target = R"({"foo": [ "1", "2", "3" ]})"_json;
+        const auto result = json::diff(source, target);
+        CHECK(result.dump() == R"([{"op":"add","path":"/foo/-","value":"3"}])");
+    }
+
+// ---- tests/src/unit-merge_patch.cpp:11-35  (uses: patch, target)
+#include <nlohmann/json.hpp>
+using nlohmann::json;
+#ifdef JSON_TEST_NO_GLOBAL_UDLS
+    using namespace nlohmann::literals; // NOLINT(google-build-using-namespace)
+#endif
+
+#include <string>
+
+namespace
+{
+// RFC 7396's MergePatch, written recursively as in the RFC; only usable on
+// values nested a few hundred levels deep
+void reference_merge_patch(json& target, const json& patch)
+{
+    if (!patch.is_object())
+    {
+        target = patch;
+        return;
+    }
+    if (!target.is_object())
+    {
+        target = json::object();
+    }
+    for (auto it = patch.begin(); it != patch.end(); ++it)
+    {
+
+// ---- tests/src/unit-regression1.cpp:569-578  (uses: basic_json, source)
+    SECTION("issue #233 - Can't use basic_json::iterator as a base iterator for std::move_iterator")
+    {
+        json source = {"a", "b", "c"};
+        json expected = {"a", "b"};
+        json dest;
+
+        std::copy_n(std::make_move_iterator(source.begin()), 2, std::back_inserter(dest));
+
+        CHECK(dest == expected);
+    }
+
+// ---- tests/src/unit-modifiers.cpp:8-32  (uses: source, target)
+
+#include "doctest_compatibility.h"
+
+#include <nlohmann/json.hpp>
+using nlohmann::json;
+
+#include <string>
+
+namespace
+{
+// update(source, true) as documented, written recursively; only usable on
+// values nested a few hundred levels deep
+void reference_update(json& target, const json& source)
+{
+    for (auto it = source.begin(); it != source.end(); ++it)
+    {
+        const auto existing = target.find(it.key());
+        if (it.value().is_object() && existing != target.end() && existing->is_object())
+        {
+            reference_update(*existing, it.value());
+        }
+        else
+        {
+            target[it.key()] = it.value();
+        }
+
+// ---- tests/src/unit-diagnostic-positions.cpp:196-209  (uses: patch, target)
+    SECTION("JSON patch add to primitive parent (#4292)")
+    {
+        // the JSON Patch "add" target /foo/bar/baz has a string parent
+        // (/foo/bar); the position of that parent is reported in the message
+        const json doc = json::parse(R"({"foo":{"bar":"a string"}})");
+        const json patch = json::parse(R"([{"op":"add","path":"/foo/bar/baz","value":1}])");
+#if JSON_DIAGNOSTICS
+        CHECK_THROWS_WITH_AS(doc.patch(patch),
+                             "[json.exception.out_of_range.411] (/foo/bar) (bytes 14-24) cannot add value: the JSON Patch 'add' target's parent is of type string, but must be an object or array", json::out_of_range);
+#else
+        CHECK_THROWS_WITH_AS(doc.patch(patch),
+                             "[json.exception.out_of_range.411] (bytes 14-24) cannot add value: the JSON Patch 'add' target's parent is of type string, but must be an object or array", json::out_of_range);
+#endif
+    }
+
+// ---- tests/src/unit-diagnostics.cpp:590-603  (uses: patch, target)
+    SECTION("update()")
+    {
+        json j = target;
+        j.update(patch, true);
+
+        // walk down through const references, which leave m_parent alone
+        const json* p = &j;
+        for (std::size_t i = 0; i < depth; ++i)
+        {
+            p = &p->at("a");
+        }
+        CHECK_THROWS_WITH_AS(p->at("x").at(0), expected_x.c_str(), json::type_error);
+        CHECK_THROWS_WITH_AS(p->at("y").at(0), expected_y.c_str(), json::type_error);
+    }
+
+// ---- tests/src/unit-ordered_json2.cpp:466-470  (uses: patch, target)
+    SECTION("patch")
+    {
+        const ordered_json patched = original.patch(patch);
+        CHECK(patched == target);
+    }

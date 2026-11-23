@@ -1,0 +1,55 @@
+{
+ "base_ref": "main",
+ "base_sha": "769e2d823005400f5ce2cd7d7db3aad4811c7099",
+ "body": "Hash joins can repeat build-side values, causing functions such as `list_sort` to repeat work. This broadens reusable dictionary output for scalar payloads and enables it for small builds with `LIST` or `MAP` payloads when an output chunk covers every build entry.\n\nThe original proposal changed optimizer expression placement. We chose dictionary emission because existing dictionary function execution can reuse results for repeated build values without adding LIST-width costing or aggregate-expression placement rules. The same mechanism applies across eligible functions and payloads.\n\nFixes #28179.\n\n<details>\n<summary>Previous proposal (superseded)</summary>\n\nThe description below documents the original optimizer implementation and its validation.\n\n**Original title:** Avoid repeated list sorting after fan-out joins\n\nFixes #28179.\n\nProjection pull-up and aggregate projection fusion can leave `list_sort` above a fan-out join. Add overflow-checked LIST width costing for known maximum lengths and fixed-size elements, and expose safe LIST-dependent scalar aggregate arguments to existing cost-based placement. Keep the existing 0.75 threshold and fallback for unsupported statistics; deduplicate shared arguments.\n\nEvidence against `6145a8699b` (macOS arm64, 4 threads, 2 GB, default optimizers): **2,047.5 \u2192 82.5 ms median (24.8\u00d7)** across 10 measured runs per binary, reversing execution order; identical checksum. Profiled sort input falls from **200,000 \u2192 2,000 rows**. Cheap scalar and bounded-string controls retain baseline medians (24/14 ms).\n\nFresh RelWithDebInfo build; **460 assertions passed across 8 targeted test files**; clang-format and diff checks passed. Regression coverage includes placement, shared arguments without CSE, NULL/empty lists, grouping/filter bindings, and unsupported nested/string lists. Full CI and broad benchmark suites remain pending. Fork validation: [kevintruong/duckdb#3](https://github.com/kevintruong/duckdb/pull/3), [CI running](https://github.com/kevintruong/duckdb/actions/runs/43079553692).\n\nAI-assisted implementation and validation.\n\n\n</details>\n",
+ "comments": [
+  {
+   "body": "Hey, I've updated the PR to do something different instead: avoid the high cost during execution rather than circumventing the problem in the optimizer. If you still think that the optimizer changes are necessary, feel free to open another PR with another reproducible example that needs fixing. The linked issue is now faster with exactly the same plan due to executing `list_sort` over a small dictionary vector derived from the hash table, rather than a flat vector.",
+   "created_at": "2026-11-13T07:44:48Z",
+   "user": {
+    "login": "lnkuiper",
+    "type": "User"
+   }
+  },
+  {
+   "body": "> Hey, I've updated the PR to do something different instead: avoid the high cost during execution rather than circumventing the problem in the optimizer. If you still think that the optimizer changes are necessary, feel free to open another PR with another reproducible example that needs fixing. The linked issue is now faster with exactly the same plan due to executing `list_sort` over a small dictionary vector derived from the hash table, rather than a flat vector.\n\nLook great , thanks for your joining ",
+   "created_at": "2026-11-13T08:09:18Z",
+   "user": {
+    "login": "kevintruong",
+    "type": "User"
+   }
+  }
+ ],
+ "created_at": "2026-11-11T18:38:08Z",
+ "fetched_at": "2026-11-23T20:34:26Z",
+ "head_sha": "9808b03a47e5f2668c50ee591bde0efaec6483ed",
+ "labels": [
+  "Ready To Merge"
+ ],
+ "linked_issues": [
+  {
+   "body": "### What happens?\n\nOn 1.5.6, the query below sorts 2,000 lists before joining. On `ed0443f18a`, sorting moves above the join and executes on 200,000 rows instead.\n\nSame machine, four threads, second execution excluding data preparation:\n\n| Version / setting | Time |\n|---|---:|\n| 1.5.6 (`069cc9f9b5`) | 0.035 s |\n| `ed0443f18a`, default settings | 0.981 s |\n| `ed0443f18a`, `projection_pullup` disabled | 0.029 s |\n\nThe development build is approximately **28\u00d7 slower**. All executions return:\n\n```text\n28496903230666301809900\n```\n\nThese are CLI wall-clock measurements. The development results refer to the tested local Release build; upstream HEAD was not rebuilt.\n\n### To Reproduce\n\n```sql\nSET threads = 4;\nSET memory_limit = '2GB';\n\nCREATE TABLE lists AS\nSELECT\n    i AS id,\n    list_transform(\n        range(128),\n        lambda x: hash(i * 128 + x)::UBIGINT\n    ) AS vals\nFROM range(2000) t(i);\n\nCREATE TABLE fanout AS\nSELECT i % 2000 AS id\nFROM range(200000) t(i);\n\n-- Run twice, then inspect with EXPLAIN ANALYZE.\nSELECT sum(sorted_values[1]::HUGEINT) AS checksum\nFROM (\n    SELECT id, list_sort(vals) AS sorted_values\n    FROM lists\n) l\nJOIN fanout f ON l.id = f.id;\n```\n\nOn the development build, repeat the query after:\n\n```sql\nSET disabled_optimizers = 'projection_pullup';\n```\n\n`EXPLAIN ANALYZE` shows that disabling this optimizer moves `list_sort` back below the join, reducing its input from 200,000 rows to 2,000 rows without changing the result.\n\n### OS:\n\nmacOS 27.0.1, arm64.\n\n### DuckDB Version:\n\nHomebrew 1.5.6 (`069cc9f9b5`) and local Release build `ed0443f18a` (v2.1.0-dev90926).\n\n### DuckDB Client:\n\nCLI. The development CLI was launched with `-no-agent`.\n\n### Hardware:\n\nApple M1 Max, 32 GiB RAM. Query settings: 4 threads, memory_limit='2GB'.\n\n### Full Name:\n\nwangqiang\n\n### Affiliation:\n\nIndependent\n\n### Did you include all relevant configuration (e.g., CPU architecture, Linux distribution) to reproduce the issue?\n\n- [x] Yes, I have\n\n### Did you include all code required to reproduce the issue?\n\n- [x] Yes, I have\n\n### Did you include all relevant data sets for reproducing the issue?\n\nYes \u2014 all data is generated by the SQL above.\n\n",
+   "labels": [
+    "reproduced"
+   ],
+   "number": 28179,
+   "state": "closed",
+   "title": "Performance regression from 1.5.6: list sorting repeated after a fan-out join"
+  }
+ ],
+ "merge_commit_sha": "9e4a1205082541e6741f7497dcd08bcb8e4e1bd3",
+ "merged_at": "2026-11-13T07:56:21Z",
+ "number": 28718,
+ "referenced_numbers": [
+  28179
+ ],
+ "repo": "duckdb/duckdb",
+ "review_comments": [],
+ "state": "closed",
+ "title": "Generalize reusable dictionary output from hash joins",
+ "transport": "gh",
+ "user": {
+  "login": "kevintruong",
+  "type": "User"
+ }
+}

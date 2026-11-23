@@ -1,0 +1,190 @@
+// Upstream tests at the PR's parent commit ca7740fef that use the changed code.
+// Names searched (test lines using each): basic_json (34), emplace (67), emplace_back (37), push_back (331), at (396), update (45), erase (228), operator[] (18), update_members (0), update_members_iteratively (0), set_parents_after_object_erase (0), set_parent_after_insert (0), set_parent_at (0), has_stable_elements (0), is_nlohmann_ordered_map (0), container_capacity (0), set_parent (0), set_parent_after_array_insert (0), array_capacity (0)
+
+// ---- tests/src/unit-allocator.cpp:675-720  (uses: emplace, emplace_back, push_back, update)
+    SECTION("turning a null value into an array or object")
+    {
+        my_json j;
+
+        next_construct_fails = true;
+        CHECK_THROWS_AS(j[0], std::bad_alloc&);
+        CHECK(j.is_null());
+
+        next_construct_fails = true;
+        CHECK_THROWS_AS(j["key"], std::bad_alloc&);
+        CHECK(j.is_null());
+
+#ifdef JSON_HAS_CPP_17
+        next_construct_fails = true;
+        CHECK_THROWS_AS(j[std::string_view("key")], std::bad_alloc&);
+        CHECK(j.is_null());
+#endif
+
+        next_construct_fails = true;
+        CHECK_THROWS_AS(j.push_back(my_json(1)), std::bad_alloc&);
+        CHECK(j.is_null());
+
+        const my_json one = 1;
+        next_construct_fails = true;
+        CHECK_THROWS_AS(j.push_back(one), std::bad_alloc&);
+        CHECK(j.is_null());
+
+        next_construct_fails = true;
+        CHECK_THROWS_AS(j.push_back(my_json::object_t::value_type("key", 1)), std::bad_alloc&);
+        CHECK(j.is_null());
+
+        next_construct_fails = true;
+        CHECK_THROWS_AS(j.emplace_back(1), std::bad_alloc&);
+        CHECK(j.is_null());
+
+        next_construct_fails = true;
+        CHECK_THROWS_AS(j.emplace("key", 1), std::bad_alloc&);
+        CHECK(j.is_null());
+
+        const my_json object = {{"key", 1}};
+        next_construct_fails = true;
+        CHECK_THROWS_AS(j.update(object), std::bad_alloc&);
+        CHECK(j.is_null());
+
+        next_construct_fails = false;
+    }
+
+// ---- tests/src/unit-diagnostics.cpp:191-239  (uses: at, push_back, update)
+    SECTION("Regression test for issue #3007 - Parent pointers properly set when using update()")
+    {
+        // void update(const_reference j)
+        {
+            json j = json::object();
+
+            {
+                json j2 = json::object();
+                j2["one"] = 1;
+
+                j.update(j2);
+            }
+
+            // Must call operator[] on const element, otherwise m_parent gets updated.
+            auto const& constJ = j;
+            CHECK_THROWS_WITH_AS(constJ["one"].at(0), "[json.exception.type_error.304] (/one) cannot use at() with number", json::type_error);
+        }
+
+        // void update(const_iterator first, const_iterator last)
+        {
+            json j = json::object();
+
+            {
+                json j2 = json::object();
+                j2["one"] = 1;
+
+                j.update(j2.begin(), j2.end());
+            }
+
+            // Must call operator[] on const element, otherwise m_parent gets updated.
+            auto const& constJ = j;
+            CHECK_THROWS_WITH_AS(constJ["one"].at(0), "[json.exception.type_error.304] (/one) cannot use at() with number", json::type_error);
+        }
+
+        // Code from #3007 triggering unwanted assertion without fix to update().
+        {
+            json root = json::array();
+            json lower = json::object();
+
+            {
+                json lowest = json::object();
+                lowest["one"] = 1;
+
+                lower.update(lowest);
+            }
+
+            root.push_back(lower);
+        }
+    }
+
+// ---- tests/src/unit-custom-array-type.cpp:71-83  (uses: emplace_back, push_back)
+    SECTION("adding elements")
+    {
+        deque_json j = deque_json::array();
+        j.push_back(1);
+        j.push_back("two");
+        j.emplace_back(3);
+        j += 4;
+
+        CHECK(j.size() == 4);
+        CHECK(j == deque_json({1, "two", 3, 4}));
+        CHECK(j.back() == 4);
+        CHECK(j.front() == 1);
+    }
+
+// ---- tests/src/unit-custom-base-class.cpp:62-75  (uses: at, emplace_back)
+    SECTION("type vector<int>")
+    {
+        using json = json_with_metadata<std::vector<int>>;
+        json value;
+        value.metadata().emplace_back(1);
+        auto copy = value;
+        value.metadata().emplace_back(2);
+
+        CHECK(copy.metadata().size()  == 1);
+        CHECK(copy.metadata().at(0)   == 1);
+        CHECK(value.metadata().size() == 2);
+        CHECK(value.metadata().at(0)  == 1);
+        CHECK(value.metadata().at(1)  == 2);
+    }
+
+// ---- tests/src/unit-custom-base-class.cpp:76-95  (uses: at, emplace_back)
+    SECTION("copy ctor")
+    {
+        using json = json_with_metadata<std::vector<int>>;
+        json value;
+        value.metadata().emplace_back(1);
+        value.metadata().emplace_back(2);
+
+        json copy = value;
+
+        CHECK(copy.metadata().size()  == 2);
+        CHECK(copy.metadata().at(0)   == 1);
+        CHECK(copy.metadata().at(1)   == 2);
+        CHECK(value.metadata().size() == 2);
+        CHECK(value.metadata().at(0)  == 1);
+        CHECK(value.metadata().at(1)  == 2);
+
+        value.metadata().clear();
+        CHECK(copy.metadata().size()  == 2);
+        CHECK(value.metadata().size() == 0);
+    }
+
+// ---- tests/src/unit-ordered_map.cpp:416-429  (uses: at, emplace)
+        SECTION("with T&& (rvalue)")
+        {
+            auto res1 = om.emplace("eins", std::string("1"));
+            CHECK(res1.first == om.begin());
+            CHECK(res1.second == false);
+            CHECK(om.size() == 3);
+            CHECK(om.at("eins") == "one"); // existing key is not overwritten
+
+            auto res4 = om.emplace("vier", std::string("four"));
+            CHECK(res4.first == om.begin() + 3);
+            CHECK(res4.second == true);
+            CHECK(om.size() == 4);
+            CHECK(om.at("vier") == "four");
+        }
+
+// ---- tests/src/unit-ordered_map.cpp:431-448  (uses: at, emplace)
+        SECTION("with T& (lvalue)")
+        {
+            std::string one = "1"; // NOLINT(misc-const-correctness): emplace must accept a non-const lvalue
+            std::string four = "four"; // NOLINT(misc-const-correctness): see above
+
+            auto res1 = om.emplace("eins", one);
+            CHECK(res1.first == om.begin());
+            CHECK(res1.second == false);
+            CHECK(om.size() == 3);
+            CHECK(om.at("eins") == "one"); // existing key is not overwritten
+
+            auto res4 = om.emplace("vier", four);
+            CHECK(res4.first == om.begin() + 3);
+            CHECK(res4.second == true);
+            CHECK(om.size() == 4);
+            CHECK(om.at("vier") == "four");
+            CHECK(four == "four"); // source was copied, not moved from
+        }

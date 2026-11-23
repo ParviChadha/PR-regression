@@ -1,0 +1,26 @@
+{
+ "base_ref": "main",
+ "base_sha": "609fa5ac2025c981affb7591929233f20a114264",
+ "body": "The statistics propagator derives filters from inner/semi join bounds, but previously lost them when the binder cast a column to the common comparison type. For example, TPC-DS Q72 compares `CAST(inv_quantity_on_hand AS BIGINT) < cs_quantity`, so the known maximum of `cs_quantity` did not bound the inventory scan.\n\nDerive these filters through invertible numeric casts using the existing cast capability checks. This includes integer and decimal widening, precision-safe conversions to floating point, and FLOAT to DOUBLE. Convert each bound back with the built-in cast; inclusive bounds remain conservative when conversion rounds, and the original join comparison remains in place. Unsupported conversions and TRY_CAST are skipped, and registered cast overrides retain their semantics. This stays within the numeric types supported by join-statistics tightening.\n\nThe author's original integral-cast benchmark reported Q72 at SF1000 improving from 56 s to 1.5 s, and at SF3000 inventory input dropping from 1.445B to about 139M rows. Those measurements predate the broader numeric coverage.\n\nValidation: the join-statistics suite (55 cases), cast optimizer suite (9 cases), and three cast-pushdown tests pass with assertions and float-cast-overflow sanitization enabled. All 540 differential queries across 15 numeric type pairs match the previous PR head and optimizer-disabled execution, including rounding, precision boundaries, NaN, infinities, and NULLs. A 1M-row decimal-inequality microbenchmark improves from a 99 ms median to 21 ms with identical results; IMDB and TPC-DS were not rerun for this follow-up.\n",
+ "comments": [],
+ "created_at": "2026-11-11T18:10:39Z",
+ "fetched_at": "2026-11-23T20:34:34Z",
+ "head_sha": "d5d25fdeb6368a1ffb89fa2816aa071110842723",
+ "labels": [
+  "Ready To Merge"
+ ],
+ "linked_issues": [],
+ "merge_commit_sha": "b4ce456542732d7eb6bf5aae1fdaefbec4ddbfea",
+ "merged_at": "2026-11-12T16:15:41Z",
+ "number": 28717,
+ "referenced_numbers": [],
+ "repo": "duckdb/duckdb",
+ "review_comments": [],
+ "state": "closed",
+ "title": "Derive join statistics filters through invertible numeric casts",
+ "transport": "gh",
+ "user": {
+  "login": "oraclechang",
+  "type": "User"
+ }
+}

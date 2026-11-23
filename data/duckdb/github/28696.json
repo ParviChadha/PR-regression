@@ -1,0 +1,36 @@
+{
+ "base_ref": "main",
+ "base_sha": "46257b1490e452ed59f1061cc0fc9c6e90841720",
+ "body": "Fixes https://github.com/duckdblabs/duckdb-internal/issues/11173\n\nDETACH closes the database once `use_count() == 1`. But `use_count()` is a relaxed load, so it doesn't synchronize with threads that already dropped their reference without `close_lock`, e.g. a scanner that got the database from `GetDatabases()`. TSan then reports a race between their reads (`GetCatalog()`) and `Cleanup()`.\n\nThis PR copies our reference and drops the copy right before `Close()`:\n- The decrement is acq_rel, so it synchronizes with all earlier decrements of the counter.\n- Dropping a copy rather than `attached_db` itself keeps the count at 1, so we still close with the `checkpoint_on_detach` action instead of through the destructor.\n- This relies on `shared_ptr` decrements being acq_rel even when they don't reach zero. That holds for all three standard libraries DuckDB builds with (libstdc++, libc++, MSVC STL). An acquire fence would also work, but TSan doesn't model fences.\n\nThe added test has a thread take a reference, read the catalog and drop it, then runs DETACH. Without the fix it fails under TSan on every run.",
+ "comments": [
+  {
+   "body": "Thanks!",
+   "created_at": "2026-11-11T14:09:01Z",
+   "user": {
+    "login": "Mytherin",
+    "type": "User"
+   }
+  }
+ ],
+ "created_at": "2026-11-11T13:46:25Z",
+ "fetched_at": "2026-11-23T20:34:45Z",
+ "head_sha": "fd1caabba75f9f6e4866105dcf8285ed96769bbb",
+ "labels": [
+  "Member",
+  "backport v2.0-cyanoptera"
+ ],
+ "linked_issues": [],
+ "merge_commit_sha": "736e1d50479a81abe7e1ac5774311846a2970db1",
+ "merged_at": "2026-11-11T19:45:50Z",
+ "number": 28696,
+ "referenced_numbers": [],
+ "repo": "duckdb/duckdb",
+ "review_comments": [],
+ "state": "closed",
+ "title": " Synchronize with dropped references before closing a detached database",
+ "transport": "gh",
+ "user": {
+  "login": "artjomPlaunov",
+  "type": "User"
+ }
+}

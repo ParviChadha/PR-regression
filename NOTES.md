@@ -347,3 +347,121 @@ Purpose: measure classifier precision/recall and inter-labeler agreement (Testor
 - Expected noise, not errors: "fatal: not a git repository" and the CMake warning about `git log` (the build tree is a git-archive export without .git); the build then uses placeholder hash 0123456789 for both old and new, so it cannot cause differences between versions.
 - Decision: do not pass DUCKDB_COMMIT; the identical placeholder is harmless and generated tests must not print the version/commit (prompt_notes says so).
 - Still to do for duckdb: collection fields in target.toml (`main_source`), first-parent handling for merge-commit PRs in collection, then generate/run on a PR.
+
+---
+
+# Stage 1b — change analysis and test context (`pipeline/changes.py`, `pipeline/context.py`)
+
+Date: 2026-11-23. Host-side Python, no container: needs `pip install libclang` plus clang's builtin headers from an
+installed clang (Windows `winget install LLVM.LLVM`, macOS `xcode-select --install`; or `PRH_CLANG_RESOURCE_DIR`).
+
+## Commands
+```
+python3 pipeline/changes.py nlohmann-json --jobs 2     # all PRs in prs.jsonl -> data/nlohmann-json/changes/<pr>.json (~20 min on 2 cores)
+python3 pipeline/context.py nlohmann-json              # -> data/nlohmann-json/context/<pr>.txt + .json (seconds)
+python3 -m unittest pipeline.test_changes pipeline.test_context
+```
+Run both before `batch.py`: generate.py reads the two files when present (no batch stage, no LLM calls, output committed).
+
+## What changes.py does
+Exports old/new library sources with `git archive` (cache/analysis/, upstream untouched), parses each with libclang
+(one TU including every `analysis_entries` header present at that commit), maps each changed line of the -U0 diff to
+the innermost declaration, and classifies public/private (detail/impl/internal or anonymous namespace,
+private/protected member, internal linkage). For private entities, a reverse-reference walk over the TU finds the
+public functions that reach them (`reached_via`, nearest first, max 10, max 15 hops). Lines compiled out by default
+are mapped again under each `analysis_variants` flag set; entities found that way carry `requires_flags`.
+
+## Problems found on the 122 json PRs and fixes (each verified on the PR that showed it)
+- libclang's pip package lacks clang's builtin headers: `stddef.h` not found aborts the parse -> resource dir lookup.
+- Deleted files lost their lines (`+++ /dev/null` cleared the path); renamed files used the new path on the old side.
+- #6015 change inside `#if JSON_DIAGNOSTICS` (off by default) -> nothing mapped -> `analysis_variants`.
+- #6075 change under `__cpp_lib_char8_t` (C++20 only) -> variant `-std=c++20`. run.py compiles every program with one
+  `--std` (default c++17), so such PRs need `run.py --std c++20` to be testable at all.
+- json_view.hpp is a public header json.hpp does not include -> second analysis entry, guarded by `__has_include`.
+- Calls through function objects (`nlohmann::from_json`, a variable holding `from_json_fn`) broke the chain ->
+  namespace/class-scope variables own references; operator() climbs to its class.
+- Members nobody names (constructors run by vector::emplace_back, destructors, fields), and public methods of private
+  classes called on temporaries from templates (`binary_writer<...>(o).write_cbor(j)` in to_cbor), climb to their
+  class. Partial specializations climb to their primary template (#6029 input adapter factories).
+- Names spelled out every template argument (`basic_json<ObjectType, ArrayType, ...>`): lists over 40 chars -> `<...>`.
+- Private entities with no public entry point: 370 (first run) -> 266 -> 66 of 1439 (4.6%, 13 PRs; every PR has at
+  least one). The rest are mostly data members of internal frames and helpers only reached through code clang leaves
+  unresolved in uninstantiated templates.
+
+## Result (final run)
+122/122 PRs, 0 failures, 1570 entities (1080 functions, 247 types, 220 variables, 23 macros), 1439 private
+(non-macro). 8 need flags (6 `-std=c++20`, 2 JSON_DIAGNOSTICS). 760 changed lines outside any declaration (includes,
+comments between declarations, preprocessor lines). Two PRs map to nothing, correctly: #5813 (json.hpp include guard and
+UDL setup) and #5874 (sanitizer `#if` block in input_adapters.hpp). Parse errors: 12, in #5890, #5966, #6005, #6012:
+nlohmann code that clang 18 rejects at that commit (`null_result` undeclared in json.hpp at #6005), mapping still works.
+Known answers: #4958 -> detail::is_usable_as_basic_json_key_type via at/contains/count/erase/find/operator[] (the
+lookups the regression broke); #5459 -> detail::compare_integer_with_float via operator== and operator<.
+
+## context.py
+Searches the upstream tests at the PR's PARENT commit (tests the PR adds never leak in) for the changed public names
+and the `reached_via` entry points, in call position (`.at(`, `->find(`, `parse(`; members need `.`/`->`).
+Operators cannot be searched (`==` is on every line); they select blocks whose test TITLE names them
+(`SECTION("comparison ...")`). Each use widens to its innermost SECTION/TEST_CASE (closing brace by indentation,
+preprocessor lines ignored), scored by rarer names first plus a bonus when the file is named after them, within a
+7000-character budget (generate.py truncates at 8000), max 2 blocks per file.
+Result: 103/122 PRs get context (median 6.8k chars); 17 have no upstream test using the changed names, 2 have only
+operators without matching titles or nothing mapped.
+
+## Changes to shared files
+- generate.py `changed_functions`: prints `reached_via` and `requires_flags` (#define lines vs compiler settings).
+- targets/nlohmann-json/target.toml: `analysis_entries`, `analysis_variants`.
+
+## Open
+- The 5 PRs generated before this (data/nlohmann-json/tests/) used the git hunk-header fallback; regenerate them
+  (`batch.py --redo generate`) so every PR is generated from the same prompt.
+- #6075-style PRs (`requires_flags` with -std=c++20) need run.py `--std c++20`.
+- QuantLib/duckdb: set `analysis_entries`, `include_dirs` and `analysis_flags` (Boost include path for QuantLib;
+  duckdb's generated headers) in their target.toml.
+
+---
+
+# Stage 1a for duckdb — PR collection (`pipeline/collect.py`)
+
+Date: 2026-11-23. `git clone https://github.com/duckdb/duckdb.git repos/duckdb` (full history, ~620 MB), then
+`python3 pipeline/collect.py duckdb [--github]` (~5 s without --github).
+
+## Settings (targets/duckdb/target.toml)
+- `collect_head` = `pinned_sha` (4c0adf6, main 2026-11-17), the commit env.py was checked on.
+- `main_source = ["src", "extension/core_functions"]`: core_functions is the only extension the env.py build compiles
+  (statically linked); json/parquet/icu-only PRs could not be tested with it.
+- DuckDB merges PRs with real merge commits whose subject is the PR title with "(#N)" (145/145 in the sample).
+  collect.py already treats any such commit as the PR: new = the merge commit, old = its first parent (the same
+  choice as `env.py --parent <sha>^1` in the duckdb Stage 0 check). No extra handling needed.
+- Generated files: new `generated_marker` (collect.py): a changed file whose first 20 lines match it at the PR's
+  commit does not count as main source. DuckDB has ~80 generated files; `src/common/enum_util.cpp` alone is
+  regenerated by ~60% of PRs and would push most PRs over the 3-file limit. 73 of 79 marked files carry the marker in
+  their first lines; the two function_list.cpp registries (marker at line 50/85) are in `generated_paths`;
+  storage_info.{cpp,hpp} mix generated and hand-written sections and stay main source.
+- `max_main_files = 3` (Testora, as for nlohmann-json), `sample_checked = 60` (midterm plan).
+
+## Result
+Newest 145 PRs (#25570-#28968, one week: 2026-11-10 to 2026-11-17) until 60 passed: no_main_source 28,
+too_many_main_files 57 (39%, vs 12% for nlohmann-json: duckdb PRs are larger), checked 60. 18 PRs had generated
+files dropped (enum_util.cpp in 12). No bot PRs and no DOC titles in the window.
+
+## Known answers (seed_prs, both pass the filters)
+- #27903 "Fix: SUMMARIZE over nanosecond temporal types" (2 files): intended fix, plus two regressions fixed in
+  #28401: avg/approx_quantile of TIMESTAMP_S, TIMESTAMP_MS and DATE no longer widened to TIMESTAMP, and infinite
+  TIMESTAMP_NS values became finite in approx_quantile. Visible from SQL on an in-memory database.
+- #27289 "Add functions to add, list and remove grammar extensions" (3 files): intended new behavior.
+- Considered and not used: #24878 (identifiers quoted twice in error messages, fixed by #26834) and #27761 (DROP TYPE
+  now fails while a table uses the type) are clearer stories but change 83 and 8 main files; #23658 is performance
+  only, which output comparison cannot see.
+
+## Notes
+- Testora's "path contains test" rule also drops real engine files such as
+  src/function/table/system/test_all_types.cpp; kept for consistency with nlohmann-json.
+- PRs that only change serialization (e.g. #28640, serialize_nodes.cpp from nodes.json) are no_main_source now,
+  because the C++ is generated. They change the on-disk format, which in-memory tests cannot reach anyway.
+- collect.py now also runs as `python3 pipeline/collect.py` (like the other pipeline scripts).
+
+## Open
+- `--github` metadata for the 62 PRs: run on a machine that can reach the GitHub API, then commit
+  data/duckdb/github/.
+- changes.py/context.py for duckdb need `analysis_entries = ["duckdb.hpp"]` and include paths for third_party
+  headers that src/*.cpp files use.
