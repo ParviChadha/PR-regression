@@ -1,0 +1,37 @@
+{
+ "base_ref": "main",
+ "base_sha": "8e057babf3904571cc90c17823590a67c8d42aaa",
+ "body": "This PR fixes HTTP errors turning into JSON parse errors once the per-host retry quota (#26947) refuses a retry. A failing httpfs read then no longer reports the HTTP error, but `Serialization Error: Failed to parse JSON string: {...}`, with the whole serialized HTTP error, response headers included, as its message. For example, a range read that keeps getting HTTP 429 from a rate-limited host fails this way instead of with `HTTP 429 Too Many Requests`.\n\nFor requests that return their error instead of throwing (`try_request`), `RunRequestWithRetry` keeps the error in `request_error` and appends the quota exhaustion note to it. When the request threw a DuckDB exception, or returned an error that holds one, that string is the exception's JSON, so the note lands after the closing brace. httpfs turns the request error back into an exception with `ErrorData(response->GetRequestError())`, which parses anything that starts with `{` as JSON and throws.\n\nThis PR appends the note to the exception message inside the JSON instead, keeping the exception type and extra info, as the throwing path already does. Plain text request errors get the note appended as before.\n\nCould this get the `backport v2.0-cyanoptera` label? The retry quota is in v2.0.0.\n",
+ "comments": [
+  {
+   "body": "Thanks!",
+   "created_at": "2026-11-17T09:50:49Z",
+   "user": {
+    "login": "Mytherin",
+    "type": "User"
+   }
+  }
+ ],
+ "created_at": "2026-11-17T08:04:57Z",
+ "fetched_at": "2026-11-23T20:33:56Z",
+ "head_sha": "52e27f5da2a32e27c55ab8b0829c6a5af0df7a1e",
+ "labels": [
+  "backport v2.0-cyanoptera"
+ ],
+ "linked_issues": [],
+ "merge_commit_sha": "5753e464694b05c96a07f6d58040f9813a326e61",
+ "merged_at": "2026-11-17T13:16:16Z",
+ "number": 28920,
+ "referenced_numbers": [
+  26947
+ ],
+ "repo": "duckdb/duckdb",
+ "review_comments": [],
+ "state": "closed",
+ "title": "Keep the HTTP error when the retry quota refuses a retry",
+ "transport": "gh",
+ "user": {
+  "login": "ywelsch",
+  "type": "User"
+ }
+}

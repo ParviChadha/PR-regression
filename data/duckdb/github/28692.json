@@ -1,0 +1,58 @@
+{
+ "base_ref": "main",
+ "base_sha": "ed8b5228f126ca3aecb74176860fd7bfd38d9a4f",
+ "body": "Supersedes #28381, fixes #28372 in a simpler way.\n\nThe PEG transformer merged `(A UNION B) UNION C` into one N-ary UNION node, so the inner set operation never resolved its own result type and `87::INTEGER` was cast straight to `VARCHAR` instead of through `DOUBLE`.\n\n`TransformSelectSetOpChain` now only merges into the N-ary nodes it builds itself. A chain's first operand can only be a set operation when it was written in parentheses (no other\n`SelectAtom` alternative produces one), so such an operand stays nested and the binder stages the cast through it. Unparenthesized chains are unchanged and still become a single N-ary node.\n",
+ "comments": [
+  {
+   "body": "I've restarted the failing CI. Does this need a backport label?",
+   "created_at": "2026-11-12T08:46:41Z",
+   "user": {
+    "login": "lnkuiper",
+    "type": "User"
+   }
+  },
+  {
+   "body": "Thanks! Yes, I added it :) But not required for 2.0.1",
+   "created_at": "2026-11-12T08:56:14Z",
+   "user": {
+    "login": "Dtenwolde",
+    "type": "User"
+   }
+  }
+ ],
+ "created_at": "2026-11-11T12:20:19Z",
+ "fetched_at": "2026-11-23T20:34:40Z",
+ "head_sha": "9cda4bd5ccdd3618746bec7403d57349dddd2f47",
+ "labels": [
+  "Ready To Merge",
+  "Member",
+  "backport v2.0-cyanoptera"
+ ],
+ "linked_issues": [
+  {
+   "body": "### What happens?\n\n\nIn DuckDB v1.5.6, a parenthesized inner `UNION` resolves `DOUBLE` and `INTEGER` to `DOUBLE` when evaluated on its own. However, when this inner query is followed by an outer `UNION` with a `VARCHAR` branch, the integer appears to be converted directly to `VARCHAR`, bypassing the intermediate `DOUBLE` conversion.\n\nChanging only the outer operator to `UNION ALL` changes the value from `'87'` to `'87.0'`. Introducing a derived-table boundary also changes the result. The discrepancy can affect duplicate elimination and therefore result cardinality.\n\nThe reproducer requires no tables, extensions, external files, or project-specific code.\n\n\n## Expected behavior\n\nThe explicitly grouped inner query has output type `DOUBLE`. Its `87::INTEGER` branch should therefore produce `87.0` before the outer operation converts that value to `VARCHAR`.\n\nUnder that interpretation, Queries A, B, and C should all return the same three strings: `'1.5'`, `'87.0'`, and `'text'`. There are no duplicate values in these results, so changing the outer `UNION` to `UNION ALL` should not change either values or cardinality.\n\nIf binding types across adjacent UNION nodes as a single operation is intentional, could you clarify why explicit parenthesization does not preserve the inner conversion, and why changing the outer duplicate-handling mode changes the value?\n\n\n### To Reproduce\n\n```sql\n-- The inner query resolves to DOUBLE.\nDESCRIBE (SELECT 1.5::DOUBLE AS x UNION SELECT 87::INTEGER);\n-- x DOUBLE\n\nSELECT 1.5::DOUBLE AS x UNION SELECT 87::INTEGER;\n-- 1.5, 87.0\n\n-- Query A\n(SELECT 1.5::DOUBLE AS x UNION SELECT 87::INTEGER)\nUNION SELECT 'text'::VARCHAR;\n-- Actual: '1.5', '87', 'text'\n\n-- Query B: only the outer operator changes.\n(SELECT 1.5::DOUBLE AS x UNION SELECT 87::INTEGER)\nUNION ALL SELECT 'text'::VARCHAR;\n-- Actual: '1.5', '87.0', 'text'\n\n-- Query C: preserve the inner result through a derived table.\nSELECT x\nFROM (SELECT 1.5::DOUBLE AS x UNION SELECT 87::INTEGER) q\nUNION SELECT 'text'::VARCHAR;\n-- Actual: '1.5', '87.0', 'text'\n```\n\n\n### OS:\n\nLinux\n\n### DuckDB Version:\n\n1.5.6\n\n### DuckDB Client:\n\npython\n\n### Hardware:\n\n_No response_\n\n### Full Name:\n\nLH Chen\n\n### Affiliation:\n\nStudent\n\n### Did you include all relevant configuration (e.g., CPU architecture, Linux distribution) to reproduce the issue?\n\n- [x] Yes, I have\n\n### Did you include all code required to reproduce the issue?\n\n- [x] Yes, I have\n\n### Did you include all relevant data sets for reproducing the issue?\n\nNo - Other reason (please specify in the issue body)",
+   "labels": [
+    "reproduced"
+   ],
+   "number": 28372,
+   "state": "closed",
+   "title": "Nested UNION changes intermediate numeric-to-VARCHAR conversion when the outer operator becomes UNION ALL"
+  }
+ ],
+ "merge_commit_sha": "9cb95fcd8a737a15749304679c61496853975b8c",
+ "merged_at": "2026-11-12T09:28:31Z",
+ "number": 28692,
+ "referenced_numbers": [
+  28381,
+  28372
+ ],
+ "repo": "duckdb/duckdb",
+ "review_comments": [],
+ "state": "closed",
+ "title": "Union staged type casts operand",
+ "transport": "gh",
+ "user": {
+  "login": "Dtenwolde",
+  "type": "User"
+ }
+}

@@ -1,0 +1,49 @@
+{
+ "base_ref": "main",
+ "base_sha": "392cee07532cad39193661814ff35309b7437b1f",
+ "body": "Since `AT TIME ZONE` on a `TIMESTAMP_NS` returns a `TIMESTAMPTZ_NS`, comparing the result with a `TIMESTAMPTZ` fails to bind, while `TIMESTAMP_NS` and `TIMESTAMP` compare fine:\n\n```sql\nSELECT (TIMESTAMP_NS '2026-10-12 12:34:56.123456789' AT TIME ZONE 'UTC') < now();\n-- Binder Error: Cannot compare values of type TIMESTAMPTZ_NS and type TIMESTAMP WITH TIME ZONE - an explicit cast is required\n```\n\nThe same happens for `BETWEEN`, `COALESCE`, `IN` and list literals that mix the two. They combine the types through an implicit cast in one direction, and `CastRules::ImplicitCast` has no rule for a `TIMESTAMP_TZ` source, so neither direction is allowed.\n\nThis allows `TIMESTAMP_TZ` to `TIMESTAMP_TZ_NS`, as `TIMESTAMP` already casts implicitly to `TIMESTAMP_NS`, so the microsecond side is cast up. On #28039 the different ranges of the two types came up as the reason against this cast. `TIMESTAMP` and `TIMESTAMP_NS` differ in the same way, and a `TIMESTAMPTZ` outside the nanosecond range now fails with the same \"Could not convert Timestamp to higher precision\" that a `TIMESTAMP` gets today. The cast also lets a `TIMESTAMPTZ` argument bind to an overload that only takes `TIMESTAMPTZ_NS`, such as a `date_diff` that mixes the two.\n\nIf that is acceptable, as a v2.0 regression, could this get the `backport v2.0-cyanoptera` label?\n",
+ "comments": [
+  {
+   "body": "Thanks!",
+   "created_at": "2026-11-11T12:53:51Z",
+   "user": {
+    "login": "Mytherin",
+    "type": "User"
+   }
+  }
+ ],
+ "created_at": "2026-11-11T08:03:47Z",
+ "fetched_at": "2026-11-23T20:34:48Z",
+ "head_sha": "72fefaccca40f3c4ac5173f348113dfb80f4006b",
+ "labels": [
+  "backport v2.0-cyanoptera"
+ ],
+ "linked_issues": [],
+ "merge_commit_sha": "46257b1490e452ed59f1061cc0fc9c6e90841720",
+ "merged_at": "2026-11-11T13:30:03Z",
+ "number": 28672,
+ "referenced_numbers": [
+  28039
+ ],
+ "repo": "duckdb/duckdb",
+ "review_comments": [
+  {
+   "body": "I know this has been merged but in future it would be good to use non-UTC time zones for testing. ",
+   "created_at": "2026-11-11T20:43:40Z",
+   "diff_hunk": "@@ -0,0 +1,63 @@\n+# name: test/sql/types/timestamp/timestamptz_ns_timestamptz_comparison.test\n+# description: TIMESTAMPTZ_NS combines with TIMESTAMPTZ at nanosecond precision, as TIMESTAMP_NS does with TIMESTAMP\n+# group: [timestamp]\n+\n+require icu\n+\n+statement ok\n+SET TimeZone = 'UTC';",
+   "line": 8,
+   "path": "test/sql/types/timestamp/timestamptz_ns_timestamptz_comparison.test",
+   "user": {
+    "login": "hawkfish",
+    "type": "User"
+   }
+  }
+ ],
+ "state": "closed",
+ "title": "Compare TIMESTAMPTZ_NS with TIMESTAMPTZ without an explicit cast",
+ "transport": "gh",
+ "user": {
+  "login": "ywelsch",
+  "type": "User"
+ }
+}

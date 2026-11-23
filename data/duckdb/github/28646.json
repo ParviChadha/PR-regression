@@ -1,0 +1,39 @@
+{
+ "base_ref": "main",
+ "base_sha": "958435288bab7af5964596997178edf26f7e714c",
+ "body": "Some aggregates keep their states in the arena but have no spill plan (e.g. `quantile_cont`, `arg_max`, the `top-N` in h2o q08, `approx_top_k` etc). Their memory can't shrink when the sink abandons, because abandoning clears only the pointer table and the arena stays. Once the arena alone is above the thread limit, Sink abandons on every chunk. Each abandon re-creates the states of every repeated group in the arena, so memory only grows. Going external doesn't help either, because it can't release the arena.\n\nThis PR changes three heuristics, only for layouts without a spill plan:\n- Abandon pressure: with a non-empty arena, abandon again only once the HT's spillable part (everything but the arena) has grown by `thread_limit / AGGREGATE_STATE_SPILL_DIVISOR` since the last abandon, so re-created states don't trigger the next abandon.\n- Going external: the decision ignores the arena, which stays in memory either way.\n- TryGrow: the arena doesn't count against the limit, and the cost of a duplicate row includes its arena bytes.\n\nLayouts with a spill plan or no arena take the old paths.\n\nRelease builds, threads=4 unless noted, median of 5 interleaved runs:\n\n| query                                           | before                           | after                 |\n|-------------------------------------------------|----------------------------------|-----------------------|\n| h2o q08, 500 MB                                 | OOM after 68 s, 14 GB spilled    | 0.39 s                |\n| h2o q08, 16 threads, 1 GB                       | OOM after 55\u201365 s, 12 GB spilled | 0.27 s                |\n| quantile_cont, 1M groups, 1 GB                  | OOM after 82 s, 20 GB spilled    | 0.88 s, 32 MB spilled |\n| arg_max(v, v, 10), 1M groups, 1 GB              | 0.90 s, 128 MB spilled           | 0.75 s, 34 MB spilled |\n| h2o q08, 300 MB                                 | OOM after 27 s, 6 GB spilled     | OOM after 0.7 s       |\n| 4 \u00d7 approx_top_k, 200k groups, 16 threads, 2 GB | OOM after 106 s, 38 GB RSS       | 10.0 s, 6.5 GB RSS    |\n\nThis also happens at 1\u20132 threads. With 48-character string keys, `quantile_cont` over 1M groups ran out of memory after 97\u201398 s and 23 GB spilled, at both 1 thread / 500 MB and 2 threads / 700 MB. With this PR it finishes in 1.7 s and 1.0 s.",
+ "comments": [],
+ "created_at": "2026-11-10T14:56:23Z",
+ "fetched_at": "2026-11-23T20:34:29Z",
+ "head_sha": "5ba582c28a55479b556db57219e000191b88113b",
+ "labels": [
+  "Ready To Merge",
+  "Member"
+ ],
+ "linked_issues": [],
+ "merge_commit_sha": "cb4190eb728a8f6661e81b0901751c9c753fe701",
+ "merged_at": "2026-11-12T21:33:38Z",
+ "number": 28646,
+ "referenced_numbers": [],
+ "repo": "duckdb/duckdb",
+ "review_comments": [
+  {
+   "body": "AI-assisted review:\n\n> Thanks for the PR! This still prevents useful row spilling when the aggregate states fit in memory but the group keys don't. This query succeeds 5/5 on merge base `c3dc01af116c` and OOMs 5/5 on head `163f8f075b08`:\n>\n> ```sql\n> SET threads=4;\n> SET memory_limit='180MB';\n> SELECT count(*), sum(v[1])\n> FROM (\n>     SELECT max(i, 200) AS v\n>     FROM range(100000) t(i)\n>     GROUP BY repeat(md5(i::VARCHAR), 16)\n> );\n> -- expected: 100000,4999950000\n> ```\n>\n> Could we keep the protection against repeatedly rebuilding large states, while still spilling substantial row data? The reservation reaches 648 MB against this query's 180 MB memory limit, so comparing only spillable bytes against the reservation-derived allowance postpones useful spilling.\n>\n> I prototyped a middle ground: keep the PR's native abandon interval when the unspillable arena is at least four times the spillable footprint; otherwise, and once external, cap the row allowance at 80% of memory per configured thread. The same cap controls entering external mode. Oversized no-plan reservations also use the existing conservative partition budget, leaving headroom for repartitioning.\n>\n> The exact tested patch is linked below as a file. On Linux x86-64/reldebug, it passes this query 5/5 and preserves 5/5 successes on the repeated-quantile control and both narrower-key top-N controls. Across 102 cases excluding one unstable parallel boundary, it preserves all 56 head successes and succeeds on 10 additional cases. The new SQL test, existing `aggregate_state_spilling.test_slow`, and all 15 `[radix_ht_sink]` tests pass.\n>\n> There are still trade-offs: the 102k/104k-group versions at 180 MB succeed on base and fail on both head and prototype. The narrow-key control in the included test went from a 90 ms to 106 ms median over five measured runs after warmup. The unstable parallel case succeeded 5/8 times on each version in separate repeats. I think this is a reasonable heuristic to build on: retain states when spilling would save little, and release keys when that can help the query fit.\n>\n> Patch file: [validated-prototype.patch.txt](https://gist.githubusercontent.com/lnkuiper/bcf4a0c66dbe40e22a86422be7d0b550/raw/fc1d7bc3fb4eea21bda7dbda295d5a0dde2ef657/validated-prototype.patch.txt) (applies to `163f8f075b086c4515632437ac7732f542fe35bf`).\n",
+   "created_at": "2026-11-11T12:14:18Z",
+   "diff_hunk": "@@ -623,7 +652,9 @@ void MaybeRepartition(ClientContext &context, RadixHTGlobalSinkState &gstate, Ra\n \tconst auto total_size = ht.GetSizeInBytes();\n \tUpdateSinkReservation(context, gstate, ht, total_size);\n \n-\tif (total_size > gstate.GetThreadLimit()) {\n+\t// Without a spill plan the arena stays in memory either way, so only the spillable part decides\n+\t// whether to go external.\n+\tif (gstate.SpillableSize(ht) > gstate.GetThreadLimit()) {",
+   "line": 657,
+   "path": "src/execution/radix_partitioned_hashtable.cpp",
+   "user": {
+    "login": "lnkuiper",
+    "type": "User"
+   }
+  }
+ ],
+ "state": "closed",
+ "title": "Stop hash aggregates from abandoning on every chunk when their states cannot spill",
+ "transport": "gh",
+ "user": {
+  "login": "DinosL",
+  "type": "User"
+ }
+}

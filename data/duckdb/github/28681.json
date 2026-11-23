@@ -1,0 +1,91 @@
+{
+ "base_ref": "main",
+ "base_sha": "6c8e177cf411b911039527e9e747f144f5ef20b9",
+ "body": "Currently we lose documentation when a parameter is documented as `VARIANT`:\n\n ```sql\n   SELECT description, examples, categories\n   FROM duckdb_functions()\n   WHERE function_name = 'variant_contains';\n   \n\u250c\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u252c\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u252c\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2510\n\u2502 description \u2502 examples  \u2502 categories \u2502\n\u2502   varchar   \u2502 varchar[] \u2502 varchar[]  \u2502\n\u251c\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u253c\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u253c\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2524\n\u2502 NULL        \u2502 []        \u2502 []         \u2502\n\u2514\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2534\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2534\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2518\n ```\n \nWe now normalize the `VARIANT` type so equality matches and we get the documentation:\n \n ```sql\n \u250c\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u252c\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u252c\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2510\n\u2502                              description                               \u2502                                examples                                 \u2502 categories \u2502\n\u2502                                varchar                                 \u2502                                varchar[]                                \u2502 varchar[]  \u2502\n\u251c\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u253c\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u253c\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2524\n\u2502 Returns whether the needle is contained in the haystack, recursively c \u2502 ['variant_contains({\\'a\\': {\\'b\\': 42}}::VARIANT, {\\'b\\': 42}::VARIANT) \u2502 [variant]  \u2502\n\u2502 hecking nested arrays and objects.                                     \u2502 ']                                                                      \u2502            \u2502\n\u2514\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2534\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2534\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2518\n```\n ",
+ "comments": [
+  {
+   "body": "Thanks!",
+   "created_at": "2026-11-13T14:55:07Z",
+   "user": {
+    "login": "Mytherin",
+    "type": "User"
+   }
+  }
+ ],
+ "created_at": "2026-11-11T10:17:47Z",
+ "fetched_at": "2026-11-23T20:34:19Z",
+ "head_sha": "f45192ff1f5ff3a17f1bcfbfc546acf60ca009a5",
+ "labels": [
+  "Member"
+ ],
+ "linked_issues": [],
+ "merge_commit_sha": "afdc4212a58c3850bcb23db0dc46d205b07da048",
+ "merged_at": "2026-11-13T15:24:05Z",
+ "number": 28681,
+ "referenced_numbers": [],
+ "repo": "duckdb/duckdb",
+ "review_comments": [
+  {
+   "body": "This is odd - why does `VARIANT` need this and other types don't?",
+   "created_at": "2026-11-11T14:03:25Z",
+   "diff_hunk": "@@ -588,6 +588,9 @@ LogicalType DBConfig::ParseLogicalType(const string &type) {\n \t}\n \n \tconst auto type_id = StringUtil::CIEquals(type, \"ANY\") ? LogicalTypeId::ANY : TransformStringToLogicalTypeId(type);\n+\tif (type_id == LogicalTypeId::VARIANT) {\n+\t\treturn LogicalType::VARIANT();",
+   "line": 592,
+   "path": "src/main/config.cpp",
+   "user": {
+    "login": "Mytherin",
+    "type": "User"
+   }
+  },
+  {
+   "body": "We need this because just returning the `type_id` results in the following construction: `LogicalType(LogicalTypeId::VARIANT)`. This results in missing child information, whereas during function registration we use `LogicalType::VARIANT()` which does fill this child info (`LogicalTypeInfo`). This means the catalog entry of the function now contains documentation and an overload which have a `VARIANT` instantiated in different ways. Once we run `duckdb_functions()` it does a comparison operation to find which overload matches to which documentation, and fails to find it due to the difference in child info.\n\nOther types have this handling as well, you can see it a bit higher up in the same function. The only thing different with `VARIANT` is that we instantiate not because of type parameters (such as with `STRUCT`), but because `VARIANT` has an internal structure stored in `LogicalTypeInfo`.",
+   "created_at": "2026-11-11T15:13:02Z",
+   "diff_hunk": "@@ -588,6 +588,9 @@ LogicalType DBConfig::ParseLogicalType(const string &type) {\n \t}\n \n \tconst auto type_id = StringUtil::CIEquals(type, \"ANY\") ? LogicalTypeId::ANY : TransformStringToLogicalTypeId(type);\n+\tif (type_id == LogicalTypeId::VARIANT) {\n+\t\treturn LogicalType::VARIANT();",
+   "line": 592,
+   "path": "src/main/config.cpp",
+   "user": {
+    "login": "sebastiaan-dev",
+    "type": "User"
+   }
+  },
+  {
+   "body": "As alternative we could also instantiate `LogicalTypeInfo` inside the `LogicalType()` constructor?",
+   "created_at": "2026-11-11T15:18:58Z",
+   "diff_hunk": "@@ -588,6 +588,9 @@ LogicalType DBConfig::ParseLogicalType(const string &type) {\n \t}\n \n \tconst auto type_id = StringUtil::CIEquals(type, \"ANY\") ? LogicalTypeId::ANY : TransformStringToLogicalTypeId(type);\n+\tif (type_id == LogicalTypeId::VARIANT) {\n+\t\treturn LogicalType::VARIANT();",
+   "line": 592,
+   "path": "src/main/config.cpp",
+   "user": {
+    "login": "sebastiaan-dev",
+    "type": "User"
+   }
+  },
+  {
+   "body": "Yes it feels like this should be made part of `GetBuiltinTypeInfo` then",
+   "created_at": "2026-11-12T09:54:18Z",
+   "diff_hunk": "@@ -588,6 +588,9 @@ LogicalType DBConfig::ParseLogicalType(const string &type) {\n \t}\n \n \tconst auto type_id = StringUtil::CIEquals(type, \"ANY\") ? LogicalTypeId::ANY : TransformStringToLogicalTypeId(type);\n+\tif (type_id == LogicalTypeId::VARIANT) {\n+\t\treturn LogicalType::VARIANT();",
+   "line": 592,
+   "path": "src/main/config.cpp",
+   "user": {
+    "login": "Mytherin",
+    "type": "User"
+   }
+  },
+  {
+   "body": "Changed it!",
+   "created_at": "2026-11-13T14:28:53Z",
+   "diff_hunk": "@@ -588,6 +588,9 @@ LogicalType DBConfig::ParseLogicalType(const string &type) {\n \t}\n \n \tconst auto type_id = StringUtil::CIEquals(type, \"ANY\") ? LogicalTypeId::ANY : TransformStringToLogicalTypeId(type);\n+\tif (type_id == LogicalTypeId::VARIANT) {\n+\t\treturn LogicalType::VARIANT();",
+   "line": 592,
+   "path": "src/main/config.cpp",
+   "user": {
+    "login": "sebastiaan-dev",
+    "type": "User"
+   }
+  }
+ ],
+ "state": "closed",
+ "title": "Fix VARIANT type normalization for function metadata",
+ "transport": "gh",
+ "user": {
+  "login": "sebastiaan-dev",
+  "type": "User"
+ }
+}

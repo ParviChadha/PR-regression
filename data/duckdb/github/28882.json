@@ -1,0 +1,35 @@
+{
+ "base_ref": "main",
+ "base_sha": "50f9bb47fa2b7ad4ecd8b0d990ab7b1fd791c677",
+ "body": "Hi team, I found the following SQL weird\r\n```sql\r\nmemory D COPY (SELECT 'a;b' AS s) TO '/tmp/nl_repro.csv' (NEW_LINE ';', HEADER false);\r\nmemory D SELECT content FROM read_text('/tmp/nl_repro.csv');\r\n\u250c\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2510\r\n\u2502 content \u2502\r\n\u2502 varchar \u2502\r\n\u251c\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2524\r\n\u2502 a;b;    \u2502\r\n\u2514\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2518\r\n```\r\nI think the reason is, in the current implementation we didn't quote the newliner character, which could be any character. The first character is considered, following the same convention of delimeter [here](https://github.com/duckdb/duckdb/blob/50f9bb47fa2b7ad4ecd8b0d990ab7b1fd791c677/src/common/csv_writer.cpp#L40) \r\n",
+ "comments": [
+  {
+   "body": "Thanks!",
+   "created_at": "2026-11-17T09:50:32Z",
+   "user": {
+    "login": "Mytherin",
+    "type": "User"
+   }
+  }
+ ],
+ "created_at": "2026-11-16T14:14:49Z",
+ "fetched_at": "2026-11-23T20:33:57Z",
+ "head_sha": "63cfc602090fe0492b3aeb71cf3639686757ba44",
+ "labels": [
+  "backport v2.0-cyanoptera"
+ ],
+ "linked_issues": [],
+ "merge_commit_sha": "629e395a854d72dcb1f414e1a0451c68ac0e9f1f",
+ "merged_at": "2026-11-17T10:35:56Z",
+ "number": 28882,
+ "referenced_numbers": [],
+ "repo": "duckdb/duckdb",
+ "review_comments": [],
+ "state": "closed",
+ "title": "Quote CSV values that contain a custom NEW_LINE",
+ "transport": "gh",
+ "user": {
+  "login": "dentiny",
+  "type": "User"
+ }
+}

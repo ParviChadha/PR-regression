@@ -1,0 +1,115 @@
+{
+ "base_ref": "main",
+ "base_sha": "90fd938fd55b30f65a544f3a6eec3886207d5319",
+ "body": "Follow-up to duckdb/duckdb#28406, addressing duckdb-bot's review (https://github.com/duckdb/duckdb/pull/28406#discussion_r4482331920): dense selections through the new bitpacking `select` were slower than the old scan + slice. The fix was pushed to the #28406 branch only after #28406 had already merged.\n\nChanges in `BitpackingSelect`:\n- DELTA_FOR no longer decodes an algorithm group twice. `Skip` stops at the start of the target's algorithm group instead of partially decoding it, and after the last selected row the prefix sum continues to the end of the already-unpacked group, so the next `Skip` doesn't unpack it again for the carry.\n- Dense selections (at least one selected row per 32-value algorithm group on average) scan the range into a scratch buffer owned by the scan state (at most one vector, allocated once per scan) and gather the selected rows from it, since nearly every group is decoded anyway. This is the old scan + select without the dictionary slice, which isn't possible here because `result_offset` can be non-zero.\n\nWhole-query wall clock, RelWithDebInfo builds, 50M rows bitpacked, 1 thread, min / median of 9 alternating runs. The box is shared and was at load ~150 on 96 cores, so differences under ~5% are noise:\n\n| query | before #28406 | main (#28406) | this PR |\n|---|---:|---:|---:|\n| DELTA_FOR, `h < 16` (1 in 2 rows) | 301 / 323 ms | 352 / 366 ms | 313 / 337 ms |\n| FOR, `h < 16` (1 in 2 rows) | 282 / 302 ms | 305 / 324 ms | 301 / 322 ms |\n| DELTA_FOR, `h = 31` (1 in 32 rows) | 301 / 306 ms | 313 / 325 ms | 293 / 306 ms |\n| DELTA_FOR, `id % 64 = 1` | 380 / 405 ms | 410 / 416 ms | 391 / 394 ms |\n| DELTA_FOR, `h2 = 7` (1 in 1024 rows) | 280 / 297 ms | 271 / 277 ms | 249 / 269 ms |\n| FOR, `h2 = 7` (1 in 1024 rows) | 303 / 317 ms | 288 / 311 ms | 292 / 301 ms |\n| no filter (control) | 180 / 195 ms | 178 / 191 ms | 183 / 199 ms |\n\nThe table is `SELECT i AS id, i % 32 AS h, i % 1024 AS h2, (i + i % 2)::BIGINT AS dfor, (hash(i) % 1000)::BIGINT AS f FROM range(50000000) r(i)` with `force_compression = 'bitpacking'`, and each query is `SELECT sum(<col>) FROM t WHERE ...`.\n\nTesting:\n- `test/sql/storage/compression/select_bitpacking.test` (its moduli 2/3/31/32 take the dense path, 33/97/2048/2049 the sparse one) passes, also with `--test-config test/configs/verify_fetch_row.json`. `test/sql/storage/compression/bitpacking/*` passes too.\n- Bitpacked vs uncompressed copies match for `id % m = r` with m in {1, 2, 3, 31, 32, 33, 63, 1023, 1024, 1025, 2047, 2048, 2049, 5000}, r in {0, 1, 30-33, 1022-1024}, over BIGINT, INTEGER with NULLs, TINYINT and HUGEINT columns in FOR, DELTA_FOR and CONSTANT_DELTA modes. Dense random, sparse random and range selections also match, as does late-materialized Top-N.\n\n",
+ "comments": [],
+ "created_at": "2026-11-06T11:38:42Z",
+ "fetched_at": "2026-11-23T20:34:24Z",
+ "head_sha": "b7830909a74b5768d2f83012febe92b2a3e8305d",
+ "labels": [],
+ "linked_issues": [],
+ "merge_commit_sha": "746abd00597f0c47e68c28f4b89e63048cb9414b",
+ "merged_at": "2026-11-13T09:09:56Z",
+ "number": 28465,
+ "referenced_numbers": [
+  28406
+ ],
+ "repo": "duckdb/duckdb",
+ "review_comments": [
+  {
+   "body": "This PR breaks `UPDATE` on DELTA_FOR; the repro fails here and works on the base. `ColumnData::FetchBaseRows` starts at the first updated row, possibly mid-group. Selecting within that group makes `target - target_in_algorithm_group` wrap before `MaxValue` clamps it, asking `Skip` for about 2^64 rows.\n\nRun against a database file with default settings:\n\n```sql\nCREATE TABLE t AS SELECT (i % 128)::INTEGER AS h, (i * 3 + i % 2)::BIGINT AS v FROM range(1000000) r(i);\nCHECKPOINT;\nUPDATE t SET v = v + 1 WHERE h = 1;\n-- Data Corruption Error: Corrupted bitpacking segment: read exceeds the segment row count\n```\n\nClamp before subtracting:\n\n```suggestion\n\t\t\t\tskip_target = target - MinValue<idx_t>(target_in_algorithm_group, target - pos);\n```\n\nEight fast-suite tests also fail here and pass on the base. This fixes them, `select_bitpacking.test` and the repro. Please add this sparse-WHERE DELTA_FOR `UPDATE` after `CHECKPOINT` under `test/sql/storage/compression/bitpacking/`.",
+   "created_at": "2026-11-06T15:12:37Z",
+   "diff_hunk": "@@ -1164,8 +1191,19 @@ void BitpackingSelect(ColumnSegment &segment, ColumnScanState &state, idx_t vect\n \twhile (i < sel_count) {\n \t\tconst idx_t target = next_index(i);\n \t\tD_ASSERT(target >= pos && target < vector_count);\n-\t\tscan_state.Skip(target - pos);\n-\t\tpos = target;\n+\t\tidx_t skip_target = target;\n+\t\tif (scan_state.HasCurrentGroup()) {\n+\t\t\tauto &current = scan_state.GetCurrentGroup();\n+\t\t\tif (current.metadata.mode == BitpackingMode::DELTA_FOR && !current.AtEnd() &&\n+\t\t\t    target - pos < current.Remaining()) {\n+\t\t\t\t// stop at the target's algorithm group: the prefix sum below covers the rows before the target\n+\t\t\t\tconst idx_t target_in_algorithm_group =\n+\t\t\t\t    (current.offset + (target - pos)) % BitpackingPrimitives::BITPACKING_ALGORITHM_GROUP_SIZE;\n+\t\t\t\tskip_target = MaxValue<idx_t>(pos, target - target_in_algorithm_group);",
+   "line": 1202,
+   "path": "src/storage/compression/bitpacking.cpp",
+   "user": {
+    "login": "duckdb-bot",
+    "type": "User"
+   }
+  },
+  {
+   "body": "The gains in the description come with regressions. The gate counts rows, not touched groups, and ignores mode: 64 adjacent selections in a 2048-row vector decode 64 groups instead of 2. `CONSTANT`/`CONSTANT_DELTA` materialize fully rather than computing selected rows directly.\n\nI would count touched groups in a pass over `sel` comparing `index / 32`, and keep both constant modes sparse; this need not block.\n\nRelease builds, one thread, 20M rows; medians of 15 timed `SELECT sum(col) FROM t WHERE ...` runs in one process, using a database file:\n\n| query | base | this PR |\n|---|---:|---:|\n| DELTA_FOR, `h < 16` (1 in 2) | 72 ms | 59 ms |\n| DELTA_FOR, `h2 < 64` (64 adjacent rows per vector) | 34 ms | 50 ms |\n| FOR, `h2 < 64` | 34 ms | 41 ms |\n| CONSTANT_DELTA, `h = 31` (1 in 32) | 32 ms | 43 ms |\n| CONSTANT_DELTA, `h2 < 64` | 33 ms | 42 ms |\n| no filter (control) | 20 ms | 21 ms |\n\n```sql\nSET force_compression = 'bitpacking';\nCREATE TABLE t AS SELECT (i % 32)::INTEGER AS h, (i % 2048)::INTEGER AS h2,\n  (i + i % 2)::BIGINT AS dfor, (hash(i) % 1000)::BIGINT AS forv, (i * 3)::BIGINT AS cdelta\nFROM range(20000000) r(i);\nCHECKPOINT;\nSET threads = 1;\nSELECT sum(dfor) FROM t WHERE h2 < 64;\n```",
+   "created_at": "2026-11-06T15:12:37Z",
+   "diff_hunk": "@@ -1149,6 +1164,18 @@ void BitpackingSelect(ColumnSegment &segment, ColumnScanState &state, idx_t vect\n \tresult.SetVectorType(VectorType::FLAT_VECTOR);\n \tT *result_data = FlatVector::GetDataMutable<T>(result) + result_offset;\n \n+\t// dense selections decode (nearly) every algorithm group anyway: scan the range and gather from it\n+\tif (sel_count * BitpackingPrimitives::BITPACKING_ALGORITHM_GROUP_SIZE >= vector_count) {",
+   "line": 1168,
+   "path": "src/storage/compression/bitpacking.cpp",
+   "user": {
+    "login": "duckdb-bot",
+    "type": "User"
+   }
+  },
+  {
+   "body": "Fixed in f763ee3c42f: the skip target is now clamped before subtracting (`target - MinValue<idx_t>(target_in_algorithm_group, target - pos)`), so it can no longer wrap when `FetchBaseRows` starts mid algorithm group. I added your repro as `test/sql/storage/compression/bitpacking/bitpacking_delta_for_sparse_update.test`: a sparse-WHERE DELTA_FOR `UPDATE` after `CHECKPOINT`, with bitpacking forced, checked row by row and again after a second update and checkpoint. On the old head it fails with the \"read exceeds the segment row count\" error. `test/sql/storage/compression/*` and `test/sql/storage/update/*` pass.\n",
+   "created_at": "2026-11-06T16:09:06Z",
+   "diff_hunk": "@@ -1164,8 +1191,19 @@ void BitpackingSelect(ColumnSegment &segment, ColumnScanState &state, idx_t vect\n \twhile (i < sel_count) {\n \t\tconst idx_t target = next_index(i);\n \t\tD_ASSERT(target >= pos && target < vector_count);\n-\t\tscan_state.Skip(target - pos);\n-\t\tpos = target;\n+\t\tidx_t skip_target = target;\n+\t\tif (scan_state.HasCurrentGroup()) {\n+\t\t\tauto &current = scan_state.GetCurrentGroup();\n+\t\t\tif (current.metadata.mode == BitpackingMode::DELTA_FOR && !current.AtEnd() &&\n+\t\t\t    target - pos < current.Remaining()) {\n+\t\t\t\t// stop at the target's algorithm group: the prefix sum below covers the rows before the target\n+\t\t\t\tconst idx_t target_in_algorithm_group =\n+\t\t\t\t    (current.offset + (target - pos)) % BitpackingPrimitives::BITPACKING_ALGORITHM_GROUP_SIZE;\n+\t\t\t\tskip_target = MaxValue<idx_t>(pos, target - target_in_algorithm_group);",
+   "line": 1202,
+   "path": "src/storage/compression/bitpacking.cpp",
+   "user": {
+    "login": "Robinho-MR",
+    "type": "User"
+   }
+  },
+  {
+   "body": "Addressed in f763ee3c42f as you suggested:\n- The dense gate now counts touched algorithm groups in one pass over `sel`, aligned to the scan's current offset and stopping as soon as the threshold is met. It goes dense when at least half the vector's groups are touched.\n- CONSTANT and CONSTANT_DELTA groups always take the sparse path. To check that, the group a select starts in has to be loaded first: vectors and metadata groups are both 2048 rows, so a select usually starts with the previous group at its end.\n\nYour benchmark (release-like reldebug build, one thread, 20M rows, medians of 15, database file). The \"base\" and \"previous head\" columns are your numbers. \"This head\" is my run on a different machine, where the no-filter control is 26 ms instead of your 20 ms:\n\n| query | base | previous head | this head |\n|---|---:|---:|---:|\n| DELTA_FOR, `h < 16` (1 in 2) | 72 ms | 59 ms | 64 ms |\n| DELTA_FOR, `h2 < 64` | 34 ms | 50 ms | 35 ms |\n| DELTA_FOR, `h2 < 1024` (half of each vector) | - | - | 64 ms |\n| FOR, `h2 < 64` | 34 ms | 41 ms | 34 ms |\n| CONSTANT_DELTA, `h = 31` | 32 ms | 43 ms | 31 ms |\n| CONSTANT_DELTA, `h2 < 64` | 33 ms | 42 ms | 33 ms |\n| no filter (control) | 20 ms | 21 ms | 26 ms |\n",
+   "created_at": "2026-11-06T16:09:09Z",
+   "diff_hunk": "@@ -1149,6 +1164,18 @@ void BitpackingSelect(ColumnSegment &segment, ColumnScanState &state, idx_t vect\n \tresult.SetVectorType(VectorType::FLAT_VECTOR);\n \tT *result_data = FlatVector::GetDataMutable<T>(result) + result_offset;\n \n+\t// dense selections decode (nearly) every algorithm group anyway: scan the range and gather from it\n+\tif (sel_count * BitpackingPrimitives::BITPACKING_ALGORITHM_GROUP_SIZE >= vector_count) {",
+   "line": 1168,
+   "path": "src/storage/compression/bitpacking.cpp",
+   "user": {
+    "login": "Robinho-MR",
+    "type": "User"
+   }
+  },
+  {
+   "body": "You're right, the clamp fixes the skip wrap. On `f763ee3`, using relassert with ASan, the eight previously failing fast-suite tests, `select_bitpacking.test`, `bitpacking_delta_for_sparse_update.test`, and both UPDATE repros pass. Compression and update tests also pass with and without `verify_fetch_row`, and 45 rounds of bitpacked-versus-uncompressed fuzzing show no mismatch.\n\n<!-- duckdb-bot reply 4494654437-1 -->\nagent_version:aa3d85aeab1eacbdaabf75f25adcbec3e7b39e6e",
+   "created_at": "2026-11-06T21:06:18Z",
+   "diff_hunk": "@@ -1164,8 +1191,19 @@ void BitpackingSelect(ColumnSegment &segment, ColumnScanState &state, idx_t vect\n \twhile (i < sel_count) {\n \t\tconst idx_t target = next_index(i);\n \t\tD_ASSERT(target >= pos && target < vector_count);\n-\t\tscan_state.Skip(target - pos);\n-\t\tpos = target;\n+\t\tidx_t skip_target = target;\n+\t\tif (scan_state.HasCurrentGroup()) {\n+\t\t\tauto &current = scan_state.GetCurrentGroup();\n+\t\t\tif (current.metadata.mode == BitpackingMode::DELTA_FOR && !current.AtEnd() &&\n+\t\t\t    target - pos < current.Remaining()) {\n+\t\t\t\t// stop at the target's algorithm group: the prefix sum below covers the rows before the target\n+\t\t\t\tconst idx_t target_in_algorithm_group =\n+\t\t\t\t    (current.offset + (target - pos)) % BitpackingPrimitives::BITPACKING_ALGORITHM_GROUP_SIZE;\n+\t\t\t\tskip_target = MaxValue<idx_t>(pos, target - target_in_algorithm_group);",
+   "line": 1202,
+   "path": "src/storage/compression/bitpacking.cpp",
+   "user": {
+    "login": "duckdb-bot",
+    "type": "User"
+   }
+  },
+  {
+   "body": "You're right: the clustered and CONSTANT_DELTA regressions are gone, and the dense gain remains. Comparing main \u2192 `f763ee3` in release builds (one thread, 20M rows, medians of 15 to 30 timed runs in one process), I get DELTA_FOR `h2 < 64`: 34\u219234 ms; FOR `h2 < 64`: 33\u219234 ms; CONSTANT_DELTA `h = 31`: 32\u219233 ms and `h2 < 64`: 33\u219232 ms; dense DELTA_FOR `h < 16`: 72\u219262 ms and `h = 31`: 55\u219251 ms; control: 19\u219220 ms. The remaining half-vector case, DELTA_FOR `h2 < 1024`, is 58\u219264 ms over 30 runs, but need not block.\n\n<!-- duckdb-bot reply 4494654836-1 -->\nagent_version:aa3d85aeab1eacbdaabf75f25adcbec3e7b39e6e",
+   "created_at": "2026-11-06T21:06:21Z",
+   "diff_hunk": "@@ -1149,6 +1164,18 @@ void BitpackingSelect(ColumnSegment &segment, ColumnScanState &state, idx_t vect\n \tresult.SetVectorType(VectorType::FLAT_VECTOR);\n \tT *result_data = FlatVector::GetDataMutable<T>(result) + result_offset;\n \n+\t// dense selections decode (nearly) every algorithm group anyway: scan the range and gather from it\n+\tif (sel_count * BitpackingPrimitives::BITPACKING_ALGORITHM_GROUP_SIZE >= vector_count) {",
+   "line": 1168,
+   "path": "src/storage/compression/bitpacking.cpp",
+   "user": {
+    "login": "duckdb-bot",
+    "type": "User"
+   }
+  },
+  {
+   "body": "Thanks for re-checking. I measured the threshold idea for `h2 < 1024`, using one binary that switches the dense threshold at runtime (reldebug, one thread, 20M rows, database file, medians of 15). Raising it makes that case, and the denser ones, slower:\n\n| dense when touched groups \u2265 | `h < 16` | `h = 31` | `h2 < 1024` | `h2 < 1536` | `h2 < 1792` |\n|---|---:|---:|---:|---:|---:|\n| 4/8 (this head) | 63 ms | 51 ms | 65 ms | 69 ms | 71 ms |\n| 5/8 | 64 ms | 51 ms | 68 ms | 71 ms | 73 ms |\n| 6/8 | 65 ms | 51 ms | 68 ms | 73 ms | 75 ms |\n| 7/8 | 66 ms | 51 ms | 68 ms | 83 ms | 77 ms |\n\nAt half the groups, the sparse path's per-row work on this head costs more than decoding the other 32 groups, so the current gate is the best of these. The remaining gap to main at `h2 < 1024` doesn't come from the gate, so I've left the head unchanged.\n",
+   "created_at": "2026-11-06T21:17:30Z",
+   "diff_hunk": "@@ -1149,6 +1164,18 @@ void BitpackingSelect(ColumnSegment &segment, ColumnScanState &state, idx_t vect\n \tresult.SetVectorType(VectorType::FLAT_VECTOR);\n \tT *result_data = FlatVector::GetDataMutable<T>(result) + result_offset;\n \n+\t// dense selections decode (nearly) every algorithm group anyway: scan the range and gather from it\n+\tif (sel_count * BitpackingPrimitives::BITPACKING_ALGORITHM_GROUP_SIZE >= vector_count) {",
+   "line": 1168,
+   "path": "src/storage/compression/bitpacking.cpp",
+   "user": {
+    "login": "Robinho-MR",
+    "type": "User"
+   }
+  },
+  {
+   "body": "You're right: the measurements show that half the touched groups is the better threshold, so I'm dropping the suggestion to raise it. Nothing else remains open from my review of `f763ee3`.\n\n<!-- duckdb-bot reply 4497687024-1 -->\nagent_version:aa3d85aeab1eacbdaabf75f25adcbec3e7b39e6e",
+   "created_at": "2026-11-06T22:09:57Z",
+   "diff_hunk": "@@ -1149,6 +1164,18 @@ void BitpackingSelect(ColumnSegment &segment, ColumnScanState &state, idx_t vect\n \tresult.SetVectorType(VectorType::FLAT_VECTOR);\n \tT *result_data = FlatVector::GetDataMutable<T>(result) + result_offset;\n \n+\t// dense selections decode (nearly) every algorithm group anyway: scan the range and gather from it\n+\tif (sel_count * BitpackingPrimitives::BITPACKING_ALGORITHM_GROUP_SIZE >= vector_count) {",
+   "line": 1168,
+   "path": "src/storage/compression/bitpacking.cpp",
+   "user": {
+    "login": "duckdb-bot",
+    "type": "User"
+   }
+  }
+ ],
+ "state": "closed",
+ "title": "Avoid redundant decoding in bitpacking select for dense selections",
+ "transport": "gh",
+ "user": {
+  "login": "Robinho-MR",
+  "type": "User"
+ }
+}

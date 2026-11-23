@@ -1,0 +1,24 @@
+{
+ "base_ref": "main",
+ "base_sha": "a2deaf15a43266f773833aa57e62dcbc90f5155a",
+ "body": "https://github.com/duckdblabs/duckdb-internal/issues/12030\n\nPorts prefix creation in ARTBuilder (CREATE INDEX) from the legacy Prefix::New to PrefixHandle::New. The last prefix node now stays pinned while the builder makes its child NodePtr point to the new leaf or inner node.\n\nPrefixHandle::New always allocates at least one prefix node, so the builder only calls it if the keys share bytes before the next node. Otherwise, the NodePtr above (the ART root, or a child of the parent inner node) points directly to the leaf or inner node, as before. Prefix::New loses its last caller and is removed.\n\nThe builder's stack still holds unpinned NodePtr references into parent inner nodes; that is the next chunk.",
+ "comments": [],
+ "created_at": "2026-11-16T15:12:55Z",
+ "fetched_at": "2026-11-23T20:34:00Z",
+ "head_sha": "61d4e174fa5cdf989e68a9b2163ddddf8b949629",
+ "labels": [],
+ "linked_issues": [],
+ "merge_commit_sha": "9eb5049fe469b317651f59eb5cc76fe25dfd74b3",
+ "merged_at": "2026-11-17T09:00:26Z",
+ "number": 28890,
+ "referenced_numbers": [],
+ "repo": "duckdb/duckdb",
+ "review_comments": [],
+ "state": "closed",
+ "title": "Buffer managed indexes 6a builder prefix handle",
+ "transport": "gh",
+ "user": {
+  "login": "artjomPlaunov",
+  "type": "User"
+ }
+}

@@ -1,0 +1,68 @@
+{
+ "base_ref": "main",
+ "base_sha": "46257b1490e452ed59f1061cc0fc9c6e90841720",
+ "body": "Fixes #27759. This is #28623 by Yannick Welsch (his two commits unchanged), plus one commit of extra tests.\n\n### The fix (from #28623)\n\nWhen the right side of a dependent join is a CTE that does not use the domain, the CTE is moved above the join. Unless the join was a SINGLE join with an uncorrelated left side, decorrelation then restarted the whole join, so the left side was prepared twice. With a LIST correlation (no duplicate elimination) that adds a second `row_number()` window under the same table index, which fails with `INTERNAL Error: Conflicting or cyclic column binding replacement`. The trigger repro from #27759 goes the same way. The fix continues with the right side after moving the CTE up, which is the path the SINGLE case already used.\n\n### Also fixes a wrong result\n\nThe restart also gave silently wrong results for a CTE inside a nested lateral join. On main this returns `2497 3666`, while the correct answer (the same query written as a plain join) is `250 367`:\n\n```sql\nCREATE TABLE q AS SELECT i % 3 AS s, i % 4 AS k FROM range(200) t(i);\nCREATE TABLE o AS SELECT i AS x, i % 3 AS g FROM range(10) t(i);\nSELECT count(*), sum(n.k)\nFROM o, LATERAL (SELECT * FROM (SELECT o.x) p,\n                 LATERAL (WITH st(k) AS (VALUES (1), (2))\n                          SELECT q.k FROM q WHERE q.k IN (SELECT k FROM st) AND q.s = o.g AND q.k < p.x)) n;\n```\n\n### Plan impact\n\nI compared optimized plans on main and on this branch for LATERAL, EXISTS / NOT EXISTS, IN, `> ANY`, scalar, LEFT LATERAL, LIMIT-in-LATERAL, LIST, nested and stacked-CTE queries. They match, except:\n- the LIST and nested-lateral queries, which are the fixed bugs;\n- two stacked independent CTEs (`WITH a AS (...), b AS (...)`). The restart used to move both CTEs above the join; now only the first one moves. `b` stays on the join's right side, but `PushDownCTE` leaves its definition free of the domain, so it is still computed once. Results and runtime were the same (about 2.05s at 20k x 2M rows).\n\n### Extra tests in this PR\n\n- the nested lateral wrong-result query above\n- the two stacked independent CTEs\n- removed `PRAGMA enable_verification` from the new test file\n\nCould this get the `backport v2.0-cyanoptera` label? It is a v2.0 regression.\n",
+ "comments": [
+  {
+   "body": "Thanks for the thorough check. On the two non-blocking notes:\n- `test/sql/subquery/scalar/correlated_cte_definition_subquery.test:48`: that file is on `main` and this PR doesn't touch it. I'll update the stale \"full-RHS-decorrelation path\" comment in a small follow-up, so the auto-merge here isn't reset for a comment-only change.\n- Row identity in the trigger test: agreed, asserting the actual rows would be stronger. I'll fold that into the same follow-up.",
+   "created_at": "2026-11-11T18:23:35Z",
+   "user": {
+    "login": "Robinho-MR",
+    "type": "User"
+   }
+  },
+  {
+   "body": "Follow-up for the two non-blocking test notes (stale EXISTS comment, row identity in the trigger test): #28729.",
+   "created_at": "2026-11-12T02:40:19Z",
+   "user": {
+    "login": "Robinho-MR",
+    "type": "User"
+   }
+  }
+ ],
+ "created_at": "2026-11-11T14:04:03Z",
+ "fetched_at": "2026-11-23T20:34:42Z",
+ "head_sha": "a9a3ab285a2c054f9d51a05bf43ebe1d8da87072",
+ "labels": [
+  "backport v2.0-cyanoptera"
+ ],
+ "linked_issues": [
+  {
+   "body": "### What happens?\n\nA FOR EACH ROW trigger whose body inserts into a second table fails with an INTERNAL error as soon as that second\ntable has a BEFORE INSERT ... FOR EACH STATEMENT trigger. The statement is rolled back, nothing is corrupted, and the\ndatabase stays usable, but the valid statement cannot be executed.\n\nThe error comes from the delim-join-to-CTE rewrite (new in 2.0, setting delim_join_as_cte, default true). With\nSET delim_join_as_cte = false the same statements succeed and give the expected result (t=[1], u=[1], l=[1]).\n\nIt also fails with a row-level AFTER DELETE trigger, and for multi-row inserts. It still fails with every optimizer\ndisabled, so it is not an optimizer pass. It does NOT fail when the trigger on t is FOR EACH STATEMENT, when the\ntrigger on u is AFTER instead of BEFORE, or when u is inserted into directly.\n\nStack (assertions build, symbolised):\nINTERNAL Error: Conflicting or cyclic column binding replacement for #[54.0]\n  ColumnBindingReplacer::Add            src/optimizer/column_binding_replacer.cpp:83\n  CreateConstructedBindingReplacements  src/planner/subquery/delim_join_cte_rewriter.cpp\n  MaterializeDelimJoinAsCTE             src/planner/subquery/delim_join_cte_rewriter.cpp\n  RewriteDelimJoinsToCTEs               src/planner/subquery/delim_join_cte_rewriter.cpp:2831\n\nRelated but different: #27631 (two MERGE trigger bodies, \"Failed to bind column reference\", goes away with\nprojection_pullup disabled). This one fails with every optimizer disabled and only with delim_join_as_cte = true.\n\n### To Reproduce\n\n```sql\nCREATE TABLE t(a INT);\nCREATE TABLE u(a INT);\nCREATE TABLE l(x INT);\n\nCREATE TRIGGER b BEFORE INSERT ON u FOR EACH STATEMENT INSERT INTO l VALUES (1);\nCREATE TRIGGER r AFTER  INSERT ON t FOR EACH ROW       INSERT INTO u VALUES (NEW.a);\n\nINSERT INTO t VALUES (1);\n```\n\nOutput:\n\n```\nINTERNAL Error: Conflicting or cyclic column binding replacement for #[54.0]\n```\n\nWorkaround (statement then succeeds, giving t=[1], u=[1], l=[1]):\n\n```sql\nSET delim_join_as_cte = false;\n```\n\n### OS:\n\nLinux (Ubuntu), x86_64\n\n### DuckDB Version:\n\n v2.0.0 (d54cbbe3df), also reproduced on 2.0.1.dev2610211350 (d9c3e9ae11)\n\n### DuckDB Client:\n\nPython (wheel) and CLI (source build with assertions and ASan/UBSan)\n\n### Hardware:\n\n_No response_\n\n### Full Name:\n\nPrabhnoor\n\n### Affiliation:\n\nIIT Guwahati\n\n### Did you include all relevant configuration (e.g., CPU architecture, Linux distribution) to reproduce the issue?\n\n- [x] Yes, I have\n\n### Did you include all code required to reproduce the issue?\n\n- [x] Yes, I have\n\n### Did you include all relevant data sets for reproducing the issue?\n\nYes",
+   "labels": [
+    "reproduced"
+   ],
+   "number": 27759,
+   "state": "closed",
+   "title": "INTERNAL Error \"Conflicting or cyclic column binding replacement\" when a FOR EACH ROW trigger inserts into a table that has a BEFORE INSERT trigger (delim_join_as_cte)"
+  }
+ ],
+ "merge_commit_sha": "39aeee12ef8fc10c678915b2165c6f25b519746f",
+ "merged_at": "2026-11-12T02:25:25Z",
+ "number": 28698,
+ "referenced_numbers": [
+  27759,
+  28623
+ ],
+ "repo": "duckdb/duckdb",
+ "review_comments": [
+  {
+   "body": "The test leaves row identity unchecked. Counts and `max(a)` alone can miss a wrong `NEW` value or collapsed duplicates, the kind of problem this path had. As a non-blocking follow-up, I would assert `u`'s contents with duplicate input. This was run on head and gives the shown results:\n\n```sql\nstatement ok\nINSERT INTO t VALUES (4), (4);\n\nquery II\nSELECT a, count(*) FROM u GROUP BY a ORDER BY a;\n----\n1\t1\n2\t1\n3\t1\n4\t2\n10\t1\n\nquery I\nSELECT count(*) FROM l;\n----\n4\n```",
+   "created_at": "2026-11-11T18:21:08Z",
+   "diff_hunk": "@@ -0,0 +1,47 @@\n+# name: test/sql/trigger/row_trigger_into_table_with_statement_trigger.test\n+# description: A FOR EACH ROW trigger inserts into a table that has a BEFORE INSERT FOR EACH STATEMENT trigger\n+# group: [trigger]\n+\n+require noforcestorage\n+\n+statement ok\n+CREATE TABLE t(a INT);\n+\n+statement ok\n+CREATE TABLE u(a INT);\n+\n+statement ok\n+CREATE TABLE l(x INT);\n+\n+statement ok\n+CREATE TRIGGER b BEFORE INSERT ON u FOR EACH STATEMENT INSERT INTO l VALUES (1);\n+\n+statement ok\n+CREATE TRIGGER r AFTER INSERT ON t FOR EACH ROW INSERT INTO u VALUES (NEW.a);\n+\n+statement ok\n+INSERT INTO t VALUES (1);\n+\n+query III\n+SELECT (SELECT count(*) FROM t), (SELECT count(*) FROM u), (SELECT count(*) FROM l);\n+----\n+1\t1\t1\n+\n+statement ok\n+INSERT INTO t VALUES (2), (3);\n+\n+query III\n+SELECT (SELECT count(*) FROM t), (SELECT count(*) FROM u), (SELECT count(*) FROM l);\n+----\n+3\t3\t2\n+\n+statement ok\n+CREATE TRIGGER d AFTER DELETE ON t FOR EACH ROW INSERT INTO u VALUES (OLD.a * 10);\n+\n+statement ok\n+DELETE FROM t WHERE a = 1;\n+\n+query IIII\n+SELECT (SELECT count(*) FROM t), (SELECT count(*) FROM u), (SELECT count(*) FROM l), (SELECT max(a) FROM u);",
+   "line": 45,
+   "path": "test/sql/trigger/row_trigger_into_table_with_statement_trigger.test",
+   "user": {
+    "login": "duckdb-bot",
+    "type": "User"
+   }
+  }
+ ],
+ "state": "closed",
+ "title": "Fix wrong results and \"Conflicting or cyclic column binding replacement\" when a lateral join reads a CTE",
+ "transport": "gh",
+ "user": {
+  "login": "Robinho-MR",
+  "type": "User"
+ }
+}

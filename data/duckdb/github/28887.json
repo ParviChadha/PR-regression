@@ -1,0 +1,47 @@
+{
+ "base_ref": "main",
+ "base_sha": "b54bafed481c85bf170006a30004c60394eeab80",
+ "body": "Fixes #28439.\n\nLoading or installing an extension with an unknown ABI type raised an internal error and invalidated the database, causing subsequent queries on all connections to fail.\n\nReturn a metadata validation message instead, allowing LOAD and INSTALL to report their existing Invalid Input and IO errors while keeping the database usable. Escape the ABI value consistently with other metadata diagnostics.\n\nValidation:\n- Reldebug shell and shared library build succeeded.\n- Six reproduction cases passed against the rebuilt local library: LOAD and INSTALL with CPP, BOGUS, and an ABI containing a quote.\n- Verified both connections remain usable after each error and stored data remains accessible after reopening.",
+ "comments": [
+  {
+   "body": "Thanks!",
+   "created_at": "2026-11-16T14:52:10Z",
+   "user": {
+    "login": "Mytherin",
+    "type": "User"
+   }
+  }
+ ],
+ "created_at": "2026-11-16T14:45:54Z",
+ "fetched_at": "2026-11-23T20:34:06Z",
+ "head_sha": "e0bab9c3623f2ca9c22927540062ff970c7b2aab",
+ "labels": [
+  "backport v2.0-cyanoptera"
+ ],
+ "linked_issues": [
+  {
+   "body": "### What happens?\n\n An extension file ends with a footer of metadata. If the ABI type field holds an unknown type like `BOGUS`, `LOAD` and  `INSTALL` raise `INTERNAL Error: Unknown ABI type for extension: 'BOGUS'.` After that, every query, on every connection, fails with `FATAL Error: Failed: database has been invalidated because of a previous fatal error` until every connection is closed and the database id opened again.\nEvery other footer problem gives an `Invalid Input` (`LOAD`) or `IO` (`INSTALL`) error, and the database stays usable.\n\n\n\n### To Reproduce\n\n\n\n```python\n# Footer layout: https://github.com/duckdb/duckdb/blob/c3dc01af116ce439464d582448b9c4d8dc412aec/src/main/extension/extension_load.cpp#L365-L424\nimport os\nimport tempfile\n\nimport duckdb\n\n\ndef footer(abi_type):\n    fields = [\"4\", \"\", \"\", \"\", abi_type, \"\", \"\", \"\"]\n    return b\"\".join(f.encode().ljust(32, b\"\\0\") for f in reversed(fields)) + b\"\\0\" * 256\n\n\ndef check(label, con, sql):\n    try:\n        con.execute(sql).fetchall()\n        print(f\"  {label:<29} ok\")\n    except duckdb.Error as e:\n        print(f\"  {label:<29} {type(e).__name__}: {str(e).splitlines()[0].split('. ')[0][:110]}\")\n\n\ndef run(abi_type, statement):\n    os.chdir(tempfile.mkdtemp())\n    with open(\"test.duckdb_extension\", \"wb\") as f:\n        f.write(footer(abi_type))\n    con = duckdb.connect(\"test.duckdb\")\n    con.execute(\"CREATE TABLE t AS SELECT 42 AS x\")\n    other = con.cursor()\n    print(f\"ABI type {abi_type!r}:\")\n    check(statement, con, f\"{statement} 'test.duckdb_extension'\")\n    check(\"SELECT 42\", con, \"SELECT 42\")\n    check(\"SELECT 42 (other connection)\", other, \"SELECT 42\")\n    con.close()  # also closes the cursor\n    con = duckdb.connect(\"test.duckdb\")\n    check(\"SELECT x FROM t (reopened)\", con, \"SELECT x FROM t\")\n    con.close()\n\n\nprint(duckdb.__version__)\nfor statement in (\"LOAD\", \"INSTALL\"):\n    run(\"CPP\", statement)  # control: a version mismatch\n    run(\"BOGUS\", statement)\n```\n\nIt needs only the `duckdb` package. I ran it with [uv](https://docs.astral.sh/uv/):\n\n```sh\nuv run --no-project --python 3.15 --with duckdb==2.0.0 python repro.py\n uv run --no-project --python 3.15 --prerelease allow --with 'duckdb>2.0.0' python repro.py # nightly\n```\n\noutput:\n\n<details>\n<summary>uv run --no-project --python 3.15 --with duckdb==2.0.0 python repro.py</summary>\n\n```shell\n2.0.0\nABI type 'CPP':\n  LOAD                          InvalidInputException: Invalid Input Error: Failed to load 'test.duckdb_extension', The file was built specifically for DuckDB versio\n  SELECT 42                     ok\n  SELECT 42 (other connection)  ok\n  SELECT x FROM t (reopened)    ok\nABI type 'BOGUS':\n  LOAD                          InternalException: INTERNAL Error: Unknown ABI type for extension: 'BOGUS'\n  SELECT 42                     FatalException: FATAL Error: Failed: database has been invalidated because of a previous fatal error\n  SELECT 42 (other connection)  FatalException: FATAL Error: Failed: database has been invalidated because of a previous fatal error\n  SELECT x FROM t (reopened)    ok\nABI type 'CPP':\n  INSTALL                       IOException: IO Error: Failed to install 'test.duckdb_extension'\n  SELECT 42                     ok\n  SELECT 42 (other connection)  ok\n  SELECT x FROM t (reopened)    ok\nABI type 'BOGUS':\n  INSTALL                       InternalException: INTERNAL Error: Unknown ABI type for extension: 'BOGUS'\n  SELECT 42                     FatalException: FATAL Error: Failed: database has been invalidated because of a previous fatal error\n  SELECT 42 (other connection)  FatalException: FATAL Error: Failed: database has been invalidated because of a previous fatal error\n  SELECT x FROM t (reopened)    ok\n```\n\n</details>\n\n<details>\n<summary> uv run --no-project --python 3.15 --prerelease allow --with 'duckdb>2.0.0' python repro.py</summary>\n\n```shell\n2.1.0.dev2610310630\nABI type 'CPP':\n  LOAD                          InvalidInputException: Invalid Input Error: Failed to load 'test.duckdb_extension', The file was built specifically for DuckDB versio\n  SELECT 42                     ok\n  SELECT 42 (other connection)  ok\n  SELECT x FROM t (reopened)    ok\nABI type 'BOGUS':\n  LOAD                          InternalException: INTERNAL Error: Unknown ABI type for extension: 'BOGUS'\n  SELECT 42                     FatalException: FATAL Error: Failed: database has been invalidated because of a previous fatal error\n  SELECT 42 (other connection)  FatalException: FATAL Error: Failed: database has been invalidated because of a previous fatal error\n  SELECT x FROM t (reopened)    ok\nABI type 'CPP':\n  INSTALL                       IOException: IO Error: Failed to install 'test.duckdb_extension'\n  SELECT 42                     ok\n  SELECT 42 (other connection)  ok\n  SELECT x FROM t (reopened)    ok\nABI type 'BOGUS':\n  INSTALL                       InternalException: INTERNAL Error: Unknown ABI type for extension: 'BOGUS'\n  SELECT 42                     FatalException: FATAL Error: Failed: database has been invalidated because of a previous fatal error\n  SELECT 42 (other connection)  FatalException: FATAL Error: Failed: database has been invalidated because of a previous fatal error\n  SELECT x FROM t (reopened)    ok\n```\n\n</details>\n\n\n\n### OS:\n\nUbuntu 26.04.1 LTS on WSL2, x86_64\n\n### DuckDB Version:\n\n 2.0.0 (also nightly 2.1.0.dev2610310630) \n\n### DuckDB Client:\n\nPython\n\n### Hardware:\n\n_No response_\n\n### Full Name:\n\nRyoji Uehara\n\n### Affiliation:\n\nindividual\n\n### Did you include all relevant configuration (e.g., CPU architecture, Linux distribution) to reproduce the issue?\n\n- [x] Yes, I have\n\n### Did you include all code required to reproduce the issue?\n\n- [x] Yes, I have\n\n### Did you include all relevant data sets for reproducing the issue?\n\nNot applicable - the reproduction does not require a data set",
+   "labels": [
+    "needs triage"
+   ],
+   "number": 28439,
+   "state": "closed",
+   "title": "LOAD / INSTALL of a file whose extension footer has an unknown ABI type raises an INTERNAL error and invalidates database"
+  }
+ ],
+ "merge_commit_sha": "11b97ab2ffacf1c6f8e68ae291f6553dca5ecb3c",
+ "merged_at": "2026-11-16T21:38:07Z",
+ "number": 28887,
+ "referenced_numbers": [
+  28439
+ ],
+ "repo": "duckdb/duckdb",
+ "review_comments": [],
+ "state": "closed",
+ "title": "Reject unknown extension ABI types without invalidating the database",
+ "transport": "gh",
+ "user": {
+  "login": "eraycep",
+  "type": "User"
+ }
+}

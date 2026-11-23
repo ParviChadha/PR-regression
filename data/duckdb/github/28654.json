@@ -1,0 +1,36 @@
+{
+ "base_ref": "main",
+ "base_sha": "8e0537aa8410b5c382eb3e6eb50179e80b5650f6",
+ "body": "Fix corrupt input handling in the Parquet reader:\n\n- Check Boolean PLAIN bounds before reading a value. A truncated page could otherwise return values from padding or read beyond the buffer.\n- Reject DELTA_BYTE_ARRAY encoding for types other than BYTE_ARRAY and FIXED_LEN_BYTE_ARRAY, rather than passing reconstructed byte-array data to an incompatible reader.\n- Reject NULL VARIANT metadata before decoding it. A non-NULL object with NULL metadata could otherwise cause an invalid memory read.\n- Upgrade row-group column-count mismatches in `parquet_metadata()` from an `InternalException` to `DataCorruptionException`",
+ "comments": [
+  {
+   "body": "Thanks!",
+   "created_at": "2026-11-11T08:49:46Z",
+   "user": {
+    "login": "Mytherin",
+    "type": "User"
+   }
+  }
+ ],
+ "created_at": "2026-11-10T16:36:37Z",
+ "fetched_at": "2026-11-23T20:34:52Z",
+ "head_sha": "23b495e569f4355015852d61cfb7f85e12fb64b5",
+ "labels": [
+  "Member",
+  "backport v2.0-cyanoptera"
+ ],
+ "linked_issues": [],
+ "merge_commit_sha": "f363080ce35ee5675fdf641a7bd7b967e013fbe8",
+ "merged_at": "2026-11-11T09:42:49Z",
+ "number": 28654,
+ "referenced_numbers": [],
+ "repo": "duckdb/duckdb",
+ "review_comments": [],
+ "state": "closed",
+ "title": "Validate more Parquet values and metadata",
+ "transport": "gh",
+ "user": {
+  "login": "HendrikLambert",
+  "type": "User"
+ }
+}

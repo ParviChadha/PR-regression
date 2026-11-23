@@ -1,0 +1,26 @@
+{
+ "base_ref": "main",
+ "base_sha": "fc09d66956ebff35bf42487071212172a7e36aec",
+ "body": "A plain CREATE of a repository that exists used to fail whatever it asked for, so a script could not state \"this repository, with this definition\" without IF NOT EXISTS (which keeps any definition) or OR REPLACE (which overwrites). Now it returns the stored repository when the request describes it, and names the difference otherwise:\n- without a prefix the request only names a host, so it matches a repository that was resolved from that host;\n- with a prefix, the prefix must match (a trailing slash aside) and so must the keys when the request gives any; keys that are not given were fetched from the prefix and are not fetched again. Nothing here reaches the network: what the host or the prefix serve today is checked only by OR REPLACE. The strict \"fail if anything is there\" is still DROP without IF EXISTS followed by CREATE.\n\nThe conflict is now decided before the opt-in (allow_extension_repositories): returning what is stored adds no trust, and a request for something else is reported as the difference it is, whatever the access level. Only a statement that would add or overwrite a repository is subject to the opt-in; a locked configuration still refuses everything.\n\nThis makes that repeated:\n```sql\nCREATE EXTENSION REPOSITORY carlopi.github.io;\nCREATE EXTENSION REPOSITORY carlopi.github.io;\nCREATE EXTENSION REPOSITORY carlopi.github.io;\n```\n(same session or different sessions) succeed, and that allows script or documentation pages to restate the `CREATE EXTENSION REPOSITORY` that will double as assertion that stuff is (after a successfull statement) properly set-up.",
+ "comments": [],
+ "created_at": "2026-11-16T08:55:33Z",
+ "fetched_at": "2026-11-23T20:34:10Z",
+ "head_sha": "ec0fe380d0c6c8bb11f4aed394738439a92e6b71",
+ "labels": [
+  "backport v2.0-cyanoptera"
+ ],
+ "linked_issues": [],
+ "merge_commit_sha": "34a81f40fc59fca44d32e923c2bc21b0e071c8b9",
+ "merged_at": "2026-11-16T13:25:59Z",
+ "number": 28862,
+ "referenced_numbers": [],
+ "repo": "duckdb/duckdb",
+ "review_comments": [],
+ "state": "closed",
+ "title": "CREATE EXTENSION REPOSITORY passes when it asks for the repository that is already stored",
+ "transport": "gh",
+ "user": {
+  "login": "carlopi",
+  "type": "User"
+ }
+}

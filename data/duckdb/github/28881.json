@@ -1,0 +1,133 @@
+{
+ "base_ref": "main",
+ "base_sha": "8e057babf3904571cc90c17823590a67c8d42aaa",
+ "body": "Small fixes and additions to the stable C++ API (`tools/cpp`), found while porting [duckdb-odbc](https://github.com/Robinho-MR/duckdb-odbc/pull/1) from DuckDB's internal C++ classes to `duckdb::cxx`. None of them changes the C API or the engine.\n\n### `StartupOptions::Set(name, value)`\n\n`StartupOptions` only had five dedicated setters, while `duckdb_v2_instance_create_with_options` accepts any option by name. So the C++ API couldn't set any startup-only option that lacks a setter, for example:\n- `duckdb_api`, which every client sets to identify itself (the ODBC driver sets `odbc`);\n- `access_mode`;\n- `extension_repository_directory`;\n- any startup-only option a user puts in a connection string.\n\n`Set` forwards a (name, value) pair to the C API, in the textual form SQL `SET` accepts. Pairs are applied in the order given, after the dedicated setters, so a later value wins. Options that need a running instance (`allowed_directories`, ...) still go through `Instance::GetConfig()`, as the C API documents.\n\n### `Value::GetDecimal()` and a public `Value::CreateDecimal()`\n\n`Value::Get<WIDTH, SCALE>()` and `Value::Create(decimal_t<WIDTH, SCALE>)` need the width and scale at compile time. A driver learns them at runtime, from a result column (`SQL_C_NUMERIC`) or a bound parameter (`SQL_NUMERIC` with a precision and scale). Until now it couldn't read the unscaled integer of a DECIMAL, nor create one, without going through text.\n\n- `Value::GetDecimal()` returns a `RuntimeDecimal {int128_t value; uint8_t width; uint8_t scale;}`, through `duckdb_v2_value_get_decimal`.\n- `Value::CreateDecimal(factory, int128_t value, width, scale)` was already the private runtime forwarder of the typed constructor; it is now public and documented.\n- C API change: `duckdb_v2_value_create_decimal` now returns `ERROR_INPUT_INVALID` for a value with more digits than the declared width. Before, it only checked the storage tier, so e.g. 10000 at `DECIMAL(4,0)` (or anything past 10^38 at width 38) built a value that failed on bind or asserted in `ToText()`. INT16 and INT32 tier overflows used to surface as an INTERNAL cast error; they are now `ERROR_INPUT_INVALID` too.\n\n### Compile when `<windows.h>` was included first\n\n`<windows.h>` defines `DELETE` and `IGNORE` as macros. That turns the `StatementType::DELETE` and `FunctionCollationHandling::IGNORE` enumerators into syntax errors for any Windows consumer that includes it before `duckdb_cpp.hpp`, which an ODBC driver must. The header now sets both macros aside with `push_macro`/`pop_macro` while it is parsed. These two are the only Windows macros among the header's enumerators. Separately, `AddString` and `AddBlob` now call `(std::numeric_limits<uint32_t>::max)()`, so the `max` macro (without `NOMINMAX`) does not break them.\n\n### Tests\n\nNew cases in `tools/cpp/tests` cover:\n- startup-only options and aliases, override order, bad values and unknown names;\n- options that need a running instance;\n- runtime DECIMALs across every storage tier, the typed constructor, a query result, and out-of-range width, scale and value, plus non-DECIMAL and NULL values.\n\n`unittest \"[cpp_api]\"`: all 218 test cases pass (4248 assertions).\n\n\n",
+ "comments": [
+  {
+   "body": "Merged main in e08a632a0f7 to resolve the conflict with #26955 (DECIMAL widths up to 255). The width check from 1f8d0a3c2ad now applies only to widths below 39: a 128-bit value always fits a wider decimal, which is stored as BIGNUM. The `value_create_decimal` docs combine the 1..255 range with the digit check. I also dropped the C++ API test expecting width 39 to be rejected, since main now accepts it. `[cpp_api]` and `[capi_v2]` pass on reldebug.\n",
+   "created_at": "2026-11-16T18:07:37Z",
+   "user": {
+    "login": "Robinho-MR",
+    "type": "User"
+   }
+  }
+ ],
+ "created_at": "2026-11-16T13:30:18Z",
+ "fetched_at": "2026-11-23T20:33:55Z",
+ "head_sha": "db6a050fc5a30c805a1a6a37b27954d6ed50e5a6",
+ "labels": [],
+ "linked_issues": [],
+ "merge_commit_sha": "8a5afae55fa47d09402675d59c5187b54da61c64",
+ "merged_at": "2026-11-17T14:19:54Z",
+ "number": 28881,
+ "referenced_numbers": [],
+ "repo": "duckdb/duckdb",
+ "review_comments": [
+  {
+   "body": "The width guarantee at `tools/cpp/duckdb_cpp.hpp:2115` is not enforced: `BuildDecimal` limits storage tiers, leaving INT128 unchecked. The typed API already behaved this way; this PR adds the promise. `Value::CreateDecimal(factory, int128_t {10000, 0}, 4, 0)` prints `10000`; binding fails with `Serialization Error: Failed to deserialize value: value is not valid for type DECIMAL(4,0)`. `Value::CreateDecimal(factory, int128_t {0, INT64_MIN}, 38, 0)` asserts in `ToText()` (`cast_helpers.cpp:213`, `value > NumericLimits<hugeint_t>::Minimum()`). I would replace tier limits after width/scale validation with this width check and update `src/include/duckdb_v2.h:16678` (\u201cis not range-checked against the width\u201d), or remove the promise.\n\n```cpp\n\tauto value = Convert(in_value);\n\tif (value >= Hugeint::POWERS_OF_TEN[width] || value <= -Hugeint::POWERS_OF_TEN[width]) {\n\t\tthrow InvalidInputException(\"value does not fit the declared DECIMAL width\");\n\t}\n\tif (width > Decimal::MAX_WIDTH_INT64) {\n\t\treturn Value::DECIMAL(value, width, scale);\n\t}\n\treturn Value::DECIMAL(Hugeint::Cast<int64_t>(value), width, scale);\n```",
+   "created_at": "2026-11-16T17:14:32Z",
+   "diff_hunk": "@@ -2068,6 +2106,15 @@ class Value final : public detail::Handle<Value> {\n \t\treturn CreateDecimal(factory, WidenDecimal(value.value), WIDTH, SCALE);\n \t}\n \n+\t/// Creates a DECIMAL of a width and scale chosen at runtime; `Create(factory, decimal_t<WIDTH, SCALE>)` is the\n+\t/// typed alternative.\n+\t/// @param factory The factory to create the value with.\n+\t/// @param value The unscaled value, e.g. 12345 for 123.45 at scale 2.\n+\t/// @param width The number of digits, in [1, 38].\n+\t/// @param scale The number of digits after the decimal point, at most `width`.\n+\t/// @throws Exception When the width or scale is out of range, or the value does not fit in `width` digits.",
+   "line": 2116,
+   "path": "tools/cpp/duckdb_cpp.hpp",
+   "user": {
+    "login": "duckdb-bot",
+    "type": "User"
+   }
+  },
+  {
+   "body": "`<windows.h>` compatibility remains incomplete at `tools/cpp/duckdb_cpp.hpp:51`. Without `NOMINMAX`, its `max(a, b)` macro breaks `AddString` and `AddBlob` at `tools/cpp/duckdb_cpp.hpp:2453` and `tools/cpp/duckdb_cpp.hpp:2468`: `macro \"max\" requires 2 arguments, but only 1 given`. This is pre-existing and outside the enumerators, so the description's enumerator claim holds. libstdc++ hides it by undefining macros present before standard headers; gcc and clang fail when macros follow those headers, as with MSVC's STL. Parenthesizing both calls fixes those builds; MSVC was unavailable:\n\n```cpp\n\t\tif (data.size() > (std::numeric_limits<uint32_t>::max)()) {\n```",
+   "created_at": "2026-11-16T17:14:32Z",
+   "diff_hunk": "@@ -48,6 +48,19 @@ struct ArrowSchema;\n struct ArrowArray;\n struct ArrowArrayStream;\n \n+// <windows.h> defines DELETE and IGNORE, which StatementType and FunctionCollationHandling name: keep the macros out of",
+   "line": 51,
+   "path": "tools/cpp/duckdb_cpp.hpp",
+   "user": {
+    "login": "duckdb-bot",
+    "type": "User"
+   }
+  },
+  {
+   "body": "The assertion at `tools/cpp/tests/test_cpp_api_types_values.cpp:504` also passes before this PR. `Exception` catches both the old `INTERNAL Error: Information loss on integer cast` and the new invalid input error for INT16/INT32 overflow (`40000` at width 4, `3000000000` at width 9). Consequently, it does not pin the improvement. I would check `HasErrorCode(DUCKDB_V2_ERROR_INPUT_INVALID)` here, add the INT32 case below, and note the v2 C API behavior change in the description, which currently says there is none. These test and description changes need not block.\n\n```cpp\n\tREQUIRE_THROWS_MATCHES(Value::CreateDecimal(factory, int128_t {3000000000ULL, 0}, 9, 0), Exception,\n\t                       HasErrorCode(DUCKDB_V2_ERROR_INPUT_INVALID));\n```",
+   "created_at": "2026-11-16T17:14:32Z",
+   "diff_hunk": "@@ -465,6 +465,49 @@ TEST_CASE(\"Stable C++API: precise temporal and decimal Values round trip\", \"[cpp\n \tREQUIRE_THROWS_MATCHES((huge.Get<18, 6>()), Exception, HasErrorCode(DUCKDB_V2_ERROR_INPUT_INVALID));\n }\n \n+TEST_CASE(\"Stable C++API: DECIMAL Values of a runtime width and scale\", \"[cpp_api][types_values]\") {\n+\tusing namespace duckdb::cxx;\n+\tauto db = Instance(\":memory:\");\n+\tauto conn = db.Connect();\n+\tauto &factory = conn.GetFactory();\n+\n+\t// Every storage tier, read back widened to 128 bits.\n+\tauto small = Value::CreateDecimal(factory, int128_t {static_cast<uint64_t>(-1234), -1}, 4, 2);\n+\tREQUIRE(small.ToText() == \"-12.34\");\n+\tauto small_read = small.GetDecimal();\n+\tREQUIRE(small_read.width == 4);\n+\tREQUIRE(small_read.scale == 2);\n+\tREQUIRE(small_read.value.lower == static_cast<uint64_t>(-1234));\n+\tREQUIRE(small_read.value.upper == -1);\n+\tREQUIRE(Value::CreateDecimal(factory, int128_t {123456789, 0}, 9, 3).GetDecimal().value.lower == 123456789);\n+\tREQUIRE(Value::CreateDecimal(factory, int128_t {123456789012345678ULL, 0}, 18, 0).ToText() == \"123456789012345678\");\n+\tauto huge = Value::CreateDecimal(factory, int128_t {0, 1}, 38, 10);\n+\tauto huge_read = huge.GetDecimal();\n+\tREQUIRE(huge_read.width == 38);\n+\tREQUIRE(huge_read.scale == 10);\n+\tREQUIRE(huge_read.value.lower == 0);\n+\tREQUIRE(huge_read.value.upper == 1);\n+\n+\t// The same value as the typed constructor.\n+\tREQUIRE(Value::Create(factory, decimal_t<9, 3> {123456789}).GetDecimal().value.lower == 123456789);\n+\t// And from a query.\n+\tauto chunk = conn.Execute(\"SELECT 1234.5::DECIMAL(10, 1)\").FetchChunk();\n+\tauto from_query = chunk.GetVector(0).GetValue(0).GetDecimal();\n+\tREQUIRE(from_query.width == 10);\n+\tREQUIRE(from_query.scale == 1);\n+\tREQUIRE(from_query.value.lower == 12345);\n+\n+\t// Out of range widths, scales and values are refused.\n+\tREQUIRE_THROWS_AS(Value::CreateDecimal(factory, int128_t {1, 0}, 0, 0), Exception);\n+\tREQUIRE_THROWS_AS(Value::CreateDecimal(factory, int128_t {1, 0}, 39, 0), Exception);\n+\tREQUIRE_THROWS_AS(Value::CreateDecimal(factory, int128_t {1, 0}, 4, 5), Exception);\n+\tREQUIRE_THROWS_AS(Value::CreateDecimal(factory, int128_t {100000, 0}, 4, 0), Exception);",
+   "line": 512,
+   "path": "tools/cpp/tests/test_cpp_api_types_values.cpp",
+   "user": {
+    "login": "duckdb-bot",
+    "type": "User"
+   }
+  },
+  {
+   "body": "Fixed in 1f8d0a3c2ad. `BuildDecimal` now checks `|value| < 10^width` after validating width and scale, then picks the hugeint or int64 form, using the check you suggested. `TRY`-less creation of `10000` at `DECIMAL(4,0)` or `{0, INT64_MIN}` at width 38 now returns `ERROR_INPUT_INVALID`. The `duckdb_v2.h` / `value.yaml` docs now say so instead of \"not range-checked against the width\".\n",
+   "created_at": "2026-11-16T17:25:28Z",
+   "diff_hunk": "@@ -2068,6 +2106,15 @@ class Value final : public detail::Handle<Value> {\n \t\treturn CreateDecimal(factory, WidenDecimal(value.value), WIDTH, SCALE);\n \t}\n \n+\t/// Creates a DECIMAL of a width and scale chosen at runtime; `Create(factory, decimal_t<WIDTH, SCALE>)` is the\n+\t/// typed alternative.\n+\t/// @param factory The factory to create the value with.\n+\t/// @param value The unscaled value, e.g. 12345 for 123.45 at scale 2.\n+\t/// @param width The number of digits, in [1, 38].\n+\t/// @param scale The number of digits after the decimal point, at most `width`.\n+\t/// @throws Exception When the width or scale is out of range, or the value does not fit in `width` digits.",
+   "line": 2116,
+   "path": "tools/cpp/duckdb_cpp.hpp",
+   "user": {
+    "login": "Robinho-MR",
+    "type": "User"
+   }
+  },
+  {
+   "body": "Fixed in 1f8d0a3c2ad: both calls in `AddString` and `AddBlob` are now `(std::numeric_limits<uint32_t>::max)()`. I have not built with MSVC either.\n",
+   "created_at": "2026-11-16T17:25:30Z",
+   "diff_hunk": "@@ -48,6 +48,19 @@ struct ArrowSchema;\n struct ArrowArray;\n struct ArrowArrayStream;\n \n+// <windows.h> defines DELETE and IGNORE, which StatementType and FunctionCollationHandling name: keep the macros out of",
+   "line": 51,
+   "path": "tools/cpp/duckdb_cpp.hpp",
+   "user": {
+    "login": "Robinho-MR",
+    "type": "User"
+   }
+  },
+  {
+   "body": "Done in 1f8d0a3c2ad. The tests now check `HasErrorCode(DUCKDB_V2_ERROR_INPUT_INVALID)` for 10000 and 40000 at width 4, 3000000000 at width 9, `{0, INT64_MIN}` and 10^38 at width 38, and that 9999 at width 4 and 10^38 - 1 at width 38 are accepted. The description now lists the v2 C API behavior change. `[cpp_api]` (218 cases) and `[capi_v2]` (597 cases) pass on reldebug.\n",
+   "created_at": "2026-11-16T17:25:32Z",
+   "diff_hunk": "@@ -465,6 +465,49 @@ TEST_CASE(\"Stable C++API: precise temporal and decimal Values round trip\", \"[cpp\n \tREQUIRE_THROWS_MATCHES((huge.Get<18, 6>()), Exception, HasErrorCode(DUCKDB_V2_ERROR_INPUT_INVALID));\n }\n \n+TEST_CASE(\"Stable C++API: DECIMAL Values of a runtime width and scale\", \"[cpp_api][types_values]\") {\n+\tusing namespace duckdb::cxx;\n+\tauto db = Instance(\":memory:\");\n+\tauto conn = db.Connect();\n+\tauto &factory = conn.GetFactory();\n+\n+\t// Every storage tier, read back widened to 128 bits.\n+\tauto small = Value::CreateDecimal(factory, int128_t {static_cast<uint64_t>(-1234), -1}, 4, 2);\n+\tREQUIRE(small.ToText() == \"-12.34\");\n+\tauto small_read = small.GetDecimal();\n+\tREQUIRE(small_read.width == 4);\n+\tREQUIRE(small_read.scale == 2);\n+\tREQUIRE(small_read.value.lower == static_cast<uint64_t>(-1234));\n+\tREQUIRE(small_read.value.upper == -1);\n+\tREQUIRE(Value::CreateDecimal(factory, int128_t {123456789, 0}, 9, 3).GetDecimal().value.lower == 123456789);\n+\tREQUIRE(Value::CreateDecimal(factory, int128_t {123456789012345678ULL, 0}, 18, 0).ToText() == \"123456789012345678\");\n+\tauto huge = Value::CreateDecimal(factory, int128_t {0, 1}, 38, 10);\n+\tauto huge_read = huge.GetDecimal();\n+\tREQUIRE(huge_read.width == 38);\n+\tREQUIRE(huge_read.scale == 10);\n+\tREQUIRE(huge_read.value.lower == 0);\n+\tREQUIRE(huge_read.value.upper == 1);\n+\n+\t// The same value as the typed constructor.\n+\tREQUIRE(Value::Create(factory, decimal_t<9, 3> {123456789}).GetDecimal().value.lower == 123456789);\n+\t// And from a query.\n+\tauto chunk = conn.Execute(\"SELECT 1234.5::DECIMAL(10, 1)\").FetchChunk();\n+\tauto from_query = chunk.GetVector(0).GetValue(0).GetDecimal();\n+\tREQUIRE(from_query.width == 10);\n+\tREQUIRE(from_query.scale == 1);\n+\tREQUIRE(from_query.value.lower == 12345);\n+\n+\t// Out of range widths, scales and values are refused.\n+\tREQUIRE_THROWS_AS(Value::CreateDecimal(factory, int128_t {1, 0}, 0, 0), Exception);\n+\tREQUIRE_THROWS_AS(Value::CreateDecimal(factory, int128_t {1, 0}, 39, 0), Exception);\n+\tREQUIRE_THROWS_AS(Value::CreateDecimal(factory, int128_t {1, 0}, 4, 5), Exception);\n+\tREQUIRE_THROWS_AS(Value::CreateDecimal(factory, int128_t {100000, 0}, 4, 0), Exception);",
+   "line": 512,
+   "path": "tools/cpp/tests/test_cpp_api_types_values.cpp",
+   "user": {
+    "login": "Robinho-MR",
+    "type": "User"
+   }
+  },
+  {
+   "body": "Verified the fix in `1f8d0a3c2ad`: `CreateDecimal` rejects 10000 and -10000 at width 4, 10^9 at width 9, 10^18 at width 18, 2^100 at width 30, and both `INT128` limits at width 38 with an invalid input error. It accepts 9999, -9999 and the PR's own cases; width 39 and above is accepted using the wide decimal support from main.\n\n<!-- duckdb-bot reply 4589111308-1 -->\nagent_version:57b249d638e45b8ced81d527a077c63b529ff1d0",
+   "created_at": "2026-11-16T21:37:30Z",
+   "diff_hunk": "@@ -2068,6 +2106,15 @@ class Value final : public detail::Handle<Value> {\n \t\treturn CreateDecimal(factory, WidenDecimal(value.value), WIDTH, SCALE);\n \t}\n \n+\t/// Creates a DECIMAL of a width and scale chosen at runtime; `Create(factory, decimal_t<WIDTH, SCALE>)` is the\n+\t/// typed alternative.\n+\t/// @param factory The factory to create the value with.\n+\t/// @param value The unscaled value, e.g. 12345 for 123.45 at scale 2.\n+\t/// @param width The number of digits, in [1, 38].\n+\t/// @param scale The number of digits after the decimal point, at most `width`.\n+\t/// @throws Exception When the width or scale is out of range, or the value does not fit in `width` digits.",
+   "line": 2116,
+   "path": "tools/cpp/duckdb_cpp.hpp",
+   "user": {
+    "login": "duckdb-bot",
+    "type": "User"
+   }
+  },
+  {
+   "body": "Verified the fix in `1f8d0a3c2ad`: with the `<windows.h>` macros (`DELETE`, `IGNORE`, `min`, `max`) defined after the standard headers, the header compiles with gcc and clang, and the macros are restored afterwards. MSVC remains unchecked on our side too.\n\n<!-- duckdb-bot reply 4589111709-1 -->\nagent_version:57b249d638e45b8ced81d527a077c63b529ff1d0",
+   "created_at": "2026-11-16T21:37:36Z",
+   "diff_hunk": "@@ -48,6 +48,19 @@ struct ArrowSchema;\n struct ArrowArray;\n struct ArrowArrayStream;\n \n+// <windows.h> defines DELETE and IGNORE, which StatementType and FunctionCollationHandling name: keep the macros out of",
+   "line": 51,
+   "path": "tools/cpp/duckdb_cpp.hpp",
+   "user": {
+    "login": "duckdb-bot",
+    "type": "User"
+   }
+  },
+  {
+   "body": "Verified the test change in `1f8d0a3c2ad`: the new `HasErrorCode(DUCKDB_V2_ERROR_INPUT_INVALID)` checks pass. For 3000000000 at width 9, the error code is now 2001 rather than the old internal error 8001, so the test pins the tier change.\n\n<!-- duckdb-bot reply 4589112033-1 -->\nagent_version:57b249d638e45b8ced81d527a077c63b529ff1d0",
+   "created_at": "2026-11-16T21:37:40Z",
+   "diff_hunk": "@@ -465,6 +465,49 @@ TEST_CASE(\"Stable C++API: precise temporal and decimal Values round trip\", \"[cpp\n \tREQUIRE_THROWS_MATCHES((huge.Get<18, 6>()), Exception, HasErrorCode(DUCKDB_V2_ERROR_INPUT_INVALID));\n }\n \n+TEST_CASE(\"Stable C++API: DECIMAL Values of a runtime width and scale\", \"[cpp_api][types_values]\") {\n+\tusing namespace duckdb::cxx;\n+\tauto db = Instance(\":memory:\");\n+\tauto conn = db.Connect();\n+\tauto &factory = conn.GetFactory();\n+\n+\t// Every storage tier, read back widened to 128 bits.\n+\tauto small = Value::CreateDecimal(factory, int128_t {static_cast<uint64_t>(-1234), -1}, 4, 2);\n+\tREQUIRE(small.ToText() == \"-12.34\");\n+\tauto small_read = small.GetDecimal();\n+\tREQUIRE(small_read.width == 4);\n+\tREQUIRE(small_read.scale == 2);\n+\tREQUIRE(small_read.value.lower == static_cast<uint64_t>(-1234));\n+\tREQUIRE(small_read.value.upper == -1);\n+\tREQUIRE(Value::CreateDecimal(factory, int128_t {123456789, 0}, 9, 3).GetDecimal().value.lower == 123456789);\n+\tREQUIRE(Value::CreateDecimal(factory, int128_t {123456789012345678ULL, 0}, 18, 0).ToText() == \"123456789012345678\");\n+\tauto huge = Value::CreateDecimal(factory, int128_t {0, 1}, 38, 10);\n+\tauto huge_read = huge.GetDecimal();\n+\tREQUIRE(huge_read.width == 38);\n+\tREQUIRE(huge_read.scale == 10);\n+\tREQUIRE(huge_read.value.lower == 0);\n+\tREQUIRE(huge_read.value.upper == 1);\n+\n+\t// The same value as the typed constructor.\n+\tREQUIRE(Value::Create(factory, decimal_t<9, 3> {123456789}).GetDecimal().value.lower == 123456789);\n+\t// And from a query.\n+\tauto chunk = conn.Execute(\"SELECT 1234.5::DECIMAL(10, 1)\").FetchChunk();\n+\tauto from_query = chunk.GetVector(0).GetValue(0).GetDecimal();\n+\tREQUIRE(from_query.width == 10);\n+\tREQUIRE(from_query.scale == 1);\n+\tREQUIRE(from_query.value.lower == 12345);\n+\n+\t// Out of range widths, scales and values are refused.\n+\tREQUIRE_THROWS_AS(Value::CreateDecimal(factory, int128_t {1, 0}, 0, 0), Exception);\n+\tREQUIRE_THROWS_AS(Value::CreateDecimal(factory, int128_t {1, 0}, 39, 0), Exception);\n+\tREQUIRE_THROWS_AS(Value::CreateDecimal(factory, int128_t {1, 0}, 4, 5), Exception);\n+\tREQUIRE_THROWS_AS(Value::CreateDecimal(factory, int128_t {100000, 0}, 4, 0), Exception);",
+   "line": 512,
+   "path": "tools/cpp/tests/test_cpp_api_types_values.cpp",
+   "user": {
+    "login": "duckdb-bot",
+    "type": "User"
+   }
+  }
+ ],
+ "state": "closed",
+ "title": "C++ API: StartupOptions::Set, runtime DECIMAL access, windows.h compatibility",
+ "transport": "gh",
+ "user": {
+  "login": "Robinho-MR",
+  "type": "User"
+ }
+}

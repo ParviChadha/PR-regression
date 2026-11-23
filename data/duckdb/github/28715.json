@@ -1,0 +1,37 @@
+{
+ "base_ref": "main",
+ "base_sha": "6145a8699b5e54b146fb305a862012b58130e9b8",
+ "body": "Projection placement moved each comparison of a column that other expressions of the same projection also read, such as the `d_moy = 1` .. `d_moy = 12` conditions of TPC-DS q66, below the joins onto the small side. That frees no input column. It only adds one column per expression that the joins have to carry.\n\nWhen the small side is the build side of a hash join, these columns come back as a global dictionary that every thread reads. The CASE expressions above then contend on its shared validity buffer. At SF3000, q66 took 1.19 s instead of 0.62 s.\n\nWith this PR, projection placement no longer moves an expression with a heuristic cost of at most 20 (for example, a comparison of a numeric column with a constant), unless moving it frees one of its inputs.\n\nOf the 99 TPC-DS queries, only q66 changes plan. It only changes with filter selectivity sampling (#28664): with sampling, q66 is otherwise 33% slower at SF1000 and SF3000, and this PR removes that regression.\n",
+ "comments": [
+  {
+   "body": "Thanks!",
+   "created_at": "2026-11-12T10:54:02Z",
+   "user": {
+    "login": "lnkuiper",
+    "type": "User"
+   }
+  }
+ ],
+ "created_at": "2026-11-11T17:54:51Z",
+ "fetched_at": "2026-11-23T20:34:37Z",
+ "head_sha": "44bd864db5971e94bab9c1eed0d4951492214344",
+ "labels": [
+  "Ready To Merge"
+ ],
+ "linked_issues": [],
+ "merge_commit_sha": "e54bd57cc4ecb8a8bd3ca60abfd2f5b343a56b2a",
+ "merged_at": "2026-11-12T15:03:39Z",
+ "number": 28715,
+ "referenced_numbers": [
+  28664
+ ],
+ "repo": "duckdb/duckdb",
+ "review_comments": [],
+ "state": "closed",
+ "title": "Do not move cheap projections below joins when their inputs stay needed",
+ "transport": "gh",
+ "user": {
+  "login": "oraclechang",
+  "type": "User"
+ }
+}

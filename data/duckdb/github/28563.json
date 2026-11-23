@@ -1,0 +1,79 @@
+{
+ "base_ref": "main",
+ "base_sha": "26489c0be48af0d9eeeb52a0cf57cf1e05942e6c",
+ "body": "## Fixes #28562\n\n### Root Cause Analysis\n- **File:** `src/optimizer/rule/empty_needle_removal.cpp`\n- **Function:** `EmptyNeedleRemovalRule::Apply`\n- **Lines:** The optimisation rewrites `contains(<non\u2011string>, '')` to a constant `TRUE` because it only checks the return type (`BOOLEAN`) and the needle type, but **does not verify the type of the first argument**. This violates the invariant that optimisation rules must preserve semantics for all overloads.\n\n### Surgical Solution & Edge\u2011Case Safety\nThe fix inserts a guard that ensures the first argument is of type `VARCHAR` before applying the empty\u2011needle rewrite. If the first argument is not a string (e.g., `LIST<VARCHAR>`), the rule aborts, leaving the original expression untouched. This restores correct behaviour for `contains(list, '')` while keeping the optimisation for genuine string overloads.\n\n### Verification\n- Run the DuckDB test suite to ensure no regressions: `make test`.\n- Add a new test case (if not already present) that checks `SELECT contains([\"a\", \"\"], '')` returns `false` (or `null` for a null list) and that the optimizer does not replace it with a constant.\n- Verify that existing string\u2011optimisation tests still pass.\n\n---\n*No other files are modified.*",
+ "comments": [
+  {
+   "body": "Thanks - but this feels like it is touching a lot more than the PR suggests",
+   "created_at": "2026-11-09T09:28:51Z",
+   "user": {
+    "login": "Mytherin",
+    "type": "User"
+   }
+  },
+  {
+   "body": "Good catch @Mytherin \u2014 this branch was accidentally created on top of my local `#28554` branch instead of `main`.\n\nI have reset the branch cleanly onto `main` (`e0ec1448`), so the diff now only touches `src/optimizer/rule/empty_needle_removal.cpp` (+4 lines guarding `input_expr.GetReturnType().InternalType() != PhysicalType::VARCHAR`) and the regression test in `test/sql/optimizer/expression/test_empty_needle_dead_branch.test`.",
+   "created_at": "2026-11-09T09:35:55Z",
+   "user": {
+    "login": "zaidrain06",
+    "type": "User"
+   }
+  },
+  {
+   "body": "Thanks",
+   "created_at": "2026-11-09T11:33:12Z",
+   "user": {
+    "login": "Mytherin",
+    "type": "User"
+   }
+  },
+  {
+   "body": "Hi @Mytherin, apologies for the noise \u2014 the branch is back at the exact commit you reviewed (`e0ec144`), and I've marked the PR ready for review again. Could you approve the pending CI workflow run and re-enable auto-merge when you get a chance?",
+   "created_at": "2026-11-10T15:12:06Z",
+   "user": {
+    "login": "zaidrain06",
+    "type": "User"
+   }
+  },
+  {
+   "body": "Thanks @Mytherin! It looks like auto-merge is only blocked by a single unrelated flake in `Main #54180` -> `Vector Sizes` (`test/sql/join/hash_join/hash_join_dict_surviving_computed_build.test`). Could you trigger \"Re-run failed jobs\" on that run so I don't reset auto-merge with a push?",
+   "created_at": "2026-11-10T18:43:32Z",
+   "user": {
+    "login": "zaidrain06",
+    "type": "User"
+   }
+  }
+ ],
+ "created_at": "2026-11-08T21:05:41Z",
+ "fetched_at": "2026-11-23T20:34:50Z",
+ "head_sha": "e0ec1448d5f6bcf77e2b876a6f2086fb2a906bfe",
+ "labels": [
+  "backport v2.0-cyanoptera"
+ ],
+ "linked_issues": [
+  {
+   "body": "### What happens?\n\n`contains(l, '')` on a `VARCHAR[]` column returns true for every non-NULL list, even when the list doesn't contain an empty string. `list_contains(l, '')` gives the right answer, and so does `contains` with `SET disabled_optimizers = 'expression_rewriter'`.\n\nI think the cause is `EmptyNeedleRemovalRule` in `src/optimizer/rule/empty_needle_removal.cpp`. It matches `contains` by name and folds an empty needle to true, which is only valid for the string overload. It checks that the needle is a VARCHAR but not the first argument. I also saw it with a struct as the first argument.\n\n### To Reproduce\n\n```sql\nCREATE TABLE t(l VARCHAR[]);\nINSERT INTO t VALUES (['a','b']), (['']), (NULL), ([]);\n\nSELECT l, contains(l, '') FROM t;\n-- [a, b]  true    expected false\n-- ['']    true\n-- NULL    NULL\n-- []      true    expected false\n\nSET disabled_optimizers = 'expression_rewriter';\nSELECT l, contains(l, '') FROM t;\n-- [a, b]  false\n-- ['']    true\n-- NULL    NULL\n-- []      false\n```\n\n### OS:\n\nLinux x86_64 (WSL2)\n\n### DuckDB Version:\n\n2.0.0 (d54cbbe3df); also reproduced on a build of main at d4eea3f208 (2026-11-06)\n\n### DuckDB Client:\n\nPython and CLI\n\n### Hardware:\n\n_No response_\n\n### Full Name:\n\nPrabhnoor\n\n### Affiliation:\n\nIIT Guwahati\n\n### Did you include all relevant configuration (e.g., CPU architecture, Linux distribution) to reproduce the issue?\n\n- [x] Yes, I have\n\n### Did you include all code required to reproduce the issue?\n\n- [x] Yes, I have\n\n### Did you include all relevant data sets for reproducing the issue?\n\nYes",
+   "labels": [
+    "reproduced"
+   ],
+   "number": 28562,
+   "state": "closed",
+   "title": "contains(list_column, '') returns true for lists that do not contain the empty string"
+  }
+ ],
+ "merge_commit_sha": "51990041154e03599abc5c777e5b89d6630006af",
+ "merged_at": "2026-11-11T11:21:13Z",
+ "number": 28563,
+ "referenced_numbers": [
+  28562
+ ],
+ "repo": "duckdb/duckdb",
+ "review_comments": [],
+ "state": "closed",
+ "title": "Fix #28562: contains(list_column, '') returns true for lists that do not contain the",
+ "transport": "gh",
+ "user": {
+  "login": "zaidrain06",
+  "type": "User"
+ }
+}

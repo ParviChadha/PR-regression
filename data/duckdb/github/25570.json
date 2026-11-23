@@ -1,0 +1,105 @@
+{
+ "base_ref": "main",
+ "base_sha": "46257b1490e452ed59f1061cc0fc9c6e90841720",
+ "body": "`ColumnReader::block`, the buffer holding each page's decompressed data, was previously allocated with an `Allocator` and was always kept pinned.\r\n\r\nThis moves `block` onto the buffer manager (`BlockHandle`/`BufferHandle`), pinning it only around each vector's read and unpinning it in between. `ByteBuffer` was changed to use an offset-based cursor instead of an absolute pointer. Further, every decoder that caches a pointer into `block` (dictionary, RLE, delta-binary-packed, byte-stream-split) now rebases itself against the new address after each re-pin.\r\n\r\nOne buffer was deliberately left on `Allocator`: the bloom filter built while writing a dictionary page. It's short-lived and never re-pinned, so buffer-manager tracking would only add overhead there with no eviction benefit.\r\n\r\nI ran a small benchmark locally, no speed regression, and it now keeps working once memory gets tight enough that main just runs out of memory.\r\n\r\nAlso includes a small unrelated build fix in `expression_binder.cpp` I hit along the way.\r\n\r\nThis looks like a lot of changes, but a lot of the changes are because many of the functions were renamed for formatting reasons (ie. `inc()` -> `Inc()`).",
+ "comments": [
+  {
+   "body": "I had Codex look into performance regressions and it found 2-4% regressions and it came up with this patch:\r\n```diff\r\nindex 7475d49a3f3..acd8de51194 100644\r\n--- a/extension/parquet/column_reader.cpp\r\n+++ b/extension/parquet/column_reader.cpp\r\n@@ -489,7 +489,7 @@ void ColumnReader::PreparePageV2(PageHeader &page_hdr) {\r\n \r\n \tif (compressed_bytes > 0) {\r\n \t\tResizeableBuffer compressed_buffer;\r\n-\t\tcompressed_buffer.Resize(GetBufferManager(), compressed_bytes);\r\n+\t\tcompressed_buffer.Resize(GetAllocator(), compressed_bytes);\r\n \r\n \t\tReadData(compressed_buffer.GetCurrentLoc(), compressed_bytes, page_hdr.type);\r\n \r\n@@ -537,7 +537,7 @@ void ColumnReader::PreparePage(PageHeader &page_hdr) {\r\n \t}\r\n \r\n \tResizeableBuffer compressed_buffer;\r\n-\tcompressed_buffer.Resize(GetBufferManager(), compressed_page_size + 1);\r\n+\tcompressed_buffer.Resize(GetAllocator(), compressed_page_size + 1);\r\n \tReadData(compressed_buffer.GetCurrentLoc(), compressed_page_size, page_hdr.type);\r\n \r\n \tDecompressInternal(chunk->meta_data.codec, compressed_buffer.GetCurrentLoc(), compressed_page_size,\r\n@@ -912,11 +912,9 @@ void ColumnReader::DirectSelect(ColumnReaderInput &input, Vector &result, const\r\n \tBeginRead(define_out, repeat_out);\r\n \tauto read_now = ReadPageHeaders(to_read);\r\n \r\n-\t// pin after BeginRead in case of skips\r\n-\tBlockPinGuard pin_guard(*this);\r\n-\r\n \t// we can only push the filter into the decoder if we are reading the ENTIRE vector in one go\r\n \tif (!page_is_filtered_out && read_now == to_read && encoding == ColumnEncoding::PLAIN) {\r\n+\t\tBlockPinGuard pin_guard(*this);\r\n \t\tconst auto all_valid = PrepareRead(read_now, define_out, repeat_out, 0);\r\n \t\tconst auto define_ptr = all_valid ? nullptr : static_cast<uint8_t *>(define_out);\r\n \t\tPlainSelect(block, define_ptr, read_now, result, sel, approved_tuple_count);\r\n@@ -953,11 +951,9 @@ void ColumnReader::DirectFilter(ColumnReaderInput &input, Vector &result, const\r\n \tBeginRead(define_out, repeat_out);\r\n \tauto read_now = ReadPageHeaders(to_read, &filter, &filter_state);\r\n \r\n-\t// pin after BeginRead in case of skips\r\n-\tBlockPinGuard pin_guard(*this);\r\n-\r\n \t// we can only push the filter into the decoder if we are reading the ENTIRE vector in one go\r\n \tif (encoding == ColumnEncoding::DICTIONARY && read_now == to_read && dictionary_decoder.HasFilter()) {\r\n+\t\tBlockPinGuard pin_guard(*this);\r\n \t\tif (page_is_filtered_out) {\r\n \t\t\t// the page has been filtered out entirely - skip\r\n \t\t\tapproved_tuple_count = 0;\r\ndiff --git a/extension/parquet/include/resizable_buffer.hpp b/extension/parquet/include/resizable_buffer.hpp\r\nindex f580bcefaa0..d07b2c4e9a5 100644\r\n--- a/extension/parquet/include/resizable_buffer.hpp\r\n+++ b/extension/parquet/include/resizable_buffer.hpp\r\n@@ -180,7 +180,7 @@ public:\r\n \t}\r\n \r\n \tvoid Pin(BufferManager &buffer_manager) {\r\n-\t\tif (block_handle) {\r\n+\t\tif (block_handle && !handle.IsValid()) {\r\n \t\t\thandle = buffer_manager.Pin(block_handle);\r\n \t\t\tptr = handle.GetDataMutable();\r\n \t\t}\r\ndiff --git a/extension/parquet/parquet_reader.cpp b/extension/parquet/parquet_reader.cpp\r\nindex 41b35cfc86f..9fe9751cdf6 100644\r\n--- a/extension/parquet/parquet_reader.cpp\r\n+++ b/extension/parquet/parquet_reader.cpp\r\n@@ -263,8 +263,8 @@ static void ParseParquetFooter(const_data_ptr_t buffer, const string &file_path,\r\n }\r\n \r\n static shared_ptr<ParquetFileMetadataCache>\r\n-LoadMetadata(ClientContext &context, Allocator &allocator, BufferManager &buffer_manager,\r\n-             CachingFileHandle &file_handle, const shared_ptr<const ParquetEncryptionConfig> &encryption_config,\r\n+LoadMetadata(ClientContext &context, Allocator &allocator, CachingFileHandle &file_handle,\r\n+             const shared_ptr<const ParquetEncryptionConfig> &encryption_config,\r\n              shared_ptr<EncryptionUtil> &encryption_util, optional_idx footer_size) {\r\n \tauto file_proto = CreateThriftFileProtocol(context, file_handle, false);\r\n \tauto &transport = reinterpret_cast<ThriftFileTransport &>(*file_proto->getTransport());\r\n@@ -293,7 +293,7 @@ LoadMetadata(ClientContext &context, Allocator &allocator, BufferManager &buffer\r\n \t\t}\r\n \r\n \t\tResizeableBuffer buf;\r\n-\t\tbuf.Resize(buffer_manager, 8);\r\n+\t\tbuf.Resize(allocator, 8);\r\n \t\tbuf.Zero();\r\n \r\n \t\ttransport.Prefetch(file_size - prefetch_size, prefetch_size);\r\n@@ -1474,13 +1474,13 @@ ParquetReader::ParquetReader(ClientContext &context_p, OpenFileInfo file_p, Parq\r\n \t// or if the cached version already expired\r\n \tif (!metadata_p) {\r\n \t\tif (!MetadataCacheEnabled(context_p)) {\r\n-\t\t\tmetadata = LoadMetadata(context_p, allocator, buffer_manager, *file_handle,\r\n-\t\t\t                        parquet_options.encryption_config, encryption_util, footer_size);\r\n+\t\t\tmetadata = LoadMetadata(context_p, allocator, *file_handle, parquet_options.encryption_config,\r\n+\t\t\t                        encryption_util, footer_size);\r\n \t\t} else {\r\n \t\t\tmetadata = ObjectCache::GetObjectCache(context_p).GetWithTypePrefix<ParquetFileMetadataCache>(file.path);\r\n \t\t\tif (!metadata || !metadata->IsValid(*file_handle)) {\r\n-\t\t\t\tmetadata = LoadMetadata(context_p, allocator, buffer_manager, *file_handle,\r\n-\t\t\t\t                        parquet_options.encryption_config, encryption_util, footer_size);\r\n+\t\t\t\tmetadata = LoadMetadata(context_p, allocator, *file_handle, parquet_options.encryption_config,\r\n+\t\t\t\t                        encryption_util, footer_size);\r\n \t\t\t\tObjectCache::GetObjectCache(context_p).PutWithTypePrefix<ParquetFileMetadataCache>(file.path, metadata);\r\n \t\t\t}\r\n \t\t}\r\n@@ -2082,8 +2082,8 @@ void ParquetReader::InitializeScan(ClientContext &context, ParquetReaderScanStat\r\n \t\t}\r\n \t}\r\n \r\n-\tstate.define_buf.Resize(buffer_manager, STANDARD_VECTOR_SIZE);\r\n-\tstate.repeat_buf.Resize(buffer_manager, STANDARD_VECTOR_SIZE);\r\n+\tstate.define_buf.Resize(allocator, STANDARD_VECTOR_SIZE);\r\n+\tstate.repeat_buf.Resize(allocator, STANDARD_VECTOR_SIZE);\r\n }\r\n \r\n void ParquetReader::GetPartitionStats(vector<PartitionStatistics> &result) {\r\ndiff --git a/extension/parquet/reader/list_column_reader.cpp b/extension/parquet/reader/list_column_reader.cpp\r\nindex 4cc61d6dc42..d76bf99bf81 100644\r\n--- a/extension/parquet/reader/list_column_reader.cpp\r\n+++ b/extension/parquet/reader/list_column_reader.cpp\r\n@@ -196,8 +196,8 @@ ListColumnReader::ListColumnReader(const ParquetReader &reader, const ParquetCol\r\n                                    unique_ptr<ColumnReader> child_column_reader_p)\r\n     : ColumnReader(reader, schema), child_column_reader(std::move(child_column_reader_p)),\r\n       read_cache(reader.allocator, ListType::GetChildType(Type())), read_vector(read_cache), overflow_child_count(0) {\r\n-\tchild_defines.Resize(reader.buffer_manager, STANDARD_VECTOR_SIZE);\r\n-\tchild_repeats.Resize(reader.buffer_manager, STANDARD_VECTOR_SIZE);\r\n+\tchild_defines.Resize(reader.allocator, STANDARD_VECTOR_SIZE);\r\n+\tchild_repeats.Resize(reader.allocator, STANDARD_VECTOR_SIZE);\r\n \tchild_defines_ptr = (uint8_t *)child_defines.GetCurrentLoc();\r\n \tchild_repeats_ptr = (uint8_t *)child_repeats.GetCurrentLoc();\r\n \tif (child_column_reader) {\r\n```\r\n\r\nCould you have a look? This is some explanation:\r\nBuffer/path | Effect of the prototype\r\n-- | --\r\nDecompressed pages and decoder state | Still buffer-managed, unpinned between reads, and evictable\r\nCompressed-page temporaries and footer buffer | These already stay pinned until destruction; changing allocator removes overhead without losing an existing eviction opportunity\r\nDefinition/repetition buffers | These already stay pinned for their lifetime; they retain memory-limit accounting through\u00a0BufferAllocator\r\nRedundant pins | Removes duplicate acquisition. After an actual unpin, the next read still pins and rebases the decoders\r\n\r\n",
+   "created_at": "2026-10-14T14:02:28Z",
+   "user": {
+    "login": "lnkuiper",
+    "type": "User"
+   }
+  },
+  {
+   "body": "This pull request is stale because it has been open 21 days with no activity. Remove stale label or comment or this will be closed in 7 days.",
+   "created_at": "2026-11-05T13:17:50Z",
+   "user": {
+    "login": "duckdblabs-bot",
+    "type": "User"
+   }
+  },
+  {
+   "body": "Hi @lnkuiper, thanks for the pointers on the regressions. I implemented your proposed changes but a benchmark after revealed that most of the slowdown was actually somewhere else, and I actually went through several iterations to try and narrow it down:\n\n| | before patch suggestion | with patch + scratch-buffer extensions ([`1844327`](https://github.com/duckdb/duckdb/commit/1844327b8bc)) | + pow2 alloc fix ([`6ed74be`](https://github.com/duckdb/duckdb/commit/6ed74be19a5)) | final, + eviction-queue skip ([`0b6f445`](https://github.com/duckdb/duckdb/commit/0b6f445880b)) |\n|---|---|---|---|---|\n| geomean | 2\u20134% (your Codex run) | +2.1% | +2.4% | **+0.3\u20131.2%** (4 runs) |\n| q13 (worst) | \u2014 | +9.6% | +1.3% | within \u00b13% |\n| q13 page faults/run | \u2014 | ~23k | ~3.5k | ~3.5k |\n\nThe leftover slowdown is the per-vector pin/unpin itself, so there's no real workaround without holding pins longer.\n",
+   "created_at": "2026-11-11T13:44:26Z",
+   "user": {
+    "login": "maiadegraaf",
+    "type": "User"
+   }
+  },
+  {
+   "body": "Thanks, LGTM now! :)",
+   "created_at": "2026-11-11T14:33:46Z",
+   "user": {
+    "login": "lnkuiper",
+    "type": "User"
+   }
+  }
+ ],
+ "created_at": "2026-09-10T11:59:08Z",
+ "fetched_at": "2026-11-23T20:34:46Z",
+ "head_sha": "80727c866706b3ad1db15c19d673811b5250f3e7",
+ "labels": [
+  "Ready To Merge",
+  "Member"
+ ],
+ "linked_issues": [],
+ "merge_commit_sha": "e3a462b51dcf1b3573f35508a7611cbac85ba131",
+ "merged_at": "2026-11-11T18:45:44Z",
+ "number": 25570,
+ "referenced_numbers": [],
+ "repo": "duckdb/duckdb",
+ "review_comments": [
+  {
+   "body": "This seems a bit error-prone - if we forget to call this rebase we run into issues. Would it be possible for the decoders to instead refer to the block and get the pointer from there instead of storing one?",
+   "created_at": "2026-09-10T12:59:36Z",
+   "diff_hunk": "@@ -742,6 +749,32 @@ bool ColumnReader::PrepareRead(idx_t read_now, data_ptr_t define_out, data_ptr_t\n \treturn true; // No defines, so everything is valid\n }\n \n+void ColumnReader::RebaseDecoders() {\n+\t// Block's offset has moved on so we need to use the decoders own stored offset to calculate current location.\n+\tif (repeated_decoder) {\n+\t\trepeated_decoder->Rebase(block->GetPtr() + repeated_decoder_offset);",
+   "line": 755,
+   "path": "extension/parquet/column_reader.cpp",
+   "user": {
+    "login": "Mytherin",
+    "type": "User"
+   }
+  },
+  {
+   "body": "Doing it via block directly would mean every `Read()`/`Skip()` in these decode loops resolves the pointer through an extra indirection instead of a direct dereference. I could add an extra `D_ASSERT` instead to catch a missing `Rebase()`?",
+   "created_at": "2026-09-10T13:39:43Z",
+   "diff_hunk": "@@ -742,6 +749,32 @@ bool ColumnReader::PrepareRead(idx_t read_now, data_ptr_t define_out, data_ptr_t\n \treturn true; // No defines, so everything is valid\n }\n \n+void ColumnReader::RebaseDecoders() {\n+\t// Block's offset has moved on so we need to use the decoders own stored offset to calculate current location.\n+\tif (repeated_decoder) {\n+\t\trepeated_decoder->Rebase(block->GetPtr() + repeated_decoder_offset);",
+   "line": 755,
+   "path": "extension/parquet/column_reader.cpp",
+   "user": {
+    "login": "maiadegraaf",
+    "type": "User"
+   }
+  },
+  {
+   "body": "Maybe the pointer can instead be resolved on `Pin()` instead of being kept around in these decoders?\r\n\r\nI'm just a bit worried about caching these pointers as the current code looks rather fragile - it seems easy to forget calling a `Rebase()` or to forget calling a `Pin()` only to be hit with crashes, and I would prefer if the code would protect against this directly.",
+   "created_at": "2026-09-10T14:50:44Z",
+   "diff_hunk": "@@ -742,6 +749,32 @@ bool ColumnReader::PrepareRead(idx_t read_now, data_ptr_t define_out, data_ptr_t\n \treturn true; // No defines, so everything is valid\n }\n \n+void ColumnReader::RebaseDecoders() {\n+\t// Block's offset has moved on so we need to use the decoders own stored offset to calculate current location.\n+\tif (repeated_decoder) {\n+\t\trepeated_decoder->Rebase(block->GetPtr() + repeated_decoder_offset);",
+   "line": 755,
+   "path": "extension/parquet/column_reader.cpp",
+   "user": {
+    "login": "Mytherin",
+    "type": "User"
+   }
+  },
+  {
+   "body": "Instead of having to remember to `Pin / Unpin` can we use an object with a destructor similar to our buffer manager (a `BufferHandle` like object).",
+   "created_at": "2026-09-22T08:30:14Z",
+   "diff_hunk": "@@ -23,42 +23,49 @@ class Vector;\n DeltaByteArrayDecoder::DeltaByteArrayDecoder(ColumnReader &reader) : reader(reader) {\n }\n \n-void DeltaByteArrayDecoder::ReadDbpData(Allocator &allocator, ResizeableBuffer &buffer, ResizeableBuffer &result_buffer,\n-                                        idx_t &value_count) {\n-\tauto decoder = make_uniq<DbpDecoder>(buffer.ptr, buffer.len);\n+void DeltaByteArrayDecoder::ReadDbpData(BufferManager &buffer_manager, ResizeableBuffer &buffer,\n+                                        ResizeableBuffer &result_buffer, idx_t &value_count) {\n+\tauto decoder = make_uniq<DbpDecoder>(buffer.GetCurrentLoc(), buffer.GetRemaining());\n \tvalue_count = decoder->TotalValues();\n-\tresult_buffer.reset();\n+\tresult_buffer.Reset();\n \t// value_count is read from the file, so the buffer size can overflow on a corrupt input\n \tidx_t result_size;\n \tif (!TryMultiplyOperator::Operation<idx_t, idx_t, idx_t>(value_count, sizeof(uint32_t), result_size)) {\n \t\tthrow InvalidInputException(\"DELTA_BYTE_ARRAY value count is too large - corrupt file?\");\n \t}\n-\tresult_buffer.resize(allocator, result_size);\n-\tdecoder->GetBatch<uint32_t>(result_buffer.ptr, value_count);\n+\tresult_buffer.Resize(buffer_manager, result_size);\n+\tdecoder->GetBatch<uint32_t>(result_buffer.GetCurrentLoc(), value_count);\n \tdecoder->Finalize();\n-\tbuffer.inc(buffer.len - decoder->BufferPtr().len);\n+\tbuffer.Inc(decoder->BytesConsumed());\n }\n \n void DeltaByteArrayDecoder::InitializePage() {\n \tauto &block = *reader.block;\n-\tauto &allocator = reader.reader.allocator;\n+\tauto &buffer_manager = reader.reader.buffer_manager;\n \tidx_t prefix_count, suffix_count;\n+\n \tauto &prefix_buffer = reader.encoding_buffers[0];\n+\tprefix_buffer.Pin(buffer_manager);\n+\tReadDbpData(buffer_manager, block, prefix_buffer, prefix_count);\n+\n \tauto &suffix_buffer = reader.encoding_buffers[1];\n-\tReadDbpData(allocator, block, prefix_buffer, prefix_count);\n-\tReadDbpData(allocator, block, suffix_buffer, suffix_count);\n+\tsuffix_buffer.Pin(buffer_manager);",
+   "line": 52,
+   "path": "extension/parquet/decoder/delta_byte_array_decoder.cpp",
+   "user": {
+    "login": "Mytherin",
+    "type": "User"
+   }
+  }
+ ],
+ "state": "closed",
+ "title": "Allow Pinning/Unpinning of ColumnReader::block",
+ "transport": "gh",
+ "user": {
+  "login": "maiadegraaf",
+  "type": "User"
+ }
+}

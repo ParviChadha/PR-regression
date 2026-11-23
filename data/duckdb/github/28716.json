@@ -1,0 +1,37 @@
+{
+ "base_ref": "main",
+ "base_sha": "6145a8699b5e54b146fb305a862012b58130e9b8",
+ "body": "Partial aggregate pushdown gives the new lower aggregate the estimate of the aggregate above the join. That estimate is often the join estimate itself, and it can exceed the lower aggregate's own input. The build side optimizer then sees a huge aggregate and builds the other side of the join instead.\n\nExample, TPC-H q10 at SF3000:\n- The lower `GROUP BY o_custkey` has 63M groups but was estimated at 1385M rows.\n- So all 450M customer rows were built without a runtime filter.\n- The top join took 156 instead of 24 thread-seconds.\n\nThe lower aggregate's estimate is now capped at both its input estimate and the product of the current domains of its groups. The cap never raises an estimate.\n\nAt SF1000 the only plan change is the build side of one join in TPC-DS q74. The q10 case shows up with filter selectivity sampling (#28664), whose estimates make the original estimate larger than the input.\n",
+ "comments": [
+  {
+   "body": "Thanks!",
+   "created_at": "2026-11-12T10:53:49Z",
+   "user": {
+    "login": "lnkuiper",
+    "type": "User"
+   }
+  }
+ ],
+ "created_at": "2026-11-11T17:54:55Z",
+ "fetched_at": "2026-11-23T20:34:31Z",
+ "head_sha": "6d1c974b31be9bfa429979ee4edb303d11ee2892",
+ "labels": [
+  "Ready To Merge"
+ ],
+ "linked_issues": [],
+ "merge_commit_sha": "54bd1db35fd8477724d035e472f91758e122cd01",
+ "merged_at": "2026-11-12T18:22:15Z",
+ "number": 28716,
+ "referenced_numbers": [
+  28664
+ ],
+ "repo": "duckdb/duckdb",
+ "review_comments": [],
+ "state": "closed",
+ "title": "Cap the estimate of a pushed down partial aggregate by its input and group domains",
+ "transport": "gh",
+ "user": {
+  "login": "oraclechang",
+  "type": "User"
+ }
+}

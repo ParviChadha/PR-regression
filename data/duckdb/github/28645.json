@@ -1,0 +1,48 @@
+{
+ "base_ref": "main",
+ "base_sha": "8378b57dd7c2b5abfaad975b3287ace30d4f574d",
+ "body": "Since 9c2cb27 (#20327), join predicates that reference both sides\nwithout splitting into a left and right side (e.g. a + b < 1) are combined\nby JoinCondition::CreateExpression as AND(expression, condition), which\nreverses the written order. A guard like a + b < 1 can then run after\nget_bit and let it throw.\n\nBuild AND(condition, expression) so the conjuncts keep the written order.\n\nFixes #28628",
+ "comments": [
+  {
+   "body": "Thanks!",
+   "created_at": "2026-11-10T14:56:51Z",
+   "user": {
+    "login": "Mytherin",
+    "type": "User"
+   }
+  }
+ ],
+ "created_at": "2026-11-10T13:12:13Z",
+ "fetched_at": "2026-11-23T20:34:55Z",
+ "head_sha": "119d661e5fdc9e94227e8a9655e9e6b99d4e2ce0",
+ "labels": [
+  "backport v2.0-cyanoptera"
+ ],
+ "linked_issues": [
+  {
+   "body": "### What happens?\n\nThis is a followup to #26098. I noticed this query still fails with latest main, but it passes with 1.5.6. It's again the order of evaluation that's causing issues. Is the order of execution something that we could expect?\n\n### To Reproduce\n\n```sql\nSELECT * FROM (VALUES (0)) x(a), (VALUES (1)) y(b)\nWHERE a + b < 1 AND get_bit('1'::BIT, a + b) = 1;\n-- Out of Range Error: bit index 1 out of valid range (0..0)\n```\n\ngit bisect points to 9c2cb272e42 (#20327).\n\n### OS:\n\nmac arm\n\n### DuckDB Version:\n\nDuckDB v2.1.0-dev93122 (Development Version, ec6b0234a3)\n\n### DuckDB Client:\n\ncli\n\n### Hardware:\n\n_No response_\n\n### Full Name:\n\nGishor Sivanrupan\n\n### Affiliation:\n\nExaforce\n\n### Did you include all relevant configuration (e.g., CPU architecture, Linux distribution) to reproduce the issue?\n\n- [x] Yes, I have\n\n### Did you include all code required to reproduce the issue?\n\n- [x] Yes, I have\n\n### Did you include all relevant data sets for reproducing the issue?\n\nNot applicable - the reproduction does not require a data set",
+   "labels": [
+    "needs triage"
+   ],
+   "number": 28628,
+   "state": "closed",
+   "title": "v2.1.0-dev93122: Potential bug with order of execution"
+  }
+ ],
+ "merge_commit_sha": "1672d36e67acc7ac85e0c0433fe0f7d37a3b8f1e",
+ "merged_at": "2026-11-10T18:58:18Z",
+ "number": 28645,
+ "referenced_numbers": [
+  20327,
+  28628
+ ],
+ "repo": "duckdb/duckdb",
+ "review_comments": [],
+ "state": "closed",
+ "title": "fix(join-condition): keep the same execution order as written",
+ "transport": "gh",
+ "user": {
+  "login": "gishor",
+  "type": "User"
+ }
+}

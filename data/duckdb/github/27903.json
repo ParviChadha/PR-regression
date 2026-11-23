@@ -1,0 +1,63 @@
+{
+ "base_ref": "main",
+ "base_sha": "3c3387f12bb3dc896ac2640a4b63953868c963ee",
+ "body": "## Issue #27867\n\nSUMMARIZE over the nanosecond temporal types added in 2.0 raised a binder error:\n\n\n\nSUMMARIZE generates \\x60avg()\\x60 and \\x60approx_quantile(x, pos)\\x60 for temporal columns, but neither function had overloads for \\x60TIMESTAMP_NS\\x60, \\x60TIMESTAMPTZ_NS\\x60 or \\x60TIME_NS\\x60.\n\n## Root cause\n\n- \\x60avg\\x60: no overloads for the three \\x60_NS\\x60 temporal types. \\x60TIMESTAMP_NS\\x60 only worked at all via a lossy implicit cast to \\x60TIMESTAMP\\x60 (nanoseconds truncated to microseconds); \\x60TIMESTAMPTZ_NS\\x60 and \\x60TIME_NS\\x60 did not bind at all.\n- \\x60approx_quantile\\x60: the \\x60INT64\\x60 internal-type dispatch path already handled these types, but they were never registered.\n\n## Fix\n\n- **avg.cpp**: add native \\x60avg()\\x60 overloads for \\x60TIMESTAMP_NS\\x60, \\x60TIMESTAMPTZ_NS\\x60 and \\x60TIME_NS\\x60 using \\x60DiscreteAverageOperation\\x60 (the same integer-rounding path as \\x60TIME\\x60/\\x60TIMESTAMP\\x60), preserving nanosecond precision. \\x60TIME_NS\\x60 gets a nanosecond state-import validator mirroring the existing microsecond \\x60ValidateTimeAverageStates\\x60.\n- **approximate_quantile.cpp**: register the three \\x60_NS\\x60 temporal types for \\x60approx_quantile(x, FLOAT)\\x60 (the single-arg form SUMMARIZE uses).\n\n## Verification\n\n- New regression test \\x60test/sql/show_select/test_summarize_temporal_ns.test\\x60 (8 assertions) \u2014 passes.\n- Existing suites all green: \\x60test/sql/aggregate/*\\x60 (232 cases, 258345 assertions), \\x60*quantile*\\x60 (24 cases), \\x60*summarize*\\x60 (6), \\x60[show_select]\\x60 (14), \\x60temporal_avg.fuzz\\60, \\x60test_time_ns.test\\x60.\n\nNote: \\x60approx_quantile\\x60 over \\x60_NS\\x60 types returns values with sub-second precision limited by the 53-bit HLL sketch (pre-existing property of the approximate function) \u2014 SUMMARIZE only requires it to bind and return the correct type, which this provides. \\x60avg\\x60 is exact.\n\nFixes #27867",
+ "comments": [
+  {
+   "body": "Please mark this no longer a draft.",
+   "created_at": "2026-10-27T19:01:21Z",
+   "user": {
+    "login": "hawkfish",
+    "type": "User"
+   }
+  },
+  {
+   "body": "The only failure in this run is `test/sql/storage/reclaim_space/test_reclaim_space_update_large_string.test` under `Linux Config (Persistence)` (config `force_storage_restart.json`). It fails right after a `restart` with `Catalog Error: Table with name test does not exist` \u2014 i.e. the table was not recovered from storage. This is a storage/WAL-recovery path that is not touched by this PR (which only adds avg/approx_quantile overloads for nanosecond temporal types in `avg.cpp` / `approximate_quantile.cpp`). The test passes locally on the exact commit (60 assertions, all green), including under repeated runs; the failure is a CI-environment flake that also failed all 4 CI retries (consistent with a transient runner state issue). Re-triggering CI.\n",
+   "created_at": "2026-10-28T17:00:21Z",
+   "user": {
+    "login": "alitrack",
+    "type": "User"
+   }
+  },
+  {
+   "body": "Re-running: the only failure in this run (40731649872) is `regression / Bench IMDB`, which failed with `The self-hosted runner lost communication with the server` \u2014 a self-hosted runner disconnection (infrastructure), not a test failure or code issue. The previous run's single failure (the `reclaim_space` storage-restart test) did not recur. All functional test jobs \u2014 including every avg/temporal/timestamp/date regression \u2014 pass in both runs.\n",
+   "created_at": "2026-10-28T18:24:47Z",
+   "user": {
+    "login": "alitrack",
+    "type": "User"
+   }
+  }
+ ],
+ "created_at": "2026-10-26T16:15:33Z",
+ "fetched_at": "2026-11-23T20:34:59Z",
+ "head_sha": "893a7ba3f2f4f084591998a3a58314587d9edbad",
+ "labels": [
+  "backport v2.0-cyanoptera"
+ ],
+ "linked_issues": [
+  {
+   "body": "### What happens?\n\nI have upgraded from 1.5.x to 2.0 today and discovered that the SUMMARIZE statement caused an error when detecting TIMESTAMPTZ_NS column types\n\n`SUMMARIZE SELECT\n    TIMESTAMPTZ_NS '2026-10-26 09:30:15.123456789+10:00' AS ts_ns;\n`\n\nwith \n\n_SQL Error: Binder Error: No function matches the given name and argument types 'avg(TIMESTAMPTZ_NS)'. You might need to add explicit type casts.\n\tCandidate functions:\n\tavg(x DECIMAL) -> DECIMAL\n\tavg(x SMALLINT, /) -> DOUBLE\n\tavg(x INTEGER, /) -> DOUBLE\n\tavg(x BIGINT, /) -> DOUBLE\n\tavg(x HUGEINT, /) -> DOUBLE\n\tavg(x INTERVAL, /) -> INTERVAL\n\tavg(x DOUBLE, /) -> DOUBLE\n\tavg(x TIMESTAMP, /) -> TIMESTAMP\n\tavg(x TIMESTAMP WITH TIME ZONE, /) -> TIMESTAMP WITH TIME ZONE\n\tavg(x TIME, /) -> TIME\n\tavg(x TIME WITH TIME ZONE, /) -> TIME WITH TIME ZONE_\n\n\n\n\n\n### To Reproduce\n\nSUMMARIZE SELECT\n    TIMESTAMPTZ_NS '2026-10-26 09:30:15.123456789+10:00' AS ts_ns;\n\n### OS:\n\nwindows\n\n### DuckDB Version:\n\n2.0.0\n\n### DuckDB Client:\n\nDBbrowser\n\n### Hardware:\n\n_No response_\n\n### Full Name:\n\nthorsten hohenstrater\n\n### Affiliation:\n\nPrivate\n\n### Did you include all relevant configuration (e.g., CPU architecture, Linux distribution) to reproduce the issue?\n\n- [x] Yes, I have\n\n### Did you include all code required to reproduce the issue?\n\n- [x] Yes, I have\n\n### Did you include all relevant data sets for reproducing the issue?\n\nYes",
+   "labels": [
+    "reproduced"
+   ],
+   "number": 27867,
+   "state": "closed",
+   "title": "avg(TIMESTAMPTZ_NS) error in 2.0 with SUMMARIZE "
+  }
+ ],
+ "merge_commit_sha": "75c4e11d5c70a6f3e9e8fdb794454d473d7de131",
+ "merged_at": "2026-11-04T12:56:36Z",
+ "number": 27903,
+ "referenced_numbers": [
+  27867
+ ],
+ "repo": "duckdb/duckdb",
+ "review_comments": [],
+ "state": "closed",
+ "title": "Fix: SUMMARIZE over nanosecond temporal types (TIMESTAMP_NS, TIME_NS, TIMESTAMPTZ_NS)",
+ "transport": "gh",
+ "user": {
+  "login": "alitrack",
+  "type": "User"
+ }
+}

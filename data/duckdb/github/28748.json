@@ -1,0 +1,39 @@
+{
+ "base_ref": "main",
+ "base_sha": "7ea23aff4d4d4d98aeed7acc27af2053cacd7494",
+ "body": "Add inaccessible gaps between `BlockAllocator` shards so Linux keeps their writable regions in separate VMAs. This reduces contention on the VMA reference counter during first-touch page faults, which can bottleneck allocation and skew NUMA placement.\n",
+ "comments": [],
+ "created_at": "2026-11-12T11:38:31Z",
+ "fetched_at": "2026-11-23T20:34:30Z",
+ "head_sha": "93a232131d0966c887cea88fc26ab9b65d0317a5",
+ "labels": [
+  "Ready To Merge",
+  "Member"
+ ],
+ "linked_issues": [],
+ "merge_commit_sha": "7aa2df86be37f19ce09b9f3a8945b384a3d88986",
+ "merged_at": "2026-11-12T19:31:36Z",
+ "number": 28748,
+ "referenced_numbers": [],
+ "repo": "duckdb/duckdb",
+ "review_comments": [
+  {
+   "body": "I think these paths should be covered regardless of runner CPU count; this isn't blocking. With `(hardware_concurrency() + 3) / 4` shards, every case here expects zero guards on runners with 4 or fewer CPUs. The rollback check in `block_allocator_fault_injection.cpp` returns early unless there are at least 2 guards, requiring 9 or more CPUs. Small runners can therefore pass both without exercising protection or rollback. I would let the test helper choose the shard count so these paths run everywhere.",
+   "created_at": "2026-11-12T13:44:26Z",
+   "diff_hunk": "@@ -2406,3 +2433,127 @@ TEST_CASE(\"BlockAllocator can borrow the whole pool and reclaim all ranges\",\n \t}\n }\n #endif\n+\n+#if (defined(__linux__) || defined(__APPLE__) || defined(_WIN32)) && INTPTR_MAX == INT64_MAX\n+TEST_CASE(\"BlockAllocator guard slots separate writable shard mappings\", \"[api][block_allocator][allocator_locality]\") {\n+\tconst auto block_size = GENERATE(idx_t(16384), idx_t(32768), idx_t(65536), idx_t(262144));\n+\t// Prime-sized pools also exercise a partial final shard.\n+\tconst auto slots = GENERATE(idx_t(1), idx_t(2), idx_t(257), idx_t(513));\n+\tAllocator fallback;\n+\tBlockAllocator allocator(fallback, block_size, slots * block_size);\n+#ifndef DUCKDB_NO_THREADS\n+\tconst auto requested_shards =",
+   "line": 2445,
+   "path": "test/api/test_block_allocator_tls.cpp",
+   "user": {
+    "login": "duckdb-bot",
+    "type": "User"
+   }
+  }
+ ],
+ "state": "closed",
+ "title": "\"NUMA-aware `BlockAllocator`\" follow-up",
+ "transport": "gh",
+ "user": {
+  "login": "lnkuiper",
+  "type": "User"
+ }
+}

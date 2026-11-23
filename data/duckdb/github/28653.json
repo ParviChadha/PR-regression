@@ -1,0 +1,37 @@
+{
+ "base_ref": "main",
+ "base_sha": "5590ae3753ee13173c10c424de73947f053bc16f",
+ "body": "A plan serialized by v1.x that calls `struct_update` runs incorrectly on 2.0. When it only updates existing fields, such as `struct_update(col, i := 10)`, it returns `col` unchanged without an error. When it also adds a field, such as `struct_update(col, i := 10, j := 'x')`, it fails with \"INTERNAL Error: Attempted to access index 2 within vector of size 2\".\n\nv1.x resolved the field that every argument of `struct_update` writes when the function ran, by matching the aliases of the arguments against the field names of the struct, and only stored the result type. Since #26844 the fields are resolved at bind time and kept in `field_indexes` (property 101) of the bind data, which is all that execution reads. Plans written by v1.x don't have that property, so `field_indexes` deserialized as empty.\n\nThis PR rebuilds `field_indexes` from the argument aliases and the result type when it is missing, the way v1.x resolved the fields.\n\nThe added plan cases we're serialized with 1.5\nCould this still be backported?\n",
+ "comments": [
+  {
+   "body": "Thanks!",
+   "created_at": "2026-11-10T16:25:17Z",
+   "user": {
+    "login": "Mytherin",
+    "type": "User"
+   }
+  }
+ ],
+ "created_at": "2026-11-10T16:22:26Z",
+ "fetched_at": "2026-11-23T20:34:54Z",
+ "head_sha": "703925ccb109ede96c7b77fc27b6721e3f84b37c",
+ "labels": [
+  "backport v2.0-cyanoptera"
+ ],
+ "linked_issues": [],
+ "merge_commit_sha": "5372fb435de359653134a0077c35d4a056503100",
+ "merged_at": "2026-11-10T19:38:23Z",
+ "number": 28653,
+ "referenced_numbers": [
+  26844
+ ],
+ "repo": "duckdb/duckdb",
+ "review_comments": [],
+ "state": "closed",
+ "title": "Keep the fields struct_update writes in plans serialized before v2.0.0",
+ "transport": "gh",
+ "user": {
+  "login": "ThijsDreef",
+  "type": "User"
+ }
+}
