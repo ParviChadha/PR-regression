@@ -183,7 +183,11 @@ def _clang():
 
 def resource_dir(t):
     cands = [os.environ.get("PRH_CLANG_RESOURCE_DIR"), t.get("analysis_resource_dir")]
-    for exe in ("clang", "clang-18", "clang-19", "clang-20", "clang-17"):
+    exes = ["clang", "clang-18", "clang-19", "clang-20", "clang-17"]
+    for base in (os.environ.get("ProgramFiles"), os.environ.get("ProgramW6432")):
+        if base:                                      # the LLVM installer for Windows does not always add itself to PATH
+            exes.append(str(Path(base) / "LLVM" / "bin" / "clang.exe"))
+    for exe in exes:
         if shutil.which(exe):
             r = subprocess.run([exe, "-print-resource-dir"], capture_output=True, text=True)
             if r.returncode == 0:
@@ -250,8 +254,8 @@ class Analyzer:
     def tu_for(self, relpath):
         """A translation unit that contains declarations from `relpath`."""
         tu = self.entry_tu()
-        full = str(self.root / relpath)
-        if any(f.include.name == full for f in tu.get_includes()):
+        full = _norm(self.root / relpath)
+        if any(_norm(f.include.name) == full for f in tu.get_includes()):
             return tu
         if not (self.root / relpath).is_file():
             return None
@@ -305,13 +309,13 @@ class Analyzer:
         tu = self.tu_for(relpath)
         if tu is None:
             return []
-        full = str(self.root / relpath)
+        full = _norm(self.root / relpath)
         out = []
         for c in tu.cursor.walk_preorder():
             if c.kind.name not in ENTITY_KINDS:
                 continue
             f = c.location.file
-            if f is None or f.name != full:
+            if f is None or _norm(f.name) != full:
                 continue
             if c.kind.name in VALUE_KINDS and c.semantic_parent is not None and \
                     c.semantic_parent.kind.name in FUNCTION_KINDS:
@@ -329,7 +333,7 @@ class Analyzer:
         if hasattr(self, "_graph"):
             return self._graph, self._info
         tu = self.entry_tu()
-        root = str(self.root)
+        root = _norm(self.root)
         graph, info = defaultdict(set), {}
 
         def visit(c, owner):
@@ -341,7 +345,7 @@ class Analyzer:
                 k == "VAR_DECL" and (owner is None or owner.kind.name not in FUNCTION_KINDS))
             if is_owner:
                 f = c.location.file
-                if f is not None and f.name.startswith(root):
+                if f is not None and _norm(f.name).startswith(root):
                     owner = c
                     u = c.get_usr()
                     if u and u not in info:
@@ -419,6 +423,12 @@ class Analyzer:
                 break
             frontier = nxt
         return found[:MAX_REACHED]
+
+
+def _norm(path):
+    """A path in one canonical spelling. On Windows clang reports an included file as the -I directory joined to the
+    #include text, mixing \\ and / (C:\\repo\\include/nlohmann/json.hpp); compared raw, nothing would match."""
+    return os.path.normcase(os.path.normpath(str(path)))
 
 
 def _overloads(ci, c):
