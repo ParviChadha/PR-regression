@@ -339,3 +339,11 @@ Purpose: measure classifier precision/recall and inter-labeler agreement (Testor
 - Commands: `labels.py export|check|reconcile|eval <target>`. Outputs in data/<t>/labels/ (items.json, items.md, labels_<name>.csv, reconciled.csv, eval.json).
 - Decision: export only after the full batch (with refine) has finished, since reruns change clusters.
 - Problem: first version had a nested-quote f-string (invalid before Python 3.12); fixed by precomputing the string.
+
+## duckdb Stage 0 check on the Mac (2026-11-23)
+- Pinned SHA 4c0adf644 is a true merge commit (DuckDB does not squash), so env.py needs `--parent`; used the first parent cb8605254dc64f158eb1d9816be1ebbfba5212d9 (`git -C repos/duckdb rev-parse <sha>^1`).
+- Command (zsh: `time` must come first): `time JOBS=4 python3 pipeline/env.py duckdb --merge 4c0adf6440aa4aa6cac81bfedae264cfe5324863 --parent $P --docker --check`
+- Result: parent built from 353 steps, then incremental merge build of 5 steps; `check old: ok`, `check new: ok`, exit 0. Wall time 4:56 total (ccache state unknown, so not a guaranteed cold figure). Docker CPUs/memory: TODO record from Docker Desktop.
+- Expected noise, not errors: "fatal: not a git repository" and the CMake warning about `git log` (the build tree is a git-archive export without .git); the build then uses placeholder hash 0123456789 for both old and new, so it cannot cause differences between versions.
+- Decision: do not pass DUCKDB_COMMIT; the identical placeholder is harmless and generated tests must not print the version/commit (prompt_notes says so).
+- Still to do for duckdb: collection fields in target.toml (`main_source`), first-parent handling for merge-commit PRs in collection, then generate/run on a PR.
