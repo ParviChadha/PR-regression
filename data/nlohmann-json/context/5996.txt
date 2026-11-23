@@ -1,0 +1,151 @@
+// Upstream tests at the PR's parent commit bdc737db6 that use the changed code.
+// Names searched (test lines using each): insert (297), basic_json (54), insert_iterator (0), set_parents_on_exit (0), m_value (122)
+
+// ---- tests/src/unit-json_view_edit.cpp:907-923  (uses: basic_json, insert)
+    SECTION("objects in moved arrays and in new values")
+    {
+        json_editable_document d = json_editable_document::parse(R"([{"a": 1, "a": 2}, {"a": 3, "b": 0, "a": 4}])");
+        check_first_wins(d.root()[0], 1);
+        check_first_wins(d.root()[1], 3);
+        d.insert(d.root(), 0, json::parse(R"({"a": 0})"));
+        d.push_back(d.root(), json::parse(R"({"a": 5, "a": 6})")); // (a basic_json value has one member)
+        check_first_wins(d.root()[1], 1);
+        check_first_wins(d.root()[2], 3);
+        CHECK(d.root()[3]["a"].get<int>() == 6);
+        d.set(d.root()[1], "a", 8);
+        check_first_wins(d.root()[1], 8);
+        CHECK(d.root()[1].dump() == R"({"a":8})");
+        d.erase(d.root(), 0);
+        check_first_wins(d.root()[1], 3);
+        CHECK(d.root().dump() == R"([{"a":8},{"a":3,"b":0,"a":4},{"a":6}])");
+    }
+
+// ---- tests/src/fuzzer-parse_json_view.cpp:1-24  (uses: basic_json)
+//     __ _____ _____ _____
+//  __|  |   __|     |   | |  JSON for Modern C++ (supporting code)
+// |  |  |__   |  |  | | | |  version 3.12.0
+// |_____|_____|_____|_|___|  https://github.com/nlohmann/json
+//
+// SPDX-FileCopyrightText: 2013-2026 Niels Lohmann <https://nlohmann.me>
+// SPDX-License-Identifier: MIT
+
+/*
+This file implements a parser test suitable for fuzz testing. It checks that
+json_document (the zero-copy, read-only view of a parsed JSON text declared in
+json_view.hpp) agrees with basic_json on every input, for the parse options
+selected by the low bits of the first input byte (bit 0: ignore_comments, bit 1:
+ignore_trailing_commas; the byte stays part of the text):
+
+- json_document::accept(data) must equal json::accept(data)
+- if the input is accepted, json_document::parse(data).root().materialize()
+  must equal json::parse(data)
+- if the input is rejected, json_document::parse(data) (with exceptions
+  enabled) must throw a json::parse_error or json::out_of_range whose what()
+  is identical to the one json::parse(data) throws
+
+This is checked for two kinds of input: a std::string, which the document
+borrows and which ends in the NUL the parser uses as sentinel, and an
+
+// ---- tests/src/unit-allocator.cpp:176-188  (uses: basic_json)
+    SECTION("class basic_json")
+    {
+        SECTION("basic_json(const CompatibleObjectType&)")
+        {
+            next_construct_fails = false;
+            const std::map<std::string, std::string> v {{"foo", "bar"}};
+            CHECK_NOTHROW(my_json(v));
+            next_construct_fails = true;
+            CHECK_THROWS_AS(my_json(v), std::bad_alloc&);
+            next_construct_fails = false;
+        }
+
+        SECTION("basic_json(const CompatibleArrayType&)")
+
+// ---- tests/src/unit-allocator.cpp:198-205  (uses: basic_json)
+        SECTION("basic_json(const typename string_t::value_type*)")
+        {
+            next_construct_fails = false;
+            CHECK_NOTHROW(my_json("foo"));
+            next_construct_fails = true;
+            CHECK_THROWS_AS(my_json("foo"), std::bad_alloc&);
+            next_construct_fails = false;
+        }
+
+// ---- tests/src/unit-alt-string.cpp:436-469  (uses: basic_json)
+    SECTION("conversion between basic_json specializations (#2649)")
+    {
+        // explicit conversions are always possible
+        CHECK(std::is_constructible<nlohmann::json, alt_json>::value);
+        CHECK(std::is_constructible<alt_json, nlohmann::json>::value);
+        CHECK(std::is_constructible<nlohmann::json, nlohmann::ordered_json>::value);
+        CHECK(std::is_constructible<nlohmann::ordered_json, nlohmann::json>::value);
+
+        // specializations with the same string type are implicitly convertible
+        CHECK(std::is_convertible<nlohmann::ordered_json, nlohmann::json>::value);
+        CHECK(std::is_convertible<nlohmann::json, nlohmann::ordered_json>::value);
+
+        // specializations with different string types are only implicitly convertible
+        // if implicit conversions are enabled
+#if JSON_USE_IMPLICIT_CONVERSIONS
+        CHECK(std::is_convertible<alt_json, nlohmann::json>::value);
+        CHECK(std::is_convertible<nlohmann::json, alt_json>::value);
+#else
+        CHECK_FALSE(std::is_convertible<alt_json, nlohmann::json>::value);
+        CHECK_FALSE(std::is_convertible<nlohmann::json, alt_json>::value);
+#endif
+
+        // get<BasicJsonType>() works in either case
+        const nlohmann::json j = {{"foo", 1}, {"bar", true}};
+        CHECK(j.get<nlohmann::ordered_json>() == nlohmann::ordered_json(j));
+        // (only a number is converted here, as objects and strings are affected by #3425)
+        CHECK(nlohmann::json(42).get<alt_json>() == 42);
+        CHECK(alt_json(nlohmann::json(42)) == 42);
+
+        // get_to() also works in either case
+        alt_json a;
+        nlohmann::json(42).get_to(a);
+        CHECK(a == 42);
+    }
+
+// ---- tests/src/unit-assert_macro.cpp:30-43  (uses: basic_json)
+    SECTION("basic_json(first, second)")
+    {
+        assert_counter = 0;
+        CHECK(assert_counter == 0);
+
+        const json::iterator it{};
+        json j;
+
+        // in case assertions do not abort execution, an exception is thrown
+        CHECK_THROWS_WITH_AS(json(it, j.end()), "[json.exception.invalid_iterator.201] iterators are not compatible", json::invalid_iterator);
+
+        // check that assertion actually happened
+        CHECK(assert_counter == 1);
+    }
+
+// ---- tests/src/unit-binary_utf8_error_handler.cpp:95-119  (uses: basic_json)
+template<typename Key, typename Value, typename Compare, typename Allocator>
+class converting_key_object : public std::map<converting_key, Value, std::less<converting_key>, // NOLINT(modernize-use-transparent-functors)
+    typename std::allocator_traits<Allocator>::template rebind_alloc<std::pair<const converting_key, Value>>>
+{
+    using base_type = std::map<converting_key, Value, std::less<converting_key>, // NOLINT(modernize-use-transparent-functors)
+                               typename std::allocator_traits<Allocator>::template rebind_alloc<std::pair<const converting_key, Value>>>;
+
+                             public:
+                               using base_type::base_type;
+                               using base_type::operator=;
+};
+
+using converting_key_json = nlohmann::basic_json<converting_key_object>;
+
+} // namespace
+
+TEST_CASE("UTF-8 error_handler for the binary readers and writers")
+{
+    SECTION("writers: string value")
+    {
+        for (const auto& c : ill_formed_cases())
+        {
+            CAPTURE(c.name)
+            const json jval = c.bytes;
+

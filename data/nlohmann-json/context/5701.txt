@@ -1,0 +1,170 @@
+// Upstream tests at the PR's parent commit ff6f3d7d4 that use the changed code.
+// Names searched (test lines using each): basic_json (0), array (0), insert (251), object (0), push_back (322), from_json (0), operator+= (7), json_ref (0), is_braced_list (0), braced_list (0), value_ref (0)
+
+// ---- tests/src/unit-class_parser.cpp:2848-2863  (uses: operator+=, push_back)
+            SECTION("push_back on a parsed array")
+            {
+                const std::string s = R"([1,2,3])";
+                json j = json::parse(s);
+                const auto root_start = j.start_pos();
+                const auto root_end = j.end_pos();
+                const auto first_start = j[0].start_pos();
+
+                j.push_back(4);
+
+                CHECK(j.back().start_pos() == std::string::npos);
+                CHECK(j.back().end_pos() == std::string::npos);
+                CHECK(j[0].start_pos() == first_start);
+                CHECK(j.start_pos() == root_start);
+                CHECK(j.end_pos() == root_end);
+            }
+
+// ---- tests/src/unit-regression1.cpp:582-589  (uses: operator+=, push_back)
+    SECTION("issue #235 - ambiguous overload for 'push_back' and 'operator+='")
+    {
+        json data = {{"key", "value"}};
+        data.push_back({"key2", "value2"});
+        data += {"key3", "value3"};
+
+        CHECK(data == json({{"key", "value"}, {"key2", "value2"}, {"key3", "value3"}}));
+    }
+
+// ---- tests/src/unit-cbor.cpp:2762-2774  (uses: operator+=)
+TEST_CASE("examples from RFC 8949 Appendix A")
+{
+    SECTION("numbers")
+    {
+        CHECK(json::to_cbor(json::parse("0")) == std::vector<uint8_t>({0x00}));
+        CHECK(json::parse("0") == json::from_cbor(std::vector<uint8_t>({0x00})));
+
+        CHECK(json::to_cbor(json::parse("1")) == std::vector<uint8_t>({0x01}));
+        CHECK(json::parse("1") == json::from_cbor(std::vector<uint8_t>({0x01})));
+
+        CHECK(json::to_cbor(json::parse("10")) == std::vector<uint8_t>({0x0a}));
+        CHECK(json::parse("10") == json::from_cbor(std::vector<uint8_t>({0x0a})));
+
+
+// ---- tests/src/unit-json_patch.cpp:1716-1728  (uses: operator+=)
+    SECTION("the array-append token '-' is an ordinary child token")
+    {
+        // "-" (append-to-array) addresses a location *inside* the array,
+        // so "from" pointing at the array is still a proper prefix of
+        // "path" ending in "-" and must be rejected like any other child.
+        json const doc = R"({"a": [1, 2]})"_json;
+        json const patch = {{{"op", "move"}, {"from", "/a"}, {"path", "/a/-"}}};
+#if JSON_DIAGNOSTIC_POSITIONS
+        CHECK_THROWS_WITH_AS(doc.patch(patch), "[json.exception.out_of_range.414] (bytes 0-13) cannot move value: 'from' path '/a' is a proper prefix of 'path' '/a/-'", json::out_of_range&);
+#else
+        CHECK_THROWS_WITH_AS(doc.patch(patch), "[json.exception.out_of_range.414] cannot move value: 'from' path '/a' is a proper prefix of 'path' '/a/-'", json::out_of_range&);
+#endif
+    }
+
+// ---- tests/src/unit-merge_patch.cpp:145-157  (uses: operator+=)
+        SECTION("Appendix A")
+        {
+            SECTION("Example 1")
+            {
+                json original = R"({"a":"b"})"_json;
+                json const patch = R"({"a":"c"})"_json;
+                json result = R"({"a":"c"})"_json;
+
+                original.merge_patch(patch);
+                CHECK(original == result);
+            }
+
+            SECTION("Example 2")
+
+// ---- tests/src/unit-modifiers.cpp:213-225  (uses: operator+=)
+    SECTION("push_back()")
+    {
+        SECTION("to array")
+        {
+            SECTION("json&&")
+            {
+                SECTION("null")
+                {
+                    json j;
+                    j.push_back(1);
+                    j.push_back(2);
+                    CHECK(j.type() == json::value_t::array);
+                    CHECK(j == json({1, 2}));
+
+// ---- tests/src/unit-modifiers.cpp:441-453  (uses: operator+=)
+    SECTION("operator+=")
+    {
+        SECTION("to array")
+        {
+            SECTION("json&&")
+            {
+                SECTION("null")
+                {
+                    json j;
+                    j += 1;
+                    j += 2;
+                    CHECK(j.type() == json::value_t::array);
+                    CHECK(j == json({1, 2}));
+
+// ---- tests/src/unit-bon8.cpp:707-715  (uses: insert, push_back)
+    SECTION("a well-formed deep value is read through the SAX interface")
+    {
+        bytes input(300000, 0x85);
+        input.push_back(0x91); // innermost value
+        input.insert(input.end(), 300000, 0xFE);
+
+        SaxCountdown accept_all(600001);
+        CHECK(json::sax_parse(input, &accept_all, json::input_format_t::bon8));
+    }
+
+// ---- tests/src/unit-custom-array-type.cpp:120-134  (uses: insert, push_back)
+    SECTION("insert(pos, initializer_list) compiles and works without reserve()")
+    {
+        // std::deque has no reserve() either; insert(pos, ilist) must not
+        // require it (regression test for #5656, which also covers an ilist
+        // that refers to elements of the array being inserted into)
+        deque_json j = deque_json::array();
+        j.push_back("a");
+        j.push_back("b");
+        j.push_back("c");
+
+        const deque_json& cj = j;
+        auto it = j.insert(j.begin(), {cj[0], cj[1]});
+        CHECK(*it == deque_json("a"));
+        CHECK(j == deque_json({"a", "b", "a", "b", "c"}));
+    }
+
+// ---- tests/src/test_utils.hpp:73-97  (uses: insert)
+
+inline std::vector<std::uint8_t> read_binary_file(const std::string& filename)
+{
+    std::ifstream file(filename, std::ios::binary);
+    file.unsetf(std::ios::skipws);
+
+    file.seekg(0, std::ios::end);
+    const auto size = file.tellg();
+    file.seekg(0, std::ios::beg);
+
+    std::vector<std::uint8_t> byte_vector;
+    byte_vector.reserve(static_cast<std::size_t>(size));
+    byte_vector.insert(byte_vector.begin(), std::istream_iterator<std::uint8_t>(file), std::istream_iterator<std::uint8_t>());
+    return byte_vector;
+}
+
+// sentinel for istreambuf_iterator; compares != true until EOF is reached
+// lets tests read a file directly via the new iterator+sentinel overloads
+// instead of buffering the whole file into a vector first.
+// Only the iterator-first direction (it != sentinel) is ever evaluated by
+// the library's parse loop, so no reversed-order overload is needed.
+struct istreambuf_sentinel
+{
+    friend bool operator!=(const std::istreambuf_iterator<char>& it, const istreambuf_sentinel& /*unused*/) noexcept
+    {
+
+// ---- tests/src/unit-cbor.cpp:2204-2211  (uses: insert)
+    SECTION("a well-formed deep value is read through the SAX interface")
+    {
+        std::vector<uint8_t> input(200000, 0x9F);
+        input.insert(input.end(), 200000, 0xFF);
+
+        SaxCountdown accept_all(1000000);
+        CHECK(json::sax_parse(input, &accept_all, json::input_format_t::cbor));
+    }

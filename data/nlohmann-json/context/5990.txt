@@ -1,0 +1,179 @@
+// Upstream tests at the PR's parent commit 732831013 that use the changed code.
+// Names searched (test lines using each): get_binary (52), from_json (0), patch_inplace (13), basic_json (0), erase (273), push_back (504), update (51), emplace (69), emplace_back (70), diagnostics (0)
+
+// ---- tests/src/unit-allocator.cpp:676-721  (uses: emplace, emplace_back, push_back, update)
+    SECTION("turning a null value into an array or object")
+    {
+        my_json j;
+
+        next_construct_fails = true;
+        CHECK_THROWS_AS(j[0], std::bad_alloc&);
+        CHECK(j.is_null());
+
+        next_construct_fails = true;
+        CHECK_THROWS_AS(j["key"], std::bad_alloc&);
+        CHECK(j.is_null());
+
+#ifdef JSON_HAS_CPP_17
+        next_construct_fails = true;
+        CHECK_THROWS_AS(j[std::string_view("key")], std::bad_alloc&);
+        CHECK(j.is_null());
+#endif
+
+        next_construct_fails = true;
+        CHECK_THROWS_AS(j.push_back(my_json(1)), std::bad_alloc&);
+        CHECK(j.is_null());
+
+        const my_json one = 1;
+        next_construct_fails = true;
+        CHECK_THROWS_AS(j.push_back(one), std::bad_alloc&);
+        CHECK(j.is_null());
+
+        next_construct_fails = true;
+        CHECK_THROWS_AS(j.push_back(my_json::object_t::value_type("key", 1)), std::bad_alloc&);
+        CHECK(j.is_null());
+
+        next_construct_fails = true;
+        CHECK_THROWS_AS(j.emplace_back(1), std::bad_alloc&);
+        CHECK(j.is_null());
+
+        next_construct_fails = true;
+        CHECK_THROWS_AS(j.emplace("key", 1), std::bad_alloc&);
+        CHECK(j.is_null());
+
+        const my_json object = {{"key", 1}};
+        next_construct_fails = true;
+        CHECK_THROWS_AS(j.update(object), std::bad_alloc&);
+        CHECK(j.is_null());
+
+        next_construct_fails = false;
+    }
+
+// ---- tests/src/unit-diagnostics.cpp:847-870  (uses: emplace, erase, push_back, update)
+TEST_CASE("Parent pointers stay consistent for object types not known to keep their members in place")
+{
+    relocating_json obj = relocating_json::object();
+    for (int i = 0; i < 100; ++i)
+    {
+        obj[std::to_string(i)] = relocating_json::array({i});
+        obj.emplace(std::to_string(i + 1000), relocating_json::array({i}));
+    }
+    CHECK(parents_consistent(obj));
+
+    obj.erase("0");
+    CHECK(parents_consistent(obj));
+
+    relocating_json other = relocating_json::object();
+    for (int i = 0; i < 100; ++i)
+    {
+        other[std::to_string(i + 2000)] = relocating_json::array({i});
+    }
+    obj.update(other);
+    CHECK(parents_consistent(obj));
+
+    obj["1"].push_back(42);
+    CHECK_THROWS_WITH_AS(obj["1"].at(5), "[json.exception.out_of_range.401] (/1) array index 5 is out of range", relocating_json::out_of_range&);
+}
+
+// ---- tests/src/unit-json_patch.cpp:871-886  (uses: patch_inplace, push_back)
+            SECTION("copy operations with spare capacity")
+            {
+                // reserve while the array is empty: reallocating non-empty
+                // elements behind the library's back leaves stale parent
+                // pointers with JSON_DIAGNOSTICS
+                json doc = json::array();
+                doc.get_ref<json::array_t&>().reserve(100);
+                for (int i = 0; i < 5; ++i)
+                {
+                    doc.push_back(copy_op);
+                }
+                CHECK(doc.patch(doc) == expected_copies);
+
+                doc.patch_inplace(doc);
+                CHECK(doc == expected_copies);
+            }
+
+// ---- tests/src/unit-diagnostics.cpp:695-706  (uses: emplace, emplace_back)
+    SECTION("emplace_back and emplace growth")
+    {
+        J arr = J::array();
+        J obj = J::object();
+        for (int i = 0; i < 500; ++i)
+        {
+            arr.emplace_back(J::array({i}));
+            obj.emplace(std::to_string(i), J::array({i}));
+        }
+        CHECK(parents_consistent(arr));
+        CHECK(parents_consistent(obj));
+    }
+
+// ---- tests/src/unit-large_json_conversions.cpp:110-155  (uses: erase, get_binary)
+    SECTION("values below the bound are converted as values above it")
+    {
+        // Bury a value below the bound, where it is converted without the
+        // call stack, and compare it with the same value converted on its
+        // own by the containers' range constructors. Its objects have
+        // members that the two object types enumerate in different orders.
+        const auto bury = [](nlohmann::ordered_json value)
+        {
+            for (std::size_t i = 0; i < 200; ++i)
+            {
+                value = nlohmann::ordered_json::array({std::move(value)});
+            }
+            return value;
+        };
+        const auto dig = [](const json & value)
+        {
+            const json* current = &value;
+            for (std::size_t i = 0; i < 200; ++i)
+            {
+                current = &current->at(0);
+            }
+            return current;
+        };
+
+        nlohmann::ordered_json value = nlohmann::ordered_json::object();
+        value["z"] = {1, -2, 3U, 4.5, true, nullptr, "six", nlohmann::ordered_json::binary({7, 8}, 9),
+                      nlohmann::ordered_json::binary({10}), nlohmann::ordered_json::array(), nlohmann::ordered_json::object()
+                     };
+        value["y"] = {{"x", {{"w", 1}, {"v", 2}}}, {"u", {3, {{"t", 4}, {"s", 5}}}}};
+        value["r"] = nlohmann::ordered_json::array({nlohmann::ordered_json(nlohmann::ordered_json::value_t::discarded)});
+
+        const json converted_above = value;
+        const json buried = bury(value);
+        const json& converted_below = *dig(buried);
+
+        CHECK(converted_below.dump() == converted_above.dump());
+        CHECK(converted_below.at("z").at(7).get_binary().subtype() == 9);
+        CHECK_FALSE(converted_below.at("z").at(8).get_binary().has_subtype());
+        CHECK(converted_below.at("r").at(0).is_discarded());
+
+        // a discarded value is never equal to anything, so compare the rest
+        value.erase("r");
+        const json without_discarded_above = value;
+        const json without_discarded_buried = bury(value);
+        CHECK(*dig(without_discarded_buried) == without_discarded_above);
+    }
+
+// ---- tests/src/unit-msgpack-custom-types.cpp:161-173  (uses: get_binary, push_back)
+TEST_CASE("MessagePack Size above uint32 for binary")
+{
+
+    huge_binary_json j = huge_binary_json::binary(huge_binary{});
+
+    j.get_binary().push_back(0x01);
+    j.get_binary().push_back(0x02);
+
+    CHECK_THROWS_WITH_AS(
+        huge_binary_json::to_msgpack(j),
+        "[json.exception.out_of_range.412] MessagePack length 4294967296 exceeds maximum of 4294967295",
+        json::out_of_range&);
+}
+
+// ---- tests/src/unit-ordered_json2.cpp:472-477  (uses: patch_inplace)
+    SECTION("patch_inplace")
+    {
+        ordered_json copy = original;
+        copy.patch_inplace(patch);
+        CHECK(copy == target);
+    }

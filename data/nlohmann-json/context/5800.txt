@@ -1,0 +1,147 @@
+// Upstream tests at the PR's parent commit 1649d9eda that use the changed code.
+// Names searched (test lines using each): erase (228), operator/ (0), operator<< (81), operator!= (52), operator< (188), operator== (57), parse_array_index (0), not_a_number (0)
+
+// ---- tests/src/unit-comparison.cpp:911-954  (uses: erase, operator!=, operator<, operator==)
+TEST_CASE("equality of objects whose entries have no fixed order")
+{
+    // Values nested deeper than a bound are compared without the call stack,
+    // entry by entry. That must agree with the object type's own operator==,
+    // which for unordered_object_t (as for std::unordered_map) does not
+    // depend on the order of the entries, and for ordered_map does.
+    REQUIRE(make_unordered_object(true).begin().key() == "9");
+    REQUIRE(make_unordered_object(false).begin().key() == "0");
+
+    for (const std::size_t depth : std::vector<std::size_t> {0, 200})
+    {
+        CAPTURE(depth)
+
+        const unordered_json descending = nest(make_unordered_object(true), depth);
+        const unordered_json ascending = nest(make_unordered_object(false), depth);
+        CHECK(descending == ascending);
+        CHECK_FALSE(descending != ascending);
+
+        // a copy is equal to its original
+        const unordered_json copy = descending; // NOLINT(performance-unnecessary-copy-initialization)
+        CHECK(copy == descending);
+
+        // a different value, a different key, or another entry still count
+        unordered_json other_value = make_unordered_object(true);
+        other_value["5"] = 42;
+        CHECK_FALSE(nest(other_value, depth) == ascending);
+
+        unordered_json other_key = make_unordered_object(true);
+        other_key.erase("5");
+        other_key["50"] = 5;
+        CHECK_FALSE(nest(other_key, depth) == ascending);
+
+        unordered_json more_entries = make_unordered_object(true);
+        more_entries["10"] = 10;
+        CHECK_FALSE(nest(more_entries, depth) == ascending);
+        CHECK_FALSE(ascending == nest(more_entries, depth));
+
+        // ordered_json compares its entries in sequence
+        const nlohmann::ordered_json ab = nest(nlohmann::ordered_json({{"a", 1}, {"b", 2}}), depth);
+        const nlohmann::ordered_json ba = nest(nlohmann::ordered_json({{"b", 2}, {"a", 1}}), depth);
+        CHECK_FALSE(ab == ba);
+        CHECK(ab != ba);
+    }
+}
+
+// ---- tests/src/unit-comparison.cpp:73-85  (uses: operator!=, operator<, operator==)
+TEST_CASE("lexicographical comparison operators")
+{
+    constexpr auto f_ = false;
+    constexpr auto _t = true;
+    constexpr auto nan = std::numeric_limits<json::number_float_t>::quiet_NaN();
+#if JSON_HAS_THREE_WAY_COMPARISON
+    constexpr auto lt = std::partial_ordering::less;
+    constexpr auto gt = std::partial_ordering::greater;
+    constexpr auto eq = std::partial_ordering::equivalent;
+    constexpr auto un = std::partial_ordering::unordered;
+#endif
+
+#if JSON_HAS_THREE_WAY_COMPARISON
+
+// ---- tests/src/unit-algorithms.cpp:125-135  (uses: operator!=, operator<, operator==)
+            SECTION("using user-defined comparison")
+            {
+                // compare objects only by size of its elements
+                json j_array2 = {13, 29, 3, {"Hello", "World"}, true, false, {{"one", 1}, {"two", 2}, {"three", 3}}, "foo", "baz"};
+                CHECK(!std::equal(j_array.begin(), j_array.end(), j_array2.begin()));
+                CHECK(std::equal(j_array.begin(), j_array.end(), j_array2.begin(),
+                                 [](const json & a, const json & b)
+                {
+                    return (a.size() == b.size());
+                }));
+            }
+
+// ---- tests/src/unit-algorithms.cpp:204-209  (uses: operator!=, operator<, operator==)
+            SECTION("with standard comparison")
+            {
+                json j = {13, 29, 3, {{"one", 1}, {"two", 2}}, true, false, {1, 2, 3}, "foo", "baz", nullptr};
+                std::sort(j.begin(), j.end());
+                CHECK(j == json({nullptr, false, true, 3, 13, 29, {{"one", 1}, {"two", 2}}, {1, 2, 3}, "baz", "foo"}));
+            }
+
+// ---- tests/src/unit-byte_container_with_subtype.cpp:78-108  (uses: operator!=, operator<, operator==)
+    SECTION("comparisons")
+    {
+        std::vector<std::uint8_t> const bytes = {{0xCA, 0xFE, 0xBA, 0xBE}};
+        nlohmann::byte_container_with_subtype<std::vector<std::uint8_t>> container1;
+        nlohmann::byte_container_with_subtype<std::vector<std::uint8_t>> container2({}, 42);
+        nlohmann::byte_container_with_subtype<std::vector<std::uint8_t>> container3(bytes);
+        nlohmann::byte_container_with_subtype<std::vector<std::uint8_t>> container4(bytes, 42);
+
+        CHECK(container1 == container1);
+        CHECK(container1 != container2);
+        CHECK(container1 != container3);
+        CHECK(container1 != container4);
+        CHECK(container2 != container1);
+        CHECK(container2 == container2);
+        CHECK(container2 != container3);
+        CHECK(container2 != container4);
+        CHECK(container3 != container1);
+        CHECK(container3 != container2);
+        CHECK(container3 == container3);
+        CHECK(container3 != container4);
+        CHECK(container4 != container1);
+        CHECK(container4 != container2);
+        CHECK(container4 != container3);
+        CHECK(container4 == container4);
+
+        container3.clear();
+        container4.clear();
+
+        CHECK(container1 == container3);
+        CHECK(container2 == container4);
+    }
+
+// ---- tests/src/unit-custom-object-type.cpp:445-457  (uses: operator!=, operator<, operator==)
+TEST_CASE("object type without key_compare")
+{
+    SECTION("object_comparator_t falls back to default_object_comparator_t")
+    {
+        CHECK(std::is_same < no_key_compare_json::object_comparator_t,
+              no_key_compare_json::default_object_comparator_t >::value);
+    }
+
+    SECTION("object types defining key_compare are unaffected")
+    {
+        CHECK(std::is_same<nlohmann::json::object_comparator_t,
+              nlohmann::json::object_t::key_compare>::value);
+        CHECK(std::is_same<nlohmann::ordered_json::object_comparator_t,
+
+// ---- tests/src/unit-enum_keyed_maps.cpp:127-134  (uses: operator!=, operator<, operator==)
+    SECTION("std::map with custom comparator")
+    {
+        using task_map = std::map<TaskState, int, std::greater<TaskState>>;
+        const task_map m = {{TS_STOPPED, 1}, {TS_RUNNING, 2}};
+        const json j = m;
+        CHECK(j == json::parse(R"({"stopped":1,"running":2})"));
+        CHECK(j.get<task_map>() == m);
+    }
+
+// ---- tests/src/unit-regression1.cpp:1034-1036  (uses: operator!=, operator<, operator==)
+    SECTION("issue #414 - compare with literal 0)")
+    {
+#define CHECK_TYPE(v) \

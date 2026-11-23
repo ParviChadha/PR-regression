@@ -39,6 +39,13 @@ build_mode = "header-only"
 include_dirs = ["include"]              # roots passed as -I; relative to repo root
 smoke_header = "nlohmann/json.hpp"      # env.py --check compiles `#include <smoke_header>` against old and new
 
+# Used by pipeline/changes.py: the public headers whose #include reaches the whole library (json_view.hpp is a
+# separate public header that json.hpp does not include; headers missing at an older commit are skipped).
+analysis_entries = ["nlohmann/json.hpp", "nlohmann/json_view.hpp"]
+# Lines compiled out by default are mapped again with these flags (one parse per set).
+# A later -std overrides the default c++17 (code under __cpp_lib_char8_t etc. exists only in C++20).
+analysis_variants = [["-DJSON_DIAGNOSTICS=1", "-DJSON_DIAGNOSTIC_POSITIONS=1"], ["-std=c++20"]]
+
 # Used by pipeline/generate.py: library-specific rules appended to the test-generation prompt.
 prompt_notes = '''
 - Include the library with #include <nlohmann/json.hpp>. The public API is nlohmann::json (nlohmann::basic_json), nlohmann::ordered_json, json_pointer, json patch/merge_patch and the documented SAX and conversion interfaces. Never use the detail namespace.

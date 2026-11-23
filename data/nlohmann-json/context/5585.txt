@@ -1,0 +1,179 @@
+// Upstream tests at the PR's parent commit 0c2329d0e that use the changed code.
+// Names searched (test lines using each): basic_json (0), binary (0), to_json (0), format_as (23), to_string (76), operator<< (79), operator>> (76), operator!= (52), operator< (185), external_constructor (0), construct (0), json_value (11), replace_value (0)
+
+// ---- tests/src/unit-deserialization.cpp:236-248  (uses: operator<<, operator>>)
+TEST_CASE("deserialization")
+{
+    SECTION("successful deserialization")
+    {
+        SECTION("stream")
+        {
+            std::stringstream ss1;
+            std::stringstream ss2;
+            std::stringstream ss3;
+            ss1 << R"(["foo",1,2,3,false,{"one":1}])";
+            ss2 << R"(["foo",1,2,3,false,{"one":1}])";
+            ss3 << R"(["foo",1,2,3,false,{"one":1}])";
+            const json j = json::parse(ss1);
+
+// ---- tests/src/unit-deserialization.cpp:345-357  (uses: operator<<, operator>>)
+    SECTION("unsuccessful deserialization")
+    {
+        SECTION("stream")
+        {
+            std::stringstream ss1;
+            std::stringstream ss3;
+            std::stringstream ss4;
+            std::stringstream ss5;
+            ss1 << R"(["foo",1,2,3,false,{"one":1})";
+            ss3 << R"(["foo",1,2,3,false,{"one":1})";
+            ss4 << R"(["foo",1,2,3,false,{"one":1})";
+            ss5 << R"(["foo",1,2,3,false,{"one":1})";
+
+
+// ---- tests/src/unit-precise-stream-position.cpp:88-100  (uses: operator<<, operator>>)
+TEST_CASE("JSON_PRECISE_STREAM_POSITION")
+{
+    SECTION("the macro is part of the ABI tag")
+    {
+        const std::string ns = STRINGIZE(NLOHMANN_JSON_NAMESPACE);
+        // other tags may come before it, e.g. json_abi_diag_psp
+        CHECK(ns.find("_psp") != std::string::npos);
+    }
+
+    SECTION("a number does not consume the character that terminates it")
+    {
+        // a number is only terminated by the character following it; that
+        // character must be given back so the stream is positioned right
+
+// ---- tests/src/unit-precise-stream-position.cpp:226-236  (uses: operator<<, operator>>)
+    SECTION("a streambuf that cannot put back is not needed")
+    {
+        // the terminating character is never consumed, so no putback
+        // position is required
+        no_putback_streambuf buf("1true");
+        std::istream is(&buf);
+        json j;
+        is >> j;
+        CHECK(j == json(1));
+        CHECK(remaining(is) == "true");
+    }
+
+// ---- tests/src/unit-comparison.cpp:73-85  (uses: operator!=, operator<)
+TEST_CASE("lexicographical comparison operators")
+{
+    constexpr auto f_ = false;
+    constexpr auto _t = true;
+    constexpr auto nan = std::numeric_limits<json::number_float_t>::quiet_NaN();
+#if JSON_HAS_THREE_WAY_COMPARISON
+    constexpr auto lt = std::partial_ordering::less;
+    constexpr auto gt = std::partial_ordering::greater;
+    constexpr auto eq = std::partial_ordering::equivalent;
+    constexpr auto un = std::partial_ordering::unordered;
+#endif
+
+#if JSON_HAS_THREE_WAY_COMPARISON
+
+// ---- tests/src/unit-comparison.cpp:127-147  (uses: operator!=, operator<)
+        SECTION("comparison: less")
+        {
+            REQUIRE(expected_lt.size() == j_types.size());
+            for (size_t i = 0; i < j_types.size(); ++i)
+            {
+                REQUIRE(expected_lt[i].size() == j_types.size());
+                for (size_t j = 0; j < j_types.size(); ++j)
+                {
+                    CAPTURE(i)
+                    CAPTURE(j)
+                    // check precomputed values
+#if JSON_HAS_THREE_WAY_COMPARISON
+                    // JSON_HAS_CPP_20 (do not remove; see note at top of file)
+                    CHECK((j_types[i] < j_types[j]) == expected_lt[i][j]);
+#else
+                    CHECK(operator<(j_types[i], j_types[j]) == expected_lt[i][j]);
+#endif
+                    CHECK(f(j_types[i], j_types[j]) == expected_lt[i][j]);
+                }
+            }
+        }
+
+// ---- tests/src/unit-ordered_json.cpp:73-83  (uses: operator<, operator>>)
+TEST_CASE("regression test for issue #3732 - iteration_proxy_value<iter_impl<ordered_json>>")
+{
+    // Naming the proxy type in a function-parameter position forces eager
+    // instantiation of basic_json<ordered_map>; previously this hit an
+    // incomplete-type error in set_parents().
+    auto fn = [](nlohmann::detail::iteration_proxy_value<nlohmann::detail::iter_impl<nlohmann::ordered_json>> const & val)
+    {
+        return val.value();
+    };
+    static_cast<void>(fn);
+}
+
+// ---- tests/src/unit-ordered_map.cpp:579-595  (uses: operator<, to_string)
+    SECTION("elements keep their order and values over many growths")
+    {
+        ordered_map<std::string, counted> om;
+        for (int i = 0; i < 1000; ++i)
+        {
+            om.emplace(std::to_string(i), counted(i));
+        }
+
+        CHECK(om.size() == 1000);
+        int i = 0;
+        for (const auto& element : om)
+        {
+            CHECK(element.first == std::to_string(i));
+            CHECK(element.second.payload == i);
+            ++i;
+        }
+    }
+
+// ---- tests/src/unit-ordered_map.cpp:633-649  (uses: operator<, to_string)
+        SECTION("ordered_json")
+        {
+            auto j = nlohmann::ordered_json::object();
+            auto& object = j.get_ref<nlohmann::ordered_json::object_t&>();
+            object.reserve(4);
+            while (object.size() < object.capacity())
+            {
+                const auto i = std::to_string(object.size());
+                j[i] = "a value that is too long for the small string optimization " + i;
+            }
+            const auto size = j.size();
+
+            j.emplace("new", std::move(j["0"]));
+            CHECK(j.size() == size + 1);
+            CHECK(j["new"] == "a value that is too long for the small string optimization 0");
+            CHECK(j["0"].is_null());
+        }
+
+// ---- tests/src/unit-serialization.cpp:30-57  (uses: operator<, operator<<)
+    SECTION("operator<<")
+    {
+        SECTION("no given width")
+        {
+            std::stringstream ss;
+            const json j = {"foo", 1, 2, 3, false, {{"one", 1}}};
+            ss << j;
+            CHECK(ss.str() == "[\"foo\",1,2,3,false,{\"one\":1}]");
+        }
+
+        SECTION("given width")
+        {
+            std::stringstream ss;
+            const json j = {"foo", 1, 2, 3, false, {{"one", 1}}};
+            ss << std::setw(4) << j;
+            CHECK(ss.str() ==
+                  "[\n    \"foo\",\n    1,\n    2,\n    3,\n    false,\n    {\n        \"one\": 1\n    }\n]");
+        }
+
+        SECTION("given fill")
+        {
+            std::stringstream ss;
+            const json j = {"foo", 1, 2, 3, false, {{"one", 1}}};
+            ss << std::setw(1) << std::setfill('\t') << j;
+            CHECK(ss.str() ==
+                  "[\n\t\"foo\",\n\t1,\n\t2,\n\t3,\n\tfalse,\n\t{\n\t\t\"one\": 1\n\t}\n]");
+        }
+    }

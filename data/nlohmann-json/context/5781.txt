@@ -1,0 +1,137 @@
+// Upstream tests at the PR's parent commit 3c465beb6 that use the changed code.
+// Names searched (test lines using each): to_bjdata (0), to_bon8 (0), to_bson (0), to_cbor (0), to_msgpack (0), binary_writer (0), write_ubjson_iterative (0), write_ubjson_start_array (0), write_cbor_iterative (0), write_ubjson_value_or_push (0), write_msgpack_iterative (0), write_ubjson_start_object (0), write_cbor_value_or_push (0), write_msgpack_value_or_push (0), write_msgpack_array_prefix (0), write_msgpack_object_prefix (0), write_ubjson (0), binary_container_frame (0), ubjson_frame (0), write_msgpack (0), write_cbor (0), is_bjdata_ndarray (0), array_it (0), object_it (0), value (2071), prefix_required (0)
+
+// ---- tests/src/value_in_range_of_test.hpp:35-59  (uses: value)
+    using type = typename T::type;
+    constexpr bool min_in_range = T::min_in_range;
+    constexpr bool max_in_range = T::max_in_range;
+
+    type const val_min = std::numeric_limits<type>::min();
+    type const val_min2 = val_min + 1;
+    type const val_max = std::numeric_limits<type>::max();
+    type const val_max2 = val_max - 1;
+
+    REQUIRE(CHAR_BIT == 8);
+
+    std::string of_type_str;
+    if (std::is_unsigned<of_type>::value)
+    {
+        of_type_str += "u";
+    }
+    of_type_str += "int";
+    of_type_str += std::to_string(sizeof(of_type) * 8);
+
+    INFO("of_type := ", of_type_str);
+
+    std::string type_str;
+    if (std::is_unsigned<type>::value)
+    {
+        type_str += "u";
+
+// ---- tests/src/fuzzer-parse_bjdata.cpp:10-34  (uses: value)
+This file implements a parser test suitable for fuzz testing. Given a byte
+array data, it performs the following steps:
+
+- j0 = from_bjdata(data, allow_exceptions = false)
+- j1 = from_bjdata(data)
+- assert(j0 is discarded if parsing j1 fails, and j0 == j1 otherwise)
+- vec2 = to_bjdata(j1, use_size = false, use_type = false)
+- vec3 = to_bjdata(j1, use_size = true, use_type = false)
+- vec4 = to_bjdata(j1, use_size = true, use_type = true)
+- j2 = from_bjdata(vec2)
+- j3 = from_bjdata(vec3)
+- j4 = from_bjdata(vec4)
+- assert(from_bjdata(to_bjdata(j2, use_size = false, use_type = false)) is value-stable with j2)
+- assert(from_bjdata(to_bjdata(j3, use_size = true, use_type = false)) is value-stable with j3)
+- assert(from_bjdata(to_bjdata(j4, use_size = true, use_type = true)) is value-stable with j4)
+
+Re-serializing j2/j3/j4 with the same use_size/use_type settings is checked
+for value-stability rather than byte-exact stability: from_bjdata(to_bjdata(j2))
+must equal j2 (and likewise for j3, j4). Byte-exact stability does not hold in
+general, because a BJData value can lose type fidelity across a round trip
+(e.g. a binary_t value serialized without the optimized "$U#" array header is
+parsed back as a plain array of numbers, see #5398 and the discussion on
+PR #5494) - the numeric value is preserved, but the writer's smallest-type
+selection for the now-plain numbers may legitimately pick a different, but
+equally valid, single-byte type marker than the dedicated binary-data writer
+
+// ---- tests/src/fuzzer-parse_bon8.cpp:9-33  (uses: value)
+/*
+This file implements a parser test suitable for fuzz testing. Given a byte
+array data, it performs the following steps:
+
+- j0 = from_bon8(data, allow_exceptions = false)
+- j1 = from_bon8(data)
+- assert(j0 is discarded if parsing j1 fails, and j0 == j1 otherwise)
+- vec = to_bon8(j1)
+- j2 = from_bon8(vec)
+- assert(to_bon8(j2) == vec)
+
+It also checks that reading the data from a stream, which reads strings byte by
+byte, gives the same value or error as reading it from contiguous memory, which
+copies strings in bulk.
+
+The provided function `LLVMFuzzerTestOneInput` can be used in different fuzzer
+drivers.
+*/
+
+#include <cassert>
+#include <sstream>
+#include <nlohmann/json.hpp>
+
+// the round-trip checks below are assertions; NDEBUG would compile them away
+#ifdef NDEBUG
+
+// ---- tests/src/unit-32bit.cpp:38-49  (uses: value)
+            SECTION("optimized array: negative size")
+            {
+                std::vector<uint8_t> const vM = {'[', '$', 'M', '#', '[', 'I', 0x00, 0x20, 'M', 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x20, 0xFF, ']'};
+                std::vector<uint8_t> const vMX = {'[', '$', 'U', '#', '[', 'M', 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 'U', 0x01, ']'};
+
+                json _;
+                CHECK_THROWS_WITH_AS(_ = json::from_bjdata(vM), "[json.exception.out_of_range.408] syntax error while parsing BJData size: integer value overflow", json::out_of_range&);
+                CHECK(json::from_bjdata(vM, true, false).is_discarded());
+
+                CHECK_THROWS_WITH_AS(_ = json::from_bjdata(vMX), "[json.exception.out_of_range.408] syntax error while parsing BJData size: integer value overflow", json::out_of_range&);
+                CHECK(json::from_bjdata(vMX, true, false).is_discarded());
+            }
+
+// ---- tests/src/unit-32bit.cpp:51-62  (uses: value)
+            SECTION("optimized array: integer value overflow")
+            {
+                std::vector<uint8_t> const vL = {'[', '#', 'L', 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x7F};
+                std::vector<uint8_t> const vM = {'[', '$', 'M', '#', '[', 'I', 0x00, 0x20, 'M', 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x20, 0xFF, ']'};
+
+                json _;
+                CHECK_THROWS_WITH_AS(_ = json::from_bjdata(vL), "[json.exception.out_of_range.408] syntax error while parsing BJData size: integer value overflow", json::out_of_range&);
+                CHECK(json::from_bjdata(vL, true, false).is_discarded());
+
+                CHECK_THROWS_WITH_AS(_ = json::from_bjdata(vM), "[json.exception.out_of_range.408] syntax error while parsing BJData size: integer value overflow", json::out_of_range&);
+                CHECK(json::from_bjdata(vM, true, false).is_discarded());
+            }
+
+// ---- tests/src/unit-algorithms.cpp:22-32  (uses: value)
+        SECTION("std::all_of")
+        {
+            CHECK(std::all_of(j_array.begin(), j_array.end(), [](const json & value)
+            {
+                return !value.empty();
+            }));
+            CHECK(std::all_of(j_object.begin(), j_object.end(), [](const json & value)
+            {
+                return value.type() == json::value_t::number_integer;
+            }));
+        }
+
+// ---- tests/src/unit-algorithms.cpp:34-44  (uses: value)
+        SECTION("std::any_of")
+        {
+            CHECK(std::any_of(j_array.begin(), j_array.end(), [](const json & value)
+            {
+                return value.is_string() && value.get<std::string>() == "foo";
+            }));
+            CHECK(std::any_of(j_object.begin(), j_object.end(), [](const json & value)
+            {
+                return value.get<int>() > 1;
+            }));
+        }

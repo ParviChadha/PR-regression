@@ -1,0 +1,106 @@
+// Upstream tests at the PR's parent commit dec0e9b74 that use the changed code.
+// Names searched (test lines using each): to_bjdata (0), to_bon8 (0), to_bson (0), to_cbor (0), to_msgpack (0), to_ubjson (0), binary_writer (0), write_ubjson (0), write_bon8_value (0), write_bson_document (0), write_msgpack_string (0), write_cbor_string (0), calc_bson_sizes (0), write_compact_float (0), write_characters (0), output_adapter_sink (0), write_msgpack (0), bson_frame (0), calc_bson_entry_header_size (0), write_bson_value (0), write_cbor (0), output_vector_sink (0), reserve (29), append (30), grow (0), write_ubjson_integer_payload (0), calc_bson_string_size (0), write_bjdata_ndarray_elements (0), write_cbor_array (0), write_ubjson_iterative (0), write_character (0), commit (0), write_cbor_array_elements (0), write_msgpack_array (0), write_msgpack_array_elements (0), write_ubjson_start_array (0), write_ubjson_start_object (0), bjdata_ndarray_value_in_range (0), check_utf8 (0), throw_integer_out_of_range (0), calc_bson_binary_size (0), to_bson_length (0), to_msgpack_length (0), write_bjdata_ndarray_float_element (0), write_msgpack_array_prefix (0), write_msgpack_object_prefix (0), write_bson_scalar (0), encode_bson_fixed_entry (0), write_bon8_members (0), write_bson_array_fixed_entries (0), write_bon8_array_elements (0), write_ubjson_members (0), write_ubjson_array_elements (0), calc_bson_fixed_array_size (0), encode_bon8_integer (0), write_msgpack_object (0), write_cbor_object (0), copy_short (0), write_bjdata_ndarray_values (0), write_bon8_binary (0), encode_bon8_float (0), encode_ubjson_integer (0), find_nul (0), write_ubjson_binary_bytes (0), write_ubjson_high_precision (0), write_ubjson_text (0), next_index (0), encode_cbor_float (0), ubjson_integer_table (0), write_bjdata_ndarray_block (0), write_float_elements (0), write_ubjson_checked_text (0), write_ubjson_count (0), write_large (0), encode_compact_float (0), store_number (0), copy_characters (0), starts_with_ubjson_number (0), fits_float32 (0), store_little_endian (0), throw_subtype_out_of_range (0), write_array_elements (0), write_cbor_container_head (0), flush (1), count_index (0), encode_ubjson_float (0), throw_invalid_utf8 (0), bjdata_ndarray_integer (0), calc_bson_checked_string_size (0), put_bon8_bytes (0), throw_bson_key_with_null (0), throw_msgpack_length_too_large (0), throw_bson_length_too_large (0), throw_size_marker_required (0), ubjson_integer_index (0), binary_initial_capacity (0), write_msgpack_float (0), is_bson_fixed_size (0), ubjson_integers_fit_64_bits (0), position (0), space (0), calc_bson_checked_entry_header_size (0), write_cbor_checked_string (0), write_msgpack_checked_string (0), storage_type (0), index_boundary (0), index_name (0), index_name_size (0), bson_index_name_space (0), bson_scalar_max_name_size (0), max_text_in_reservation (0), ubjson_integer_encoding_space (0), min_vector_sink_capacity (0), buffer (48), buffer_size (0), used (24), cursor (0), limit (17), create_bson_index_name (0), index (167), reserved (2)
+
+// ---- tests/src/unit-convenience.cpp:92-116  (uses: buffer, flush)
+    }
+
+    std::string impl{}; // NOLINT(readability-redundant-member-init)
+};
+
+void check_escaped(const char* original, const char* escaped = "", bool ensure_ascii = false);
+void check_escaped(const char* original, const char* escaped, const bool ensure_ascii)
+{
+    std::stringstream ss;
+    nlohmann::detail::output_stream_adapter<char> adapter(ss);
+    json::serializer s(adapter, ' ', false, ensure_ascii);
+    s.dump_escaped(original);
+    s.flush(); // dump_escaped writes into the serializer's internal buffer
+    CHECK(ss.str() == escaped);
+}
+} // namespace
+
+TEST_CASE("convenience functions")
+{
+    SECTION("type name as string")
+    {
+        CHECK(std::string(json(json::value_t::null).type_name()) == "null");
+        CHECK(std::string(json(json::value_t::object).type_name()) == "object");
+        CHECK(std::string(json(json::value_t::array).type_name()) == "array");
+        CHECK(std::string(json(json::value_t::number_integer).type_name()) == "number");
+
+// ---- tests/src/unit-json_view_image.cpp:719-743  (uses: reserved)
+        CHECK(exception_of([&]
+        {
+            const json_document d = json_document::load(image.data(), 63);
+            static_cast<void>(d);
+        }) == prefix + "too short");
+
+        std::vector<std::uint8_t> bad = image;
+        bad[0] = 'X';
+        CHECK(load_result(bad, image_check::full) == prefix + "unknown format");
+        bad = image;
+        bad[4] = 2; // version
+        CHECK(load_result(bad, image_check::full) == prefix + "unknown format");
+        for (std::size_t reserved = 32; reserved < 64; reserved += 8)
+        {
+            bad = image;
+            bad[reserved + 3] = 1;
+            CHECK(load_result(bad, image_check::none) == prefix + "unknown format");
+        }
+
+        const auto sizes = [&](std::size_t offset, std::uint64_t v)
+        {
+            std::vector<std::uint8_t> b = image;
+            set_header_field(b, offset, v);
+            return load_result(b, image_check::none);
+        };
+
+// ---- tests/src/unit-json_view_builder.cpp:584-610  (uses: limit, reserve)
+TEST_CASE("json_view node array size limit")
+{
+    // a node array larger than the address space is refused, not wrapped to a
+    // small allocation (the size computation overflows on 32-bit targets, and
+    // for absurd counts everywhere)
+    std::unique_ptr<document_data, document_data::deleter> d(document_data::create(0));
+    d->reserve(8);
+    REQUIRE(d->node_capacity >= 8);
+    d->node_count = 2;
+    const std::size_t cap = d->node_capacity;
+    node* const nodes = d->nodes;
+
+#if !defined(JSON_NOEXCEPTION)
+    const std::size_t too_many = document_data::max_nodes() + 1;
+    CHECK_THROWS_AS(d->reserve(too_many), std::bad_alloc&);
+    CHECK_THROWS_AS(d->reserve((std::numeric_limits<std::size_t>::max)()), std::bad_alloc&);
+    // the array is unchanged
+    CHECK(d->nodes == nodes);
+    CHECK(d->node_capacity == cap);
+    CHECK(d->node_count == 2);
+#endif
+
+    // the largest count that fits is not refused by the check (nothing is
+    // allocated for a count that is already there)
+    d->reserve(cap);
+    CHECK(d->nodes == nodes);
+}
+
+// ---- tests/src/unit-large_json.cpp:77-95  (uses: append, reserve)
+        SECTION("object")
+        {
+            std::string s;
+            s.reserve((6 * depth) + 1);
+            for (std::size_t i = 0; i < depth; ++i)
+            {
+                s += "{\"a\":";
+            }
+            s += '1';
+            s.append(depth, '}');
+
+            const json j = json::parse(s);
+
+            const json copy(j); // NOLINT(performance-unnecessary-copy-initialization): the copy is what is tested
+
+            std::size_t copy_depth = 0;
+            CHECK(*innermost_value(copy, copy_depth) == 1);
+            CHECK(copy_depth == depth);
+        }

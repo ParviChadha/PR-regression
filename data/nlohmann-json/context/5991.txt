@@ -1,0 +1,173 @@
+// Upstream tests at the PR's parent commit 100f676b3 that use the changed code.
+// Names searched (test lines using each): materialize (188), accept (12), parse (11), sax_parse (0), operator>> (103), json_sax_dom_parser (19), set_member (0), construct_member (0)
+
+// ---- tests/src/unit-deserialization.cpp:557-577  (uses: json_sax_dom_parser, operator>>)
+            SECTION("iterator_input_adapter advances iterators correctly")
+            {
+                using nlohmann::json;
+                using nlohmann::detail::input_format_t;
+                using nlohmann::detail::json_sax_dom_parser;
+                using proxy = proxy_iterator<std::string>;
+
+                std::string str1 = "[1]";
+                std::string str2 = "[2]";
+                std::string str = str1 + str2;
+
+                auto first = str.begin();
+                auto last = str.end();
+                json j;
+                json_sax_dom_parser<json, nlohmann::detail::string_input_adapter_type> sax(j, true);
+
+                CHECK(json::sax_parse(proxy(first), proxy(last), &sax,
+                                      input_format_t::json, false));
+                CHECK(j.dump() == str1);
+                CHECK(std::string(first, last) == str2);
+            }
+
+// ---- tests/src/unit-stream-bulk-scan.cpp:496-509  (uses: json_sax_dom_parser, operator>>)
+    SECTION("SAX parsing from a stream")
+    {
+        const std::string input = R"({"a": [1, "two", 3.5]} rest)";
+        for (const std::size_t chunk_size : chunk_sizes())
+        {
+            CAPTURE(chunk_size)
+            chunked_streambuf buf(input, chunk_size);
+            std::istream is(&buf);
+            json j;
+            nlohmann::detail::json_sax_dom_parser<json, nlohmann::detail::string_input_adapter_type> sax(j);
+            CHECK(json::sax_parse(is, &sax, json::input_format_t::json, false));
+            CHECK(j == json::parse(R"({"a": [1, "two", 3.5]})"));
+        }
+    }
+
+// ---- tests/src/unit-class_parser.cpp:47-71  (uses: parse)
+using utils::SaxEventLogger;
+
+namespace
+{
+json parser_helper(const std::string& s);
+bool accept_helper(const std::string& s);
+void comments_helper(const std::string& s);
+void trailing_comma_helper(const std::string& s);
+
+json parser_helper(const std::string& s)
+{
+    json j;
+    json::parser(nlohmann::detail::input_adapter(s)).parse(true, j);
+
+    // if this line was reached, no exception occurred
+    // -> check if result is the same without exceptions
+    json j_nothrow;
+    CHECK_NOTHROW(json::parser(nlohmann::detail::input_adapter(s), nullptr, false).parse(true, j_nothrow));
+    CHECK(j_nothrow == j);
+
+    json j_sax;
+    nlohmann::detail::json_sax_dom_parser<json, nlohmann::detail::string_input_adapter_type> sdp(j_sax);
+    json::sax_parse(s, &sdp);
+    CHECK(j_sax == j);
+
+
+// ---- tests/src/unit-class_parser.cpp:73-97  (uses: parse)
+
+    trailing_comma_helper(s);
+
+    return j;
+}
+
+bool accept_helper(const std::string& s)
+{
+    CAPTURE(s)
+
+    // 1. parse s without exceptions
+    json j;
+    CHECK_NOTHROW(json::parser(nlohmann::detail::input_adapter(s), nullptr, false).parse(true, j));
+    const bool ok_noexcept = !j.is_discarded();
+
+    // 2. accept s
+    const bool ok_accept = json::parser(nlohmann::detail::input_adapter(s)).accept(true);
+
+    // 3. check if both approaches come to the same result
+    CHECK(ok_noexcept == ok_accept);
+
+    // 4. parse with SAX (compare with relaxed accept result)
+    SaxEventLogger el;
+    CHECK_NOTHROW(json::sax_parse(s, &el, json::input_format_t::json, false));
+    CHECK(json::parser(nlohmann::detail::input_adapter(s)).accept(false) == !el.errored);
+
+// ---- tests/src/unit-disabled_exceptions.cpp:13-37  (uses: json_sax_dom_parser)
+DOCTEST_GCC_SUPPRESS_WARNING("-Wnoexcept")
+
+#include <nlohmann/json.hpp>
+using nlohmann::json;
+#ifdef JSON_TEST_NO_GLOBAL_UDLS
+    using namespace nlohmann::literals; // NOLINT(google-build-using-namespace)
+#endif
+
+/////////////////////////////////////////////////////////////////////
+// for #2824
+/////////////////////////////////////////////////////////////////////
+
+class sax_no_exception : public nlohmann::detail::json_sax_dom_parser<json, nlohmann::detail::string_input_adapter_type>
+{
+  public:
+    explicit sax_no_exception(json& j) : nlohmann::detail::json_sax_dom_parser<json, nlohmann::detail::string_input_adapter_type>(j, false) {}
+
+    static bool parse_error(std::size_t /*position*/, const std::string& /*last_token*/, const json::exception& ex)
+    {
+        error_string = new std::string(ex.what()); // NOLINT(cppcoreguidelines-owning-memory)
+        return false;
+    }
+
+    static std::string* error_string;
+};
+
+// ---- tests/src/unit-file_input.cpp:192-214  (uses: json_sax_dom_parser)
+    SECTION("the file can be parsed again and read with stdio afterwards")
+    {
+        const file_ptr f = open_with(name, "[1] [2] tail");
+        REQUIRE(f != nullptr);
+
+        // sax_parse with strict == false stops after the first value; an array
+        // ends with its closing bracket, so the space after it is not read
+        json j;
+        nlohmann::detail::json_sax_dom_parser<json, nlohmann::detail::string_input_adapter_type> sax1(j);
+        CHECK(json::sax_parse(f.get(), &sax1, json::input_format_t::json, false));
+        CHECK(j == json({1}));
+        check_unlocked(f.get());
+
+        json k;
+        nlohmann::detail::json_sax_dom_parser<json, nlohmann::detail::string_input_adapter_type> sax2(k);
+        CHECK(json::sax_parse(f.get(), &sax2, json::input_format_t::json, false));
+        CHECK(k == json({2}));
+        check_unlocked(f.get());
+
+        std::array<char, 8> rest{};
+        CHECK(std::fgets(rest.data(), static_cast<int>(rest.size()), f.get()) != nullptr);
+        CHECK(std::string(rest.data()) == " tail");
+    }
+
+// ---- tests/src/unit-precise-stream-position.cpp:240-248  (uses: json_sax_dom_parser)
+    SECTION("sax_parse with strict == false")
+    {
+        std::istringstream ss("1true");
+        json j;
+        nlohmann::detail::json_sax_dom_parser<json, nlohmann::detail::input_stream_adapter> sdp(j, true);
+        CHECK(json::sax_parse(ss, &sdp, nlohmann::detail::input_format_t::json, false));
+        CHECK(j == 1);
+        CHECK(remaining(ss) == "true");
+    }
+
+// ---- tests/src/unit-deserialization.cpp:97-109  (uses: operator>>)
+TEST_CASE("deserialization")
+{
+    SECTION("successful deserialization")
+    {
+        SECTION("stream")
+        {
+            std::stringstream ss1;
+            std::stringstream ss2;
+            std::stringstream ss3;
+            ss1 << R"(["foo",1,2,3,false,{"one":1}])";
+            ss2 << R"(["foo",1,2,3,false,{"one":1}])";
+            ss3 << R"(["foo",1,2,3,false,{"one":1}])";
+            const json j = json::parse(ss1);

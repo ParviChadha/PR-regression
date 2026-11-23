@@ -1,0 +1,180 @@
+// Upstream tests at the PR's parent commit e9970066c that use the changed code.
+// Names searched (test lines using each): sax_parse (0), from_bson (0), from_cbor (0), from_msgpack (0), from_ubjson (0), from_bjdata (0), from_bon8 (0), accept (12), parse (11), operator>> (94), scan_after_whitespace (0), lexer (96), sax_parse_internal (0), scan_literal_bulk (0), scan_literal (0)
+
+// ---- tests/src/unit-class_parser.cpp:47-71  (uses: parse)
+using utils::SaxEventLogger;
+
+namespace
+{
+json parser_helper(const std::string& s);
+bool accept_helper(const std::string& s);
+void comments_helper(const std::string& s);
+void trailing_comma_helper(const std::string& s);
+
+json parser_helper(const std::string& s)
+{
+    json j;
+    json::parser(nlohmann::detail::input_adapter(s)).parse(true, j);
+
+    // if this line was reached, no exception occurred
+    // -> check if result is the same without exceptions
+    json j_nothrow;
+    CHECK_NOTHROW(json::parser(nlohmann::detail::input_adapter(s), nullptr, false).parse(true, j_nothrow));
+    CHECK(j_nothrow == j);
+
+    json j_sax;
+    nlohmann::detail::json_sax_dom_parser<json, nlohmann::detail::string_input_adapter_type> sdp(j_sax);
+    json::sax_parse(s, &sdp);
+    CHECK(j_sax == j);
+
+
+// ---- tests/src/unit-class_parser.cpp:73-97  (uses: parse)
+
+    trailing_comma_helper(s);
+
+    return j;
+}
+
+bool accept_helper(const std::string& s)
+{
+    CAPTURE(s)
+
+    // 1. parse s without exceptions
+    json j;
+    CHECK_NOTHROW(json::parser(nlohmann::detail::input_adapter(s), nullptr, false).parse(true, j));
+    const bool ok_noexcept = !j.is_discarded();
+
+    // 2. accept s
+    const bool ok_accept = json::parser(nlohmann::detail::input_adapter(s)).accept(true);
+
+    // 3. check if both approaches come to the same result
+    CHECK(ok_noexcept == ok_accept);
+
+    // 4. parse with SAX (compare with relaxed accept result)
+    SaxEventLogger el;
+    CHECK_NOTHROW(json::sax_parse(s, &el, json::input_format_t::json, false));
+    CHECK(json::parser(nlohmann::detail::input_adapter(s)).accept(false) == !el.errored);
+
+// ---- tests/src/unit-class_lexer.cpp:24-48  (uses: lexer)
+#include <map> // map
+#include <random> // mt19937
+#include <sstream> // stringstream
+#include <string> // string
+#include <utility> // pair
+#include <vector> // vector
+
+#include "float_hard_cases.hpp"
+
+namespace
+{
+// shortcut to scan a string literal
+json::lexer::token_type scan_string(const char* s, bool ignore_comments = false);
+json::lexer::token_type scan_string(const char* s, const bool ignore_comments)
+{
+    auto ia = nlohmann::detail::input_adapter(s);
+    return nlohmann::detail::lexer<json, decltype(ia)>(std::move(ia), ignore_comments).scan(); // NOLINT(hicpp-move-const-arg,performance-move-const-arg)
+}
+} // namespace
+
+std::string get_error_message(const char* s, bool ignore_comments = false); // NOLINT(misc-use-internal-linkage)
+std::string get_error_message(const char* s, const bool ignore_comments)
+{
+    auto ia = nlohmann::detail::input_adapter(s);
+    auto lexer = nlohmann::detail::lexer<json, decltype(ia)>(std::move(ia), ignore_comments); // NOLINT(hicpp-move-const-arg,performance-move-const-arg)
+
+// ---- tests/src/unit-class_lexer.cpp:53-65  (uses: lexer)
+TEST_CASE("lexer class")
+{
+    SECTION("scan")
+    {
+        SECTION("structural characters")
+        {
+            CHECK((scan_string("[") == json::lexer::token_type::begin_array));
+            CHECK((scan_string("]") == json::lexer::token_type::end_array));
+            CHECK((scan_string("{") == json::lexer::token_type::begin_object));
+            CHECK((scan_string("}") == json::lexer::token_type::end_object));
+            CHECK((scan_string(",") == json::lexer::token_type::value_separator));
+            CHECK((scan_string(":") == json::lexer::token_type::name_separator));
+        }
+
+// ---- tests/src/unit-deserialization.cpp:97-109  (uses: operator>>)
+TEST_CASE("deserialization")
+{
+    SECTION("successful deserialization")
+    {
+        SECTION("stream")
+        {
+            std::stringstream ss1;
+            std::stringstream ss2;
+            std::stringstream ss3;
+            ss1 << R"(["foo",1,2,3,false,{"one":1}])";
+            ss2 << R"(["foo",1,2,3,false,{"one":1}])";
+            ss3 << R"(["foo",1,2,3,false,{"one":1}])";
+            const json j = json::parse(ss1);
+
+// ---- tests/src/unit-deserialization.cpp:174-181  (uses: operator>>)
+        SECTION("operator>>")
+        {
+            std::stringstream ss;
+            ss << R"(["foo",1,2,3,false,{"one":1}])";
+            json j;
+            ss >> j;
+            CHECK(j == json({"foo", 1, 2, 3, false, {{"one", 1}}}));
+        }
+
+// ---- tests/src/unit-precise-stream-position.cpp:123-135  (uses: operator>>)
+TEST_CASE("JSON_PRECISE_STREAM_POSITION")
+{
+    SECTION("the macro is part of the ABI tag")
+    {
+        const std::string ns = STRINGIZE(NLOHMANN_JSON_NAMESPACE);
+        // other tags may come before it, e.g. json_abi_diag_psp
+        CHECK(ns.find("_psp") != std::string::npos);
+    }
+
+    SECTION("a number does not consume the character that terminates it")
+    {
+        // a number is only terminated by the character following it; that
+        // character must be given back so the stream is positioned right
+
+// ---- tests/src/unit-precise-stream-position.cpp:181-193  (uses: operator>>)
+    SECTION("a number at the end of the input leaves nothing behind")
+    {
+        for (const std::string s :
+                {"1", "12", "-3.5e2", " 7 "
+                })
+        {
+            CAPTURE(s)
+            std::istringstream ss(s);
+            json j;
+            ss >> j;
+            CHECK(remaining(ss).find_first_not_of(" \t\n\r") == std::string::npos);
+        }
+    }
+
+// ---- tests/src/unit-stream-bulk-scan.cpp:191-203  (uses: operator>>)
+TEST_CASE("parsing from a std::istream scans the get area in bulk")
+{
+#if !defined(JSON_NOEXCEPTION)
+    SECTION("results do not depend on the get area")
+    {
+        const std::vector<read_mode> read_modes = {read_mode::extract, read_mode::parse, read_mode::parse_lenient};
+        for (const auto& input : corpus())
+        {
+            for (const read_mode mode : read_modes)
+            {
+                // no get area: the character-at-a-time path
+                const std::string expected = observe(input, 0, mode);
+                for (const std::size_t chunk_size : chunk_sizes())
+
+// ---- tests/src/unit-bjdata.cpp:3767-3776  (uses: operator>>)
+TEST_CASE("BJData input that cannot be read is discarded by every overload")
+{
+    std::vector<std::uint8_t> input = json::to_bjdata(json({{"a", {1, 2}}}));
+    input.pop_back();
+
+    json _;
+    CHECK_THROWS_AS(_ = json::from_bjdata(input.begin(), input.end()), json::parse_error&);
+    CHECK(json::from_bjdata(input, true, false).is_discarded());
+    CHECK(json::from_bjdata(input.begin(), input.end(), true, false).is_discarded());
+}

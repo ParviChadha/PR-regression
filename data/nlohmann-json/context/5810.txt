@@ -1,0 +1,107 @@
+// Upstream tests at the PR's parent commit f23830b65 that use the changed code.
+// Names searched (test lines using each): sax_parse (0), from_bson (0), from_cbor (0), from_msgpack (0), from_ubjson (0), from_bjdata (0), from_bon8 (0), lexer (94), skip_whitespace (0), skip_indentation (0), count_trailing_zeros (0)
+
+// ---- tests/src/unit-class_lexer.cpp:17-41  (uses: lexer)
+#include <cstdint> // uint32_t, uint64_t
+#include <cstdlib> // strtod
+#include <cstring> // memcpy
+#include <limits> // numeric_limits
+#include <sstream> // stringstream
+#include <string> // string
+#include <utility> // pair
+#include <vector> // vector
+
+namespace
+{
+// shortcut to scan a string literal
+json::lexer::token_type scan_string(const char* s, bool ignore_comments = false);
+json::lexer::token_type scan_string(const char* s, const bool ignore_comments)
+{
+    auto ia = nlohmann::detail::input_adapter(s);
+    return nlohmann::detail::lexer<json, decltype(ia)>(std::move(ia), ignore_comments).scan(); // NOLINT(hicpp-move-const-arg,performance-move-const-arg)
+}
+} // namespace
+
+std::string get_error_message(const char* s, bool ignore_comments = false); // NOLINT(misc-use-internal-linkage)
+std::string get_error_message(const char* s, const bool ignore_comments)
+{
+    auto ia = nlohmann::detail::input_adapter(s);
+    auto lexer = nlohmann::detail::lexer<json, decltype(ia)>(std::move(ia), ignore_comments); // NOLINT(hicpp-move-const-arg,performance-move-const-arg)
+
+// ---- tests/src/unit-class_lexer.cpp:46-58  (uses: lexer)
+TEST_CASE("lexer class")
+{
+    SECTION("scan")
+    {
+        SECTION("structural characters")
+        {
+            CHECK((scan_string("[") == json::lexer::token_type::begin_array));
+            CHECK((scan_string("]") == json::lexer::token_type::end_array));
+            CHECK((scan_string("{") == json::lexer::token_type::begin_object));
+            CHECK((scan_string("}") == json::lexer::token_type::end_object));
+            CHECK((scan_string(",") == json::lexer::token_type::value_separator));
+            CHECK((scan_string(":") == json::lexer::token_type::name_separator));
+        }
+
+// ---- tests/src/unit-class_parser.cpp:2825-2847  (uses: lexer)
+    SECTION("user-driven SAX consumers with no lexer report npos")
+    {
+        // json::parse() internally wires up its json_sax_dom_parser with a
+        // pointer to its own lexer (see parser.hpp), which is how positions
+        // get set at all. A user who constructs a json_sax_dom_parser
+        // directly (e.g. to drive it via json::sax_parse()) and does not
+        // supply a lexer pointer gets a consumer with m_lexer_ref == nullptr;
+        // every "if (m_lexer_ref)" guard in json_sax.hpp is then skipped, so
+        // every value it produces keeps its default, unset position (npos).
+        // This was previously true but silently unasserted (operator==
+        // ignores positions), see #5420.
+        json result;
+        nlohmann::detail::json_sax_dom_parser<json, nlohmann::detail::string_input_adapter_type> sdp(result);
+        const std::string s = R"({"a":1,"b":[1,2,3]})";
+        CHECK(json::sax_parse(s, &sdp));
+
+        CHECK(result.start_pos() == std::string::npos);
+        CHECK(result.end_pos() == std::string::npos);
+        CHECK(result["a"].start_pos() == std::string::npos);
+        CHECK(result["a"].end_pos() == std::string::npos);
+        CHECK(result["b"][0].start_pos() == std::string::npos);
+        CHECK(result["b"][0].end_pos() == std::string::npos);
+    }
+
+// ---- tests/src/unit-locale-cpp.cpp:261-273  (uses: lexer)
+TEST_CASE("locale changes between lexer construction and number conversion (#5198)")
+{
+    // The numbers are chosen so that the conversion also takes the strtod
+    // fallback, which honors the locale that is current at conversion time:
+    // too many significant digits for Clinger's fast path, an underflow that
+    // std::from_chars rejects, and a plain value.
+    const std::vector<std::string> numbers = {"3.14159265358979323846", "1.5e-400", "12.34", "-0.000123456789012345678"};
+    std::string text = "[";
+    for (const auto& n : numbers)
+    {
+        text += (text.size() == 1 ? "" : ",") + n;
+    }
+    text += "]";
+
+// ---- tests/src/unit-regression1.cpp:230-250  (uses: lexer)
+    SECTION("issue #82 - lexer::get_number return NAN")
+    {
+        const auto* const content = R"(
+        {
+            "Test":"Test1",
+            "Number":100,
+            "Foo":42.42
+        })";
+
+        std::stringstream ss;
+        ss << content;
+        json j;
+        ss >> j;
+
+        auto test = j["Test"].get<std::string>();
+        CHECK(test == "Test1");
+        const int number{j["Number"]};
+        CHECK(number == 100);
+        const float foo{j["Foo"]};
+        CHECK(static_cast<double>(foo) == Approx(42.42));
+    }

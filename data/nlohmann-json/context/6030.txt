@@ -1,0 +1,130 @@
+// Upstream tests at the PR's parent commit 951271127 that use the changed code.
+// Names searched (test lines using each): JSON_FILE_WINDOW (0), accept (12), from_bjdata (0), from_bon8 (0), from_bson (0), from_cbor (0), from_msgpack (0), from_ubjson (0), parse (11), sax_parse (0), file_input_adapter (0), get_character (2), get_character_slow (0), mark_token_start (0), copy_token (1), bulk_remaining (4), begin_token (0), bulk_skip (2), buffer_bump (0), buffer_end (0), buffer_ptr (0), bulk_data (0), bulk_window (0), current_in_buffer (0), supports_bulk_scan (2), supports_token_tracking (0), token_carry (0), token_segment (0), tracking_token (0), m_file (3)
+
+// ---- tests/src/unit-stream-bulk-scan.cpp:470-497  (uses: bulk_remaining, bulk_skip, get_character)
+    SECTION("skipping more characters than gbump() takes at once")
+    {
+        // gbump() takes an int, but a get area can be larger
+        const std::size_t claimed = std::size_t{3} << 30u;
+        oversized_get_area_streambuf buf(claimed);
+        if (static_cast<std::size_t>(buf.in_avail()) != claimed)
+        {
+            // a standard library whose streambuf stores the size of the get
+            // area in an int (MSVC)
+            MESSAGE("a get area larger than an int is not supported");
+        }
+        else
+        {
+            std::istream is(&buf);
+            nlohmann::detail::input_stream_adapter ia(is);
+            CHECK(ia.get_character() == 'a');
+            CHECK(ia.bulk_remaining() == claimed - 1);
+
+            const std::size_t skipped = static_cast<std::size_t>((std::numeric_limits<int>::max)()) + 10;
+            ia.bulk_skip(skipped);
+            CHECK(ia.bulk_remaining() == claimed - 1 - skipped);
+
+            ia.bulk_skip(ia.bulk_remaining());
+            CHECK(ia.bulk_remaining() == 0);
+
+            buf.restore_get_area();
+        }
+    }
+
+// ---- tests/src/unit-stream-bulk-scan.cpp:450-465  (uses: copy_token, get_character)
+    SECTION("the adapter keeps no token unless the lexer starts one")
+    {
+        // the binary readers read through the same adapter, but never start a
+        // token; refilling the get area must then not collect the input
+        chunked_streambuf buf(std::string(1000, 'x'), 7);
+        std::istream is(&buf);
+        nlohmann::detail::input_stream_adapter ia(is);
+        for (int i = 0; i < 1000; ++i)
+        {
+            CHECK(ia.get_character() == 'x');
+        }
+
+        std::vector<char> token;
+        ia.copy_token(token, false);
+        CHECK(token.empty());
+    }
+
+// ---- tests/src/unit-json_view.cpp:437-461  (uses: supports_bulk_scan)
+        CHECK(from_stream.root().materialize() == expected);
+        const std::list<char> list(text.begin(), text.end());
+        CHECK(json_document::parse(list.begin(), list.end()).owns_source());
+        // (an input that is not valid)
+        const std::list<char> bad_list{'[', '1', ','};
+        json_document from_bad_list;
+        CHECK_THROWS_AS(from_bad_list = json_document::parse(bad_list.begin(), bad_list.end()), json::parse_error&);
+        CHECK(materialized<json_document>(list.begin(), list.end()) == expected);
+
+        // iterator pairs: pointers are borrowed, and so are contiguous library
+        // iterators where the input adapter detects them (C++20)
+        CHECK(!json_document::parse(text.data(), text.data() + text.size()).owns_source());
+        const bool contiguous = nlohmann::detail::iterator_input_adapter<std::vector<char>::const_iterator>::supports_bulk_scan;
+        const json_document from_iterators = json_document::parse(chars.cbegin(), chars.cend());
+        CHECK(from_iterators.owns_source() != contiguous);
+        CHECK((from_iterators.source().data() == chars.data()) == contiguous);
+        CHECK(from_iterators.root().materialize() == expected);
+        const std::string padded = "x" + text + "x";
+        CHECK(materialized<json_document>(padded.begin() + 1, padded.end() - 1) == expected);
+        CHECK(json_document::parse(chars.cbegin(), chars.cbegin(), false).is_discarded());
+        const std::wstring wide = L"[\"\u00e4\u20ac\", 1]";
+        CHECK(materialized<json_document>(wide) == json::parse(wide));
+        CHECK(json_document::parse(static_cast<const char*>(nullptr), false).is_discarded());
+        CHECK(json_document::parse("", false).is_discarded());
+
+
+// ---- tests/src/unit-user_defined_input.cpp:297-320  (uses: supports_bulk_scan)
+TEST_CASE("std::counted_iterator reaches the contiguous fast paths")
+{
+    // A sized sentinel makes the remaining element count computable in O(1), so
+    // std::counted_iterator over a contiguous iterator must reach the same bulk
+    // string/number scanners as a plain pointer - not just the byte-at-a-time
+    // fallback (see #5268 for the equivalent memcpy fast path).
+#if JSON_HAS_RANGES
+    // JSON_HAS_RANGES is 0 on standard libraries with an incomplete <ranges>
+    // (libstdc++ < 11, libc++ < 16), where the adapter deliberately falls back
+    // to the byte-at-a-time scanner; everything below still has to work there.
+    using adapter_type = nlohmann::detail::iterator_input_adapter<std::counted_iterator<const char*>, std::default_sentinel_t>;
+    CHECK(adapter_type::supports_bulk_scan);
+    CHECK(adapter_type::supports_seek);
+#endif
+
+    // exercise every fast path: long ASCII run, multibyte UTF-8, escapes, and
+    // integer/floating-point numbers
+    const std::string json_str =
+        R"({"ascii":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",)"
+        "\"utf8\":\"\xe4\xb8\xad\xe6\x96\x87\xf0\x9f\x98\x80\xc3\xa9\","
+        R"("escaped":"aéb\n\\","ints":[0,-1,18446744073709551615,-9223372036854775808],)"
+        R"("floats":[1.5,-2.25e3,0.30000000000000004]})";
+    const auto len = static_cast<std::iter_difference_t<const char*>>(json_str.size());
+
+
+// ---- tests/src/unit-file_input.cpp:67-91  (uses: m_file)
+    other.join();
+    CHECK(result == 0);
+}
+#else
+void check_unlocked(std::FILE* /*f*/) {}
+#endif
+
+// SAX consumer that also reads the position of the file it is parsing, which
+// takes the file's lock again on the same thread
+class position_reading_sax : public nlohmann::json_sax<json>
+{
+  public:
+    explicit position_reading_sax(std::FILE* f) : m_file(f) {}
+    position_reading_sax(const position_reading_sax&) = delete;
+    position_reading_sax(position_reading_sax&&) = delete;
+    position_reading_sax& operator=(const position_reading_sax&) = delete;
+    position_reading_sax& operator=(position_reading_sax&&) = delete;
+    ~position_reading_sax() override = default;
+
+    bool null() override
+    {
+        return record();
+    }
+    bool boolean(bool /*val*/) override
+    {

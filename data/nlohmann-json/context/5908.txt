@@ -1,0 +1,129 @@
+// Upstream tests at the PR's parent commit 9c349b1d7 that use the changed code.
+// Names searched (test lines using each): dump (713), materialize (178), get (778), operator== (68), view_serializer (0), layout_decimal (0), dump_text (0), layout_float (0), float_value (0), convert_ahead (0), locate_token (0), sixteen_digits (0), coordinate_bits (0), write_double_beside (0), write_token_digits (0), coordinate_float (0), write_double_ahead (0), token_digits_2 (0), write_carried_digits (0), token_digits_1 (0), four_digit_text (0), biased_distance (0), float_batch (0), mark (0), mask_if (0), select_if (0), carried (0), capacity (14), entries (7), format (57), at (1196), count (215), digits (101), next (50), scanned (0), storage (6)
+
+// ---- tests/src/unit-json_view.cpp:913-959  (uses: at, count, dump, get, materialize, next)
+    SECTION("duplicate keys: lookups find the first member, iteration all")
+    {
+        const json_document d = json_document::parse(R"({"a":1,"b":2,"a":3})");
+        const json_view v = d.root();
+        CHECK(v.size() == 3);
+        CHECK(v["a"].materialize() == 1);
+        CHECK(v.at("a").materialize() == 1);
+        CHECK(v.find("a") == v.begin());
+        CHECK(v.find("a").value().materialize() == 1);
+        CHECK(v.find("b") == std::next(v.begin()));
+        CHECK(v.count("a") == 2); // every member, unlike materialize()
+        CHECK(v.count("b") == 1);
+        CHECK(v.contains("a"));
+        CHECK(v.value("a", 0) == 1);
+        CHECK(v.materialize()["a"] == 3); // materialize() keeps the last value, unlike the lookups
+        // JSON pointers resolve to the first member at every level
+        const json_document dp = json_document::parse(R"({"a":{"b":1},"a":{"b":2,"b":3}})");
+        CHECK(dp.root()[json::json_pointer("/a/b")].materialize() == 1);
+        CHECK(dp.root().at(json::json_pointer("/a/b")).materialize() == 1);
+        CHECK(dp.root().value(json::json_pointer("/a/b"), 0) == 1);
+        CHECK(dp.root().materialize()[json::json_pointer("/a/b")] == 3);
+        // get<map> keeps the last value, as materialize()
+        CHECK((v.get<std::map<std::string, int>>() == std::map<std::string, int> {{"a", 3}, {"b", 2}}));
+        // keys of every length class (the 16-byte short compare and memcmp)
+        for (const std::size_t n :
+                {
+                    0u, 1u, 3u, 7u, 8u, 15u, 16u, 17u, 40u
+                })
+        {
+            const std::string key(n, 'k');
+            const json_document dk = json_document::parse("{\"" + key + "\":1,\"" + key + "x\":2,\"" + key + "\":3,\"" + key + "\":4}"); // NOLINT(performance-inefficient-string-concatenation)
+            CAPTURE(n)
+            CHECK(dk.root()[key].materialize() == 1);
+            CHECK(dk.root().at(key).materialize() == 1);
+            CHECK(dk.root().find(key) == dk.root().begin());
+            CHECK(dk.root().value(key, 0) == 1);
+            CHECK(dk.root()[key + "x"].materialize() == 2);
+        }
+        std::string order;
+        for (auto it = v.begin(); it != v.end(); ++it)
+        {
+            order += std::string(it.key().data(), it.key().size()) + it->materialize().dump();
+        }
+        CHECK(order == "a1b2a3");
+        CHECK(v.back().materialize() == 3);
+        CHECK(v.materialize() == json::parse(R"({"a":1,"b":2,"a":3})")); // the last value, as parse()
+    }
+
+// ---- tests/src/unit-comparison.cpp:912-955  (uses: entries, operator==)
+TEST_CASE("equality of objects whose entries have no fixed order")
+{
+    // Values nested deeper than a bound are compared without the call stack,
+    // entry by entry. That must agree with the object type's own operator==,
+    // which for unordered_object_t (as for std::unordered_map) does not
+    // depend on the order of the entries, and for ordered_map does.
+    REQUIRE(make_unordered_object(true).begin().key() == "9");
+    REQUIRE(make_unordered_object(false).begin().key() == "0");
+
+    for (const std::size_t depth : std::vector<std::size_t> {0, 200})
+    {
+        CAPTURE(depth)
+
+        const unordered_json descending = nest(make_unordered_object(true), depth);
+        const unordered_json ascending = nest(make_unordered_object(false), depth);
+        CHECK(descending == ascending);
+        CHECK_FALSE(descending != ascending);
+
+        // a copy is equal to its original
+        const unordered_json copy = descending; // NOLINT(performance-unnecessary-copy-initialization)
+        CHECK(copy == descending);
+
+        // a different value, a different key, or another entry still count
+        unordered_json other_value = make_unordered_object(true);
+        other_value["5"] = 42;
+        CHECK_FALSE(nest(other_value, depth) == ascending);
+
+        unordered_json other_key = make_unordered_object(true);
+        other_key.erase("5");
+        other_key["50"] = 5;
+        CHECK_FALSE(nest(other_key, depth) == ascending);
+
+        unordered_json more_entries = make_unordered_object(true);
+        more_entries["10"] = 10;
+        CHECK_FALSE(nest(more_entries, depth) == ascending);
+        CHECK_FALSE(ascending == nest(more_entries, depth));
+
+        // ordered_json compares its entries in sequence
+        const nlohmann::ordered_json ab = nest(nlohmann::ordered_json({{"a", 1}, {"b", 2}}), depth);
+        const nlohmann::ordered_json ba = nest(nlohmann::ordered_json({{"b", 2}, {"a", 1}}), depth);
+        CHECK_FALSE(ab == ba);
+        CHECK(ab != ba);
+    }
+}
+
+// ---- tests/src/unit-json_view_dump.cpp:318-336  (uses: capacity, dump)
+    SECTION("the output buffer of a small value is small")
+    {
+        // an escaped key after the value: its node lies in the arena, so the
+        // source extent of the value cannot be read from the next node
+        const std::string big(100000, 'a');
+        const std::string text = R"({"small":1,"list":[1,2,3],"k\n":")" + big + R"("})";
+        const json_document d = json_document::parse(text);
+        const auto small = d.root()["small"].dump();
+        CHECK(small == "1");
+        CHECK(small.capacity() < 4096);
+        const auto list = d.root()["list"].dump();
+        CHECK(list == "[1,2,3]");
+        CHECK(list.capacity() < 4096);
+        CHECK(d.root()["list"].dump(2).capacity() < 4096);
+
+        // the whole document and the large value are unaffected
+        CHECK(d.root().dump() == ordered_json::parse(text).dump());
+        CHECK(d.root()["k\n"].dump() == "\"" + big + "\"");
+    }
+
+// ---- tests/src/unit-json_pointer.cpp:1298-1306  (uses: dump, entries)
+    SECTION("order of the entries of an ordered_json")
+    {
+        const auto value = nlohmann::ordered_json::parse(
+                               R"({"z":"s","a/b":{"~":1,"k":[]},"a":[1,{"c":{},"b":[]},[{"x~/":[true,null],"w":2}]]})");
+
+        const auto flat = value.flatten();
+        CHECK(flat.dump() ==
+              R"({"/z":"s","/a~1b/~0":1,"/a~1b/k":null,"/a/0":1,"/a/1/c":null,"/a/1/b":null,"/a/2/0/x~0~1/0":true,"/a/2/0/x~0~1/1":null,"/a/2/0/w":2})");
+    }

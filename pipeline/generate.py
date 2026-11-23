@@ -124,7 +124,22 @@ def changed_functions(t, rec):
     p = t.data / "changes" / f"{rec['pr']}.json"
     if p.is_file():
         funcs = json.loads(p.read_text(encoding="utf-8")).get("functions", [])
-        return [f"{f['name']}" + (f" ({f['access']})" if f.get("access") else "") for f in funcs], "changes.py"
+        out = []
+        for f in funcs:
+            line = f"{f['name']}" + (f" ({f['access']})" if f.get("access") else "")
+            via = [v["name"] if isinstance(v, dict) else v for v in f.get("reached_via", [])]
+            if via:
+                line += "; reached from the public API through: " + ", ".join(via)
+            defines = [x[2:] for x in f.get("requires_flags", []) if x.startswith("-D")]
+            others = [x for x in f.get("requires_flags", []) if not x.startswith("-D")]
+            if defines:
+                line += ("; compiled only when the program does "
+                         + ", ".join("#define " + d.replace("=", " ", 1) for d in defines)
+                         + " before including the library")
+            if others:
+                line += "; compiled only with " + " ".join(others) + " (the test run must use that compiler setting)"
+            out.append(line)
+        return out, "changes.py"
     seen = []
     for c in rec.get("hunk_contexts", []):
         if c and c not in seen:

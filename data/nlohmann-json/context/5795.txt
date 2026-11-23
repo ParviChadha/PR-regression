@@ -1,0 +1,158 @@
+// Upstream tests at the PR's parent commit 11ef35251 that use the changed code.
+// Names searched (test lines using each): basic_json (31), to_bjdata (0), to_bon8 (0), to_bson (0), to_cbor (0), to_msgpack (0), at (375), binary_writer (0), write_bson_document (0), write_cbor (0), write_msgpack (0), copy_object_level (0), object_at (0), write_cbor_iterative (0), write_msgpack_iterative (0), copy_keys_equal (0), write_bson_nested_head (0), write_cbor_key (0), write_msgpack_key (0), key_for_message (0), detect_equal_comparable (0)
+
+// ---- tests/src/custom_object_key_type.hpp:62-75  (uses: basic_json)
+  private:
+    using allocator_type =
+    typename std::allocator_traits<Allocator>::template rebind_alloc <
+        std::pair<const key, Value >>;
+
+    using base_type =
+        std::map<key, Value, std::less<key>, allocator_type>; // NOLINT(modernize-use-transparent-functors)
+
+  public:
+    using base_type::base_type;
+};
+
+using json = nlohmann::basic_json<object>;
+} // namespace custom_object_key_test
+
+// ---- tests/src/unit-allocator.cpp:176-188  (uses: basic_json)
+    SECTION("class basic_json")
+    {
+        SECTION("basic_json(const CompatibleObjectType&)")
+        {
+            next_construct_fails = false;
+            const std::map<std::string, std::string> v {{"foo", "bar"}};
+            CHECK_NOTHROW(my_json(v));
+            next_construct_fails = true;
+            CHECK_THROWS_AS(my_json(v), std::bad_alloc&);
+            next_construct_fails = false;
+        }
+
+        SECTION("basic_json(const CompatibleArrayType&)")
+
+// ---- tests/src/unit-allocator.cpp:198-205  (uses: basic_json)
+        SECTION("basic_json(const typename string_t::value_type*)")
+        {
+            next_construct_fails = false;
+            CHECK_NOTHROW(my_json("foo"));
+            next_construct_fails = true;
+            CHECK_THROWS_AS(my_json("foo"), std::bad_alloc&);
+            next_construct_fails = false;
+        }
+
+// ---- tests/src/unit-alt-string.cpp:418-451  (uses: basic_json)
+    SECTION("conversion between basic_json specializations (#2649)")
+    {
+        // explicit conversions are always possible
+        CHECK(std::is_constructible<nlohmann::json, alt_json>::value);
+        CHECK(std::is_constructible<alt_json, nlohmann::json>::value);
+        CHECK(std::is_constructible<nlohmann::json, nlohmann::ordered_json>::value);
+        CHECK(std::is_constructible<nlohmann::ordered_json, nlohmann::json>::value);
+
+        // specializations with the same string type are implicitly convertible
+        CHECK(std::is_convertible<nlohmann::ordered_json, nlohmann::json>::value);
+        CHECK(std::is_convertible<nlohmann::json, nlohmann::ordered_json>::value);
+
+        // specializations with different string types are only implicitly convertible
+        // if implicit conversions are enabled
+#if JSON_USE_IMPLICIT_CONVERSIONS
+        CHECK(std::is_convertible<alt_json, nlohmann::json>::value);
+        CHECK(std::is_convertible<nlohmann::json, alt_json>::value);
+#else
+        CHECK_FALSE(std::is_convertible<alt_json, nlohmann::json>::value);
+        CHECK_FALSE(std::is_convertible<nlohmann::json, alt_json>::value);
+#endif
+
+        // get<BasicJsonType>() works in either case
+        const nlohmann::json j = {{"foo", 1}, {"bar", true}};
+        CHECK(j.get<nlohmann::ordered_json>() == nlohmann::ordered_json(j));
+        // (only a number is converted here, as objects and strings are affected by #3425)
+        CHECK(nlohmann::json(42).get<alt_json>() == 42);
+        CHECK(alt_json(nlohmann::json(42)) == 42);
+
+        // get_to() also works in either case
+        alt_json a;
+        nlohmann::json(42).get_to(a);
+        CHECK(a == 42);
+    }
+
+// ---- tests/src/unit-assert_macro.cpp:30-43  (uses: basic_json)
+    SECTION("basic_json(first, second)")
+    {
+        assert_counter = 0;
+        CHECK(assert_counter == 0);
+
+        const json::iterator it{};
+        json j;
+
+        // in case assertions do not abort execution, an exception is thrown
+        CHECK_THROWS_WITH_AS(json(it, j.end()), "[json.exception.invalid_iterator.201] iterators are not compatible", json::invalid_iterator);
+
+        // check that assertion actually happened
+        CHECK(assert_counter == 1);
+    }
+
+// ---- tests/src/unit-binary_utf8_error_handler.cpp:95-119  (uses: basic_json)
+template<typename Key, typename Value, typename Compare, typename Allocator>
+class converting_key_object : public std::map<converting_key, Value, std::less<converting_key>, // NOLINT(modernize-use-transparent-functors)
+    typename std::allocator_traits<Allocator>::template rebind_alloc<std::pair<const converting_key, Value>>>
+{
+    using base_type = std::map<converting_key, Value, std::less<converting_key>, // NOLINT(modernize-use-transparent-functors)
+                               typename std::allocator_traits<Allocator>::template rebind_alloc<std::pair<const converting_key, Value>>>;
+
+                             public:
+                               using base_type::base_type;
+                               using base_type::operator=;
+};
+
+using converting_key_json = nlohmann::basic_json<converting_key_object>;
+
+} // namespace
+
+TEST_CASE("UTF-8 error_handler for the binary readers and writers")
+{
+    SECTION("writers: string value")
+    {
+        for (const auto& c : ill_formed_cases())
+        {
+            CAPTURE(c.name)
+            const json jval = c.bytes;
+
+
+// ---- tests/src/unit-delete_deprecated_functions.cpp:190-203  (uses: basic_json)
+    SECTION("json_pointer with a basic_json type as template argument")
+    {
+        CHECK_FALSE(legacy_ptr_value<json>::value);
+        CHECK_FALSE(legacy_ptr_value_rvalue<json>::value);
+        CHECK_FALSE(legacy_ptr_contains<json>::value);
+        CHECK_FALSE(legacy_ptr_subscript<json>::value);
+        CHECK_FALSE(legacy_ptr_subscript_const<json>::value);
+        CHECK_FALSE(legacy_ptr_at<json>::value);
+        CHECK_FALSE(legacy_ptr_at_const<json>::value);
+
+        // the replacement
+        CHECK(ptr_value<json>::value);
+        CHECK(ptr_at<json>::value);
+    }
+
+// ---- tests/src/unit-explicit_instantiation.cpp:32-37  (uses: basic_json)
+TEST_CASE("explicit instantiation of basic_json (#4825)")
+{
+    const json j = {1, "two", 3.0};
+    CHECK(j.size() == 3);
+    CHECK(json::from_bjdata(json::to_bjdata(j)) == j);
+}
+
+// ---- tests/src/unit-regression1.cpp:569-578  (uses: basic_json)
+    SECTION("issue #233 - Can't use basic_json::iterator as a base iterator for std::move_iterator")
+    {
+        json source = {"a", "b", "c"};
+        json expected = {"a", "b"};
+        json dest;
+
+        std::copy_n(std::make_move_iterator(source.begin()), 2, std::back_inserter(dest));
+
+        CHECK(dest == expected);
+    }

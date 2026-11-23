@@ -1,0 +1,184 @@
+// Upstream tests at the PR's parent commit 30e542e52 that use the changed code.
+// Names searched (test lines using each): erase (228), to_bjdata (0), to_bon8 (0), to_bson (0), to_cbor (0), to_msgpack (0), throw_on_discarded (0)
+
+// ---- tests/src/unit-class_parser.cpp:2401-2412  (uses: erase)
+        SECTION("for object")
+        {
+            // Create an object with spaces to test the start and end positions. Spaces will not be included in the
+            // JSON object, however, the start and end positions should include the spaces from the input JSON string.
+            const std::string nested_type_json_str =  R"({    "a":       1,"b"      : "test1"})";
+            const std::string root_type_json_str =  R"({    "nested": )" + nested_type_json_str + R"(, "anotherValue": "test2"})";
+            auto expected = json({{"nested", {{"a", 1}, {"b", "test1"}}}, {"anotherValue", "test2"}});
+            auto filteredExpected = expected;
+            filteredExpected["nested"].erase("a");
+
+            SETUP_TESTCASES()
+        }
+
+// ---- tests/src/unit-class_parser.cpp:2424-2438  (uses: erase)
+        SECTION("for array with objects")
+        {
+            const std::string nested_type_json_str =  R"([{"a": 1, "b": "test"}, {"c": 2, "d": "test2"}])";
+            const std::string root_type_json_str =  R"({   "nested": )" + nested_type_json_str + R"(, "anotherValue": "test" })";
+            auto expected = json({{"nested", {{{"a", 1}, {"b", "test"}}, {{"c", 2}, {"d", "test2"}}}}, {"anotherValue", "test"}});
+            auto filteredExpected = expected;
+            filteredExpected["nested"][0].erase("a");
+            SETUP_TESTCASES()
+
+            auto j = json::parse(root_type_json_str);
+            auto nested_array = j["nested"];
+            const auto& nested_obj = nested_array[0];
+            CHECK(nested_type_json_str.substr(1, 21) == root_type_json_str.substr(nested_obj.start_pos(), nested_obj.end_pos() - nested_obj.start_pos()));
+            CHECK(nested_type_json_str.substr(24, 22) == root_type_json_str.substr(nested_array[1].start_pos(), nested_array[1].end_pos() - nested_array[1].start_pos()));
+        }
+
+// ---- tests/src/unit-comparison.cpp:911-954  (uses: erase)
+TEST_CASE("equality of objects whose entries have no fixed order")
+{
+    // Values nested deeper than a bound are compared without the call stack,
+    // entry by entry. That must agree with the object type's own operator==,
+    // which for unordered_object_t (as for std::unordered_map) does not
+    // depend on the order of the entries, and for ordered_map does.
+    REQUIRE(make_unordered_object(true).begin().key() == "9");
+    REQUIRE(make_unordered_object(false).begin().key() == "0");
+
+    for (const std::size_t depth : std::vector<std::size_t> {0, 200})
+    {
+        CAPTURE(depth)
+
+        const unordered_json descending = nest(make_unordered_object(true), depth);
+        const unordered_json ascending = nest(make_unordered_object(false), depth);
+        CHECK(descending == ascending);
+        CHECK_FALSE(descending != ascending);
+
+        // a copy is equal to its original
+        const unordered_json copy = descending; // NOLINT(performance-unnecessary-copy-initialization)
+        CHECK(copy == descending);
+
+        // a different value, a different key, or another entry still count
+        unordered_json other_value = make_unordered_object(true);
+        other_value["5"] = 42;
+        CHECK_FALSE(nest(other_value, depth) == ascending);
+
+        unordered_json other_key = make_unordered_object(true);
+        other_key.erase("5");
+        other_key["50"] = 5;
+        CHECK_FALSE(nest(other_key, depth) == ascending);
+
+        unordered_json more_entries = make_unordered_object(true);
+        more_entries["10"] = 10;
+        CHECK_FALSE(nest(more_entries, depth) == ascending);
+        CHECK_FALSE(ascending == nest(more_entries, depth));
+
+        // ordered_json compares its entries in sequence
+        const nlohmann::ordered_json ab = nest(nlohmann::ordered_json({{"a", 1}, {"b", 2}}), depth);
+        const nlohmann::ordered_json ba = nest(nlohmann::ordered_json({{"b", 2}, {"a", 1}}), depth);
+        CHECK_FALSE(ab == ba);
+        CHECK(ab != ba);
+    }
+}
+
+// ---- tests/src/unit-custom-array-type.cpp:85-106  (uses: erase)
+    SECTION("accessing and modifying elements")
+    {
+        auto j = deque_json::parse(R"([1,2,3])");
+
+        CHECK(j[1] == 2);
+        CHECK(j.at(2) == 3);
+
+        // growing through operator[] fills up with null values
+        j[5] = 6;
+        CHECK(j.size() == 6);
+        CHECK(j[4].is_null());
+        CHECK(j[5] == 6);
+
+        j.erase(0);
+        CHECK(j == deque_json({2, 3, nullptr, nullptr, 6}));
+
+        auto it = j.erase(j.begin());
+        CHECK(*it == 3);
+
+        j.insert(j.begin(), 1);
+        CHECK(j.front() == 1);
+    }
+
+// ---- tests/src/unit-custom-base-class.cpp:368-384  (uses: erase)
+                break;
+            case value_t::binary:
+                str << "binary";
+                break;
+            default:
+                str << "error";
+                break;
+        }
+        str << " - "  << j.dump();
+        CHECK(json.at(p) == j);
+        INFO(str.str());
+        CHECK(expected.count(str.str()) == 1);
+        expected.erase(str.str());
+    }
+        );
+    CHECK(expected.empty());
+}
+
+// ---- tests/src/unit-custom-object-type.cpp:144-168  (uses: erase)
+
+    mapped_type& at(const key_type& key)
+    {
+        return data.at(key);
+    }
+    const mapped_type& at(const key_type& key) const
+    {
+        return data.at(key);
+    }
+
+    iterator erase(iterator pos)
+    {
+        return data.erase(pos);
+    }
+    iterator erase(iterator first, iterator last)
+    {
+        return data.erase(first, last);
+    }
+    size_type erase(const key_type& key)
+    {
+        return data.erase(key);
+    }
+
+    void swap(no_key_compare_map& other) noexcept(noexcept(data.swap(other.data)))
+    {
+
+// ---- tests/src/unit-custom-object-type.cpp:353-377  (uses: erase)
+
+    mapped_type& at(const key_type& key)
+    {
+        return data.at(key);
+    }
+    const mapped_type& at(const key_type& key) const
+    {
+        return data.at(key);
+    }
+
+    iterator erase(iterator pos)
+    {
+        return iterator(data.erase(pos.base()));
+    }
+    iterator erase(iterator first, iterator last)
+    {
+        return iterator(data.erase(first.base(), last.base()));
+    }
+    size_type erase(const key_type& key)
+    {
+        return data.erase(key);
+    }
+
+    void swap(forward_only_map& other) noexcept(noexcept(data.swap(other.data)))
+    {
+
+// ---- tests/src/unit-diagnostics.cpp:62-67  (uses: erase)
+    SECTION("wrong iterator")
+    {
+        json j;
+        j["array"] = json::array();
+        CHECK_THROWS_WITH_AS(j["array"].erase(j.begin()), "[json.exception.invalid_iterator.202] (/array) iterator does not fit current value", json::invalid_iterator);
+    }

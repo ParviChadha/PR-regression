@@ -1,0 +1,196 @@
+// Upstream tests at the PR's parent commit 4e294f4b1 that use the changed code.
+// Names searched (test lines using each): accept (12), parse (11), sax_parse (0), operator>> (79), key (159)
+
+// ---- tests/src/unit-class_parser.cpp:45-69  (uses: parse)
+using utils::SaxEventLogger;
+
+namespace
+{
+json parser_helper(const std::string& s);
+bool accept_helper(const std::string& s);
+void comments_helper(const std::string& s);
+void trailing_comma_helper(const std::string& s);
+
+json parser_helper(const std::string& s)
+{
+    json j;
+    json::parser(nlohmann::detail::input_adapter(s)).parse(true, j);
+
+    // if this line was reached, no exception occurred
+    // -> check if result is the same without exceptions
+    json j_nothrow;
+    CHECK_NOTHROW(json::parser(nlohmann::detail::input_adapter(s), nullptr, false).parse(true, j_nothrow));
+    CHECK(j_nothrow == j);
+
+    json j_sax;
+    nlohmann::detail::json_sax_dom_parser<json, nlohmann::detail::string_input_adapter_type> sdp(j_sax);
+    json::sax_parse(s, &sdp);
+    CHECK(j_sax == j);
+
+
+// ---- tests/src/unit-class_parser.cpp:71-95  (uses: parse)
+
+    trailing_comma_helper(s);
+
+    return j;
+}
+
+bool accept_helper(const std::string& s)
+{
+    CAPTURE(s)
+
+    // 1. parse s without exceptions
+    json j;
+    CHECK_NOTHROW(json::parser(nlohmann::detail::input_adapter(s), nullptr, false).parse(true, j));
+    const bool ok_noexcept = !j.is_discarded();
+
+    // 2. accept s
+    const bool ok_accept = json::parser(nlohmann::detail::input_adapter(s)).accept(true);
+
+    // 3. check if both approaches come to the same result
+    CHECK(ok_noexcept == ok_accept);
+
+    // 4. parse with SAX (compare with relaxed accept result)
+    SaxEventLogger el;
+    CHECK_NOTHROW(json::sax_parse(s, &el, json::input_format_t::json, false));
+    CHECK(json::parser(nlohmann::detail::input_adapter(s)).accept(false) == !el.errored);
+
+// ---- tests/src/unit-deserialization.cpp:97-109  (uses: operator>>)
+TEST_CASE("deserialization")
+{
+    SECTION("successful deserialization")
+    {
+        SECTION("stream")
+        {
+            std::stringstream ss1;
+            std::stringstream ss2;
+            std::stringstream ss3;
+            ss1 << R"(["foo",1,2,3,false,{"one":1}])";
+            ss2 << R"(["foo",1,2,3,false,{"one":1}])";
+            ss3 << R"(["foo",1,2,3,false,{"one":1}])";
+            const json j = json::parse(ss1);
+
+// ---- tests/src/unit-deserialization.cpp:174-181  (uses: operator>>)
+        SECTION("operator>>")
+        {
+            std::stringstream ss;
+            ss << R"(["foo",1,2,3,false,{"one":1}])";
+            json j;
+            ss >> j;
+            CHECK(j == json({"foo", 1, 2, 3, false, {{"one", 1}}}));
+        }
+
+// ---- tests/src/unit-precise-stream-position.cpp:88-100  (uses: operator>>)
+TEST_CASE("JSON_PRECISE_STREAM_POSITION")
+{
+    SECTION("the macro is part of the ABI tag")
+    {
+        const std::string ns = STRINGIZE(NLOHMANN_JSON_NAMESPACE);
+        // other tags may come before it, e.g. json_abi_diag_psp
+        CHECK(ns.find("_psp") != std::string::npos);
+    }
+
+    SECTION("a number does not consume the character that terminates it")
+    {
+        // a number is only terminated by the character following it; that
+        // character must be given back so the stream is positioned right
+
+// ---- tests/src/unit-precise-stream-position.cpp:146-158  (uses: operator>>)
+    SECTION("a number at the end of the input leaves nothing behind")
+    {
+        for (const std::string s :
+                {"1", "12", "-3.5e2", " 7 "
+                })
+        {
+            CAPTURE(s)
+            std::istringstream ss(s);
+            json j;
+            ss >> j;
+            CHECK(remaining(ss).find_first_not_of(" \t\n\r") == std::string::npos);
+        }
+    }
+
+// ---- tests/src/unit-std-format.cpp:105-126  (uses: parse)
+    SECTION("a format spec may run to the end of the parse context")
+    {
+        // std::format always hands parse() a range that still holds the closing
+        // '}', but a parse context may also end right after the spec
+        const auto parse = [](const char* spec)
+        {
+            std::format_parse_context ctx(spec);
+            std::formatter<json> f;
+            CHECK(f.parse(ctx) == ctx.end());
+            return f;
+        };
+
+        CHECK(parse("").indent == -1);
+        CHECK(parse(">").indent == -1);
+        CHECK(parse("#").indent == 4);
+        CHECK(parse("3").indent == 3);
+        CHECK(parse("#12").indent == 12);
+
+        const auto f = parse(".>");
+        CHECK(f.indent == -1);
+        CHECK(f.indent_char == '.');
+    }
+
+// ---- tests/src/unit-alt-string.cpp:269-296  (uses: key)
+    SECTION("items")
+    {
+        auto doc = alt_json::parse(R"({"foo": "bar"})");
+
+        for (const auto& item : doc.items())
+        {
+            CHECK(item.key() == "foo");
+            CHECK(item.value() == "bar");
+        }
+
+        auto doc_array = alt_json::parse(R"(["foo", "bar"])");
+
+        for (const auto& item : doc_array.items())
+        {
+            if (item.key() == "0" )
+            {
+                CHECK( item.value() == "foo" );
+            }
+            else if (item.key() == "1" )
+            {
+                CHECK(item.value() == "bar");
+            }
+            else
+            {
+                CHECK(false);
+            }
+        }
+    }
+
+// ---- tests/src/unit-binary_utf8_error_handler.cpp:302-321  (uses: key)
+    SECTION("well-formed UTF-8 is unaffected by error_handler")
+    {
+        const json jval = valid_sequence();
+        json jobj;
+        jobj[valid_sequence()] = valid_sequence();
+
+        for (const auto h : all_handlers())
+        {
+            CAPTURE(static_cast<int>(h))
+
+            CHECK(json::from_cbor(json::to_cbor(jval, h)).get<std::string>() == valid_sequence());
+            CHECK(json::from_msgpack(json::to_msgpack(jval, h)).get<std::string>() == valid_sequence());
+            CHECK(json::from_ubjson(json::to_ubjson(jval, false, false, h)).get<std::string>() == valid_sequence());
+            CHECK(json::from_bjdata(json::to_bjdata(jval, false, false, json::bjdata_version_t::draft2, h)).get<std::string>() == valid_sequence());
+            CHECK(json::from_bson(json::to_bson(jobj, h)).begin().key() == valid_sequence());
+
+            CHECK(json::from_cbor(json::to_cbor(jval, eh::keep), true, true, json::cbor_tag_handler_t::error, h).get<std::string>() == valid_sequence());
+            CHECK(json::from_msgpack(json::to_msgpack(jval), true, true, h).get<std::string>() == valid_sequence());
+        }
+    }
+
+// ---- tests/src/unit-bon8.cpp:812-818  (uses: operator>>)
+            SECTION("std::ostringstream")
+            {
+                std::basic_ostringstream<char> ss;
+                json::to_bon8(j1, ss);
+                json j3 = json::from_bon8(ss.str());
+                CHECK(j1 == j3);
+            }

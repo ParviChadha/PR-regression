@@ -1,0 +1,153 @@
+// Upstream tests at the PR's parent commit 515d994ac that use the changed code.
+// Names searched (test lines using each): at (223), contains (91), count (50), erase (189), find (111), operator[] (15), is_usable_as_basic_json_key_type (0)
+
+// ---- tests/src/unit-json_pointer.cpp:371-396  (uses: at, contains)
+        SECTION("const access")
+        {
+            const json j = {1, 2, 3};
+
+            // check reading access
+            CHECK(j["/0"_json_pointer] == j[0]);
+            CHECK(j["/1"_json_pointer] == j[1]);
+            CHECK(j["/2"_json_pointer] == j[2]);
+
+            // assign to nonexisting index
+            CHECK_THROWS_WITH_AS(j.at("/3"_json_pointer),
+                                 "[json.exception.out_of_range.401] array index 3 is out of range", json::out_of_range&);
+            CHECK(!j.contains("/3"_json_pointer));
+
+            // assign to nonexisting index (with gap)
+            CHECK_THROWS_WITH_AS(j.at("/5"_json_pointer),
+                                 "[json.exception.out_of_range.401] array index 5 is out of range", json::out_of_range&);
+            CHECK(!j.contains("/5"_json_pointer));
+
+            // assign to "-"
+            CHECK_THROWS_WITH_AS(j["/-"_json_pointer],
+                                 "[json.exception.out_of_range.402] array index '-' (3) is out of range", json::out_of_range&);
+            CHECK_THROWS_WITH_AS(j.at("/-"_json_pointer),
+                                 "[json.exception.out_of_range.402] array index '-' (3) is out of range", json::out_of_range&);
+            CHECK(!j.contains("/-"_json_pointer));
+        }
+
+// ---- tests/src/unit-element_access2.cpp:740-781  (uses: erase, find)
+            SECTION("remove element by key")
+            {
+                CHECK(j.find("integer") != j.end());
+                CHECK(j.erase("integer") == 1);
+                CHECK(j.find("integer") == j.end());
+                CHECK(j.erase("integer") == 0);
+
+                CHECK(j.find("unsigned") != j.end());
+                CHECK(j.erase("unsigned") == 1);
+                CHECK(j.find("unsigned") == j.end());
+                CHECK(j.erase("unsigned") == 0);
+
+                CHECK(j.find("boolean") != j.end());
+                CHECK(j.erase("boolean") == 1);
+                CHECK(j.find("boolean") == j.end());
+                CHECK(j.erase("boolean") == 0);
+
+                CHECK(j.find("null") != j.end());
+                CHECK(j.erase("null") == 1);
+                CHECK(j.find("null") == j.end());
+                CHECK(j.erase("null") == 0);
+
+                CHECK(j.find("string") != j.end());
+                CHECK(j.erase("string") == 1);
+                CHECK(j.find("string") == j.end());
+                CHECK(j.erase("string") == 0);
+
+                CHECK(j.find("floating") != j.end());
+                CHECK(j.erase("floating") == 1);
+                CHECK(j.find("floating") == j.end());
+                CHECK(j.erase("floating") == 0);
+
+                CHECK(j.find("object") != j.end());
+                CHECK(j.erase("object") == 1);
+                CHECK(j.find("object") == j.end());
+                CHECK(j.erase("object") == 0);
+
+                CHECK(j.find("array") != j.end());
+                CHECK(j.erase("array") == 1);
+                CHECK(j.find("array") == j.end());
+                CHECK(j.erase("array") == 0);
+            }
+
+// ---- tests/src/unit-element_access2.cpp:784-825  (uses: erase, find)
+            SECTION("remove element by key (string_view)")
+            {
+                CHECK(j.find(std::string_view("integer")) != j.end());
+                CHECK(j.erase(std::string_view("integer")) == 1);
+                CHECK(j.find(std::string_view("integer")) == j.end());
+                CHECK(j.erase(std::string_view("integer")) == 0);
+
+                CHECK(j.find(std::string_view("unsigned")) != j.end());
+                CHECK(j.erase(std::string_view("unsigned")) == 1);
+                CHECK(j.find(std::string_view("unsigned")) == j.end());
+                CHECK(j.erase(std::string_view("unsigned")) == 0);
+
+                CHECK(j.find(std::string_view("boolean")) != j.end());
+                CHECK(j.erase(std::string_view("boolean")) == 1);
+                CHECK(j.find(std::string_view("boolean")) == j.end());
+                CHECK(j.erase(std::string_view("boolean")) == 0);
+
+                CHECK(j.find(std::string_view("null")) != j.end());
+                CHECK(j.erase(std::string_view("null")) == 1);
+                CHECK(j.find(std::string_view("null")) == j.end());
+                CHECK(j.erase(std::string_view("null")) == 0);
+
+                CHECK(j.find(std::string_view("string")) != j.end());
+                CHECK(j.erase(std::string_view("string")) == 1);
+                CHECK(j.find(std::string_view("string")) == j.end());
+                CHECK(j.erase(std::string_view("string")) == 0);
+
+                CHECK(j.find(std::string_view("floating")) != j.end());
+                CHECK(j.erase(std::string_view("floating")) == 1);
+                CHECK(j.find(std::string_view("floating")) == j.end());
+                CHECK(j.erase(std::string_view("floating")) == 0);
+
+                CHECK(j.find(std::string_view("object")) != j.end());
+                CHECK(j.erase(std::string_view("object")) == 1);
+                CHECK(j.find(std::string_view("object")) == j.end());
+                CHECK(j.erase(std::string_view("object")) == 0);
+
+                CHECK(j.find(std::string_view("array")) != j.end());
+                CHECK(j.erase(std::string_view("array")) == 1);
+                CHECK(j.find(std::string_view("array")) == j.end());
+                CHECK(j.erase(std::string_view("array")) == 0);
+            }
+
+// ---- tests/src/unit-meta.cpp:16-35  (uses: at, find)
+    SECTION("meta()")
+    {
+        json j = json::meta();
+
+        CHECK(j["name"] == "JSON for Modern C++");
+        CHECK(j["copyright"] == "(C) 2013-2026 Niels Lohmann");
+        CHECK(j["url"] == "https://github.com/nlohmann/json");
+        CHECK(j["version"] == json(
+        {
+            {"string", "3.12.0"},
+            {"major", 3},
+            {"minor", 12},
+            {"patch", 0}
+        }));
+
+        CHECK(j.find("platform") != j.end());
+        CHECK(j.at("compiler").find("family") != j.at("compiler").end());
+        CHECK(j.at("compiler").find("version") != j.at("compiler").end());
+        CHECK(j.at("compiler").find("c++") != j.at("compiler").end());
+    }
+
+// ---- tests/src/unit-cbor.cpp:1281-1291  (uses: operator[])
+            SECTION("[[[[]]]]")
+            {
+                const json j = json::parse("[[[[]]]]");
+                const std::vector<uint8_t> expected = {0x81, 0x81, 0x81, 0x80};
+                const auto result = json::to_cbor(j);
+                CHECK(result == expected);
+
+                // roundtrip
+                CHECK(json::from_cbor(result) == j);
+                CHECK(json::from_cbor(result, true, false) == j);
+            }

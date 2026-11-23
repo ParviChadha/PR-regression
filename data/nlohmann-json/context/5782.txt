@@ -1,0 +1,24 @@
+// Upstream tests at the PR's parent commit ed8ba0201 that use the changed code.
+// Names searched (test lines using each): sax_parse (0), from_bson (0), from_cbor (0), from_msgpack (0), from_ubjson (0), from_bjdata (0), from_bon8 (0), full_multiplication (1)
+
+// ---- tests/src/unit-class_lexer.cpp:892-911  (uses: full_multiplication)
+    SECTION("128-bit products and leading zeros")
+    {
+        // whichever implementation the compiler gets (with or without a
+        // 128-bit integer type or a builtin)
+        std::uint64_t state = 42;
+        for (int i = 0; i < 10000; ++i)
+        {
+            state ^= state << 13u;
+            state ^= state >> 7u;
+            state ^= state << 17u;
+            const std::uint64_t a = state;
+            const std::uint64_t b = (state * 0x9E3779B97F4A7C15u) >> (i % 64);
+            const auto product = nlohmann::detail::full_multiplication(a, b);
+            CHECK(big_from(product.high, product.low) == big_mul(big_from(0, a), big_from(0, b)));
+
+            const int k = i % 64;
+            const std::uint64_t x = (std::uint64_t{1} << k) | (a & ((std::uint64_t{1} << k) - 1));
+            CHECK(nlohmann::detail::count_leading_zeros(x) == 63 - k);
+        }
+    }

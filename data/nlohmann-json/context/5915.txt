@@ -1,0 +1,156 @@
+// Upstream tests at the PR's parent commit 94fe31eb9 that use the changed code.
+// Names searched (test lines using each): read (19), basic_json_document (0), load (0), accept (12), parse (11), save (41), count (70), back (104), materialize (155), dump (704), memory_usage (17), shrink_to_fit (16), at (507), operator= (28), arena_grow (0), document_data (8), create (0), max_inline_nodes (0)
+
+// ---- tests/src/unit-json_view.cpp:624-667  (uses: materialize, memory_usage, read, shrink_to_fit)
+    SECTION("memory")
+    {
+        std::string big = "[";
+        for (int i = 0; i < 10000; ++i)
+        {
+            big += (i != 0 ? ",\"" : "\"") + std::to_string(i) + "\"";
+        }
+        big += ']';
+        json_document d = json_document::parse(big);
+        CHECK(d.node_count() == 10001);
+        const std::size_t before = d.memory_usage();
+        d.shrink_to_fit(); // (invalidates views, like std::vector::shrink_to_fit)
+        CHECK(d.memory_usage() <= before);
+        CHECK(d.node_count() == 10001);
+        CHECK(d.root().materialize() == json::parse(big));
+        CHECK(d.root().size() == 10000);
+        d.shrink_to_fit(); // nothing left to release
+
+        // after reading a smaller text, both the index and the decoded strings
+        // shrink, and the strings are found in their new place
+        std::string escaped = "[";
+        for (int i = 0; i < 1000; ++i)
+        {
+            escaped += (i != 0 ? ",\"a\\n" : "\"a\\n") + std::to_string(i) + "\"";
+        }
+        escaped += ']';
+        json_document reused = json_document::parse(escaped);
+        const std::string smaller = "[\"x\\ty\", [true, \"\\u00e4\"]]"; // NOLINT(modernize-raw-string-literal)
+        reused.read(smaller);
+        const std::size_t grown = reused.memory_usage();
+        reused.shrink_to_fit();
+        CHECK(reused.memory_usage() < grown);
+        CHECK(reused.root().materialize() == json::parse(smaller));
+
+        // an empty document has nothing to release
+        json_document empty;
+        empty.shrink_to_fit();
+        CHECK(empty.memory_usage() == 0);
+
+        // a small document stays in the storage block of the header
+        json_document small = json_document::parse("[1,[2,3],{\"a\":\"b\\n\"}]"); // NOLINT(modernize-raw-string-literal)
+        small.shrink_to_fit();
+        CHECK(small.root().materialize() == json::parse("[1,[2,3],{\"a\":\"b\\n\"}]"));
+    }
+
+// ---- tests/src/unit-json_view_edit_values.cpp:284-300  (uses: dump, memory_usage, read, shrink_to_fit)
+    SECTION("reuse and memory")
+    {
+        json_editable_document d = json_editable_document::parse("[1, 2, 3]");
+        const std::size_t before = d.memory_usage();
+        for (int i = 0; i < 100; ++i)
+        {
+            d.push_back(d.root(), "some text");
+        }
+        CHECK(d.memory_usage() > before);
+        const json_editable_view first = d.root()[0];
+        d.shrink_to_fit(); // (with edits, the index stays in place)
+        CHECK(first.get<int>() == 1);
+        d.read(std::string("[true]"));
+        CHECK(d.root().dump() == "[true]");
+        d.push_back(d.root(), false);
+        CHECK(d.root().dump() == "[true,false]");
+    }
+
+// ---- tests/src/unit-json_view_dump.cpp:876-916  (uses: memory_usage, read, shrink_to_fit)
+    SECTION("shrink_to_fit releases the tables' spare capacity")
+    {
+        const auto make_text = [](int objects, int members)
+        {
+            std::string text = "[";
+            for (int object = 0; object < objects; ++object)
+            {
+                text += object != 0 ? ",{" : "{";
+                for (int i = 0, n = members + object; i < n; ++i)
+                {
+                    text += (i != 0 ? ",\"" : "\"") + std::to_string(i) + "\":" + std::to_string(i);
+                }
+                text += '}';
+            }
+            return text + "]";
+        };
+        const std::string small_text = make_text(5, 150);
+        const std::string big_text = make_text(40, 400);
+
+        // reading a big text, and then a small one, leaves the spare capacity
+        // of the big one: shrink_to_fit() brings the document to the size of
+        // one parsed from the small text alone
+        json_document d = json_document::parse(big_text);
+        const std::size_t big = d.memory_usage();
+        d.read(small_text);
+        CHECK(d.memory_usage() >= big);
+        d.shrink_to_fit();
+        json_document fresh = json_document::parse(small_text);
+        fresh.shrink_to_fit();
+        CHECK(d.memory_usage() == fresh.memory_usage());
+        CHECK(d.memory_usage() < big / 2);
+        CHECK(d.root() == json::parse(small_text));
+        for (int object = 0; object < 5; ++object)
+        {
+            const json_view v = d.root()[static_cast<std::size_t>(object)];
+            for (int i = 0, n = 150 + object; i < n; ++i)
+            {
+                CHECK(v[std::to_string(i)].get<int>() == i);
+            }
+        }
+    }
+
+// ---- tests/src/unit-json_view_image.cpp:397-421  (uses: memory_usage, save, shrink_to_fit)
+    SECTION("loading releases the list of large objects")
+    {
+        std::string text = "[";
+        for (int object = 0; object < 400; ++object)
+        {
+            text += object != 0 ? ",{" : "{";
+            for (int i = 0; i < 128; ++i)
+            {
+                text += (i != 0 ? ",\"" : "\"") + std::to_string(i) + "\":" + std::to_string(i);
+            }
+            text += '}';
+        }
+        text += "]";
+        json_document parsed = json_document::parse(text);
+        const std::vector<std::uint8_t> image = parsed.save();
+        json_document loaded = json_document::load(image);
+        CHECK(loaded.root()[399]["127"] == 127);
+        // Parsing and loading build the same tables, and keep nothing else:
+        // not the positions of the objects to index (2 KiB here). The slack
+        // covers the nodes in the header of the document, which are sized
+        // differently.
+        parsed.shrink_to_fit();
+        loaded.shrink_to_fit();
+        CHECK(loaded.memory_usage() <= parsed.memory_usage() + 512);
+    }
+
+// ---- tests/src/unit-json_view_image.cpp:668-684  (uses: dump, memory_usage, read)
+    SECTION("owned")
+    {
+        std::vector<std::uint8_t> copy = image;
+        const std::uint8_t* const data = copy.data();
+        json_document d = json_document::load(std::move(copy));
+        CHECK(d.owns_source());
+        CHECK(d.source().data() == reinterpret_cast<const char*>(data + text_at(image)));
+        CHECK(d.memory_usage() >= image.size());
+        CHECK(d.root()["b"][1] == 2);
+        // read() replaces the image
+        d.read(std::string("[1]"));
+        CHECK(d.owns_source());
+        CHECK(d.root().dump() == "[1]");
+        const std::string borrowed = "[2]";
+        d.read(borrowed);
+        CHECK(!d.owns_source());
+    }
