@@ -1,0 +1,135 @@
+[system]
+You write test programs that probe a C++ library for behavioral changes made by one pull request.
+Each program is compiled and run twice, once against the library before the change and once after, and the two
+outputs are compared. Your job is to produce programs whose output reveals whether the change altered behavior,
+including side effects the author did not intend.
+
+Rules for every program:
+- It is standalone: one file with its own int main(), compiled as C++17, printing results to stdout.
+- Use only the library's documented public API. Never include internal headers or use detail/impl namespaces,
+  private members or undocumented macros.
+- Do not judge results (no assert, no expected-value comparisons): just print what the library returns. Print
+  enough to make differences visible, one fact per line.
+- Output must be deterministic. Never print pointers or addresses, uninitialized data, the order of
+  hash-based containers, timings, thread ids, random values, file paths or environment data. Print floating point
+  values with an explicit precision. No input, files, network, threads, clocks or randomness.
+- Wrap calls that may throw in try/catch and print the exception's type and message, so an exception is an
+  observable result. Do not crash on purpose.
+- Aim at the code the diff changes. Prefer calls that compile against both the old and the new library; one or two
+  programs may use an API the PR adds. Cover ordinary inputs and edge cases (empty, minimum and maximum values,
+  boundaries, special values, nesting, unusual types) and also neighbouring behavior the change could disturb.
+- When the diff changes which types or inputs an API accepts or rejects (constraints, overloads, traits,
+  conversions), test it with the detection idiom (std::void_t or requires) and `if constexpr`, so the program
+  compiles against both versions, prints whether the expression is well-formed, and exercises it when it is.
+  Accepting an input is not enough: also use it through every entry point that should follow (const and
+  non-const, read, write, insert, erase, lookup, nested use), because a change that admits new inputs can leave
+  later code unable to handle them.
+- If the changed code is internal (a detail, impl or internal namespace, a trait, a helper), do not name it in the
+  program. Reach it through the public API that depends on it, using detection (as above) where needed.
+- Use the exact types and values the diff is about (the new trait's argument types, the new overload's
+  parameters), not stand-ins.
+- Spread the programs over distinct public entry points and overloads, one main idea per program. Do not write
+  several programs that only rename a type or change a literal.
+- Make the programs differ from each other: different inputs, different entry points, different features.
+
+Rules specific to this library:
+- Include the library with #include <nlohmann/json.hpp>. The public API is nlohmann::json (nlohmann::basic_json), nlohmann::ordered_json, json_pointer, json patch/merge_patch and the documented SAX and conversion interfaces. Never use the detail namespace.
+- It is a header-only library: nothing to link. Programs are compiled as C++17.
+- Print JSON values with dump() (compact) or dump(2). Keys of nlohmann::json objects print in sorted order, so output is deterministic; do not depend on insertion order except with ordered_json.
+
+[user]
+# Pull request #6084: Reject integer tokens in float nodes of fully checked json_view images
+
+## Description
+# Reject integer tokens in float nodes of images loaded with image_check::full
+
+`json_document::load(image, image_check::full)` accepted a float node whose token is an integer literal that fits 64 bits. Example: save the image of `18446744073709551616` (2^64, which the parser stores as a float), change the second digit to `0` in the image, and `load()` succeeds. The loaded node is a float (`is_number_unsigned()` is `false`, `dump()` prints `1.0446744073709552e+19`), while parsing the same text gives an unsigned integer (`10446744073709551616`). The documentation promises that a fully checked image is as safe and as faithful as a freshly parsed document, so `full` must reject this with `parse_error.116`. There is no memory-safety effect. `json_view` is new in 3.13.0, so nothing released is affected.
+
+## Cause
+
+`check_float_ranges` scanned the token and checked its digit layout and finiteness, but never required it to be something the parser stores as a float. A float node is legitimate only for a token with a fraction or an exponent, or for an integer token that does not fit 64 bits.
+
+## Change
+
+- New `integer_token_fits` in `detail/view/image.hpp`: at most 20 digits, 20 digits not above `18446744073709551615`, a negative one not below `-9223372036854775808` (the same bounds that `check_integer` applies to integer nodes). `check_float_ranges` rejects a float node whose token has no fraction and no exponent and fits. Tokens in the plain `digits.digits` layout (all of canada.json) never reach this branch.
+- Docs: `api/basic_json_document/load.md` (`image_check::full`) now says that the token must also have the type the parser gives it. `features/json_view/images.md` needs no change ("exactly as safe to read and serialize as a freshly parsed document" is true with this fix).
+- `single_include/nlohmann/json_view.hpp` regenerated.
+
+## Tests
+
+`unit-json_view_image.cpp`, section "float tokens: an integer token is a float node only if it does not fit 64 bits". For five float-valued integer tokens (2^64, -2^63-1, 10^20, -2^64, a 30-digit number) it replaces every digit (not the sign) by every digit, loads with `image_check::full`, and compares with what the parser does for the changed text: accepted and dumped like `json::parse` if the parser stores a float, `parse_error.116` otherwise (this covers both boundaries). On develop the section fails with 176 failed checks (the changed tokens that fit are accepted); with the change it passes (64002 assertions of the file, ASan/UBSan clean). The existing fuzzer cannot see this: it compares `json::parse(dump())` with `materialize()`, and both give the rounded value.
+
+## Differential check
+
+A harness (385182 tokens, for `json` and `ordered_json` documents) takes a number token, forces a float node over it in a saved image (digit layout of the token and the "many" layout), and compares `load(..., image_check::full)` with what `json::parse` makes of the token: accepted and dumped identically if the parser gives a float, rejected otherwise. It covers fixed boundary tokens, every single-digit mutation of the 2^64-1, 2^63, 2^63-1, 10^19 and 10^20-1 literals with both signs and suffixes (`0`, `.0`, `e0`, `E-1`), 200000 random tokens of 1-24 digits with fractions and exponents, and edited documents (including NaN and infinity). Develop: 298k failures; with the change: 0 failures. `integer_token_fits` decides on the first digit where it can (a 20-digit token needs the string comparison only if it starts with `1`, a negative 19-digit one only if it starts with `9`); the harness was re-run after that.
+
+## Measurements
+
+`json_document::load(image, image_check::full)` of the image of canada.json (4.9 MB, float-heavy; best of 40, clang -O2, Apple silicon, three alternating runs): develop 1.497, 1.514, 1.560 ms; this PR 1.477, 1.497, 1.496 ms (no difference). canada's tokens take the plain-layout fast path, which is unchanged.
+
+Worst case, a 200000-element array of integer tokens that do not fit and so are fl
+[... truncated, 1039 more characters]
+
+## Commit message
+image_check::full accepted a float node whose token is an integer literal
+that fits 64 bits (e.g. 10446744073709551616 changed from 18446744073709551616).
+The parser stores an integer node for such a token, so the loaded
+document differed from what parsing the same text gives. check_float_ranges
+now requires an integer token of a float node not to fit uint64_t (or
+int64_t when negative).
+
+Signed-off-by: Niels Lohmann <mail@nlohmann.me>
+
+## Changed functions (from git hunk headers (rough hint))
+- inline bool float_token_finite(const unsigned char* s, std::size_t len, const nu
+- inline bool check_float_ranges(std::vector<float_range>& ranges, const unsigned
+
+## Diff of the library source (before -> after)
+```diff
+diff --git a/include/nlohmann/detail/view/image.hpp b/include/nlohmann/detail/view/image.hpp
+index e6680730f..5459f435f 100644
+--- a/include/nlohmann/detail/view/image.hpp
++++ b/include/nlohmann/detail/view/image.hpp
+@@ -416,6 +416,28 @@ inline bool float_token_finite(const unsigned char* s, std::size_t len, const nu
+     return true;
+ }
+ 
++/// whether an integer token (well-formed, no fraction or exponent) fits 64
++/// bits: the parser stores a number_integer or number_unsigned node for it,
++/// and a number_float node only for a token that does not fit
++inline bool integer_token_fits(const number_token& t)
++{
++    if (t.int_digits > 20)
++    {
++        return false;
++    }
++    if (t.int_digits == 20)
++    {
++        // (20 digits are compared with 2^64 - 1; a negative one is below -2^63)
++        // (only a leading 1 needs the comparison: the first digit of 20 is not 0)
++        return !t.negative && *t.int_start == '1' && std::memcmp(t.int_start, "18446744073709551615", 20) <= 0;
++    }
++    if (t.negative && t.int_digits == 19)
++    {
++        return *t.int_start != '9' || std::memcmp(t.int_start, "9223372036854775808", 19) <= 0;
++    }
++    return true;
++}
++
+ /// whether an integer node matches its token the way the parser records it
+ /// (after the bounds check; the token has at most 256 characters)
+ inline bool check_integer(const node& n, const unsigned char* text)
+@@ -535,7 +557,8 @@ inline bool check_float_ranges(std::vector<float_range>& ranges, const unsigned
+         if (!plain_float_token(s, r.len, r.extra))
+         {
+             number_token t{};
+-            if (!scan_number_token(s, r.len, t) || !float_token_finite(s, r.len, t))
++            // (an integer token is a float node only if it does not fit 64 bits)
++            if (!scan_number_token(s, r.len, t) || (!t.is_float && integer_token_fits(t)) || !float_token_finite(s, r.len, t))
+             {
+                 return false;
+             }
+```
+
+# Task
+Write 20 test programs for this pull request. Return JSON with a "tests" array; each item has "name" (short snake_case), "intent" (one sentence: what behavior it probes) and "code" (the complete C++ program).
