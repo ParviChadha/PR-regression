@@ -1,5 +1,5 @@
 // Upstream tests at the PR's parent commit 2a4aec3e6 that use the changed code.
-// Names searched (test lines using each): accept (12), from_bjdata (0), from_bon8 (0), from_bson (0), from_cbor (0), from_msgpack (0), from_ubjson (0), parse (11), sax_parse (0), create (0), is_byte_char_type (0), value (2665), iterator_input_adapter_factory (0), is_std_contiguous_byte_iterator_impl (0), is_std_contiguous_byte_iterator (0), adapter_type (3), char_type (0), iterator_type (4), sentinel_type (0)
+// Names searched (test lines using each): parse (11), iterator_input_adapter_factory (0), is_byte_char_type (0), value (2665), is_std_contiguous_byte_iterator_impl (0), is_std_contiguous_byte_iterator (0), adapter_type (3), char_type (0), create (0), iterator_type (4), sentinel_type (0)
 
 // ---- tests/src/unit-user_defined_input.cpp:282-295  (uses: iterator_type, value)
 TEST_CASE("Parse with std::counted_iterator and std::default_sentinel_t")
@@ -146,3 +146,9 @@ bool accept_helper(const std::string& s)
     if (std::is_unsigned<type>::value)
     {
         type_str += "u";
+
+// ---- tests/src/unit-concepts.cpp:69-72  (uses: value)
+        SECTION("DefaultConstructible")
+        {
+            CHECK(std::is_nothrow_default_constructible<json>::value);
+        }

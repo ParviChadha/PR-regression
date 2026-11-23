@@ -1,5 +1,82 @@
 // Upstream tests at the PR's parent commit bd067fd08 that use the changed code.
-// Names searched (test lines using each): JSON_IMPLEMENT_OPERATOR (0), format_as (23), to_string (182), begin (837), cbegin (199), cend (129), end (679), find (203), insert (304), basic_json (0), operator<< (103), operator>> (103), operator!= (69), operator< (228), dump_escaped_impl (0), iter_impl (0), copy_object_level (0)
+// Names searched (test lines using each): JSON_IMPLEMENT_OPERATOR (0), format_as (23), to_string (182), array (0), basic_json (0), begin (837), cbegin (199), cend (129), end (679), find (203), insert (304), operator<< (103), operator>> (103), serializer (5), iter_impl (14), copy_object_level (0)
+
+// ---- tests/src/unit-serialization.cpp:855-896  (uses: operator<<, serializer)
+TEST_CASE("serializer buffers are flushed mid-string and mid-binary")
+{
+    SECTION("a long run of escaped characters")
+    {
+        // each character is escaped on its own, so the escape buffer fills up
+        const json newlines = std::string(600, '\n');
+        std::string expected = "\"";
+        for (int i = 0; i < 600; ++i)
+        {
+            expected += "\\n";
+        }
+        expected += '"';
+        CHECK(newlines.dump() == expected);
+
+        // every character is \u-escaped under ensure_ascii
+        std::string umlauts;
+        std::string escaped_umlauts = "\"";
+        for (int i = 0; i < 300; ++i)
+        {
+            umlauts += "\xC3\xA4";
+            escaped_umlauts += "\\u00e4";
+        }
+        escaped_umlauts += '"';
+        CHECK(json(umlauts).dump(-1, ' ', true) == escaped_umlauts);
+    }
+
+    SECTION("a large binary value")
+    {
+        std::vector<std::uint8_t> bytes(3000);
+        std::string expected_bytes;
+        std::string expected_pretty_bytes;
+        for (std::size_t i = 0; i < bytes.size(); ++i)
+        {
+            bytes[i] = static_cast<std::uint8_t>(i % 256);
+            expected_bytes += (i == 0 ? "" : ",") + std::to_string(i % 256);
+            expected_pretty_bytes += (i == 0 ? "" : ", ") + std::to_string(i % 256);
+        }
+        const json j = json::binary(bytes);
+        CHECK(j.dump() == "{\"bytes\":[" + expected_bytes + "],\"subtype\":null}");
+        CHECK(j.dump(2) == "{\n  \"bytes\": [" + expected_pretty_bytes + "],\n  \"subtype\": null\n}");
+    }
+}
+
+// ---- tests/src/unit-udt.cpp:685-701  (uses: operator<<, serializer)
+TEST_CASE("custom serializer for pods" * doctest::test_suite("udt"))
+{
+    using custom_json =
+        nlohmann::json::with_json_serializer_t<pod_serializer>;
+
+    auto p = udt::small_pod{42, '/', 42};
+    custom_json const j = p;
+
+    auto p2 = j.get<udt::small_pod>();
+
+    CHECK(p == p2);
+
+    auto np = udt::non_pod{{"non-pod"}};
+    custom_json const j2 = np;
+    auto np2 = j2.get<udt::non_pod>();
+    CHECK(np == np2);
+}
+
+// ---- tests/src/unit-udt.cpp:724-735  (uses: operator<<, serializer)
+TEST_CASE("custom serializer that does adl by default" * doctest::test_suite("udt"))
+{
+    auto me = udt::person{{23}, {"theo"}, udt::country::france};
+
+    json const j = me;
+    custom_json const cj = me;
+
+    CHECK(j.dump() == cj.dump());
+
+    CHECK(me == j.get<udt::person>());
+    CHECK(me == cj.get<udt::person>());
+}
 
 // ---- tests/src/unit-deserialization.cpp:1293-1338  (uses: operator<<, operator>>, to_string)
 TEST_CASE("parse error positions are the same for contiguous and stream input")
@@ -49,73 +126,6 @@ TEST_CASE("parse error positions are the same for contiguous and stream input")
     }
 }
 
-// ---- tests/src/unit-stream-bulk-scan.cpp:348-379  (uses: operator<<, operator>>, to_string)
-    SECTION("many values from one stream")
-    {
-        std::string input;
-        for (int i = 0; i < 200; ++i)
-        {
-            input += R"({"id":)" + std::to_string(i) + R"(,"name":"user)" + std::to_string(i) + R"(","score":)" + std::to_string(i) + ".5}\n";
-            input += std::to_string(i * 7919) + "\n";
-        }
-
-        for (const std::size_t chunk_size : chunk_sizes())
-        {
-            CAPTURE(chunk_size)
-            chunked_streambuf buf(input, chunk_size);
-            std::istream is(&buf);
-            json j;
-            int count = 0;
-            while (!(is >> std::ws).eof())
-            {
-                is >> j;
-                if (count % 2 == 0)
-                {
-                    CHECK(j["id"] == count / 2);
-                }
-                else
-                {
-                    CHECK(j == (count / 2) * 7919);
-                }
-                ++count;
-            }
-            CHECK(count == 400);
-        }
-    }
-
-// ---- tests/src/unit-stream-bulk-scan.cpp:402-432  (uses: operator<<, operator>>, to_string)
-    SECTION("std::stringstream and std::ifstream")
-    {
-        const std::string input = R"([1, 2.5, "three", {"four": [true, null]}] 5)";
-
-        std::stringstream ss(input);
-        json j1;
-        json j2;
-        ss >> j1 >> j2;
-        CHECK(j1 == json::parse(R"([1, 2.5, "three", {"four": [true, null]}])"));
-        CHECK(j2 == 5);
-        CHECK(ss.eof());
-
-        // a file name of its own for every run: the test runs for several C++
-        // standards and configurations at the same time, in the same directory
-        std::random_device rd;
-        const std::string temp_name = "unit-stream-bulk-scan-" + std::to_string(rd()) + ".tmp";
-        const char* const filename = temp_name.c_str();
-        {
-            std::ofstream file(filename);
-            file << input;
-        }
-        {
-            std::ifstream file(filename);
-            json k1;
-            json k2;
-            file >> k1 >> k2;
-            CHECK(k1 == j1);
-            CHECK(k2 == j2);
-        }
-        static_cast<void>(std::remove(filename));
-    }
-
 // ---- tests/src/unit-ordered_map.cpp:562-576  (uses: cbegin, cend, insert, to_string)
         SECTION("insert(first, last)")
         {
@@ -133,10 +143,9 @@ TEST_CASE("parse error positions are the same for contiguous and stream input")
             check_contents();
         }
 
-// ---- tests/src/unit-algorithms.cpp:205-210  (uses: begin, end, operator!=, operator<)
-            SECTION("with standard comparison")
+// ---- tests/src/unit-modifiers.cpp:767-771  (uses: begin, end, insert)
+            SECTION("proper usage")
             {
-                json j = {13, 29, 3, {{"one", 1}, {"two", 2}}, true, false, {1, 2, 3}, "foo", "baz", nullptr};
-                std::sort(j.begin(), j.end());
-                CHECK(j == json({nullptr, false, true, 3, 13, 29, {{"one", 1}, {"two", 2}}, {1, 2, 3}, "baz", "foo"}));
+                j_object1.insert(j_object2.begin(), j_object2.end());
+                CHECK(j_object1.size() == 4);
             }

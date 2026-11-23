@@ -1,7 +1,61 @@
 // Upstream tests at the PR's parent commit 6fa14d8f9 that use the changed code.
-// Names searched (test lines using each): to_string (10), json_pointer (0), split (0)
+// Names searched (test lines using each): json_pointer (222), split (0)
 
-// ---- tests/src/unit-alt-string.cpp:328-349  (uses: to_string)
+// ---- tests/src/unit-json_pointer.cpp:37-61  (uses: json_pointer)
+    SECTION("errors")
+    {
+        CHECK_THROWS_WITH_AS(json::json_pointer("foo"),
+                             "[json.exception.parse_error.107] parse error at byte 1: JSON pointer must be empty or begin with '/' - was: 'foo'", json::parse_error&);
+
+        CHECK_THROWS_WITH_AS(json::json_pointer("/~~"),
+                             "[json.exception.parse_error.108] parse error: escape character '~' must be followed with '0' or '1'", json::parse_error&);
+
+        CHECK_THROWS_WITH_AS(json::json_pointer("/~"),
+                             "[json.exception.parse_error.108] parse error: escape character '~' must be followed with '0' or '1'", json::parse_error&);
+
+        json::json_pointer p;
+        CHECK_THROWS_WITH_AS(p.top(),
+                             "[json.exception.out_of_range.405] JSON pointer has no parent", json::out_of_range&);
+        CHECK_THROWS_WITH_AS(p.pop_back(),
+                             "[json.exception.out_of_range.405] JSON pointer has no parent", json::out_of_range&);
+
+        SECTION("array index error")
+        {
+            json v = {1, 2, 3, 4};
+            json::json_pointer const ptr("/10e");
+            CHECK_THROWS_WITH_AS(v[ptr],
+                                 "[json.exception.out_of_range.404] unresolved reference token '10e'", json::out_of_range&);
+        }
+    }
+
+// ---- tests/src/unit-json_pointer.cpp:71-95  (uses: json_pointer)
+                "a/b": 1,
+                "c%d": 2,
+                "e^f": 3,
+                "g|h": 4,
+                "i\\j": 5,
+                "k\"l": 6,
+                " ": 7,
+                "m~n": 8
+            }
+            )"_json;
+
+            // the whole document
+            CHECK(j[json::json_pointer()] == j);
+            CHECK(j[json::json_pointer("")] == j);
+            CHECK(j.contains(json::json_pointer()));
+            CHECK(j.contains(json::json_pointer("")));
+
+            // array access
+            CHECK(j[json::json_pointer("/foo")] == j["foo"]);
+            CHECK(j.contains(json::json_pointer("/foo")));
+            CHECK(j[json::json_pointer("/foo/0")] == j["foo"][0]);
+            CHECK(j[json::json_pointer("/foo/1")] == j["foo"][1]);
+            CHECK(j["/foo/1"_json_pointer] == j["foo"][1]);
+            CHECK(j.contains(json::json_pointer("/foo/0")));
+            CHECK(j.contains(json::json_pointer("/foo/1")));
+
+// ---- tests/src/unit-alt-string.cpp:328-349  (uses: json_pointer)
     SECTION("JSON pointer")
     {
         // Direct conversion from a json literal to alt_json is not supported due to issue #3425:
@@ -25,114 +79,74 @@
         CHECK(j2.flatten().unflatten() == j2);
     }
 
-// ---- tests/src/unit-custom-base-class.cpp:326-350  (uses: to_string)
-        "/array/2/float - number_float - 1.0",
-        "/array/2/boolean - boolean - true",
-        "/array/2/string - string - \"string\"",
-        "/array/2/array/0 - number_integer - 0",
-        "/array/2/array/1 - number_integer - 1"
-    };
-
-    json.visit(
-            [&](const json_with_visitor_t::json_pointer & p,
-                const json_with_visitor_t& j)
+// ---- tests/src/unit-alt-string.cpp:351-374  (uses: json_pointer)
+    SECTION("contains(json_pointer)")
     {
-        std::stringstream str;
-        str << p.to_string() << " - " ;
-        using value_t = nlohmann::detail::value_t;
-        switch (j.type())
-        {
-            case value_t::object:
-                str << "object";
-                break;
-            case value_t::array:
-                str << "array";
-                break;
-            case value_t::discarded:
-                str << "discarded";
-                break;
+        // contains(json_pointer) must compile and work with a string_t that has
+        // no c_str() and no comparison with const char* (see #5666)
+        auto j = alt_json::parse(R"({"foo": ["bar", "baz"]})");
 
-// ---- tests/src/unit-delete_deprecated_functions.cpp:81-105  (uses: to_string)
-JSON_TEST_DETECT(istream_gtgt_json, std::declval<std::istream&>() >> std::declval<J&>());
-JSON_TEST_DETECT(json_gtgt_ostream, std::declval<const J&>() >> std::declval<std::ostream&>());
-JSON_TEST_DETECT(ostream_ltlt_json, std::declval<std::ostream&>() << std::declval<const J&>());
+        // present: object key and array indices
+        CHECK(j.contains(alt_json::json_pointer("/foo")));
+        CHECK(j.contains(alt_json::json_pointer("/foo/0")));
+        CHECK(j.contains(alt_json::json_pointer("/foo/1")));
 
-JSON_TEST_DETECT(ptr_eq_ptr, std::declval<const typename J::json_pointer&>() == std::declval<const typename J::json_pointer&>());
-JSON_TEST_DETECT(ptr_ne_ptr, std::declval<const typename J::json_pointer&>() != std::declval<const typename J::json_pointer&>());
-JSON_TEST_DETECT(ptr_eq_string, std::declval<const typename J::json_pointer&>() == std::declval<const std::string&>());
-JSON_TEST_DETECT(string_eq_ptr, std::declval<const std::string&>() == std::declval<const typename J::json_pointer&>());
-JSON_TEST_DETECT(ptr_eq_c_string, std::declval<const typename J::json_pointer&>() == std::declval<const char*>());
-JSON_TEST_DETECT(c_string_eq_ptr, std::declval<const char*>() == std::declval<const typename J::json_pointer&>());
-JSON_TEST_DETECT(ptr_ne_string, std::declval<const typename J::json_pointer&>() != std::declval<const std::string&>());
-JSON_TEST_DETECT(string_ne_ptr, std::declval<const std::string&>() != std::declval<const typename J::json_pointer&>());
-JSON_TEST_DETECT(ptr_to_string, std::declval<const typename J::json_pointer&>().to_string());
+        // missing: absent object key and out-of-range array index
+        CHECK_FALSE(j.contains(alt_json::json_pointer("/bar")));
+        CHECK_FALSE(j.contains(alt_json::json_pointer("/foo/2")));
 
-// json_pointer with a basic_json type as template argument
-template<typename J>
-using legacy_ptr_t = const nlohmann::json_pointer<J>& ;
-JSON_TEST_DETECT(legacy_ptr_value, std::declval<const J&>().value(std::declval<legacy_ptr_t<J>>(), 0));
-JSON_TEST_DETECT(legacy_ptr_value_rvalue, std::declval<const J&>().value(std::declval<legacy_ptr_t<J>>(), std::string()));
-JSON_TEST_DETECT(legacy_ptr_contains, std::declval<const J&>().contains(std::declval<legacy_ptr_t<J>>()));
-JSON_TEST_DETECT(legacy_ptr_subscript, std::declval<J&>()[std::declval<legacy_ptr_t<J>>()]);
-JSON_TEST_DETECT(legacy_ptr_subscript_const, std::declval<const J&>()[std::declval<legacy_ptr_t<J>>()]);
-JSON_TEST_DETECT(legacy_ptr_at, std::declval<J&>().at(std::declval<legacy_ptr_t<J>>()));
-JSON_TEST_DETECT(legacy_ptr_at_const, std::declval<const J&>().at(std::declval<legacy_ptr_t<J>>()));
-JSON_TEST_DETECT(ptr_value, std::declval<const J&>().value(std::declval<const typename J::json_pointer&>(), 0));
+        // "-" always fails the range check
+        CHECK_FALSE(j.contains(alt_json::json_pointer("/foo/-")));
 
-// ---- tests/src/unit-delete_deprecated_functions.cpp:207-228  (uses: to_string)
-    SECTION("the non-deprecated functions still work")
-    {
-        const json j = {{"a", {1, 2}}};
-        const auto cbor = json::to_cbor(j);
-        CHECK(json::from_cbor(cbor.data(), cbor.data() + cbor.size()) == j);
+        // an array index must not have a leading zero
+        CHECK_FALSE(j.contains(alt_json::json_pointer("/foo/01")));
 
-        const json::json_pointer ptr("/a/1");
-        CHECK(ptr == json::json_pointer("/a/1"));
-        CHECK(ptr.to_string() == "/a/1");
-        CHECK(j[ptr] == 2);
-        CHECK(j.at(ptr) == 2);
-        CHECK(j.value(ptr, 0) == 2);
-        CHECK(j.contains(ptr));
-
-        std::ostringstream os;
-        os << j;
-        CHECK(os.str() == R"({"a":[1,2]})");
-        std::istringstream is(os.str());
-        json parsed;
-        is >> parsed;
-        CHECK(parsed == j);
+        // a reference token that is not a number
+        CHECK_FALSE(j.contains(alt_json::json_pointer("/foo/bar")));
     }
 
-// ---- tests/src/unit-json_pointer.cpp:592-607  (uses: to_string)
-    SECTION("string representation")
+// ---- tests/src/unit-custom-array-type.cpp:152-168  (uses: json_pointer)
+TEST_CASE("array type without at()")
+{
+    // built in memory rather than parsed, so that the exception message does
+    // not gain a byte range with JSON_DIAGNOSTIC_POSITIONS
+    no_at_json j = {1, 2, 3};
+    const auto& jc = j;
+
+    CHECK(j.at(0) == 1);
+    CHECK(j.at(2) == 3);
+    CHECK(jc.at(2) == 3);
+
+    CHECK_THROWS_WITH_AS(j.at(3), "[json.exception.out_of_range.401] array index 3 is out of range", no_at_json::out_of_range);
+    CHECK_THROWS_WITH_AS(jc.at(3), "[json.exception.out_of_range.401] array index 3 is out of range", no_at_json::out_of_range);
+
+    CHECK(j.at(no_at_json::json_pointer("/1")) == 2);
+    CHECK_THROWS_AS(j.at(no_at_json::json_pointer("/3")), no_at_json::out_of_range);
+}
+
+// ---- tests/src/unit-custom-base-class.cpp:251-275  (uses: json_pointer)
+    template <class Fnc>
+    void visit(const Fnc& fnc) const;
+  private:
+    template <class Ptr, class Fnc>
+    void do_visit(const Ptr& ptr, const Fnc& fnc) const;
+};
+
+using json_with_visitor_t = nlohmann::json::with_base_class_t<visitor_adaptor>;
+
+template <class Fnc>
+void visitor_adaptor::visit(const Fnc& fnc) const
+{
+    do_visit(json_with_visitor_t::json_pointer{}, fnc);
+}
+
+template <class Ptr, class Fnc>
+void visitor_adaptor::do_visit(const Ptr& ptr, const Fnc& fnc) const
+{
+    using value_t = nlohmann::detail::value_t;
+    const json_with_visitor_t& json = *static_cast<const json_with_visitor_t*>(this); // NOLINT(cppcoreguidelines-pro-type-static-cast-downcast)
+    switch (json.type())
     {
-        for (const auto* ptr_str :
-                {"", "/foo", "/foo/0", "/", "/a~1b", "/c%d", "/e^f", "/g|h", "/i\\j", "/k\"l", "/ ", "/m~0n"
-                })
-        {
-            json::json_pointer const ptr(ptr_str);
-            std::stringstream ss;
-            ss << ptr;
-            CHECK(ptr.to_string() == ptr_str);
-#ifndef JSON_TEST_DEPRECATED_FUNCTIONS_DELETED
-            CHECK(std::string(ptr) == ptr_str);
-#endif
-            CHECK(ss.str() == ptr_str);
-        }
-    }
-
-// ---- tests/src/unit-json_pointer.cpp:767-780  (uses: to_string)
-        CHECK(j[ptr] == j);
-
-        CHECK(ptr / ""_json_pointer == ptr);
-        CHECK(j["/answer"_json_pointer / "/everything"_json_pointer] == j["answer"]["everything"]);
-
-        // list children access
-        CHECK(j["/list"_json_pointer / 1] == j["list"][1]);
-
-        // push key which has to be encoded
-        ptr /= "object";
-        ptr = ptr / "/";
-        CHECK(j[ptr] == j["object"]["/"]);
-        CHECK(ptr.to_string() == "/object/~1");
-    }
+        case value_t::object:
+            for (const auto& entry : json.items())
+            {

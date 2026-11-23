@@ -1,0 +1,40 @@
+// Upstream tests at the PR's parent commit a7d387a76 that use the changed code.
+// Names searched (test lines using each): binary_reader (2)
+
+// ---- tests/src/unit-bjdata.cpp:76-111  (uses: binary_reader)
+    SECTION("binary_reader BJData lookup tables")
+    {
+        // both lookups are static member functions
+        std::vector<std::uint8_t> const data;
+        using reader_t = nlohmann::detail::binary_reader<json, decltype(nlohmann::detail::input_adapter(data))>;
+
+        // the excluded optimized-type markers must match binary_writer's
+        // is_bjdata_excluded_type_marker(), which encodes the same 8 markers
+        for (const char marker :
+                {'[', '{', 'S', 'H', 'T', 'F', 'N', 'Z'
+                })
+        {
+            CHECK(reader_t::is_bjd_excluded_optimized_type(static_cast<unsigned char>(marker)));
+        }
+        for (const char marker :
+                {'U', 'i', 'u', 'I', 'm', 'l', 'M', 'L', 'd', 'D', 'C', 'B', 'x'
+                })
+        {
+            CHECK(!reader_t::is_bjd_excluded_optimized_type(static_cast<unsigned char>(marker)));
+        }
+
+        // every dtype marker must round-trip to its ND-array type name
+        const std::vector<std::pair<char, std::string>> types
+        {
+            {'B', "byte"}, {'C', "char"}, {'D', "double"}, {'I', "int16"},
+            {'L', "int64"}, {'M', "uint64"}, {'U', "uint8"}, {'d', "single"},
+            {'i', "int8"}, {'l', "int32"}, {'m', "uint32"}, {'u', "uint16"}
+        };
+        for (const auto& type : types)
+        {
+            const char* name = reader_t::bjd_type_name(static_cast<unsigned char>(type.first));
+            REQUIRE(name != nullptr);
+            CHECK(std::string(name) == type.second);
+        }
+        CHECK(reader_t::bjd_type_name(static_cast<unsigned char>('x')) == nullptr);
+    }

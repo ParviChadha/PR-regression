@@ -1,5 +1,5 @@
 // Upstream tests at the PR's parent commit 76dbe8f9c that use the changed code.
-// Names searched (test lines using each): parse_error (0), format_as (23), to_string (178), operator<< (99), operator>> (98), operator!= (65), operator< (217), exception (1838)
+// Names searched (test lines using each): parse_error (0), format_as (23), to_string (178), array (0), basic_json (0), operator<< (99), operator>> (98), exception (1838)
 
 // ---- tests/src/unit-deserialization.cpp:1271-1316  (uses: exception, operator<<, operator>>, to_string)
 TEST_CASE("parse error positions are the same for contiguous and stream input")
@@ -112,13 +112,11 @@ TEST_CASE("parse error positions are the same for contiguous and stream input")
         CHECK_THROWS_WITH_AS(_ = json::parse(is), "[json.exception.parse_error.101] parse error: attempting to parse an empty input; check that your input string or stream contains the expected JSON", json::parse_error&);
     }
 
-// ---- tests/src/unit-comparison.cpp:1297-1305  (uses: operator!=, operator<)
-    SECTION("structured values still compare")
-    {
-        CHECK(json({1, 2}) == json({1, 2}));
-        CHECK(json({1, 2}) < json({1, 3}));
-        CHECK(json({{"a", 1}}) == json({{"a", 1}}));
-        CHECK(json::binary({1, 2}) == json::binary({1, 2}));
-        CHECK(json(1) < json::array());
-        CHECK(json::object() < json::array());
-    }
+// ---- tests/src/unit-bon8.cpp:812-818  (uses: operator<<, operator>>)
+            SECTION("std::ostringstream")
+            {
+                std::basic_ostringstream<char> ss;
+                json::to_bon8(j1, ss);
+                json j3 = json::from_bon8(ss.str());
+                CHECK(j1 == j3);
+            }

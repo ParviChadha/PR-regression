@@ -1,53 +1,59 @@
 // Upstream tests at the PR's parent commit 898e6ee81 that use the changed code.
-// Names searched (test lines using each): sax_parse (0), from_bson (0), from_cbor (0), from_msgpack (0), from_ubjson (0), from_bjdata (0), from_bon8 (0), materialize (135), get (680), dump (658), scan_number_bulk_contiguous (0), parse_float_significand (0), has_nonzero_digit (0), lexer (96), accumulate_digits (0), accumulate_significant_digits (0), store_integer (0), convert_accumulated_float (0), is_eight_digits (0)
+// Names searched (test lines using each): parse (11), scan_number_bulk_contiguous (0), parse_float_significand (0), has_nonzero_digit (0), lexer (96), accumulate_digits (0), accumulate_significant_digits (0), store_integer (0), convert_accumulated_float (0), is_eight_digits (0)
 
-// ---- tests/src/unit-class_lexer.cpp:1615-1624  (uses: get, lexer)
-    SECTION("used by the lexer")
-    {
-        // 17 significant digits: beyond Clinger's fast path
-        CHECK(bits_of(json::parse("-65.613616999999977").get<double>()) == bits_of(-65.613616999999977));
-        CHECK(bits_of(json::parse("2.2250738585072011e-308").get<double>()) == 0x000FFFFFFFFFFFFFu);
-        CHECK(bits_of(json::parse("4.9406564584124654e-324").get<double>()) == 1u);
-        json _;
-        CHECK_THROWS_WITH_AS(_ = json::parse("1.7976931348623159e308"),
-                             "[json.exception.out_of_range.406] number overflow parsing '1.7976931348623159e308'", json::out_of_range&);
-    }
+// ---- tests/src/unit-class_parser.cpp:45-69  (uses: parse)
+using utils::SaxEventLogger;
 
-// ---- tests/src/unit-json_view_dump.cpp:41-74  (uses: dump, materialize)
-    SECTION("the output of ordered_json::dump()")
-    {
-        generator g;
-        for (int i = 0; i < 2000; ++i)
-        {
-            std::string text;
-            g.value(text, 0);
-            const ordered_json_document d = ordered_json_document::parse(text);
-            if (has_duplicate_keys(d.root()))
-            {
-                continue;
-            }
-            CAPTURE(text)
-            const ordered_json j = ordered_json::parse(text);
-            for (const int indent :
-                    {
-                        -1, 0, 2
-                    })
-            {
-                for (const bool ensure_ascii :
-                        {
-                            false, true
-                        })
-                {
-                    CHECK(d.root().dump(indent, i % 2 == 0 ? ' ' : '\t', ensure_ascii) == j.dump(indent, i % 2 == 0 ? ' ' : '\t', ensure_ascii));
-                }
-            }
-            // also of each element
-            for (const ordered_json_view e : d.root())
-            {
-                CHECK(e.dump() == e.materialize().dump());
-            }
-        }
-    }
+namespace
+{
+json parser_helper(const std::string& s);
+bool accept_helper(const std::string& s);
+void comments_helper(const std::string& s);
+void trailing_comma_helper(const std::string& s);
+
+json parser_helper(const std::string& s)
+{
+    json j;
+    json::parser(nlohmann::detail::input_adapter(s)).parse(true, j);
+
+    // if this line was reached, no exception occurred
+    // -> check if result is the same without exceptions
+    json j_nothrow;
+    CHECK_NOTHROW(json::parser(nlohmann::detail::input_adapter(s), nullptr, false).parse(true, j_nothrow));
+    CHECK(j_nothrow == j);
+
+    json j_sax;
+    nlohmann::detail::json_sax_dom_parser<json, nlohmann::detail::string_input_adapter_type> sdp(j_sax);
+    json::sax_parse(s, &sdp);
+    CHECK(j_sax == j);
+
+
+// ---- tests/src/unit-class_parser.cpp:71-95  (uses: parse)
+
+    trailing_comma_helper(s);
+
+    return j;
+}
+
+bool accept_helper(const std::string& s)
+{
+    CAPTURE(s)
+
+    // 1. parse s without exceptions
+    json j;
+    CHECK_NOTHROW(json::parser(nlohmann::detail::input_adapter(s), nullptr, false).parse(true, j));
+    const bool ok_noexcept = !j.is_discarded();
+
+    // 2. accept s
+    const bool ok_accept = json::parser(nlohmann::detail::input_adapter(s)).accept(true);
+
+    // 3. check if both approaches come to the same result
+    CHECK(ok_noexcept == ok_accept);
+
+    // 4. parse with SAX (compare with relaxed accept result)
+    SaxEventLogger el;
+    CHECK_NOTHROW(json::sax_parse(s, &el, json::input_format_t::json, false));
+    CHECK(json::parser(nlohmann::detail::input_adapter(s)).accept(false) == !el.errored);
 
 // ---- tests/src/unit-class_lexer.cpp:21-45  (uses: lexer)
 #include <map> // map
@@ -76,56 +82,61 @@ std::string get_error_message(const char* s, const bool ignore_comments)
     auto ia = nlohmann::detail::input_adapter(s);
     auto lexer = nlohmann::detail::lexer<json, decltype(ia)>(std::move(ia), ignore_comments); // NOLINT(hicpp-move-const-arg,performance-move-const-arg)
 
-// ---- tests/src/unit-json_view.cpp:792-838  (uses: dump, get, materialize)
-    SECTION("duplicate keys: lookups find the first member, iteration all")
+// ---- tests/src/unit-class_lexer.cpp:50-62  (uses: lexer)
+TEST_CASE("lexer class")
+{
+    SECTION("scan")
     {
-        const json_document d = json_document::parse(R"({"a":1,"b":2,"a":3})");
-        const json_view v = d.root();
-        CHECK(v.size() == 3);
-        CHECK(v["a"].materialize() == 1);
-        CHECK(v.at("a").materialize() == 1);
-        CHECK(v.find("a") == v.begin());
-        CHECK(v.find("a").value().materialize() == 1);
-        CHECK(v.find("b") == std::next(v.begin()));
-        CHECK(v.count("a") == 2); // every member, unlike materialize()
-        CHECK(v.count("b") == 1);
-        CHECK(v.contains("a"));
-        CHECK(v.value("a", 0) == 1);
-        CHECK(v.materialize()["a"] == 3); // materialize() keeps the last value, unlike the lookups
-        // JSON pointers resolve to the first member at every level
-        const json_document dp = json_document::parse(R"({"a":{"b":1},"a":{"b":2,"b":3}})");
-        CHECK(dp.root()[json::json_pointer("/a/b")].materialize() == 1);
-        CHECK(dp.root().at(json::json_pointer("/a/b")).materialize() == 1);
-        CHECK(dp.root().value(json::json_pointer("/a/b"), 0) == 1);
-        CHECK(dp.root().materialize()[json::json_pointer("/a/b")] == 3);
-        // get<map> keeps the last value, as materialize()
-        CHECK((v.get<std::map<std::string, int>>() == std::map<std::string, int> {{"a", 3}, {"b", 2}}));
-        // keys of every length class (the 16-byte short compare and memcmp)
-        for (const std::size_t n :
-                {
-                    0u, 1u, 3u, 7u, 8u, 15u, 16u, 17u, 40u
-                })
+        SECTION("structural characters")
         {
-            const std::string key(n, 'k');
-            const json_document dk = json_document::parse("{\"" + key + "\":1,\"" + key + "x\":2,\"" + key + "\":3,\"" + key + "\":4}"); // NOLINT(performance-inefficient-string-concatenation)
-            CAPTURE(n)
-            CHECK(dk.root()[key].materialize() == 1);
-            CHECK(dk.root().at(key).materialize() == 1);
-            CHECK(dk.root().find(key) == dk.root().begin());
-            CHECK(dk.root().value(key, 0) == 1);
-            CHECK(dk.root()[key + "x"].materialize() == 2);
+            CHECK((scan_string("[") == json::lexer::token_type::begin_array));
+            CHECK((scan_string("]") == json::lexer::token_type::end_array));
+            CHECK((scan_string("{") == json::lexer::token_type::begin_object));
+            CHECK((scan_string("}") == json::lexer::token_type::end_object));
+            CHECK((scan_string(",") == json::lexer::token_type::value_separator));
+            CHECK((scan_string(":") == json::lexer::token_type::name_separator));
         }
-        std::string order;
-        for (auto it = v.begin(); it != v.end(); ++it)
+
+// ---- tests/src/unit-std-format.cpp:105-126  (uses: parse)
+    SECTION("a format spec may run to the end of the parse context")
+    {
+        // std::format always hands parse() a range that still holds the closing
+        // '}', but a parse context may also end right after the spec
+        const auto parse = [](const char* spec)
         {
-            order += std::string(it.key().data(), it.key().size()) + it->materialize().dump();
-        }
-        CHECK(order == "a1b2a3");
-        CHECK(v.back().materialize() == 3);
-        CHECK(v.materialize() == json::parse(R"({"a":1,"b":2,"a":3})")); // the last value, as parse()
+            std::format_parse_context ctx(spec);
+            std::formatter<json> f;
+            CHECK(f.parse(ctx) == ctx.end());
+            return f;
+        };
+
+        CHECK(parse("").indent == -1);
+        CHECK(parse(">").indent == -1);
+        CHECK(parse("#").indent == 4);
+        CHECK(parse("3").indent == 3);
+        CHECK(parse("#12").indent == 12);
+
+        const auto f = parse(".>");
+        CHECK(f.indent == -1);
+        CHECK(f.indent_char == '.');
     }
 
-// ---- tests/src/unit-regression1.cpp:230-250  (uses: get, lexer)
+// ---- tests/src/unit-locale-cpp.cpp:261-273  (uses: lexer)
+TEST_CASE("locale changes between lexer construction and number conversion (#5198)")
+{
+    // float and double are converted without the locale. A long double that
+    // is not binary64 can take the strtold fallback, which honors the locale
+    // that is current at conversion time. The numbers are chosen so that it
+    // does: too many significant digits for Clinger's fast path, an underflow
+    // that std::from_chars rejects, and a plain value.
+    const std::vector<std::string> numbers = {"3.14159265358979323846", "1.5e-400", "12.34", "-0.000123456789012345678"};
+    std::string text = "[";
+    for (const auto& n : numbers)
+    {
+        text += (text.size() == 1 ? "" : ",") + n;
+    }
+
+// ---- tests/src/unit-regression1.cpp:230-250  (uses: lexer)
     SECTION("issue #82 - lexer::get_number return NAN")
     {
         const auto* const content = R"(
@@ -148,10 +159,20 @@ std::string get_error_message(const char* s, const bool ignore_comments)
         CHECK(static_cast<double>(foo) == Approx(42.42));
     }
 
-// ---- tests/src/unit-alt-string.cpp:262-267  (uses: dump)
-    SECTION("parse")
+// ---- tests/src/unit-stream-bulk-scan.cpp:391-406  (uses: lexer)
+    SECTION("the adapter keeps no token unless the lexer starts one")
     {
-        auto doc = alt_json::parse(R"({"foo": "bar"})");
-        const alt_string dump = doc.dump();
-        CHECK(dump == R"({"foo":"bar"})");
+        // the binary readers read through the same adapter, but never start a
+        // token; refilling the get area must then not collect the input
+        chunked_streambuf buf(std::string(1000, 'x'), 7);
+        std::istream is(&buf);
+        nlohmann::detail::input_stream_adapter ia(is);
+        for (int i = 0; i < 1000; ++i)
+        {
+            CHECK(ia.get_character() == 'x');
+        }
+
+        std::vector<char> token;
+        ia.copy_token(token, false);
+        CHECK(token.empty());
     }

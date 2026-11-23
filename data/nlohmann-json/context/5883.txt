@@ -1,5 +1,5 @@
 // Upstream tests at the PR's parent commit 86d5c56c5 that use the changed code.
-// Names searched (test lines using each): format_as (23), to_string (140), operator<< (97), operator>> (94), operator!= (59), operator< (210), serializer (5), dump_scalar (0), dump_escaped_impl (0), dump_iteratively (0), dump_escaped (1), put_indent (0), dump (672), number_buffer (0), string_buffer (0), write_buffer (0), dump_container (0), put_short_quoted (0), dump_binary_value (0), write_u_escapes (0), copy_plain_vectors (0), copy_plain_halves (0), put_short_literal_indent (0), dump_element (0), put_object_key (0), put_run (0), dump_string_value (0), put_u_escape (0), put_literal_indent (0), swar_not_plain (0), load_word (0), store_word (0), dump_float_value (0), dump_signed_value (0), dump_unsigned_value (0), uninitialized_buffer (0), short_string_max (0), dump_internal (0)
+// Names searched (test lines using each): format_as (23), to_string (140), array (0), basic_json (0), operator<< (97), operator>> (94), serializer (5), dump_escaped (1), number_buffer (0), string_buffer (0), write_buffer (0), uninitialized_buffer (0), dump_container (0), dump_element (0), load_word (0), put_literal_indent (0), put_object_key (0), put_run (0), put_short_literal_indent (0), put_short_quoted (0), store_word (0), copy_plain_halves (0), copy_plain_vectors (0), dump_binary_value (0), dump_float_value (0), dump_signed_value (0), dump_string_value (0), dump_unsigned_value (0), put_u_escape (0), short_string_max (0), swar_not_plain (0), write_u_escapes (0), dump_internal (0)
 
 // ---- tests/src/unit-convenience.cpp:91-115  (uses: dump_escaped)
         return *this;
@@ -27,20 +27,6 @@ TEST_CASE("convenience functions")
         CHECK(std::string(json(json::value_t::null).type_name()) == "null");
         CHECK(std::string(json(json::value_t::object).type_name()) == "object");
         CHECK(std::string(json(json::value_t::array).type_name()) == "array");
-
-// ---- tests/src/unit-udt.cpp:724-735  (uses: dump, operator<<, serializer)
-TEST_CASE("custom serializer that does adl by default" * doctest::test_suite("udt"))
-{
-    auto me = udt::person{{23}, {"theo"}, udt::country::france};
-
-    json const j = me;
-    custom_json const cj = me;
-
-    CHECK(j.dump() == cj.dump());
-
-    CHECK(me == j.get<udt::person>());
-    CHECK(me == cj.get<udt::person>());
-}
 
 // ---- tests/src/unit-serialization.cpp:809-850  (uses: operator<<, serializer)
 TEST_CASE("serializer buffers are flushed mid-string and mid-binary")
@@ -105,63 +91,92 @@ TEST_CASE("custom serializer for pods" * doctest::test_suite("udt"))
     CHECK(np == np2);
 }
 
-// ---- tests/src/unit-json_view_dump.cpp:293-303  (uses: dump, operator<<, operator>>)
-    SECTION("streams and discarded views")
-    {
-        const json_document d = json_document::parse(R"({"a": [1, 2]})");
-        std::ostringstream compact;
-        compact << d.root();
-        CHECK(compact.str() == R"({"a":[1,2]})");
-        std::ostringstream pretty;
-        pretty << std::setw(2) << std::setfill('.') << d.root() << d.root()["a"];
-        CHECK(pretty.str() == "{\n..\"a\": [\n....1,\n....2\n..]\n}[1,2]");
-        CHECK(json_view().dump() == json(json::value_t::discarded).dump());
-    }
-
-// ---- tests/src/unit-comparison.cpp:957-996  (uses: dump, operator!=, operator<)
-TEST_CASE("copying an object preserves its comparator's state")
+// ---- tests/src/unit-udt.cpp:724-735  (uses: operator<<, serializer)
+TEST_CASE("custom serializer that does adl by default" * doctest::test_suite("udt"))
 {
-    // Past the iterative deep copy's nesting bound, an object copy used to be
-    // built with a default-constructed comparator instead of a copy of the
-    // original's. For an object type whose comparator carries state - here, a
-    // std::map that compares keys case-sensitively only when created that way
-    // - this reordered the copy's keys and could even drop entries that the
-    // original's comparator kept distinct (see #5649).
-    key_case_json object = key_case_json::object_t(key_case_less(true)); // case-sensitive
-    object["b"] = 1;
-    object["B"] = 2;
-    object["a"] = 3;
-    REQUIRE(object.dump() == R"({"B":2,"a":3,"b":1})");
+    auto me = udt::person{{23}, {"theo"}, udt::country::france};
 
-    for (const std::size_t depth : std::vector<std::size_t> {0, 127, 128, 200})
-    {
-        CAPTURE(depth)
+    json const j = me;
+    custom_json const cj = me;
 
-        key_case_json original = object;
-        for (std::size_t i = 0; i < depth; ++i)
-        {
-            original = key_case_json::array({std::move(original)});
-        }
+    CHECK(j.dump() == cj.dump());
 
-        {
-            const key_case_json copy = original; // NOLINT(performance-unnecessary-copy-initialization)
-            CHECK(innermost(copy).size() == 3);
-            CHECK(innermost(copy).dump() == R"({"B":2,"a":3,"b":1})");
-            CHECK(copy == original);
-        }
-
-        {
-            key_case_json copy = key_case_json::array();
-            copy = original;
-            CHECK(innermost(copy).size() == 3);
-            CHECK(innermost(copy).dump() == R"({"B":2,"a":3,"b":1})");
-            CHECK(copy == original);
-        }
-    }
+    CHECK(me == j.get<udt::person>());
+    CHECK(me == cj.get<udt::person>());
 }
 
-// ---- tests/src/unit-ordered_json.cpp:104-107  (uses: dump, operator<)
-    SECTION("the key order is preserved at every level")
+// ---- tests/src/unit-stream-bulk-scan.cpp:319-350  (uses: operator<<, operator>>, to_string)
+    SECTION("many values from one stream")
     {
-        CHECK(copy.dump() == R"({"z":1,"a":{"y":2,"b":{"x":3}},"m":[1,2,{"w":4}]})");
+        std::string input;
+        for (int i = 0; i < 200; ++i)
+        {
+            input += R"({"id":)" + std::to_string(i) + R"(,"name":"user)" + std::to_string(i) + R"(","score":)" + std::to_string(i) + ".5}\n";
+            input += std::to_string(i * 7919) + "\n";
+        }
+
+        for (const std::size_t chunk_size : chunk_sizes())
+        {
+            CAPTURE(chunk_size)
+            chunked_streambuf buf(input, chunk_size);
+            std::istream is(&buf);
+            json j;
+            int count = 0;
+            while (!(is >> std::ws).eof())
+            {
+                is >> j;
+                if (count % 2 == 0)
+                {
+                    CHECK(j["id"] == count / 2);
+                }
+                else
+                {
+                    CHECK(j == (count / 2) * 7919);
+                }
+                ++count;
+            }
+            CHECK(count == 400);
+        }
     }
+
+// ---- tests/src/unit-stream-bulk-scan.cpp:373-403  (uses: operator<<, operator>>, to_string)
+    SECTION("std::stringstream and std::ifstream")
+    {
+        const std::string input = R"([1, 2.5, "three", {"four": [true, null]}] 5)";
+
+        std::stringstream ss(input);
+        json j1;
+        json j2;
+        ss >> j1 >> j2;
+        CHECK(j1 == json::parse(R"([1, 2.5, "three", {"four": [true, null]}])"));
+        CHECK(j2 == 5);
+        CHECK(ss.eof());
+
+        // a file name of its own for every run: the test runs for several C++
+        // standards and configurations at the same time, in the same directory
+        std::random_device rd;
+        const std::string temp_name = "unit-stream-bulk-scan-" + std::to_string(rd()) + ".tmp";
+        const char* const filename = temp_name.c_str();
+        {
+            std::ofstream file(filename);
+            file << input;
+        }
+        {
+            std::ifstream file(filename);
+            json k1;
+            json k2;
+            file >> k1 >> k2;
+            CHECK(k1 == j1);
+            CHECK(k2 == j2);
+        }
+        static_cast<void>(std::remove(filename));
+    }
+
+// ---- tests/src/unit-bon8.cpp:812-818  (uses: operator<<, operator>>)
+            SECTION("std::ostringstream")
+            {
+                std::basic_ostringstream<char> ss;
+                json::to_bon8(j1, ss);
+                json j3 = json::from_bon8(ss.str());
+                CHECK(j1 == j3);
+            }

@@ -1,5 +1,5 @@
 // Upstream tests at the PR's parent commit 79f6513ce that use the changed code.
-// Names searched (test lines using each): to_bjdata (0), to_bon8 (0), to_bson (0), to_cbor (0), to_msgpack (0), sax_parse (0), from_bson (0), from_cbor (0), from_msgpack (0), from_ubjson (0), from_bjdata (0), from_bon8 (0), write_ubjson_start_container (0), get_ubjson_array (0), binary_reader (2), binary_writer (0), charge_valueless_elements (0), valueless_array_fits (0), valueless_elements (0), valueless_elements_written (0), valueless_elements_base (0), valueless_elements_per_byte (0), error_handler (23)
+// Names searched (test lines using each): format_as (23), to_string (192), array (0), basic_json (0), operator<< (105), operator>> (109), binary_reader (2), binary_writer (0), valueless_array_fits (0), charge_valueless_elements (0), valueless_elements (0), valueless_elements_written (0), valueless_elements_base (0), valueless_elements_per_byte (0), error_handler (23)
 
 // ---- tests/src/unit-bjdata.cpp:79-116  (uses: binary_reader)
     SECTION("binary_reader BJData lookup tables")
@@ -41,81 +41,94 @@
         CHECK(reader_t::bjd_type_name(static_cast<unsigned char>('x')) == nullptr);
     }
 
-// ---- tests/src/unit-binary_utf8_error_handler.cpp:45-69  (uses: error_handler)
+// ---- tests/src/unit-deserialization.cpp:1294-1339  (uses: operator<<, operator>>, to_string)
+TEST_CASE("parse error positions are the same for contiguous and stream input")
 {
-    return "\xC3\xA9"; // U+00E9, "é"
-}
-
-using eh = json::error_handler_t;
-std::vector<eh> all_handlers()
-{
-    return {eh::strict, eh::replace, eh::ignore, eh::keep};
-}
-
-// what dump()+parse() produces for a sanitizing error_handler; this is the
-// ground truth every binary writer/reader is checked against
-std::string dump_and_parse(const std::string& raw, eh error_handler)
-{
-    return json::parse(json(raw).dump(-1, ' ', false, error_handler)).get<std::string>();
-}
-
-// an object key type that is not string_t, but converts implicitly to it;
-// data() is only used when JSON_DIAGNOSTICS is enabled
-DOCTEST_CLANG_SUPPRESS_WARNING_PUSH
-DOCTEST_CLANG_SUPPRESS_WARNING("-Wunused-member-function")
-class converting_key
-{
-  public:
-    converting_key(const char* s) : m_value(s) {} // NOLINT(google-explicit-constructor,hicpp-explicit-conversions)
-
-// ---- tests/src/unit-binary_utf8_error_handler.cpp:111-123  (uses: error_handler)
-TEST_CASE("UTF-8 error_handler for the binary readers and writers")
-{
-    SECTION("writers: string value")
+    // contiguous input derives the position from the input on error, stream
+    // input counts it while reading (see lexer::lazy_position); the cases
+    // cover newlines before the error, ungetting a newline after a number,
+    // newlines inside a string, a comment, and reads at the end of input
+    struct test_case
     {
-        for (const auto& c : ill_formed_cases())
+        std::string input;
+        std::size_t byte;
+        std::string message;
+    };
+    const std::vector<test_case> cases =
+    {
+        {"[\n  1,\n  2\n", 12, "[json.exception.parse_error.101] parse error at line 4, column 1: syntax error while parsing array - unexpected end of input; expected ']'"},
+        {"[1\n,2,\n]", 8, "[json.exception.parse_error.101] parse error at line 3, column 1: syntax error while parsing value - unexpected ']'; expected '[', '{', or a literal"},
+        {"[1\n x]", 5, "[json.exception.parse_error.101] parse error at line 2, column 2: syntax error while parsing array - invalid literal; last read: '1<U+000A> x'; expected ']'"},
+        {"1\n2", 3, "[json.exception.parse_error.101] parse error at line 2, column 1: syntax error while parsing value - unexpected number literal; expected end of input"},
         {
-            CAPTURE(c.name)
-            const json jval = c.bytes;
+            "{\"a\":\n\"b\nc\"}", 9, R"([json.exception.parse_error.101] parse error at line 3, column 0: syntax error while parsing value - invalid string: control character U+000A (LF) must be escaped to \u000A or \n; last read: '"b<U+000A>')"
+        },
+        {"/* a\n b */\n x", 13, "[json.exception.parse_error.101] parse error at line 3, column 2: syntax error while parsing value - invalid literal; last read: '/* a<U+000A> b */<U+000A> x'"},
+        {"\n\n", 3, "[json.exception.parse_error.101] parse error at line 3, column 1: syntax error while parsing value - unexpected end of input; expected '[', '{', or a literal"},
+        {"[\"a\",\n 1e\n]", 10, "[json.exception.parse_error.101] parse error at line 3, column 0: syntax error while parsing value - invalid number; expected '+', '-', or digit after exponent; last read: '1e<U+000A>'"},
+        {"[tru\n]", 5, "[json.exception.parse_error.101] parse error at line 2, column 0: syntax error while parsing value - invalid literal; last read: '[tru<U+000A>'"},
+    };
 
-            CHECK_THROWS_AS(json::to_cbor(jval, eh::strict), json::type_error&);
-            CHECK_THROWS_AS(json::to_msgpack(jval, eh::strict), json::type_error&);
-            CHECK_THROWS_AS(json::to_ubjson(jval, false, false, eh::strict), json::type_error&);
-            CHECK_THROWS_AS(json::to_bjdata(jval, false, false, json::bjdata_version_t::draft2, eh::strict), json::type_error&);
-
-// ---- tests/src/unit-binary_utf8_strict.cpp:127-135  (uses: error_handler)
-    SECTION("an explicit error_handler overrides the default")
+    for (const auto& c : cases)
     {
-        // the macro only changes the default of the error_handler parameter
-        CHECK(json::to_cbor(json("\xFF"), json::error_handler_t::keep) == std::vector<std::uint8_t>({0x61, 0xff}));
-        CHECK(json::to_ubjson(json("\xFF"), false, false, json::error_handler_t::keep) == std::vector<std::uint8_t>({'S', 'i', 1, 0xff}));
-        CHECK(json::to_bjdata(json("\xFF"), false, false, json::bjdata_version_t::draft2, json::error_handler_t::keep) == std::vector<std::uint8_t>({'S', 'i', 1, 0xff}));
-        CHECK(json::from_bson(json::to_bson(json{{"s", "\xFF"}}, json::error_handler_t::keep)) == json{{"s", "\xFF"}});
-        CHECK(json::to_cbor(json("\xFF"), json::error_handler_t::replace) == std::vector<std::uint8_t>({0x63, 0xef, 0xbf, 0xbd}));
+        CAPTURE(c.input)
+        const std::string expected = std::to_string(c.byte) + " " + c.message;
+
+        SaxErrorRecorder string_sax;
+        CHECK_FALSE(json::sax_parse(c.input, &string_sax, json::input_format_t::json, true, true));
+        CHECK(string_sax.error == expected);
+
+        SaxErrorRecorder pointer_sax;
+        CHECK_FALSE(json::sax_parse(c.input.data(), c.input.data() + c.input.size(), &pointer_sax, json::input_format_t::json, true, true));
+        CHECK(pointer_sax.error == expected);
+
+        std::istringstream is(c.input);
+        SaxErrorRecorder stream_sax;
+        CHECK_FALSE(json::sax_parse(is, &stream_sax, json::input_format_t::json, true, true));
+        CHECK(stream_sax.error == expected);
+    }
+}
+
+// ---- tests/src/unit-stream-bulk-scan.cpp:349-380  (uses: operator<<, operator>>, to_string)
+    SECTION("many values from one stream")
+    {
+        std::string input;
+        for (int i = 0; i < 200; ++i)
+        {
+            input += R"({"id":)" + std::to_string(i) + R"(,"name":"user)" + std::to_string(i) + R"(","score":)" + std::to_string(i) + ".5}\n";
+            input += std::to_string(i * 7919) + "\n";
+        }
+
+        for (const std::size_t chunk_size : chunk_sizes())
+        {
+            CAPTURE(chunk_size)
+            chunked_streambuf buf(input, chunk_size);
+            std::istream is(&buf);
+            json j;
+            int count = 0;
+            while (!(is >> std::ws).eof())
+            {
+                is >> j;
+                if (count % 2 == 0)
+                {
+                    CHECK(j["id"] == count / 2);
+                }
+                else
+                {
+                    CHECK(j == (count / 2) * 7919);
+                }
+                ++count;
+            }
+            CHECK(count == 400);
+        }
     }
 
-// ---- tests/src/unit-cbor.cpp:1898-1921  (uses: error_handler)
-                CHECK_THROWS_AS(_ = json::from_cbor(std::vector<std::uint8_t>({0xA1, 0xDB, 0x00, 0x00}), true, true, store), json::parse_error&);
-                CHECK_THROWS_AS(_ = json::from_cbor(std::vector<std::uint8_t>({0xBF, 0xC0}), true, true, store), json::parse_error&);
-            }
-
-            // SAX: the key event is reported without the tag (start_object,
-            // key, number_unsigned, end_object are four events)
-            {
-                const std::vector<std::uint8_t> input = {0xA1, 0xC0, 0x61, 0x61, 0x0A};
-                SaxCountdown four(4);
-                CHECK(json::sax_parse(input, &four, json::input_format_t::cbor, true, false, false, ignore));
-                SaxCountdown three(3);
-                CHECK(!json::sax_parse(input, &three, json::input_format_t::cbor, true, false, false, ignore));
-                SaxCountdown error_handler(4);
-                CHECK(!json::sax_parse(input, &error_handler, json::input_format_t::cbor));
-            }
-
-            // a long chain of tags needs no recursion
-            {
-                std::vector<std::uint8_t> input = {0xA1};
-                input.insert(input.end(), 100000, 0xC0);
-                input.insert(input.end(), {0x61, 0x61, 0x0A});
-                CHECK(json::from_cbor(input, true, true, ignore) == expected);
-            }
+// ---- tests/src/unit-deserialization.cpp:165-172  (uses: operator<<)
+        SECTION("operator<<")
+        {
+            std::stringstream ss;
+            ss << R"(["foo",1,2,3,false,{"one":1}])";
+            json j;
+            j << ss;
+            CHECK(j == json({"foo", 1, 2, 3, false, {{"one", 1}}}));
         }

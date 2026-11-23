@@ -1,184 +1,180 @@
 // Upstream tests at the PR's parent commit 30e542e52 that use the changed code.
-// Names searched (test lines using each): erase (228), to_bjdata (0), to_bon8 (0), to_bson (0), to_cbor (0), to_msgpack (0), throw_on_discarded (0)
+// Names searched (test lines using each): ordered_map (41), format_as (23), to_string (76), array (0), basic_json (0), operator<< (81), operator>> (76), binary_writer (0)
 
-// ---- tests/src/unit-class_parser.cpp:2401-2412  (uses: erase)
-        SECTION("for object")
+// ---- tests/src/unit-ordered_map.cpp:516-525  (uses: ordered_map, to_string)
+        SECTION("emplace")
         {
-            // Create an object with spaces to test the start and end positions. Spaces will not be included in the
-            // JSON object, however, the start and end positions should include the spaces from the input JSON string.
-            const std::string nested_type_json_str =  R"({    "a":       1,"b"      : "test1"})";
-            const std::string root_type_json_str =  R"({    "nested": )" + nested_type_json_str + R"(, "anotherValue": "test2"})";
-            auto expected = json({{"nested", {{"a", 1}, {"b", "test1"}}}, {"anotherValue", "test2"}});
-            auto filteredExpected = expected;
-            filteredExpected["nested"].erase("a");
-
-            SETUP_TESTCASES()
+            fill([](ordered_map<std::string, counted>& m, int i)
+            {
+                m.emplace(std::to_string(i), counted(i));
+            });
+            CHECK(growths >= 3);
+            CHECK(value_copies == 0);
+            check_contents();
         }
 
-// ---- tests/src/unit-class_parser.cpp:2424-2438  (uses: erase)
-        SECTION("for array with objects")
+// ---- tests/src/unit-ordered_map.cpp:527-536  (uses: ordered_map, to_string)
+        SECTION("operator[]")
         {
-            const std::string nested_type_json_str =  R"([{"a": 1, "b": "test"}, {"c": 2, "d": "test2"}])";
-            const std::string root_type_json_str =  R"({   "nested": )" + nested_type_json_str + R"(, "anotherValue": "test" })";
-            auto expected = json({{"nested", {{{"a", 1}, {"b", "test"}}, {{"c", 2}, {"d", "test2"}}}}, {"anotherValue", "test"}});
-            auto filteredExpected = expected;
-            filteredExpected["nested"][0].erase("a");
-            SETUP_TESTCASES()
-
-            auto j = json::parse(root_type_json_str);
-            auto nested_array = j["nested"];
-            const auto& nested_obj = nested_array[0];
-            CHECK(nested_type_json_str.substr(1, 21) == root_type_json_str.substr(nested_obj.start_pos(), nested_obj.end_pos() - nested_obj.start_pos()));
-            CHECK(nested_type_json_str.substr(24, 22) == root_type_json_str.substr(nested_array[1].start_pos(), nested_array[1].end_pos() - nested_array[1].start_pos()));
+            fill([](ordered_map<std::string, counted>& m, int i)
+            {
+                m[std::to_string(i)] = counted(i);
+            });
+            CHECK(growths >= 3);
+            CHECK(value_copies == 0);
+            check_contents();
         }
 
-// ---- tests/src/unit-comparison.cpp:911-954  (uses: erase)
-TEST_CASE("equality of objects whose entries have no fixed order")
+// ---- tests/src/unit-deserialization.cpp:236-248  (uses: operator<<, operator>>)
+TEST_CASE("deserialization")
 {
-    // Values nested deeper than a bound are compared without the call stack,
-    // entry by entry. That must agree with the object type's own operator==,
-    // which for unordered_object_t (as for std::unordered_map) does not
-    // depend on the order of the entries, and for ordered_map does.
-    REQUIRE(make_unordered_object(true).begin().key() == "9");
-    REQUIRE(make_unordered_object(false).begin().key() == "0");
-
-    for (const std::size_t depth : std::vector<std::size_t> {0, 200})
+    SECTION("successful deserialization")
     {
-        CAPTURE(depth)
+        SECTION("stream")
+        {
+            std::stringstream ss1;
+            std::stringstream ss2;
+            std::stringstream ss3;
+            ss1 << R"(["foo",1,2,3,false,{"one":1}])";
+            ss2 << R"(["foo",1,2,3,false,{"one":1}])";
+            ss3 << R"(["foo",1,2,3,false,{"one":1}])";
+            const json j = json::parse(ss1);
 
-        const unordered_json descending = nest(make_unordered_object(true), depth);
-        const unordered_json ascending = nest(make_unordered_object(false), depth);
-        CHECK(descending == ascending);
-        CHECK_FALSE(descending != ascending);
-
-        // a copy is equal to its original
-        const unordered_json copy = descending; // NOLINT(performance-unnecessary-copy-initialization)
-        CHECK(copy == descending);
-
-        // a different value, a different key, or another entry still count
-        unordered_json other_value = make_unordered_object(true);
-        other_value["5"] = 42;
-        CHECK_FALSE(nest(other_value, depth) == ascending);
-
-        unordered_json other_key = make_unordered_object(true);
-        other_key.erase("5");
-        other_key["50"] = 5;
-        CHECK_FALSE(nest(other_key, depth) == ascending);
-
-        unordered_json more_entries = make_unordered_object(true);
-        more_entries["10"] = 10;
-        CHECK_FALSE(nest(more_entries, depth) == ascending);
-        CHECK_FALSE(ascending == nest(more_entries, depth));
-
-        // ordered_json compares its entries in sequence
-        const nlohmann::ordered_json ab = nest(nlohmann::ordered_json({{"a", 1}, {"b", 2}}), depth);
-        const nlohmann::ordered_json ba = nest(nlohmann::ordered_json({{"b", 2}, {"a", 1}}), depth);
-        CHECK_FALSE(ab == ba);
-        CHECK(ab != ba);
-    }
-}
-
-// ---- tests/src/unit-custom-array-type.cpp:85-106  (uses: erase)
-    SECTION("accessing and modifying elements")
+// ---- tests/src/unit-deserialization.cpp:345-357  (uses: operator<<, operator>>)
+    SECTION("unsuccessful deserialization")
     {
-        auto j = deque_json::parse(R"([1,2,3])");
+        SECTION("stream")
+        {
+            std::stringstream ss1;
+            std::stringstream ss3;
+            std::stringstream ss4;
+            std::stringstream ss5;
+            ss1 << R"(["foo",1,2,3,false,{"one":1})";
+            ss3 << R"(["foo",1,2,3,false,{"one":1})";
+            ss4 << R"(["foo",1,2,3,false,{"one":1})";
+            ss5 << R"(["foo",1,2,3,false,{"one":1})";
 
-        CHECK(j[1] == 2);
-        CHECK(j.at(2) == 3);
 
-        // growing through operator[] fills up with null values
-        j[5] = 6;
-        CHECK(j.size() == 6);
-        CHECK(j[4].is_null());
-        CHECK(j[5] == 6);
-
-        j.erase(0);
-        CHECK(j == deque_json({2, 3, nullptr, nullptr, 6}));
-
-        auto it = j.erase(j.begin());
-        CHECK(*it == 3);
-
-        j.insert(j.begin(), 1);
-        CHECK(j.front() == 1);
+// ---- tests/src/unit-precise-stream-position.cpp:88-100  (uses: operator<<, operator>>)
+TEST_CASE("JSON_PRECISE_STREAM_POSITION")
+{
+    SECTION("the macro is part of the ABI tag")
+    {
+        const std::string ns = STRINGIZE(NLOHMANN_JSON_NAMESPACE);
+        // other tags may come before it, e.g. json_abi_diag_psp
+        CHECK(ns.find("_psp") != std::string::npos);
     }
 
-// ---- tests/src/unit-custom-base-class.cpp:368-384  (uses: erase)
-                break;
-            case value_t::binary:
-                str << "binary";
-                break;
-            default:
-                str << "error";
-                break;
-        }
-        str << " - "  << j.dump();
-        CHECK(json.at(p) == j);
-        INFO(str.str());
-        CHECK(expected.count(str.str()) == 1);
-        expected.erase(str.str());
-    }
-        );
-    CHECK(expected.empty());
-}
+    SECTION("a number does not consume the character that terminates it")
+    {
+        // a number is only terminated by the character following it; that
+        // character must be given back so the stream is positioned right
 
-// ---- tests/src/unit-custom-object-type.cpp:144-168  (uses: erase)
-
-    mapped_type& at(const key_type& key)
+// ---- tests/src/unit-precise-stream-position.cpp:226-236  (uses: operator<<, operator>>)
+    SECTION("a streambuf that cannot put back is not needed")
     {
-        return data.at(key);
-    }
-    const mapped_type& at(const key_type& key) const
-    {
-        return data.at(key);
-    }
-
-    iterator erase(iterator pos)
-    {
-        return data.erase(pos);
-    }
-    iterator erase(iterator first, iterator last)
-    {
-        return data.erase(first, last);
-    }
-    size_type erase(const key_type& key)
-    {
-        return data.erase(key);
-    }
-
-    void swap(no_key_compare_map& other) noexcept(noexcept(data.swap(other.data)))
-    {
-
-// ---- tests/src/unit-custom-object-type.cpp:353-377  (uses: erase)
-
-    mapped_type& at(const key_type& key)
-    {
-        return data.at(key);
-    }
-    const mapped_type& at(const key_type& key) const
-    {
-        return data.at(key);
-    }
-
-    iterator erase(iterator pos)
-    {
-        return iterator(data.erase(pos.base()));
-    }
-    iterator erase(iterator first, iterator last)
-    {
-        return iterator(data.erase(first.base(), last.base()));
-    }
-    size_type erase(const key_type& key)
-    {
-        return data.erase(key);
-    }
-
-    void swap(forward_only_map& other) noexcept(noexcept(data.swap(other.data)))
-    {
-
-// ---- tests/src/unit-diagnostics.cpp:62-67  (uses: erase)
-    SECTION("wrong iterator")
-    {
+        // the terminating character is never consumed, so no putback
+        // position is required
+        no_putback_streambuf buf("1true");
+        std::istream is(&buf);
         json j;
-        j["array"] = json::array();
-        CHECK_THROWS_WITH_AS(j["array"].erase(j.begin()), "[json.exception.invalid_iterator.202] (/array) iterator does not fit current value", json::invalid_iterator);
+        is >> j;
+        CHECK(j == json(1));
+        CHECK(remaining(is) == "true");
+    }
+
+// ---- tests/src/unit-bon8.cpp:635-647  (uses: operator<<, operator>>)
+TEST_CASE("BON8 strings from contiguous and stream input")
+{
+    // contiguous input copies the valid UTF-8 of a string in bulk, a stream
+    // is read byte by byte; both must end strings and report errors alike
+    const std::string ascii(20, 'a');
+    const std::vector<bytes> inputs =
+    {
+        // the string ends at 0xFF, at a marker, and at an integer
+        concat(concat(bytes(ascii.begin(), ascii.end()), {0xC3, 0xA4}), {0xFF}),
+        concat(concat({0x82}, bytes(ascii.begin(), ascii.end())), {0x91}),
+        concat(concat({0x85}, bytes(ascii.begin(), ascii.end())), {0xFE}),
+        concat(concat({0x82}, bytes(ascii.begin(), ascii.end())), {0xC2, 0x05}),
+        concat(concat({0x87}, bytes(ascii.begin(), ascii.end())), {0xE2, 0x82, 0xAC, 0xF0, 0x05, 0x00, 0x00}),
+
+// ---- tests/src/unit-bon8.cpp:765-771  (uses: operator<<, operator>>)
+            SECTION("std::ostringstream")
+            {
+                std::basic_ostringstream<char> ss;
+                json::to_bon8(j1, ss);
+                json j3 = json::from_bon8(ss.str());
+                CHECK(j1 == j3);
+            }
+
+// ---- tests/src/unit-bson.cpp:905-917  (uses: operator<<, operator>>)
+TEST_CASE("BSON input/output_adapters")
+{
+    const json json_representation =
+    {
+        {"double", 42.5},
+        {"entry", 4.2},
+        {"number", 12345},
+        {"object", {{ "string", "value" }}}
+    };
+
+    const std::vector<std::uint8_t> bson_representation =
+    {
+        /*size */ 0x4f, 0x00, 0x00, 0x00,
+
+// ---- tests/src/unit-bson.cpp:936-942  (uses: operator<<, operator>>)
+        SECTION("std::ostringstream")
+        {
+            std::basic_ostringstream<char> ss;
+            json::to_bson(json_representation, ss);
+            const json j3 = json::from_bson(ss.str());
+            CHECK(json_representation == j3);
+        }
+
+// ---- tests/src/unit-cbor.cpp:1616-1653  (uses: operator<<, operator>>)
+    SECTION("additional deserialization")
+    {
+        SECTION("0x5b (byte array)")
+        {
+            std::vector<uint8_t> const given = {0x5b, 0x00, 0x00, 0x00, 0x00,
+                                                0x00, 0x00, 0x00, 0x01, 0x61
+                                               };
+            const json j = json::from_cbor(given);
+            CHECK(j == json::binary(std::vector<uint8_t> {'a'}));
+        }
+
+        SECTION("0x7b (string)")
+        {
+            std::vector<uint8_t> const given = {0x7b, 0x00, 0x00, 0x00, 0x00,
+                                                0x00, 0x00, 0x00, 0x01, 0x61
+                                               };
+            const json j = json::from_cbor(given);
+            CHECK(j == "a");
+        }
+
+        SECTION("0x9b (array)")
+        {
+            std::vector<uint8_t> const given = {0x9b, 0x00, 0x00, 0x00, 0x00,
+                                                0x00, 0x00, 0x00, 0x01, 0xf4
+                                               };
+            const json j = json::from_cbor(given);
+            CHECK(j == json::parse("[false]"));
+        }
+
+        SECTION("0xbb (map)")
+        {
+            std::vector<uint8_t> const given = {0xbb, 0x00, 0x00, 0x00, 0x00,
+                                                0x00, 0x00, 0x00, 0x01, 0x60, 0xf4
+                                               };
+            const json j = json::from_cbor(given);
+            CHECK(j == json::parse("{\"\": false}"));
+        }
+    }
+
+// ---- tests/src/unit-serialization.cpp:196-201  (uses: to_string)
+    SECTION("minimum")
+    {
+        constexpr auto minimum = (std::numeric_limits<T>::min)();
+        const json j = minimum;
+        CHECK(j.dump() == std::to_string(minimum));
     }

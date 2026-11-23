@@ -1,5 +1,5 @@
 // Upstream tests at the PR's parent commit 0c4e7c103 that use the changed code.
-// Names searched (test lines using each): patch_inplace (4), json_pointer (158), to_string (7), parent_pointer (3), diff (0), back (83), front (31), pop_back (17), pop_front (3), operator/ (0), operator<< (83), operator!= (52), operator< (197), operator== (57), unflatten (32), split (0), escape (1), parse_array_index (0), prefix_tree (0), get_checked (0), contains (140), get_checked_or_null (0), get_unchecked (0), unescape (3), throw_no_parent (0), throw_unresolved (0), equals_string (0), add_child (0), grow (0), escape_into (0), object_member (0), hash_of (0), get_and_create (0), slot (0), parent (30), hash (59), id (37), token (43), slots (0), used (20), find_child (0), children (1)
+// Names searched (test lines using each): json_pointer (158), basic_json (34), operator/ (0), operator<< (83), operator!= (52), operator< (197), operator== (57), prefix_tree (0), split (0), escape (1), unescape (3), throw_no_parent (0), throw_unresolved (0), escape_into (0), slot (0), get_and_create (0), object_member (0), equals_string (0), add_child (0), grow (0), hash_of (0), parent (30), hash (59), id (37), token (43), slots (0), used (20), children (1), find_child (0)
 
 // ---- tests/src/unit-unicode.cpp:333-361  (uses: escape, json_pointer, unescape)
         SECTION("check JSON Pointers")
@@ -32,30 +32,6 @@
             }
         }
 
-// ---- tests/src/unit-alt-string.cpp:328-349  (uses: json_pointer, to_string, unflatten)
-    SECTION("JSON pointer")
-    {
-        // Direct conversion from a json literal to alt_json is not supported due to issue #3425:
-        // alt_json's string_t (alt_string) is not directly constructible from std::string, so the
-        // cross-basic_json conversion falls back to the array-conversion path, incorrectly representing
-        // objects as arrays of [key, value] pairs and strings as arrays of character codes.
-        // See https://github.com/nlohmann/json/issues/3425 for details.
-        // Workaround: use alt_json::parse() instead of implicit conversion.
-        auto j = alt_json::parse(R"({"foo": ["bar", "baz"]})");
-
-        CHECK(j.at(alt_json::json_pointer("/foo/0")) == j["foo"][0]);
-        CHECK(j.at(alt_json::json_pointer("/foo/1")) == j["foo"][1]);
-
-        // RFC 6901 escaping works without string_t::find(str, pos), replace(),
-        // and substr()
-        auto j2 = alt_json::parse(R"({"a/b": 1, "m~n": 2, "~/~~//": 3})");
-        CHECK(j2.at(alt_json::json_pointer("/a~1b")) == 1);
-        CHECK(j2.at(alt_json::json_pointer("/m~0n")) == 2);
-        CHECK(j2.at(alt_json::json_pointer("/~0~1~0~0~1~1")) == 3);
-        CHECK(alt_json::json_pointer("/~0~1~0~0~1~1").to_string() == alt_string("/~0~1~0~0~1~1"));
-        CHECK(j2.flatten().unflatten() == j2);
-    }
-
 // ---- tests/src/unit-regression2.cpp:1174-1178  (uses: children)
     SECTION("container children in first and last position")
     {
@@ -63,55 +39,56 @@
         check_destroy_edge_case(root);
     }
 
-// ---- tests/src/unit-json_pointer.cpp:33-57  (uses: json_pointer, parent, pop_back)
-    SECTION("errors")
+// ---- tests/src/unit-json_pointer.cpp:778-827  (uses: json_pointer, operator!=, operator<, operator==)
+    SECTION("equality comparison")
     {
-        CHECK_THROWS_WITH_AS(json::json_pointer("foo"),
-                             "[json.exception.parse_error.107] parse error at byte 1: JSON pointer must be empty or begin with '/' - was: 'foo'", json::parse_error&);
+        std::string ptr_string{"/foo/bar"};
+        auto ptr1 = json::json_pointer(ptr_string);
+        auto ptr2 = json::json_pointer(ptr_string);
 
-        CHECK_THROWS_WITH_AS(json::json_pointer("/~~"),
-                             "[json.exception.parse_error.108] parse error: escape character '~' must be followed with '0' or '1'", json::parse_error&);
+        // build with C++20 to test rewritten candidates
+        // JSON_HAS_CPP_20
 
-        CHECK_THROWS_WITH_AS(json::json_pointer("/~"),
-                             "[json.exception.parse_error.108] parse error: escape character '~' must be followed with '0' or '1'", json::parse_error&);
+        CHECK(ptr1 == ptr2);
 
-        json::json_pointer p;
-        CHECK_THROWS_WITH_AS(p.top(),
-                             "[json.exception.out_of_range.405] JSON pointer has no parent", json::out_of_range&);
-        CHECK_THROWS_WITH_AS(p.pop_back(),
-                             "[json.exception.out_of_range.405] JSON pointer has no parent", json::out_of_range&);
+        CHECK_FALSE(ptr1 != ptr2);
 
-        SECTION("array index error")
+#ifndef JSON_TEST_DEPRECATED_FUNCTIONS_DELETED
+        const char* ptr_cpstring = "/foo/bar";
+        const char ptr_castring[] = "/foo/bar"; // NOLINT(misc-const-correctness,hicpp-avoid-c-arrays,modernize-avoid-c-arrays,cppcoreguidelines-avoid-c-arrays)
+
+        CHECK(ptr1 == "/foo/bar");
+        CHECK(ptr1 == ptr_cpstring);
+        CHECK(ptr1 == ptr_castring);
+        CHECK(ptr1 == ptr_string);
+
+        CHECK("/foo/bar" == ptr1);
+        CHECK(ptr_cpstring == ptr1);
+        CHECK(ptr_castring == ptr1);
+        CHECK(ptr_string == ptr1);
+
+        CHECK_FALSE(ptr1 != "/foo/bar");
+        CHECK_FALSE(ptr1 != ptr_cpstring);
+        CHECK_FALSE(ptr1 != ptr_castring);
+        CHECK_FALSE(ptr1 != ptr_string);
+
+        CHECK_FALSE("/foo/bar" != ptr1);
+        CHECK_FALSE(ptr_cpstring != ptr1);
+        CHECK_FALSE(ptr_castring != ptr1);
+        CHECK_FALSE(ptr_string != ptr1);
+
+        SECTION("exceptions")
         {
-            json v = {1, 2, 3, 4};
-            json::json_pointer const ptr("/10e");
-            CHECK_THROWS_WITH_AS(v[ptr],
-                                 "[json.exception.out_of_range.404] unresolved reference token '10e'", json::out_of_range&);
+            CHECK_THROWS_WITH_AS(ptr1 == "foo",
+                                 "[json.exception.parse_error.107] parse error at byte 1: JSON pointer must be empty or begin with '/' - was: 'foo'", json::parse_error&);
+            CHECK_THROWS_WITH_AS("foo" == ptr1,
+                                 "[json.exception.parse_error.107] parse error at byte 1: JSON pointer must be empty or begin with '/' - was: 'foo'", json::parse_error&);
+            CHECK_THROWS_WITH_AS(ptr1 == "/~~",
+                                 "[json.exception.parse_error.108] parse error: escape character '~' must be followed with '0' or '1'", json::parse_error&);
+            CHECK_THROWS_WITH_AS("/~~" == ptr1,
+                                 "[json.exception.parse_error.108] parse error: escape character '~' must be followed with '0' or '1'", json::parse_error&);
         }
-    }
-
-// ---- tests/src/unit-delete_deprecated_functions.cpp:207-228  (uses: contains, json_pointer, to_string)
-    SECTION("the non-deprecated functions still work")
-    {
-        const json j = {{"a", {1, 2}}};
-        const auto cbor = json::to_cbor(j);
-        CHECK(json::from_cbor(cbor.data(), cbor.data() + cbor.size()) == j);
-
-        const json::json_pointer ptr("/a/1");
-        CHECK(ptr == json::json_pointer("/a/1"));
-        CHECK(ptr.to_string() == "/a/1");
-        CHECK(j[ptr] == 2);
-        CHECK(j.at(ptr) == 2);
-        CHECK(j.value(ptr, 0) == 2);
-        CHECK(j.contains(ptr));
-
-        std::ostringstream os;
-        os << j;
-        CHECK(os.str() == R"({"a":[1,2]})");
-        std::istringstream is(os.str());
-        json parsed;
-        is >> parsed;
-        CHECK(parsed == j);
+#endif
     }
 
 // ---- tests/src/unit-json_pointer.cpp:829-843  (uses: json_pointer, operator!=, operator<, operator==)
@@ -145,6 +122,44 @@ TEST_CASE("lexicographical comparison operators")
 #endif
 
 #if JSON_HAS_THREE_WAY_COMPARISON
+
+// ---- tests/src/unit-comparison.cpp:127-147  (uses: operator!=, operator<, operator==)
+        SECTION("comparison: less")
+        {
+            REQUIRE(expected_lt.size() == j_types.size());
+            for (size_t i = 0; i < j_types.size(); ++i)
+            {
+                REQUIRE(expected_lt[i].size() == j_types.size());
+                for (size_t j = 0; j < j_types.size(); ++j)
+                {
+                    CAPTURE(i)
+                    CAPTURE(j)
+                    // check precomputed values
+#if JSON_HAS_THREE_WAY_COMPARISON
+                    // JSON_HAS_CPP_20 (do not remove; see note at top of file)
+                    CHECK((j_types[i] < j_types[j]) == expected_lt[i][j]);
+#else
+                    CHECK(operator<(j_types[i], j_types[j]) == expected_lt[i][j]);
+#endif
+                    CHECK(f(j_types[i], j_types[j]) == expected_lt[i][j]);
+                }
+            }
+        }
+
+// ---- tests/src/unit-hash.cpp:91-103  (uses: hash, operator<)
+TEST_CASE("hash<nlohmann::json>")
+{
+    // Collect hashes for different JSON values and make sure that they are distinct
+    // We cannot compare against fixed values, because the implementation of
+    // std::hash may differ between compilers.
+    //
+    // numbers that compare equal under operator== (0 == 0U == 0.0) must hash
+    // equally, so they are only inserted once below and checked separately.
+
+    std::set<std::size_t> hashes;
+
+    // null
+    hashes.insert(std::hash<json> {}(json(nullptr)));
 
 // ---- tests/src/unit-regression1.cpp:1034-1036  (uses: operator!=, operator<, operator==)
     SECTION("issue #414 - compare with literal 0)")

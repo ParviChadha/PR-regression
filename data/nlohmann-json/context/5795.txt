@@ -1,158 +1,169 @@
 // Upstream tests at the PR's parent commit 11ef35251 that use the changed code.
-// Names searched (test lines using each): basic_json (31), to_bjdata (0), to_bon8 (0), to_bson (0), to_cbor (0), to_msgpack (0), at (375), binary_writer (0), write_bson_document (0), write_cbor (0), write_msgpack (0), copy_object_level (0), object_at (0), write_cbor_iterative (0), write_msgpack_iterative (0), copy_keys_equal (0), write_bson_nested_head (0), write_cbor_key (0), write_msgpack_key (0), key_for_message (0), detect_equal_comparable (0)
+// Names searched (test lines using each): basic_json (31), format_as (23), to_string (75), array (0), operator<< (81), operator>> (76), binary_writer (0), copy_object_level (0), copy_keys_equal (0), write_cbor_key (0), write_msgpack_key (0), key_for_message (0), write_bson_nested_head (0), detect_equal_comparable (0)
 
-// ---- tests/src/custom_object_key_type.hpp:62-75  (uses: basic_json)
-  private:
-    using allocator_type =
-    typename std::allocator_traits<Allocator>::template rebind_alloc <
-        std::pair<const key, Value >>;
-
-    using base_type =
-        std::map<key, Value, std::less<key>, allocator_type>; // NOLINT(modernize-use-transparent-functors)
-
-  public:
-    using base_type::base_type;
-};
-
-using json = nlohmann::basic_json<object>;
-} // namespace custom_object_key_test
-
-// ---- tests/src/unit-allocator.cpp:176-188  (uses: basic_json)
-    SECTION("class basic_json")
+// ---- tests/src/unit-deserialization.cpp:96-108  (uses: operator<<, operator>>)
+TEST_CASE("deserialization")
+{
+    SECTION("successful deserialization")
     {
-        SECTION("basic_json(const CompatibleObjectType&)")
+        SECTION("stream")
         {
-            next_construct_fails = false;
-            const std::map<std::string, std::string> v {{"foo", "bar"}};
-            CHECK_NOTHROW(my_json(v));
-            next_construct_fails = true;
-            CHECK_THROWS_AS(my_json(v), std::bad_alloc&);
-            next_construct_fails = false;
-        }
+            std::stringstream ss1;
+            std::stringstream ss2;
+            std::stringstream ss3;
+            ss1 << R"(["foo",1,2,3,false,{"one":1}])";
+            ss2 << R"(["foo",1,2,3,false,{"one":1}])";
+            ss3 << R"(["foo",1,2,3,false,{"one":1}])";
+            const json j = json::parse(ss1);
 
-        SECTION("basic_json(const CompatibleArrayType&)")
-
-// ---- tests/src/unit-allocator.cpp:198-205  (uses: basic_json)
-        SECTION("basic_json(const typename string_t::value_type*)")
-        {
-            next_construct_fails = false;
-            CHECK_NOTHROW(my_json("foo"));
-            next_construct_fails = true;
-            CHECK_THROWS_AS(my_json("foo"), std::bad_alloc&);
-            next_construct_fails = false;
-        }
-
-// ---- tests/src/unit-alt-string.cpp:418-451  (uses: basic_json)
-    SECTION("conversion between basic_json specializations (#2649)")
+// ---- tests/src/unit-deserialization.cpp:205-217  (uses: operator<<, operator>>)
+    SECTION("unsuccessful deserialization")
     {
-        // explicit conversions are always possible
-        CHECK(std::is_constructible<nlohmann::json, alt_json>::value);
-        CHECK(std::is_constructible<alt_json, nlohmann::json>::value);
-        CHECK(std::is_constructible<nlohmann::json, nlohmann::ordered_json>::value);
-        CHECK(std::is_constructible<nlohmann::ordered_json, nlohmann::json>::value);
+        SECTION("stream")
+        {
+            std::stringstream ss1;
+            std::stringstream ss3;
+            std::stringstream ss4;
+            std::stringstream ss5;
+            ss1 << R"(["foo",1,2,3,false,{"one":1})";
+            ss3 << R"(["foo",1,2,3,false,{"one":1})";
+            ss4 << R"(["foo",1,2,3,false,{"one":1})";
+            ss5 << R"(["foo",1,2,3,false,{"one":1})";
 
-        // specializations with the same string type are implicitly convertible
-        CHECK(std::is_convertible<nlohmann::ordered_json, nlohmann::json>::value);
-        CHECK(std::is_convertible<nlohmann::json, nlohmann::ordered_json>::value);
 
-        // specializations with different string types are only implicitly convertible
-        // if implicit conversions are enabled
-#if JSON_USE_IMPLICIT_CONVERSIONS
-        CHECK(std::is_convertible<alt_json, nlohmann::json>::value);
-        CHECK(std::is_convertible<nlohmann::json, alt_json>::value);
-#else
-        CHECK_FALSE(std::is_convertible<alt_json, nlohmann::json>::value);
-        CHECK_FALSE(std::is_convertible<nlohmann::json, alt_json>::value);
-#endif
-
-        // get<BasicJsonType>() works in either case
-        const nlohmann::json j = {{"foo", 1}, {"bar", true}};
-        CHECK(j.get<nlohmann::ordered_json>() == nlohmann::ordered_json(j));
-        // (only a number is converted here, as objects and strings are affected by #3425)
-        CHECK(nlohmann::json(42).get<alt_json>() == 42);
-        CHECK(alt_json(nlohmann::json(42)) == 42);
-
-        // get_to() also works in either case
-        alt_json a;
-        nlohmann::json(42).get_to(a);
-        CHECK(a == 42);
+// ---- tests/src/unit-precise-stream-position.cpp:88-100  (uses: operator<<, operator>>)
+TEST_CASE("JSON_PRECISE_STREAM_POSITION")
+{
+    SECTION("the macro is part of the ABI tag")
+    {
+        const std::string ns = STRINGIZE(NLOHMANN_JSON_NAMESPACE);
+        // other tags may come before it, e.g. json_abi_diag_psp
+        CHECK(ns.find("_psp") != std::string::npos);
     }
 
-// ---- tests/src/unit-assert_macro.cpp:30-43  (uses: basic_json)
-    SECTION("basic_json(first, second)")
+    SECTION("a number does not consume the character that terminates it")
     {
-        assert_counter = 0;
-        CHECK(assert_counter == 0);
+        // a number is only terminated by the character following it; that
+        // character must be given back so the stream is positioned right
 
-        const json::iterator it{};
+// ---- tests/src/unit-precise-stream-position.cpp:226-236  (uses: operator<<, operator>>)
+    SECTION("a streambuf that cannot put back is not needed")
+    {
+        // the terminating character is never consumed, so no putback
+        // position is required
+        no_putback_streambuf buf("1true");
+        std::istream is(&buf);
         json j;
-
-        // in case assertions do not abort execution, an exception is thrown
-        CHECK_THROWS_WITH_AS(json(it, j.end()), "[json.exception.invalid_iterator.201] iterators are not compatible", json::invalid_iterator);
-
-        // check that assertion actually happened
-        CHECK(assert_counter == 1);
+        is >> j;
+        CHECK(j == json(1));
+        CHECK(remaining(is) == "true");
     }
 
-// ---- tests/src/unit-binary_utf8_error_handler.cpp:95-119  (uses: basic_json)
-template<typename Key, typename Value, typename Compare, typename Allocator>
-class converting_key_object : public std::map<converting_key, Value, std::less<converting_key>, // NOLINT(modernize-use-transparent-functors)
-    typename std::allocator_traits<Allocator>::template rebind_alloc<std::pair<const converting_key, Value>>>
+// ---- tests/src/unit-bon8.cpp:682-694  (uses: operator<<, operator>>)
+TEST_CASE("BON8 strings from contiguous and stream input")
 {
-    using base_type = std::map<converting_key, Value, std::less<converting_key>, // NOLINT(modernize-use-transparent-functors)
-                               typename std::allocator_traits<Allocator>::template rebind_alloc<std::pair<const converting_key, Value>>>;
-
-                             public:
-                               using base_type::base_type;
-                               using base_type::operator=;
-};
-
-using converting_key_json = nlohmann::basic_json<converting_key_object>;
-
-} // namespace
-
-TEST_CASE("UTF-8 error_handler for the binary readers and writers")
-{
-    SECTION("writers: string value")
+    // contiguous input copies the valid UTF-8 of a string in bulk, a stream
+    // is read byte by byte; both must end strings and report errors alike
+    const std::string ascii(20, 'a');
+    const std::vector<bytes> inputs =
     {
-        for (const auto& c : ill_formed_cases())
+        // the string ends at 0xFF, at a marker, and at an integer
+        concat(concat(bytes(ascii.begin(), ascii.end()), {0xC3, 0xA4}), {0xFF}),
+        concat(concat({0x82}, bytes(ascii.begin(), ascii.end())), {0x91}),
+        concat(concat({0x85}, bytes(ascii.begin(), ascii.end())), {0xFE}),
+        concat(concat({0x82}, bytes(ascii.begin(), ascii.end())), {0xC2, 0x05}),
+        concat(concat({0x87}, bytes(ascii.begin(), ascii.end())), {0xE2, 0x82, 0xAC, 0xF0, 0x05, 0x00, 0x00}),
+
+// ---- tests/src/unit-bon8.cpp:812-818  (uses: operator<<, operator>>)
+            SECTION("std::ostringstream")
+            {
+                std::basic_ostringstream<char> ss;
+                json::to_bon8(j1, ss);
+                json j3 = json::from_bon8(ss.str());
+                CHECK(j1 == j3);
+            }
+
+// ---- tests/src/unit-bson.cpp:901-913  (uses: operator<<, operator>>)
+TEST_CASE("BSON input/output_adapters")
+{
+    const json json_representation =
+    {
+        {"double", 42.5},
+        {"entry", 4.2},
+        {"number", 12345},
+        {"object", {{ "string", "value" }}}
+    };
+
+    const std::vector<std::uint8_t> bson_representation =
+    {
+        /*size */ 0x4f, 0x00, 0x00, 0x00,
+
+// ---- tests/src/unit-bson.cpp:932-938  (uses: operator<<, operator>>)
+        SECTION("std::ostringstream")
         {
-            CAPTURE(c.name)
-            const json jval = c.bytes;
+            std::basic_ostringstream<char> ss;
+            json::to_bson(json_representation, ss);
+            const json j3 = json::from_bson(ss.str());
+            CHECK(json_representation == j3);
+        }
 
-
-// ---- tests/src/unit-delete_deprecated_functions.cpp:190-203  (uses: basic_json)
-    SECTION("json_pointer with a basic_json type as template argument")
+// ---- tests/src/unit-cbor.cpp:1616-1653  (uses: operator<<, operator>>)
+    SECTION("additional deserialization")
     {
-        CHECK_FALSE(legacy_ptr_value<json>::value);
-        CHECK_FALSE(legacy_ptr_value_rvalue<json>::value);
-        CHECK_FALSE(legacy_ptr_contains<json>::value);
-        CHECK_FALSE(legacy_ptr_subscript<json>::value);
-        CHECK_FALSE(legacy_ptr_subscript_const<json>::value);
-        CHECK_FALSE(legacy_ptr_at<json>::value);
-        CHECK_FALSE(legacy_ptr_at_const<json>::value);
+        SECTION("0x5b (byte array)")
+        {
+            std::vector<uint8_t> const given = {0x5b, 0x00, 0x00, 0x00, 0x00,
+                                                0x00, 0x00, 0x00, 0x01, 0x61
+                                               };
+            const json j = json::from_cbor(given);
+            CHECK(j == json::binary(std::vector<uint8_t> {'a'}));
+        }
 
-        // the replacement
-        CHECK(ptr_value<json>::value);
-        CHECK(ptr_at<json>::value);
+        SECTION("0x7b (string)")
+        {
+            std::vector<uint8_t> const given = {0x7b, 0x00, 0x00, 0x00, 0x00,
+                                                0x00, 0x00, 0x00, 0x01, 0x61
+                                               };
+            const json j = json::from_cbor(given);
+            CHECK(j == "a");
+        }
+
+        SECTION("0x9b (array)")
+        {
+            std::vector<uint8_t> const given = {0x9b, 0x00, 0x00, 0x00, 0x00,
+                                                0x00, 0x00, 0x00, 0x01, 0xf4
+                                               };
+            const json j = json::from_cbor(given);
+            CHECK(j == json::parse("[false]"));
+        }
+
+        SECTION("0xbb (map)")
+        {
+            std::vector<uint8_t> const given = {0xbb, 0x00, 0x00, 0x00, 0x00,
+                                                0x00, 0x00, 0x00, 0x01, 0x60, 0xf4
+                                               };
+            const json j = json::from_cbor(given);
+            CHECK(j == json::parse("{\"\": false}"));
+        }
     }
 
-// ---- tests/src/unit-explicit_instantiation.cpp:32-37  (uses: basic_json)
-TEST_CASE("explicit instantiation of basic_json (#4825)")
-{
-    const json j = {1, "two", 3.0};
-    CHECK(j.size() == 3);
-    CHECK(json::from_bjdata(json::to_bjdata(j)) == j);
-}
+// ---- tests/src/unit-cbor.cpp:2018-2024  (uses: operator<<, operator>>)
+            SECTION("std::ostringstream")
+            {
+                std::basic_ostringstream<char> ss;
+                json::to_cbor(j1, ss);
+                json j3 = json::from_cbor(ss.str());
+                CHECK(j1 == j3);
+            }
 
-// ---- tests/src/unit-regression1.cpp:569-578  (uses: basic_json)
-    SECTION("issue #233 - Can't use basic_json::iterator as a base iterator for std::move_iterator")
-    {
-        json source = {"a", "b", "c"};
-        json expected = {"a", "b"};
-        json dest;
+// ---- tests/src/unit-class_parser.cpp:2751-2760  (uses: operator<<, operator>>)
+        SECTION("std::istringstream: positions are consistent, not npos")
+        {
+            const std::string s = R"({"a":1,"b":2})";
+            std::istringstream ss(s);
+            const json j = json::parse(ss);
 
-        std::copy_n(std::make_move_iterator(source.begin()), 2, std::back_inserter(dest));
-
-        CHECK(dest == expected);
-    }
+            CHECK(j.start_pos() == 0);
+            CHECK(j.end_pos() == s.size());
+            CHECK(j["a"].start_pos() == 5);
+        }

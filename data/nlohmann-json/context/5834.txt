@@ -1,5 +1,5 @@
 // Upstream tests at the PR's parent commit a6e9785ab that use the changed code.
-// Names searched (test lines using each): json_pointer (158), ordered_map (39), emplace_new_key (0), operator/ (0), operator<< (83), operator!= (52), operator< (195), operator== (57), flatten (17), add_flattened (0)
+// Names searched (test lines using each): json_pointer (158), ordered_map (39), emplace_new_key (0), operator/ (0), operator<< (83), operator!= (52), operator< (195), operator== (57), add_flattened (0)
 
 // ---- tests/src/unit-json_pointer.cpp:776-825  (uses: json_pointer, operator!=, operator<, operator==)
     SECTION("equality comparison")
@@ -70,25 +70,6 @@
 #endif
     }
 
-// ---- tests/src/unit-ordered_json2.cpp:434-450  (uses: flatten, operator<)
-TEST_CASE("ordered_json through flatten/unflatten")
-{
-    const ordered_json original = make_rich_ordered_json();
-    const std::vector<std::string> original_keys = collect_keys(original);
-    const std::vector<std::string> original_mango_keys = collect_keys(original["mango"]);
-
-    const ordered_json flat = original.flatten();
-    const ordered_json unflattened = flat.unflatten();
-
-    CHECK(unflattened == original);
-    // flatten() walks the value depth-first in iteration order and
-    // unflatten() re-inserts each flattened key via operator[] in the flat
-    // object's iteration order, so for ordered_json the original key order
-    // (both top-level and nested) is preserved end-to-end.
-    CHECK(collect_keys(unflattened) == original_keys);
-    CHECK(collect_keys(unflattened["mango"]) == original_mango_keys);
-}
-
 // ---- tests/src/unit-comparison.cpp:73-85  (uses: operator!=, operator<, operator==)
 TEST_CASE("lexicographical comparison operators")
 {
@@ -157,9 +138,28 @@ TEST_CASE("ordered_map growth")
             for (int i = 0; i < 100; ++i)
             {
 
-// ---- tests/src/unit-custom-object-type.cpp:447-451  (uses: operator!=, operator<, operator==)
-    SECTION("object_comparator_t falls back to default_object_comparator_t")
+// ---- tests/src/unit-algorithms.cpp:125-135  (uses: operator!=, operator<, operator==)
+            SECTION("using user-defined comparison")
+            {
+                // compare objects only by size of its elements
+                json j_array2 = {13, 29, 3, {"Hello", "World"}, true, false, {{"one", 1}, {"two", 2}, {"three", 3}}, "foo", "baz"};
+                CHECK(!std::equal(j_array.begin(), j_array.end(), j_array2.begin()));
+                CHECK(std::equal(j_array.begin(), j_array.end(), j_array2.begin(),
+                                 [](const json & a, const json & b)
+                {
+                    return (a.size() == b.size());
+                }));
+            }
+
+// ---- tests/src/unit-algorithms.cpp:204-209  (uses: operator!=, operator<, operator==)
+            SECTION("with standard comparison")
+            {
+                json j = {13, 29, 3, {{"one", 1}, {"two", 2}}, true, false, {1, 2, 3}, "foo", "baz", nullptr};
+                std::sort(j.begin(), j.end());
+                CHECK(j == json({nullptr, false, true, 3, 13, 29, {{"one", 1}, {"two", 2}}, {1, 2, 3}, "baz", "foo"}));
+            }
+
+// ---- tests/src/unit-regression1.cpp:1034-1036  (uses: operator!=, operator<, operator==)
+    SECTION("issue #414 - compare with literal 0)")
     {
-        CHECK(std::is_same < no_key_compare_json::object_comparator_t,
-              no_key_compare_json::default_object_comparator_t >::value);
-    }
+#define CHECK_TYPE(v) \

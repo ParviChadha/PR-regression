@@ -1,156 +1,144 @@
 // Upstream tests at the PR's parent commit 94fe31eb9 that use the changed code.
-// Names searched (test lines using each): read (19), basic_json_document (0), load (0), accept (12), parse (11), save (41), count (70), back (104), materialize (155), dump (704), memory_usage (17), shrink_to_fit (16), at (507), operator= (28), arena_grow (0), document_data (8), create (0), max_inline_nodes (0)
+// Names searched (test lines using each): begin (785), cbegin (198), cend (129), end (635), find (195), basic_json_document (0), load (0), builder (4), document_data (8), create (0), max_inline_nodes (0)
 
-// ---- tests/src/unit-json_view.cpp:624-667  (uses: materialize, memory_usage, read, shrink_to_fit)
-    SECTION("memory")
+// ---- tests/src/unit-json_view_builder.cpp:1-25  (uses: builder)
+//     __ _____ _____ _____
+//  __|  |   __|     |   | |  JSON for Modern C++ (supporting code)
+// |  |  |__   |  |  | | | |  version 3.12.0
+// |_____|_____|_____|_|___|  https://github.com/nlohmann/json
+//
+// SPDX-FileCopyrightText: 2013-2026 Niels Lohmann <https://nlohmann.me>
+// SPDX-License-Identifier: MIT
+
+#include "doctest_compatibility.h"
+
+#include <nlohmann/json.hpp>
+#if JSON_TEST_USING_MULTIPLE_HEADERS
+    #include <nlohmann/detail/view/builder.hpp>
+    #include <nlohmann/detail/view/materialize.hpp>
+    #include <nlohmann/detail/view/string_ref.hpp>
+#else
+    #include <nlohmann/json_view.hpp> // the single header contains the internal headers
+#endif
+using nlohmann::json;
+
+#include <array>
+#include <cstdint>
+#include <fstream>
+#include <limits>
+#include <map>
+
+// ---- tests/src/unit-json_view_builder.cpp:270-282  (uses: builder)
+TEST_CASE("json_view builder")
+{
+    SECTION("scalars and containers")
     {
-        std::string big = "[";
-        for (int i = 0; i < 10000; ++i)
-        {
-            big += (i != 0 ? ",\"" : "\"") + std::to_string(i) + "\"";
-        }
-        big += ']';
-        json_document d = json_document::parse(big);
-        CHECK(d.node_count() == 10001);
-        const std::size_t before = d.memory_usage();
-        d.shrink_to_fit(); // (invalidates views, like std::vector::shrink_to_fit)
-        CHECK(d.memory_usage() <= before);
-        CHECK(d.node_count() == 10001);
-        CHECK(d.root().materialize() == json::parse(big));
-        CHECK(d.root().size() == 10000);
-        d.shrink_to_fit(); // nothing left to release
-
-        // after reading a smaller text, both the index and the decoded strings
-        // shrink, and the strings are found in their new place
-        std::string escaped = "[";
-        for (int i = 0; i < 1000; ++i)
-        {
-            escaped += (i != 0 ? ",\"a\\n" : "\"a\\n") + std::to_string(i) + "\"";
-        }
-        escaped += ']';
-        json_document reused = json_document::parse(escaped);
-        const std::string smaller = "[\"x\\ty\", [true, \"\\u00e4\"]]"; // NOLINT(modernize-raw-string-literal)
-        reused.read(smaller);
-        const std::size_t grown = reused.memory_usage();
-        reused.shrink_to_fit();
-        CHECK(reused.memory_usage() < grown);
-        CHECK(reused.root().materialize() == json::parse(smaller));
-
-        // an empty document has nothing to release
-        json_document empty;
-        empty.shrink_to_fit();
-        CHECK(empty.memory_usage() == 0);
-
-        // a small document stays in the storage block of the header
-        json_document small = json_document::parse("[1,[2,3],{\"a\":\"b\\n\"}]"); // NOLINT(modernize-raw-string-literal)
-        small.shrink_to_fit();
-        CHECK(small.root().materialize() == json::parse("[1,[2,3],{\"a\":\"b\\n\"}]"));
-    }
-
-// ---- tests/src/unit-json_view_edit_values.cpp:284-300  (uses: dump, memory_usage, read, shrink_to_fit)
-    SECTION("reuse and memory")
-    {
-        json_editable_document d = json_editable_document::parse("[1, 2, 3]");
-        const std::size_t before = d.memory_usage();
-        for (int i = 0; i < 100; ++i)
-        {
-            d.push_back(d.root(), "some text");
-        }
-        CHECK(d.memory_usage() > before);
-        const json_editable_view first = d.root()[0];
-        d.shrink_to_fit(); // (with edits, the index stays in place)
-        CHECK(first.get<int>() == 1);
-        d.read(std::string("[true]"));
-        CHECK(d.root().dump() == "[true]");
-        d.push_back(d.root(), false);
-        CHECK(d.root().dump() == "[true,false]");
-    }
-
-// ---- tests/src/unit-json_view_dump.cpp:876-916  (uses: memory_usage, read, shrink_to_fit)
-    SECTION("shrink_to_fit releases the tables' spare capacity")
-    {
-        const auto make_text = [](int objects, int members)
-        {
-            std::string text = "[";
-            for (int object = 0; object < objects; ++object)
-            {
-                text += object != 0 ? ",{" : "{";
-                for (int i = 0, n = members + object; i < n; ++i)
+        for (const char* text :
                 {
-                    text += (i != 0 ? ",\"" : "\"") + std::to_string(i) + "\":" + std::to_string(i);
+                    "null", "true", "false", "0", "-0", "42", "-42", "1.5", "\"\"", "\"abc\"", "[]", "{}", "[1,2,3]", "{\"a\":1,\"b\":[true,null]}", // NOLINT(modernize-raw-string-literal)
+                    " [ 1 , 2 ] ", "{\"a\" : {\"b\" : {}}}", "[[[]]]", "\"\\u00e4\\n\\ud83d\\ude00\"", "{\"a\":1,\"a\":2}", "18446744073709551616", // NOLINT(modernize-raw-string-literal)
+                    "-9223372036854775809", "123456789012345678901234567890", "1e400", "-1e400", "1.7976931348623157e308"
+                })
+        {
+            check_same(text);
+        }
+
+// ---- tests/src/unit-concepts.cpp:129-147  (uses: begin, cbegin, cend, end)
+        SECTION("Swappable")
+        {
+            {
+                json j {1, 2, 3};
+                json::iterator it1 = j.begin();
+                json::iterator it2 = j.end();
+                swap(it1, it2);
+                CHECK(it1 == j.end());
+                CHECK(it2 == j.begin());
+            }
+            {
+                json j {1, 2, 3};
+                json::const_iterator it1 = j.cbegin();
+                json::const_iterator it2 = j.cend();
+                swap(it1, it2);
+                CHECK(it1 == j.end());
+                CHECK(it2 == j.begin());
+            }
+        }
+
+// ---- tests/src/unit-constructor1.cpp:1400-1412  (uses: begin, cbegin, cend, end)
+            SECTION("json(begin(), end())")
+            {
+                {
+                    json jobject = {{"a", "a"}, {"b", 1}, {"c", 17u}};
+                    json const j_new(jobject.begin(), jobject.end());
+                    CHECK(j_new == jobject);
                 }
-                text += '}';
+                {
+                    json jobject = {{"a", "a"}, {"b", 1}, {"c", 17u}};
+                    json const j_new(jobject.cbegin(), jobject.cend());
+                    CHECK(j_new == jobject);
+                }
             }
-            return text + "]";
-        };
-        const std::string small_text = make_text(5, 150);
-        const std::string big_text = make_text(40, 400);
 
-        // reading a big text, and then a small one, leaves the spare capacity
-        // of the big one: shrink_to_fit() brings the document to the size of
-        // one parsed from the small text alone
-        json_document d = json_document::parse(big_text);
-        const std::size_t big = d.memory_usage();
-        d.read(small_text);
-        CHECK(d.memory_usage() >= big);
-        d.shrink_to_fit();
-        json_document fresh = json_document::parse(small_text);
-        fresh.shrink_to_fit();
-        CHECK(d.memory_usage() == fresh.memory_usage());
-        CHECK(d.memory_usage() < big / 2);
-        CHECK(d.root() == json::parse(small_text));
-        for (int object = 0; object < 5; ++object)
-        {
-            const json_view v = d.root()[static_cast<std::size_t>(object)];
-            for (int i = 0, n = 150 + object; i < n; ++i)
+// ---- tests/src/unit-constructor1.cpp:1435-1449  (uses: begin, cbegin, cend, end)
+            SECTION("incompatible iterators")
             {
-                CHECK(v[std::to_string(i)].get<int>() == i);
+                {
+                    json jobject = {{"a", "a"}, {"b", 1}, {"c", 17u}, {"d", false}, {"e", true}};
+                    json jobject2 = {{"a", "a"}, {"b", 1}, {"c", 17u}};
+                    CHECK_THROWS_WITH_AS(json(jobject.begin(), jobject2.end()), "[json.exception.invalid_iterator.201] iterators are not compatible", json::invalid_iterator&);
+                    CHECK_THROWS_WITH_AS(json(jobject2.begin(), jobject.end()), "[json.exception.invalid_iterator.201] iterators are not compatible", json::invalid_iterator&);
+                }
+                {
+                    json const jobject = {{"a", "a"}, {"b", 1}, {"c", 17u}, {"d", false}, {"e", true}};
+                    json const jobject2 = {{"a", "a"}, {"b", 1}, {"c", 17u}};
+                    CHECK_THROWS_WITH_AS(json(jobject.cbegin(), jobject2.cend()), "[json.exception.invalid_iterator.201] iterators are not compatible", json::invalid_iterator&);
+                    CHECK_THROWS_WITH_AS(json(jobject2.cbegin(), jobject.cend()), "[json.exception.invalid_iterator.201] iterators are not compatible", json::invalid_iterator&);
+                }
             }
-        }
-    }
 
-// ---- tests/src/unit-json_view_image.cpp:397-421  (uses: memory_usage, save, shrink_to_fit)
-    SECTION("loading releases the list of large objects")
-    {
-        std::string text = "[";
-        for (int object = 0; object < 400; ++object)
-        {
-            text += object != 0 ? ",{" : "{";
-            for (int i = 0; i < 128; ++i)
+// ---- tests/src/unit-element_access1.cpp:306-320  (uses: begin, cbegin, cend, end)
+                SECTION("erase(begin(), end())")
+                {
+                    {
+                        json jarray = {1, 1u, true, nullptr, "string", 42.23, json::object(), {1, 2, 3}};
+                        const json::iterator it2 = jarray.erase(jarray.begin(), jarray.end());
+                        CHECK(jarray == json::array());
+                        CHECK(it2 == jarray.end());
+                    }
+                    {
+                        json jarray = {1, 1u, true, nullptr, "string", 42.23, json::object(), {1, 2, 3}};
+                        const json::const_iterator it2 = jarray.erase(jarray.cbegin(), jarray.cend());
+                        CHECK(jarray == json::array());
+                        CHECK(it2 == jarray.cend());
+                    }
+                }
+
+// ---- tests/src/unit-element_access1.cpp:716-726  (uses: begin, cbegin, cend, end)
+            SECTION("null")
             {
-                text += (i != 0 ? ",\"" : "\"") + std::to_string(i) + "\":" + std::to_string(i);
+                {
+                    json j;
+                    CHECK_THROWS_WITH_AS(j.erase(j.begin(), j.end()), "[json.exception.type_error.307] cannot use erase() with null", json::type_error&);
+                }
+                {
+                    json j;
+                    CHECK_THROWS_WITH_AS(j.erase(j.cbegin(), j.cend()), "[json.exception.type_error.307] cannot use erase() with null", json::type_error&);
+                }
             }
-            text += '}';
-        }
-        text += "]";
-        json_document parsed = json_document::parse(text);
-        const std::vector<std::uint8_t> image = parsed.save();
-        json_document loaded = json_document::load(image);
-        CHECK(loaded.root()[399]["127"] == 127);
-        // Parsing and loading build the same tables, and keep nothing else:
-        // not the positions of the objects to index (2 KiB here). The slack
-        // covers the nodes in the header of the document, which are sized
-        // differently.
-        parsed.shrink_to_fit();
-        loaded.shrink_to_fit();
-        CHECK(loaded.memory_usage() <= parsed.memory_usage() + 512);
-    }
 
-// ---- tests/src/unit-json_view_image.cpp:668-684  (uses: dump, memory_usage, read)
-    SECTION("owned")
-    {
-        std::vector<std::uint8_t> copy = image;
-        const std::uint8_t* const data = copy.data();
-        json_document d = json_document::load(std::move(copy));
-        CHECK(d.owns_source());
-        CHECK(d.source().data() == reinterpret_cast<const char*>(data + text_at(image)));
-        CHECK(d.memory_usage() >= image.size());
-        CHECK(d.root()["b"][1] == 2);
-        // read() replaces the image
-        d.read(std::string("[1]"));
-        CHECK(d.owns_source());
-        CHECK(d.root().dump() == "[1]");
-        const std::string borrowed = "[2]";
-        d.read(borrowed);
-        CHECK(!d.owns_source());
-    }
+// ---- tests/src/unit-element_access2.cpp:938-952  (uses: begin, cbegin, cend, end)
+                SECTION("erase(begin(), end())")
+                {
+                    {
+                        Json jobject = {{"a", "a"}, {"b", 1}, {"c", 17u}};
+                        const typename Json::iterator it2 = jobject.erase(jobject.begin(), jobject.end());
+                        CHECK(jobject == Json::object());
+                        CHECK(it2 == jobject.end());
+                    }
+                    {
+                        Json jobject = {{"a", "a"}, {"b", 1}, {"c", 17u}};
+                        const typename Json::const_iterator it2 = jobject.erase(jobject.cbegin(), jobject.cend());
+                        CHECK(jobject == Json::object());
+                        CHECK(it2 == jobject.cend());
+                    }
+                }

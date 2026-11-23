@@ -1,159 +1,167 @@
 // Upstream tests at the PR's parent commit 5c4f585ac that use the changed code.
-// Names searched (test lines using each): basic_json (62), JSON_IMPLEMENT_OPERATOR (0), operator== (74), operator< (228), equal_general (0), less_general (0)
+// Names searched (test lines using each): basic_json (62), JSON_IMPLEMENT_OPERATOR (0)
 
-// ---- tests/src/unit-json_view_compare_values.cpp:63-82  (uses: basic_json, operator<)
-    SECTION("a basic_json whose members are not sorted")
+// ---- tests/src/fuzzer-parse_json_view.cpp:1-24  (uses: basic_json)
+//     __ _____ _____ _____
+//  __|  |   __|     |   | |  JSON for Modern C++ (supporting code)
+// |  |  |__   |  |  | | | |  version 3.12.0
+// |_____|_____|_____|_|___|  https://github.com/nlohmann/json
+//
+// SPDX-FileCopyrightText: 2013-2026 Niels Lohmann <https://nlohmann.me>
+// SPDX-License-Identifier: MIT
+
+/*
+This file implements a parser test suitable for fuzz testing. It checks that
+json_document (the zero-copy, read-only view of a parsed JSON text declared in
+json_view.hpp) agrees with basic_json on every input, for the parse options
+selected by the low bits of the first input byte (bit 0: ignore_comments, bit 1:
+ignore_trailing_commas; the byte stays part of the text):
+
+- json_document::accept(data) must equal json::accept(data)
+- if the input is accepted, json_document::parse(data).root().materialize()
+  must equal json::parse(data)
+- if the input is rejected, json_document::parse(data) (with exceptions
+  enabled) must throw a json::parse_error or json::out_of_range whose what()
+  is identical to the one json::parse(data) throws
+
+This is checked for two kinds of input: a std::string, which the document
+borrows and which ends in the NUL the parser uses as sentinel, and an
+
+// ---- tests/src/unit-allocator.cpp:177-189  (uses: basic_json)
+    SECTION("class basic_json")
     {
-        // (an object type that is not an ordered map, and does not keep its members sorted either)
-        using descending_json = nlohmann::basic_json<descending_object>;
-        using descending_document = nlohmann::basic_json_document<descending_json>;
-        std::string text = "{";
-        for (char key = 'a'; key <= 'p'; ++key)
+        SECTION("basic_json(const CompatibleObjectType&)")
         {
-            text += (key != 'a' ? ",\"" : "\"") + std::string(1, key) + "\":[" + std::to_string(key) + "]";
+            next_construct_fails = false;
+            const std::map<std::string, std::string> v {{"foo", "bar"}};
+            CHECK_NOTHROW(my_json(v));
+            next_construct_fails = true;
+            CHECK_THROWS_AS(my_json(v), std::bad_alloc&);
+            next_construct_fails = false;
         }
-        text += "}";
-        const descending_json j = descending_json::parse(text);
-        const descending_document d = descending_document::parse(text);
-        CHECK(d.root() == j);
-        CHECK(j == d.root());
-        descending_json other = j;
-        other["k"] = 0;
-        CHECK(d.root() != other);
-        CHECK(other != d.root());
+
+        SECTION("basic_json(const CompatibleArrayType&)")
+
+// ---- tests/src/unit-allocator.cpp:199-206  (uses: basic_json)
+        SECTION("basic_json(const typename string_t::value_type*)")
+        {
+            next_construct_fails = false;
+            CHECK_NOTHROW(my_json("foo"));
+            next_construct_fails = true;
+            CHECK_THROWS_AS(my_json("foo"), std::bad_alloc&);
+            next_construct_fails = false;
+        }
+
+// ---- tests/src/unit-alt-string.cpp:436-469  (uses: basic_json)
+    SECTION("conversion between basic_json specializations (#2649)")
+    {
+        // explicit conversions are always possible
+        CHECK(std::is_constructible<nlohmann::json, alt_json>::value);
+        CHECK(std::is_constructible<alt_json, nlohmann::json>::value);
+        CHECK(std::is_constructible<nlohmann::json, nlohmann::ordered_json>::value);
+        CHECK(std::is_constructible<nlohmann::ordered_json, nlohmann::json>::value);
+
+        // specializations with the same string type are implicitly convertible
+        CHECK(std::is_convertible<nlohmann::ordered_json, nlohmann::json>::value);
+        CHECK(std::is_convertible<nlohmann::json, nlohmann::ordered_json>::value);
+
+        // specializations with different string types are only implicitly convertible
+        // if implicit conversions are enabled
+#if JSON_USE_IMPLICIT_CONVERSIONS
+        CHECK(std::is_convertible<alt_json, nlohmann::json>::value);
+        CHECK(std::is_convertible<nlohmann::json, alt_json>::value);
+#else
+        CHECK_FALSE(std::is_convertible<alt_json, nlohmann::json>::value);
+        CHECK_FALSE(std::is_convertible<nlohmann::json, alt_json>::value);
+#endif
+
+        // get<BasicJsonType>() works in either case
+        const nlohmann::json j = {{"foo", 1}, {"bar", true}};
+        CHECK(j.get<nlohmann::ordered_json>() == nlohmann::ordered_json(j));
+        // (only a number is converted here, as objects and strings are affected by #3425)
+        CHECK(nlohmann::json(42).get<alt_json>() == 42);
+        CHECK(alt_json(nlohmann::json(42)) == 42);
+
+        // get_to() also works in either case
+        alt_json a;
+        nlohmann::json(42).get_to(a);
+        CHECK(a == 42);
     }
 
-// ---- tests/src/unit-comparison.cpp:74-86  (uses: operator<, operator==)
-TEST_CASE("lexicographical comparison operators")
-{
-    constexpr auto f_ = false;
-    constexpr auto _t = true;
-    constexpr auto nan = std::numeric_limits<json::number_float_t>::quiet_NaN();
-#if JSON_HAS_THREE_WAY_COMPARISON
-    constexpr auto lt = std::partial_ordering::less;
-    constexpr auto gt = std::partial_ordering::greater;
-    constexpr auto eq = std::partial_ordering::equivalent;
-    constexpr auto un = std::partial_ordering::unordered;
-#endif
-
-#if JSON_HAS_THREE_WAY_COMPARISON
-
-// ---- tests/src/unit-comparison.cpp:128-148  (uses: operator<, operator==)
-        SECTION("comparison: less")
-        {
-            REQUIRE(expected_lt.size() == j_types.size());
-            for (size_t i = 0; i < j_types.size(); ++i)
-            {
-                REQUIRE(expected_lt[i].size() == j_types.size());
-                for (size_t j = 0; j < j_types.size(); ++j)
-                {
-                    CAPTURE(i)
-                    CAPTURE(j)
-                    // check precomputed values
-#if JSON_HAS_THREE_WAY_COMPARISON
-                    // JSON_HAS_CPP_20 (do not remove; see note at top of file)
-                    CHECK((j_types[i] < j_types[j]) == expected_lt[i][j]);
-#else
-                    CHECK(operator<(j_types[i], j_types[j]) == expected_lt[i][j]);
-#endif
-                    CHECK(f(j_types[i], j_types[j]) == expected_lt[i][j]);
-                }
-            }
-        }
-
-// ---- tests/src/unit-json_view_compare.cpp:31-43  (uses: operator<, operator==)
-TEST_CASE("json_view comparison")
-{
-    SECTION("equality of the values parse() produces")
+// ---- tests/src/unit-assert_macro.cpp:30-43  (uses: basic_json)
+    SECTION("basic_json(first, second)")
     {
-        generator g;
-        std::vector<std::string> texts;
-        for (int i = 0; i < 600; ++i)
-        {
-            std::string text;
-            g.value(text, 0);
-            texts.push_back(text);
-            // the same value written differently: sorted keys, canonical numbers
-            texts.push_back(json::parse(text).dump(1));
+        assert_counter = 0;
+        CHECK(assert_counter == 0);
 
-// ---- tests/src/unit-json_view_compare_values.cpp:29-41  (uses: operator<, operator==)
-TEST_CASE("json_view comparison of differing values")
+        const json::iterator it{};
+        json j;
+
+        // in case assertions do not abort execution, an exception is thrown
+        CHECK_THROWS_WITH_AS(json(it, j.end()), "[json.exception.invalid_iterator.201] iterators are not compatible", json::invalid_iterator);
+
+        // check that assertion actually happened
+        CHECK(assert_counter == 1);
+    }
+
+// ---- tests/src/unit-binary_utf8_error_handler.cpp:95-119  (uses: basic_json)
+template<typename Key, typename Value, typename Compare, typename Allocator>
+class converting_key_object : public std::map<converting_key, Value, std::less<converting_key>, // NOLINT(modernize-use-transparent-functors)
+    typename std::allocator_traits<Allocator>::template rebind_alloc<std::pair<const converting_key, Value>>>
 {
-    SECTION("values that differ in their first bytes, or are written differently")
+    using base_type = std::map<converting_key, Value, std::less<converting_key>, // NOLINT(modernize-use-transparent-functors)
+                               typename std::allocator_traits<Allocator>::template rebind_alloc<std::pair<const converting_key, Value>>>;
+
+                             public:
+                               using base_type::base_type;
+                               using base_type::operator=;
+};
+
+using converting_key_json = nlohmann::basic_json<converting_key_object>;
+
+} // namespace
+
+TEST_CASE("UTF-8 error_handler for the binary readers and writers")
+{
+    SECTION("writers: string value")
     {
-        const auto same = [](const char* x, const char* y)
+        for (const auto& c : ill_formed_cases())
         {
-            const json_document dx = json_document::parse(x);
-            const json_document dy = json_document::parse(y);
-            const bool equal = dx.root() == dy.root();
-            CHECK(equal == (json::parse(x) == json::parse(y)));
-            CHECK(equal == (dx.root() == json::parse(y)));
-            const nlohmann::json_editable_document ex = nlohmann::json_editable_document::parse(x);
-            CHECK(equal == (ex.root() == dy.root()));
+            CAPTURE(c.name)
+            const json jval = c.bytes;
 
-// ---- tests/src/unit-ordered_json2.cpp:378-402  (uses: operator<, operator==)
-TEST_CASE("ordered_json operator== is sensitive to key order")
+
+// ---- tests/src/unit-custom-number-types.cpp:85-109  (uses: basic_json)
+template<>
+class numeric_limits<class_int>
 {
-    // Unlike nlohmann::json (whose object_t is a std::map, so equality never
-    // depends on insertion order), ordered_json's object_t (ordered_map) is a
-    // std::vector<std::pair<Key, T>> under the hood, and does not define its
-    // own operator==: it inherits std::vector's element-wise comparison. As a
-    // result, two ordered_json objects holding the very same key/value pairs
-    // in different insertion order compare *unequal*. This is the property
-    // that makes the round-trip `CHECK(restored == original)` checks above a
-    // meaningful order-preservation check by themselves (the explicit
-    // collect_keys() comparisons make that check explicit/readable, and
-    // guard against this operator== behavior ever changing).
-    ordered_json a;
-    a["x"] = 1;
-    a["y"] = 2;
+  public:
+    static constexpr bool is_signed = true;
+    static constexpr int digits = std::numeric_limits<std::int64_t>::digits;
+};
+} // namespace std
 
-    ordered_json b;
-    b["y"] = 2;
-    b["x"] = 1;
+namespace
+{
 
-    CHECK(a.size() == b.size());
-    CHECK(a["x"] == b["x"]);
-    CHECK(a["y"] == b["y"]);
-    CHECK_FALSE(a == b);
+using class_int_json = nlohmann::basic_json<std::map, std::vector, std::string, bool, class_int, std::uint64_t, double>;
+
+class_int_json make_class_int(std::int64_t v)
+{
+    class_int_json j(class_int_json::value_t::number_integer);
+    j.get_ref<class_int&>() = class_int(v);
+    return j;
 }
 
-// ---- tests/src/unit-regression3.cpp:385-396  (uses: basic_json, operator<)
-    SECTION("issue #3333 - Ambiguous conversion from nlohmann::basic_json<> to custom class")
-    {
-        const json j
-        {
-            {"x", 1},
-            {"y", 2}
-        };
-        const for_3333 p = j;
+} // namespace
 
-        CHECK(p.x == 1);
-        CHECK(p.y == 2);
-    }
+// the serializer cannot print an integer of class type, so doctest must not
+// try when an assertion fails
 
-// ---- tests/src/unit-algorithms.cpp:126-136  (uses: operator<, operator==)
-            SECTION("using user-defined comparison")
-            {
-                // compare objects only by size of its elements
-                json j_array2 = {13, 29, 3, {"Hello", "World"}, true, false, {{"one", 1}, {"two", 2}, {"three", 3}}, "foo", "baz"};
-                CHECK(!std::equal(j_array.begin(), j_array.end(), j_array2.begin()));
-                CHECK(std::equal(j_array.begin(), j_array.end(), j_array2.begin(),
-                                 [](const json & a, const json & b)
-                {
-                    return (a.size() == b.size());
-                }));
-            }
-
-// ---- tests/src/unit-algorithms.cpp:205-210  (uses: operator<, operator==)
-            SECTION("with standard comparison")
-            {
-                json j = {13, 29, 3, {{"one", 1}, {"two", 2}}, true, false, {1, 2, 3}, "foo", "baz", nullptr};
-                std::sort(j.begin(), j.end());
-                CHECK(j == json({nullptr, false, true, 3, 13, 29, {{"one", 1}, {"two", 2}}, {1, 2, 3}, "baz", "foo"}));
-            }
-
-// ---- tests/src/unit-regression1.cpp:1036-1038  (uses: operator<, operator==)
-    SECTION("issue #414 - compare with literal 0)")
-    {
-#define CHECK_TYPE(v) \
+// ---- tests/src/unit-explicit_instantiation.cpp:32-37  (uses: basic_json)
+TEST_CASE("explicit instantiation of basic_json (#4825)")
+{
+    const json j = {1, "two", 3.0};
+    CHECK(j.size() == 3);
+    CHECK(json::from_bjdata(json::to_bjdata(j)) == j);
+}

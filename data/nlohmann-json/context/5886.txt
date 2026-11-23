@@ -1,5 +1,5 @@
 // Upstream tests at the PR's parent commit aa0b371f7 that use the changed code.
-// Names searched (test lines using each): patch_inplace (5), json_pointer (222), basic_json (52), diff (0), operator/ (0), operator<< (97), operator!= (59), operator< (210), operator== (64), unflatten (34), flatten (25), diff_operation (0), object_member (0), diff_unequal (0), contains (178), get_checked (0), get_checked_or_null (0), get_unchecked (0), parse_array_index (0), resolve_plain (0), find_patch_members (0), count_flattened (0), diff_target_values (0), object_member_impl (0), reserve (29), reserve_elements (0), reserve_flattened (0), plain_steps (0), reset (5), push_back (439), size (886), is_dash (0), uninitialized_items (0), patch_members (0), diff_object_keys (0), count (164), inline_items (0), inline_size (0), items (59), large (28), from (205), op (223), path (267), value (2403), steps (7)
+// Names searched (test lines using each): json_pointer (222), basic_json (52), format_as (23), to_string (140), array (0), operator/ (0), operator<< (97), operator!= (59), operator< (210), operator== (64), operator>> (94), object_member (0), diff_target_values (0), plain_steps (0), uninitialized_items (0), patch_members (0), diff_object_keys (0), count_flattened (0), object_member_impl (0), reserve_elements (0), reserve_flattened (0), count (164), inline_items (0), inline_size (0), items (59), large (28), push_back (439), reserve (29), size (886), find_patch_members (0), from (205), op (223), path (267), value (2403), is_dash (0), reset (5), steps (7), resolve_plain (0)
 
 // ---- tests/src/unit-json_patch.cpp:1659-1671  (uses: from, op, operator!=, operator<, operator==, path, value)
     SECTION("escaped reference tokens are compared unescaped")
@@ -16,131 +16,138 @@
 #endif
     }
 
-// ---- tests/src/unit-json_pointer.cpp:1302-1318  (uses: from, op, patch_inplace, path)
-TEST_CASE("JSON patch with moves and copies")
-{
-    json doc = {{"a", {{"b", {1, 2, 3}}}}, {"c", {{"d", "x"}}}};
-
-    CHECK(doc.patch(json::parse(R"([{"op":"move","from":"/a/b","path":"/c/e"}])")) ==
-          json::parse(R"({"a":{},"c":{"d":"x","e":[1,2,3]}})"));
-    CHECK(doc.patch(json::parse(R"([{"op":"copy","from":"/a/b","path":"/c/e"}])")) ==
-          json::parse(R"({"a":{"b":[1,2,3]},"c":{"d":"x","e":[1,2,3]}})"));
-    CHECK(doc.patch(json::parse(R"([{"op":"move","from":"/a/b/0","path":"/a/b/2"}])")) ==
-          json::parse(R"({"a":{"b":[2,3,1]},"c":{"d":"x"}})"));
-
-    // a failing move leaves a copy-patched document untouched
-    CHECK_THROWS_AS(doc.patch(json::parse(R"([{"op":"move","from":"","path":""}])")), json::out_of_range&);
-    json inplace = doc;
-    CHECK_THROWS_AS(inplace.patch_inplace(json::parse(R"([{"op":"move","from":"","path":""}])")), json::out_of_range&);
-    CHECK(inplace == doc);
-}
-
-// ---- tests/src/unit-json_view.cpp:1392-1423  (uses: contains, flatten, items, json_pointer, value)
-    SECTION("every value of generated documents")
-    {
-        generator g;
-        for (int i = 0; i < 1000; ++i)
+// ---- tests/src/unit-ordered_map.cpp:633-649  (uses: operator<, reserve, size, to_string, value)
+        SECTION("ordered_json")
         {
-            std::string text;
-            g.value(text, 0);
-            const ordered_json_document d = ordered_json_document::parse(text);
-            if (has_duplicate_keys(d.root()))
+            auto j = nlohmann::ordered_json::object();
+            auto& object = j.get_ref<nlohmann::ordered_json::object_t&>();
+            object.reserve(4);
+            while (object.size() < object.capacity())
             {
-                continue;
+                const auto i = std::to_string(object.size());
+                j[i] = "a value that is too long for the small string optimization " + i;
             }
-            CAPTURE(text)
-            const ordered_json j = ordered_json::parse(text);
-            const ordered_json flat = j.flatten();
-            for (const auto& leaf : flat.items())
+            const auto size = j.size();
+
+            j.emplace("new", std::move(j["0"]));
+            CHECK(j.size() == size + 1);
+            CHECK(j["new"] == "a value that is too long for the small string optimization 0");
+            CHECK(j["0"].is_null());
+        }
+
+// ---- tests/src/unit-stream-bulk-scan.cpp:319-350  (uses: count, from, operator<<, operator>>, to_string)
+    SECTION("many values from one stream")
+    {
+        std::string input;
+        for (int i = 0; i < 200; ++i)
+        {
+            input += R"({"id":)" + std::to_string(i) + R"(,"name":"user)" + std::to_string(i) + R"(","score":)" + std::to_string(i) + ".5}\n";
+            input += std::to_string(i * 7919) + "\n";
+        }
+
+        for (const std::size_t chunk_size : chunk_sizes())
+        {
+            CAPTURE(chunk_size)
+            chunked_streambuf buf(input, chunk_size);
+            std::istream is(&buf);
+            json j;
+            int count = 0;
+            while (!(is >> std::ws).eof())
             {
-                // the leaf and each of its parents
-                for (ordered_json::json_pointer p(leaf.key());; p = p.parent_pointer())
+                is >> j;
+                if (count % 2 == 0)
                 {
-                    CAPTURE(p.to_string())
-                    CHECK(d.root()[p].materialize() == j[p]);
-                    CHECK(d.root().at(p).materialize() == j.at(p));
-                    CHECK(d.root().contains(p));
-                    if (p.empty())
+                    CHECK(j["id"] == count / 2);
+                }
+                else
+                {
+                    CHECK(j == (count / 2) * 7919);
+                }
+                ++count;
+            }
+            CHECK(count == 400);
+        }
+    }
+
+// ---- tests/src/unit-json_patch.cpp:526-552  (uses: op, operator!=, operator<, operator==, path, value)
+        SECTION("A.15. Comparing Strings and Numbers")
+        {
+            // An example target JSON document:
+            json const doc = R"(
                     {
-                        break;
+                        "/": 9,
+                        "~1": 10
+                    } 
+                )"_json;
+
+            // A JSON Patch document that will result in an error condition:
+            json patch = R"(
+                    [
+                        {"op": "test", "path": "/~01", "value": "10"}
+                    ]
+                )"_json;
+
+            // check that evaluation throws
+            CHECK_THROWS_AS(doc.patch(patch), json::other_error&);
+#if JSON_DIAGNOSTICS
+            CHECK_THROWS_WITH_STD_STR(doc.patch(patch), "[json.exception.other_error.501] (/0) unsuccessful: " + patch[0].dump());
+#elif JSON_DIAGNOSTIC_POSITIONS
+            CHECK_THROWS_WITH_STD_STR(doc.patch(patch), "[json.exception.other_error.501] (bytes 47-92) unsuccessful: " + patch[0].dump());
+#else
+            CHECK_THROWS_WITH_STD_STR(doc.patch(patch), "[json.exception.other_error.501] unsuccessful: " + patch[0].dump());
+#endif
+        }
+
+// ---- tests/src/unit-class_lexer.cpp:711-755  (uses: operator<<, operator>>, push_back, reserve, size)
+    SECTION("exhaustive contiguous vs streaming parity")
+    {
+        // ordinary ASCII, both specials, a control byte, characters that make
+        // the preceding backslash a valid escape, a UTF-8 lead byte of each
+        // length, a continuation byte, and a byte that is never valid
+        const std::vector<std::string> alphabet =
+        {
+            "a", "\"", "\\", "n", "u", "0", bytes({0x01}),
+            bytes({0xC3}), bytes({0xA9}), bytes({0xE4}), bytes({0xF0}),
+            bytes({0x80}), bytes({0xFF})
+        };
+
+        std::vector<std::string> mismatches;
+        std::vector<std::string> tokens{""};
+        for (std::size_t length = 1; length <= 3; ++length)
+        {
+            std::vector<std::string> next;
+            next.reserve(tokens.size() * alphabet.size());
+            for (const auto& prefix : tokens)
+            {
+                for (const auto& symbol : alphabet)
+                {
+                    next.push_back(prefix + symbol);
+                }
+            }
+            tokens = next;
+
+            for (const auto& token : tokens)
+            {
+                for (const std::size_t offset : offsets)
+                {
+                    const std::string doc = "[\"" + std::string(offset, 'a') + token + "\"]";
+                    if (outcome(doc, false) != outcome(doc, true))
+                    {
+                        mismatches.push_back(doc);
                     }
                 }
             }
         }
+
+        // 13 + 169 + 2197 tokens, each at two offsets
+        CHECK(tokens.size() == 2197);
+        CAPTURE(mismatches)
+        CHECK(mismatches.empty());
     }
 
-// ---- tests/src/unit-json_pointer.cpp:972-1002  (uses: flatten, path, size, unflatten, value)
-    SECTION("values nested too deeply for the call stack (#5393)")
+// ---- tests/src/unit-custom-object-type.cpp:447-451  (uses: operator!=, operator<, operator==, value)
+    SECTION("object_comparator_t falls back to default_object_comparator_t")
     {
-        // flatten() used to recurse once per nesting level
-        const std::size_t depth = 100000;
-        for (const bool objects :
-                {
-                    false, true
-                })
-        {
-            CAPTURE(objects)
-            std::string text;
-            std::string path;
-            for (std::size_t i = 0; i < depth; ++i)
-            {
-                text += objects ? "{\"a\":" : "[";
-                path += objects ? "/a" : "/0";
-            }
-            text += "0";
-            text += std::string(depth, objects ? '}' : ']');
-            const auto value = json::parse(text);
-
-            const auto flat = value.flatten();
-            REQUIRE(flat.size() == 1);
-            REQUIRE(flat.begin().key().size() == path.size());
-            CHECK(flat.begin().key() == path);
-            CHECK(flat.begin().value() == 0);
-
-            // unflatten() is linear in the depth, so the value roundtrips
-            CHECK(flat.unflatten() == value);
-        }
-    }
-
-// ---- tests/src/unit-json_patch.cpp:734-761  (uses: op, patch_inplace, path, value)
-        SECTION("happy path: patch_inplace mirrors patch() on success")
-        {
-            // mirrors "A.5. Replacing a Value" above, but applies the patch with
-            // patch_inplace() to a mutable copy instead of using patch()'s
-            // returned copy
-            json doc = R"(
-                    {
-                        "baz": "qux",
-                        "foo": "bar"
-                    }
-                )"_json;
-
-            json const patch = R"(
-                    [
-                        { "op": "replace", "path": "/baz", "value": "boo" }
-                    ]
-                )"_json;
-
-            json const expected = R"(
-                    {
-                        "baz": "boo",
-                        "foo": "bar"
-                    }
-                )"_json;
-
-            doc.patch_inplace(patch);
-            CHECK(doc == expected);
-        }
-
-// ---- tests/src/unit-ordered_json.cpp:168-178  (uses: op, operator<, path, size)
-    SECTION("matching order still produces a minimal patch (fast path unaffected)")
-    {
-        ordered_json a = {{"a", 1}, {"b", 2}, {"c", 3}};
-        ordered_json b = {{"a", 1}, {"b", 20}, {"c", 3}};
-        auto p = ordered_json::diff(a, b);
-        // only the changed value should be touched, not a wholesale remove+add
-        CHECK(p.size() == 1);
-        CHECK(p[0]["op"] == "replace");
-        CHECK(p[0]["path"] == "/b");
-        CHECK(a.patch(p) == b);
+        CHECK(std::is_same < no_key_compare_json::object_comparator_t,
+              no_key_compare_json::default_object_comparator_t >::value);
     }

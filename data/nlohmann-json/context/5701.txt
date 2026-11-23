@@ -1,5 +1,5 @@
 // Upstream tests at the PR's parent commit ff6f3d7d4 that use the changed code.
-// Names searched (test lines using each): basic_json (0), array (0), insert (251), object (0), push_back (322), from_json (0), operator+= (7), json_ref (0), is_braced_list (0), braced_list (0), value_ref (0)
+// Names searched (test lines using each): basic_json (75), array (0), insert (251), object (0), push_back (322), from_json (0), operator+= (7), json_ref (0), braced_list (0), is_braced_list (0), value_ref (0)
 
 // ---- tests/src/unit-class_parser.cpp:2848-2863  (uses: operator+=, push_back)
             SECTION("push_back on a parsed array")
@@ -132,39 +132,43 @@ TEST_CASE("examples from RFC 8949 Appendix A")
         CHECK(j == deque_json({"a", "b", "a", "b", "c"}));
     }
 
-// ---- tests/src/test_utils.hpp:73-97  (uses: insert)
-
-inline std::vector<std::uint8_t> read_binary_file(const std::string& filename)
-{
-    std::ifstream file(filename, std::ios::binary);
-    file.unsetf(std::ios::skipws);
-
-    file.seekg(0, std::ios::end);
-    const auto size = file.tellg();
-    file.seekg(0, std::ios::beg);
-
-    std::vector<std::uint8_t> byte_vector;
-    byte_vector.reserve(static_cast<std::size_t>(size));
-    byte_vector.insert(byte_vector.begin(), std::istream_iterator<std::uint8_t>(file), std::istream_iterator<std::uint8_t>());
-    return byte_vector;
-}
-
-// sentinel for istreambuf_iterator; compares != true until EOF is reached
-// lets tests read a file directly via the new iterator+sentinel overloads
-// instead of buffering the whole file into a vector first.
-// Only the iterator-first direction (it != sentinel) is ever evaluated by
-// the library's parse loop, so no reversed-order overload is needed.
-struct istreambuf_sentinel
-{
-    friend bool operator!=(const std::istreambuf_iterator<char>& it, const istreambuf_sentinel& /*unused*/) noexcept
+// ---- tests/src/unit-allocator.cpp:176-188  (uses: basic_json)
+    SECTION("class basic_json")
     {
+        SECTION("basic_json(const CompatibleObjectType&)")
+        {
+            next_construct_fails = false;
+            const std::map<std::string, std::string> v {{"foo", "bar"}};
+            CHECK_NOTHROW(my_json(v));
+            next_construct_fails = true;
+            CHECK_THROWS_AS(my_json(v), std::bad_alloc&);
+            next_construct_fails = false;
+        }
 
-// ---- tests/src/unit-cbor.cpp:2204-2211  (uses: insert)
-    SECTION("a well-formed deep value is read through the SAX interface")
+        SECTION("basic_json(const CompatibleArrayType&)")
+
+// ---- tests/src/unit-allocator.cpp:198-205  (uses: basic_json)
+        SECTION("basic_json(const typename string_t::value_type*)")
+        {
+            next_construct_fails = false;
+            CHECK_NOTHROW(my_json("foo"));
+            next_construct_fails = true;
+            CHECK_THROWS_AS(my_json("foo"), std::bad_alloc&);
+            next_construct_fails = false;
+        }
+
+// ---- tests/src/unit-assert_macro.cpp:30-43  (uses: basic_json)
+    SECTION("basic_json(first, second)")
     {
-        std::vector<uint8_t> input(200000, 0x9F);
-        input.insert(input.end(), 200000, 0xFF);
+        assert_counter = 0;
+        CHECK(assert_counter == 0);
 
-        SaxCountdown accept_all(1000000);
-        CHECK(json::sax_parse(input, &accept_all, json::input_format_t::cbor));
+        const json::iterator it{};
+        json j;
+
+        // in case assertions do not abort execution, an exception is thrown
+        CHECK_THROWS_WITH_AS(json(it, j.end()), "[json.exception.invalid_iterator.201] iterators are not compatible", json::invalid_iterator);
+
+        // check that assertion actually happened
+        CHECK(assert_counter == 1);
     }

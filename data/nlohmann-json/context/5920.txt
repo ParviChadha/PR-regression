@@ -1,5 +1,5 @@
 // Upstream tests at the PR's parent commit 731f1b5bf that use the changed code.
-// Names searched (test lines using each): basic_json_document (7), load (0), save (41), load_image (0), save_image (0), document_image_unsupported (0)
+// Names searched (test lines using each): basic_json_document (7), load_image (0), save_image (0), document_image_unsupported (0)
 
 // ---- tests/src/unit-json_view.cpp:278-306  (uses: basic_json_document)
     SECTION("overflow of the floating-point type")
@@ -98,30 +98,3 @@ TEST_CASE("json_view modes")
         CHECK(d.root().dump() == "[1.5,null,null]");
         CHECK(d.root().dump(2) == json_float::parse("[1.5, null, null]").dump(2));
     }
-
-// ---- tests/src/fuzzer-json_view_image.cpp:63-87  (uses: save)
-        }
-        catch (const json::type_error& e)
-        {
-            // invalid UTF-8 can only pass the bounds check
-            assert(check == image_check::bounds && e.id == 316);
-            continue;
-        }
-        const json j = d.root().materialize();
-        if (check == image_check::full)
-        {
-            assert(json::parse(dumped) == j);
-            // an image of the loaded document is the input
-            assert(d.save() == std::vector<std::uint8_t>(data, data + size));
-        }
-    }
-
-    // the input as a JSON text
-    const std::string text(reinterpret_cast<const char*>(data), size); // NOLINT(cppcoreguidelines-pro-type-reinterpret-cast)
-    const json_document parsed = json_document::parse(text, false);
-    if (!parsed.is_discarded())
-    {
-        const std::vector<std::uint8_t> image = parsed.save();
-        for (const image_check check :
-                {
-                    image_check::full, image_check::bounds, image_check::none

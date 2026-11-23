@@ -1,5 +1,5 @@
 // Upstream tests at the PR's parent commit 4e294f4b1 that use the changed code.
-// Names searched (test lines using each): accept (12), parse (11), sax_parse (0), operator>> (79), key (159)
+// Names searched (test lines using each): parse (11), key (159)
 
 // ---- tests/src/unit-class_parser.cpp:45-69  (uses: parse)
 using utils::SaxEventLogger;
@@ -55,61 +55,6 @@ bool accept_helper(const std::string& s)
     CHECK_NOTHROW(json::sax_parse(s, &el, json::input_format_t::json, false));
     CHECK(json::parser(nlohmann::detail::input_adapter(s)).accept(false) == !el.errored);
 
-// ---- tests/src/unit-deserialization.cpp:97-109  (uses: operator>>)
-TEST_CASE("deserialization")
-{
-    SECTION("successful deserialization")
-    {
-        SECTION("stream")
-        {
-            std::stringstream ss1;
-            std::stringstream ss2;
-            std::stringstream ss3;
-            ss1 << R"(["foo",1,2,3,false,{"one":1}])";
-            ss2 << R"(["foo",1,2,3,false,{"one":1}])";
-            ss3 << R"(["foo",1,2,3,false,{"one":1}])";
-            const json j = json::parse(ss1);
-
-// ---- tests/src/unit-deserialization.cpp:174-181  (uses: operator>>)
-        SECTION("operator>>")
-        {
-            std::stringstream ss;
-            ss << R"(["foo",1,2,3,false,{"one":1}])";
-            json j;
-            ss >> j;
-            CHECK(j == json({"foo", 1, 2, 3, false, {{"one", 1}}}));
-        }
-
-// ---- tests/src/unit-precise-stream-position.cpp:88-100  (uses: operator>>)
-TEST_CASE("JSON_PRECISE_STREAM_POSITION")
-{
-    SECTION("the macro is part of the ABI tag")
-    {
-        const std::string ns = STRINGIZE(NLOHMANN_JSON_NAMESPACE);
-        // other tags may come before it, e.g. json_abi_diag_psp
-        CHECK(ns.find("_psp") != std::string::npos);
-    }
-
-    SECTION("a number does not consume the character that terminates it")
-    {
-        // a number is only terminated by the character following it; that
-        // character must be given back so the stream is positioned right
-
-// ---- tests/src/unit-precise-stream-position.cpp:146-158  (uses: operator>>)
-    SECTION("a number at the end of the input leaves nothing behind")
-    {
-        for (const std::string s :
-                {"1", "12", "-3.5e2", " 7 "
-                })
-        {
-            CAPTURE(s)
-            std::istringstream ss(s);
-            json j;
-            ss >> j;
-            CHECK(remaining(ss).find_first_not_of(" \t\n\r") == std::string::npos);
-        }
-    }
-
 // ---- tests/src/unit-std-format.cpp:105-126  (uses: parse)
     SECTION("a format spec may run to the end of the parse context")
     {
@@ -164,6 +109,45 @@ TEST_CASE("JSON_PRECISE_STREAM_POSITION")
         }
     }
 
+// ---- tests/src/unit-binary_utf8_error_handler.cpp:165-201  (uses: key)
+    SECTION("writers: object key")
+    {
+        for (const auto& c : ill_formed_cases())
+        {
+            CAPTURE(c.name)
+            json jobj;
+            jobj[c.bytes] = 1;
+
+            CHECK_THROWS_AS(json::to_cbor(jobj, eh::strict), json::type_error&);
+            CHECK_THROWS_AS(json::to_msgpack(jobj, eh::strict), json::type_error&);
+            CHECK_THROWS_AS(json::to_ubjson(jobj, false, false, eh::strict), json::type_error&);
+            CHECK_THROWS_AS(json::to_bjdata(jobj, false, false, json::bjdata_version_t::draft2, eh::strict), json::type_error&);
+            CHECK_THROWS_AS(json::to_bson(jobj, eh::strict), json::type_error&);
+
+            for (const auto h :
+                    {
+                        eh::replace, eh::ignore
+                    })
+            {
+                CAPTURE(static_cast<int>(h))
+                const std::string expected = dump_and_parse(c.bytes, h);
+
+                CHECK(json::from_cbor(json::to_cbor(jobj, h)).begin().key() == expected);
+                CHECK(json::from_msgpack(json::to_msgpack(jobj, h)).begin().key() == expected);
+                CHECK(json::from_ubjson(json::to_ubjson(jobj, false, false, h)).begin().key() == expected);
+                CHECK(json::from_bjdata(json::to_bjdata(jobj, false, false, json::bjdata_version_t::draft2, h)).begin().key() == expected);
+                CHECK(json::from_bson(json::to_bson(jobj, h)).begin().key() == expected);
+            }
+
+            // keep: object keys round-trip unchanged too
+            CHECK(json::from_cbor(json::to_cbor(jobj, eh::keep)).begin().key() == c.bytes);
+            CHECK(json::from_msgpack(json::to_msgpack(jobj, eh::keep)).begin().key() == c.bytes);
+            CHECK(json::from_ubjson(json::to_ubjson(jobj, false, false, eh::keep)).begin().key() == c.bytes);
+            CHECK(json::from_bjdata(json::to_bjdata(jobj, false, false, json::bjdata_version_t::draft2, eh::keep)).begin().key() == c.bytes);
+            CHECK(json::from_bson(json::to_bson(jobj, eh::keep)).begin().key() == c.bytes);
+        }
+    }
+
 // ---- tests/src/unit-binary_utf8_error_handler.cpp:302-321  (uses: key)
     SECTION("well-formed UTF-8 is unaffected by error_handler")
     {
@@ -185,12 +169,3 @@ TEST_CASE("JSON_PRECISE_STREAM_POSITION")
             CHECK(json::from_msgpack(json::to_msgpack(jval), true, true, h).get<std::string>() == valid_sequence());
         }
     }
-
-// ---- tests/src/unit-bon8.cpp:812-818  (uses: operator>>)
-            SECTION("std::ostringstream")
-            {
-                std::basic_ostringstream<char> ss;
-                json::to_bon8(j1, ss);
-                json j3 = json::from_bon8(ss.str());
-                CHECK(j1 == j3);
-            }
