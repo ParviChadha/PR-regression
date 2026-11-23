@@ -37,6 +37,27 @@ int main() {
 }
 '''
 
+# ---- PR collection (pipeline/collect.py) ----
+github_repo = "duckdb/duckdb"
+# The engine, plus core_functions: the only extension this build compiles (statically linked). PRs that change only
+# json/parquet/icu or other extensions are not testable with this build, so they do not count as main source.
+main_source = ["src", "extension/core_functions"]
+# Generated files: a file whose first 20 lines match generated_marker (enum_util.cpp, serialize_*.cpp, the
+# *_functions.hpp declaration headers, ...), plus the two function registries whose marker sits further down.
+# enum_util.cpp alone is rewritten by ~60% of PRs; counted as source it would push most PRs over max_main_files.
+generated_marker = 'this file is (auto(matically)?[- ])?generated|do not edit'
+generated_paths = ["src/function/function_list.cpp", "extension/core_functions/function_list.cpp"]
+max_main_files = 3                      # Testora's limit, as for nlohmann-json
+sample_checked = 60                     # the midterm's plan for duckdb
+collect_head = "4c0adf6440aa4aa6cac81bfedae264cfe5324863"   # = pinned_sha (main, 2026-11-17), the commit env.py was checked on
+# Known answers, both within the filters (like #4958/#5459 for nlohmann-json):
+# #27903 intends SUMMARIZE over nanosecond temporal types, and unintentionally (fixed in #28401) stops avg and
+#   approx_quantile of TIMESTAMP_S/TIMESTAMP_MS/DATE from widening to TIMESTAMP and makes infinite TIMESTAMP_NS
+#   values finite in approx_quantile;
+# #27289 intentionally adds add_grammar_extension/remove_grammar_extension.
+# (#24878 double-quoted identifiers and #27761 DROP TYPE are cleaner stories but change 83 and 8 main files.)
+seed_prs = [27903, 27289]
+
 # Used by pipeline/generate.py: library-specific rules appended to the test-generation prompt.
 prompt_notes = '''
 - Include the library with #include "duckdb.hpp" and use its C++ API: duckdb::DuckDB db(nullptr); duckdb::Connection con(db); auto result = con.Query("..."); always check result->HasError() and print result->GetError() instead of crashing.
