@@ -386,6 +386,14 @@ class Analyzer:
                     if pu:
                         users.add(pu)
                         info.setdefault(pu, c.semantic_parent)
+                if c is not None and c.kind.name in ("CXX_METHOD", "DESTRUCTOR"):
+                    # an override is called wherever the method it overrides is (virtual dispatch:
+                    # Calendar::isBusinessDay -> impl_->isBusinessDay -> Serbia::BseImpl::isBusinessDay)
+                    for base in _overridden(self.ci, c):
+                        bu = base.get_usr()
+                        if bu:
+                            users.add(bu)
+                            info.setdefault(bu, base)
                 if c is not None and c.kind.name in ("CLASS_TEMPLATE_PARTIAL_SPECIALIZATION", "CLASS_DECL",
                                                      "STRUCT_DECL"):
                     # code names the primary template, never a (partial) specialization of it, so the
@@ -420,6 +428,25 @@ def _overloads(ci, c):
     get_f.argtypes, get_f.restype = [ci.Cursor, ctypes.c_uint], ci.Cursor
     get_f.errcheck = ci.Cursor.from_result
     return [get_f(c, i) for i in range(n_f(c))]
+
+
+def _overridden(ci, c):
+    """The base-class methods that method `c` overrides (libclang's clang_getOverriddenCursors)."""
+    f = ci.conf.lib.clang_getOverriddenCursors
+    f.argtypes = [ci.Cursor, ctypes.POINTER(ctypes.POINTER(ci.Cursor)), ctypes.POINTER(ctypes.c_uint)]
+    f.restype = None
+    arr, num = ctypes.POINTER(ci.Cursor)(), ctypes.c_uint(0)
+    f(c, ctypes.byref(arr), ctypes.byref(num))
+    out = []
+    for i in range(num.value):
+        cur = arr[i]
+        cur._tu = c._tu                      # keep the translation unit alive for the copied cursor
+        out.append(cur)
+    if num.value:
+        d = ci.conf.lib.clang_disposeOverriddenCursors
+        d.argtypes, d.restype = [ctypes.POINTER(ci.Cursor)], None
+        d(arr)
+    return out
 
 
 def _primary_template(ci, c):

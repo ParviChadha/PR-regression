@@ -149,6 +149,16 @@ class Box {
     int grow() { return ++n; }
     int n = 0;
 };
+class Shape {
+  public:
+    double area() const { return impl_->area(); }
+  protected:
+    struct Impl { virtual ~Impl() = default; virtual double area() const = 0; };
+    Impl* impl_ = nullptr;
+};
+class Square : public Shape {
+    struct SquareImpl : Shape::Impl { double area() const override { return 4.0; } };
+};
 }  // namespace lib
 """
 
@@ -204,6 +214,11 @@ class WithLibclang(unittest.TestCase):
         d = self.at_line("template<typename T> struct is_key { static constexpr bool value = true; };")
         self.assertEqual(d["access"], "private")
         self.assertIn("lib::Box::at(K)", [v["name"] for v in self.an.reached_via(d["usr"])])
+
+    def test_override_reached_through_virtual_call(self):
+        d = self.at_line("    struct SquareImpl : Shape::Impl { double area() const override { return 4.0; } };")
+        self.assertEqual(d["access"], "private")
+        self.assertIn("lib::Shape::area()", [v["name"] for v in self.an.reached_via(d["usr"])])
 
     def test_public_and_private_members(self):
         self.assertEqual(self.at_line("    int size() const { return n; }")["access"], "public")
