@@ -1,0 +1,71 @@
+{
+ "base_ref": "master",
+ "base_sha": "e0dd888507fc01b4abfe10d3ba86272e2702af27",
+ "body": "Follow-up to #2962. This replaces the memo version of this branch, on @lballabio's point that the lookup is not needed at all.\n\n`DiscretizedCallableFixedRateBond::preAdjustValuesImpl()` and `postAdjustValuesImpl()` run at every step of the rollback over every coupon and every callability, and each test went through `isOnTime()` \u2014 `close_enough(grid[grid.index(t)], time())`. The lookup is not computing a grid time: `TimeGrid::index(t)` throws unless `t` belongs to the grid, and when it returns `i`, `grid[i]` is `t` within tolerance. It is a validator, and the comparison does not need it.\n\n## Change\n\n`isOnTime(t)` becomes `close_enough(t, time())` at the three call sites. The cache, the two arrays, the NaN sentinels, the lattice pointer and the grid-identity check are gone.\n\nThe validation the lookup also performed is kept where it can fail: the `TimeGrid` constructor overload takes the caller's grid unchanged, so `calculateWithSpread()` checks \u2014 once per valuation, and only for that path \u2014 that every event time is a grid node and that no second node matches it. Grids the engine builds from `mandatoryTimes()` contain the event times by construction and are not re-checked.\n\n## Measurements\n\nCallable bond OAS benchmark: 30-year semiannual bond, monthly calls at par, Black-Karasinski, 100 steps. Each timing is one OAS solve plus three `cleanPriceOAS` calls, median of three runs, on a 2 vCPU machine.\n\n| Case | `master` | this branch |\n|---|---|---|\n| 30y monthly calls, a=1e-4 | 1472 ms | 1400 ms |\n| 30y monthly calls, a=0.03 | 1405 ms | 1361 ms |\n\nAt these timings the run-to-run spread on this machine is on the order of \u00b110%, so read the wall clock as \"not slower\"; the binary search the memo cached is now absent from the per-step path rather than remembered.\n\nAll twelve configurations of the benchmark harness print bit-identical `oas`, `cleanAtOas`, `cleanUp`, `cleanDown` and `oasd` against `master` (the `bits=` field is equal on every line).\n\n## Tests\n\n`testCallerSuppliedGridMustContainEventTimes` in `test-suite/callablebonds.cpp`:\n\n* a caller-supplied grid holding the bond's event times reproduces the price of the engine-built grid;\n* a caller-supplied grid holding only the endpoints throws instead of silently pricing without the coupons and calls it does not contain.\n",
+ "comments": [
+  {
+   "body": "Thanks.  I was also thinking about the `T = grid[grid.index(t)]; return close_enough(T, time())` pattern that we're using, cached or not.  We seems to be doing this in order to check (via `grid.index`) that `t` is, in fact, on the grid.  But didn't we adjust the coupon times etc to the grid already?  Couldn't we just say `close_enough(t, time())`?",
+   "created_at": "2026-10-29T16:44:34Z",
+   "user": {
+    "login": "lballabio",
+    "type": "User"
+   }
+  },
+  {
+   "body": "Thanks for reviewing, @lballabio . This PR was obviously LLM-generated, based on a backport of https://github.com/amaggiulli/QLNet/pull/331 . I, the human, looked at it now. Your comments are valid and it looks like it will lead to an even better performance improvement. I'll submit a new PR for this. Thanks for your gracious response, as always. The flood of AI-generated PRs surely is challenging.",
+   "created_at": "2026-11-03T08:05:14Z",
+   "user": {
+    "login": "igitur",
+    "type": "User"
+   }
+  },
+  {
+   "body": "@lballabio you were right \u2014 the lookup only checks that `t` is on the grid, and the grid the engine builds already contains every coupon and call date. I rewrote this branch rather than opening another PR:\n\n* `isOnTime(t)` is now `close_enough(t, time())` at the three call sites; the memo, the two arrays, the NaN sentinels and the invalidation rule are gone.\n* The check is kept only where it can fail. The `TimeGrid` constructor overload uses the caller's grid unchanged, so that path now validates it once per valuation: every event time must be a node, and no second node may match it. Grids built from `mandatoryTimes()` are not re-checked.\n* New test covers both: a supplied complete grid reproduces the engine price, a grid with only the endpoints throws.\n\nMeasured on the 30y monthly-call cases: 1472 \u2192 1400 ms and 1405 \u2192 1361 ms; all twelve benchmark configurations bit-identical to `master`.\n",
+   "created_at": "2026-11-05T17:20:56Z",
+   "user": {
+    "login": "igitur",
+    "type": "User"
+   }
+  },
+  {
+   "body": "\n[![Coverage Status](https://coveralls.io/builds/83123134/badge)](https://coveralls.io/builds/83123134)\n\ncoverage: 80.399% (+0.009%) from 80.39% \u2014 **igitur:callable-bond-grid-time-lookup** into **lballabio:master**\n",
+   "created_at": "2026-11-18T08:24:31Z",
+   "user": {
+    "login": "coveralls",
+    "type": "User"
+   }
+  }
+ ],
+ "created_at": "2026-10-29T15:47:41Z",
+ "fetched_at": "2026-11-24T03:17:45Z",
+ "head_sha": "1cafff1df3ae299097dc31f15406b792b40d410f",
+ "labels": [],
+ "linked_issues": [],
+ "merge_commit_sha": "908964c2085f75f03dce3e297c32c1e98a62ba44",
+ "merged_at": "2026-11-18T08:36:35Z",
+ "number": 2971,
+ "referenced_numbers": [
+  2962
+ ],
+ "repo": "lballabio/QuantLib",
+ "review_comments": [
+  {
+   "body": "Thanks!  If you use `BOOST_CHECK_EXCEPTION` (plenty of examples in the test suite for you to clone) you can also check that the error is the one you expect and not another unrelated failure.",
+   "created_at": "2026-11-13T07:47:12Z",
+   "diff_hunk": "@@ -297,6 +297,85 @@ BOOST_AUTO_TEST_CASE(testConsistency) {\n             << \" (should be higher)\");\n }\n \n+BOOST_AUTO_TEST_CASE(testCallerSuppliedGridMustContainEventTimes) {\n+\n+    BOOST_TEST_MESSAGE(\"Testing caller-supplied time grids for callable bonds...\");\n+\n+    Globals vars;\n+\n+    vars.termStructure.linkTo(vars.makeFlatCurve(0.03));\n+    vars.model.linkTo(ext::make_shared<HullWhite>(vars.termStructure));\n+\n+    Schedule schedule =\n+        MakeSchedule()\n+        .from(vars.issueDate())\n+        .to(vars.maturityDate())\n+        .withCalendar(vars.calendar)\n+        .withFrequency(Semiannual)\n+        .withConvention(vars.rollingConvention)\n+        .withRule(DateGeneration::Backward);\n+\n+    std::vector<Rate> coupons(1, 0.05);\n+\n+    CallabilitySchedule callabilities;\n+    std::vector<Date> callDates;\n+    // Calls on coupon dates every two years, so no exercise date is snapped\n+    // to a nearby coupon by the bond's constructor.\n+    for (Size i = 4; i + 1 < schedule.size(); i += 4) {\n+        callDates.push_back(schedule[i]);\n+        callabilities.push_back(ext::make_shared<Callability>(\n+            Bond::Price(110.0, Bond::Price::Clean), Callability::Call, schedule[i]));\n+    }\n+\n+    CallableFixedRateBond callable(3, 100.0, schedule,\n+                                   coupons, Thirty360(Thirty360::BondBasis),\n+                                   vars.rollingConvention,\n+                                   100.0, vars.issueDate(),\n+                                   callabilities);\n+\n+    Size timeSteps = 240;\n+\n+    callable.setPricingEngine(ext::make_shared<TreeCallableFixedRateBondEngine>(\n+        *(vars.model), timeSteps, vars.termStructure));\n+    Real expected = callable.cleanPrice();\n+\n+    // The same event times, supplied as a grid, must reproduce that price.\n+    std::vector<Time> eventTimes(1, 0.0);\n+    for (Size i = 1; i < schedule.size(); ++i) {\n+        Time t = vars.dayCounter.yearFraction(vars.settlement, schedule[i]);\n+        if (t >= 0.0)\n+            eventTimes.push_back(t);\n+    }\n+    for (auto& callDate : callDates) {\n+        Time t = vars.dayCounter.yearFraction(vars.settlement, callDate);\n+        if (t >= 0.0)\n+            eventTimes.push_back(t);\n+    }\n+    TimeGrid complete(eventTimes.begin(), eventTimes.end(), timeSteps);\n+\n+    callable.setPricingEngine(ext::make_shared<TreeCallableFixedRateBondEngine>(\n+        *(vars.model), complete, vars.termStructure));\n+    Real calculated = callable.cleanPrice();\n+\n+    if (std::fabs(calculated - expected) > 1.0e-8)\n+        BOOST_ERROR(\"supplied complete grid changed the price:\\n\"\n+                    << std::setprecision(12)\n+                    << \"    engine grid:   \" << expected << \"\\n\"\n+                    << \"    supplied grid: \" << calculated);\n+\n+    // A supplied grid that omits the event times must be rejected, not\n+    // silently priced without the coupons and calls it does not contain.\n+    std::vector<Time> endpoints(1, 0.0);\n+    endpoints.push_back(vars.dayCounter.yearFraction(vars.settlement, vars.maturityDate()));\n+    TimeGrid incomplete(endpoints.begin(), endpoints.end(), timeSteps);\n+\n+    callable.setPricingEngine(ext::make_shared<TreeCallableFixedRateBondEngine>(\n+        *(vars.model), incomplete, vars.termStructure));\n+\n+    BOOST_CHECK_THROW(callable.cleanPrice(), Error);",
+   "line": 375,
+   "path": "test-suite/callablebonds.cpp",
+   "user": {
+    "login": "lballabio",
+    "type": "User"
+   }
+  }
+ ],
+ "state": "closed",
+ "title": "Compare callable-bond event times directly instead of looking them up",
+ "transport": "gh",
+ "user": {
+  "login": "igitur",
+  "type": "User"
+ }
+}

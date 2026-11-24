@@ -1,0 +1,33 @@
+{
+ "base_ref": "master",
+ "base_sha": "84fbf0a0ecb9aa1cd6022ec468129f9dee5464be",
+ "body": "## Summary\n\n`detail::QdPutCallParityEngine::calculate()` \u2014 shared by both `QdPlusAmericanEngine` and `QdFpAmericanEngine` \u2014 checks only that the exercise type is American:\n\n```cpp\nQL_REQUIRE(arguments_.exercise->type() == Exercise::American,\n           \"not an American option\");\n```\n\nIt never inspects `AmericanExercise::payoffAtExpiry()`. Every other closed-form American engine explicitly rejects that flag, since their analytic formulas assume the standard immediate-early-exercise convention, not the payoff-deferred-to-expiry one:\n\n- `BaroneAdesiWhaleyApproximationEngine`\n- `BjerksundStenslandApproximationEngine`\n- `JuQuadraticApproximationEngine`\n- `McAmericanEngine` (via `EarlyExercise::payoffAtExpiry()`)\n\nWithout the same guard, QD+/QD-FP silently price a `payoffAtExpiry`-flagged American option as if it were a standard American option \u2014 a confidently wrong result with no indication anything is off, rather than the clean rejection every sibling closed-form engine gives.\n\n## Fix\n\nAdded the same guard pattern used by the sibling engines (downcast to `AmericanExercise`, reject if `payoffAtExpiry()` is set), in the single shared `calculate()` so both `QdPlusAmericanEngine` and `QdFpAmericanEngine` are covered.\n\n## Test\n\nAdded `testQdEnginesRejectPayoffAtExpiry` to `test-suite/americanoption.cpp`, covering both engines: confirms a plain American exercise still prices normally, and a `payoffAtExpiry`-flagged one throws. Without the fix, both engines compute a result instead of throwing; with the fix, both throw as expected. Full `AmericanOptionTests` suite (39 cases) passes with no regressions.\n\n\ud83e\udd16 Co-worked with [Claude Code](https://claude.com/claude-code)",
+ "comments": [
+  {
+   "body": "\n[![Coverage Status](https://coveralls.io/builds/83000386/badge)](https://coveralls.io/builds/83000386)\n\ncoverage: 79.665% (+0.001%) from 79.664% \u2014 **leafyoung:fix-qdplus-american-engines-payoff-at-expiry** into **lballabio:master**\n",
+   "created_at": "2026-11-12T15:44:12Z",
+   "user": {
+    "login": "coveralls",
+    "type": "User"
+   }
+  }
+ ],
+ "created_at": "2026-11-01T13:53:56Z",
+ "fetched_at": "2026-11-24T03:18:18Z",
+ "head_sha": "c3dce2afde96529315f388e3c8cb6c362b4d07c4",
+ "labels": [],
+ "linked_issues": [],
+ "merge_commit_sha": "c06a9ff807ce97f67d82e8d36a21e3b5bf038a09",
+ "merged_at": "2026-11-12T16:37:50Z",
+ "number": 3001,
+ "referenced_numbers": [],
+ "repo": "lballabio/QuantLib",
+ "review_comments": [],
+ "state": "closed",
+ "title": "Reject payoff-at-expiry exercise in Qd+/QdFp American engines",
+ "transport": "gh",
+ "user": {
+  "login": "leafyoung",
+  "type": "User"
+ }
+}

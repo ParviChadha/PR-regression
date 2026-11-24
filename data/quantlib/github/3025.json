@@ -1,0 +1,66 @@
+{
+ "base_ref": "master",
+ "base_sha": "e0247baf5a3e7d4cb7f1e357d5a688e1fc0c94c0",
+ "body": "`StulzEngine` fails for perfectly correlated assets. With \u03c1 = 1 and a non-zero strike, pricing a min or max basket call throws, even for unequal volatilities:\n\n| \u03c1 = 1, K = 90 | Before |\n|---|---|\n| \u03c3\u2081 = 20%, \u03c3\u2082 = 30% | `rho must be >= -1.0 (-1 not allowed)` |\n| \u03c3\u2081 = 25%, \u03c3\u2082 = 15% | `rho must be <= 1.0 (1 not allowed)` |\n| \u03c3\u2081 = \u03c3\u2082 = 20% | `rho must be >= -1.0 (-nan not allowed)` |\n\nand with K = 0 and equal volatilities the NPV is NaN.\n\nAt \u03c1 = 1 the modified correlations $(\\rho\\sigma_2 - \\sigma_1)/\\sigma$ and $(\\rho\\sigma_1 - \\sigma_2)/\\sigma$ are exactly \u00b11 in exact arithmetic, but rounding pushes them just outside [-1, 1], which `BivariateCumulativeNormalDistribution` rejects. With equal volatilities, the variance of the asset ratio $\\sigma^2$ is zero (or slightly negative after rounding), giving 0/0.\n\nThis PR:\n- clamps the modified correlations to [-1, 1];\n- clamps the ratio variance at zero;\n- when the ratio's standard deviation is below `QL_EPSILON`, uses the fact that the ratio is deterministic: the minimum is the asset with the lower forward, so the min call is a Black call on that forward (the max call follows from the existing `black1 + black2 - min` identity).\n\nThe non-degenerate path is unchanged: over 224 cases (\u03c1 from -0.95 to 0.999, four strikes, four volatility pairs, min and max) prices before and after agree to 17 significant digits.\n\n**Tests:** added `testStulzPerfectCorrelation` to `BasketOptionTests`. With \u03c1 = 1 both assets are driven by the same Brownian motion, so the reference values are one-dimensional integrals, computed independently with 30-digit numerical quadrature; for equal volatilities they reduce to the Black formula. The engine matches them to 1e-8. The test fails on master and passes with this change; the existing basket option tests still pass.\n\nSee also #3011 , which fixes the same degenerate-variance issue in `AnalyticEuropeanMargrabeEngine`.",
+ "comments": [
+  {
+   "body": "Applied the same variance threshold as suggested in #3011.",
+   "created_at": "2026-11-06T12:02:49Z",
+   "user": {
+    "login": "csarushan1729",
+    "type": "User"
+   }
+  },
+  {
+   "body": "\n[![Coverage Status](https://coveralls.io/builds/83067955/badge)](https://coveralls.io/builds/83067955)\n\ncoverage: 80.011% (+0.3%) from 79.717% \u2014 **csarushan1729:fix-stulz-perfect-correlation** into **lballabio:master**\n",
+   "created_at": "2026-11-16T10:58:47Z",
+   "user": {
+    "login": "coveralls",
+    "type": "User"
+   }
+  }
+ ],
+ "created_at": "2026-11-05T23:17:44Z",
+ "fetched_at": "2026-11-24T03:18:01Z",
+ "head_sha": "64fd7bb55f1c6254513d111137adb24787871019",
+ "labels": [],
+ "linked_issues": [],
+ "merge_commit_sha": "27196d2ce0b339bc8c4cac5897e593aa9cd5d057",
+ "merged_at": "2026-11-16T11:12:04Z",
+ "number": 3025,
+ "referenced_numbers": [
+  3011
+ ],
+ "repo": "lballabio/QuantLib",
+ "review_comments": [
+  {
+   "body": "This is `std::clamp`.",
+   "created_at": "2026-11-13T07:49:39Z",
+   "diff_hunk": "@@ -41,11 +41,26 @@ namespace QuantLib {\n             Real stdDev1 = std::sqrt(variance1);\n             Real stdDev2 = std::sqrt(variance2);\n \n-            Real variance = variance1 + variance2 - 2*rho*stdDev1*stdDev2;\n+            // with perfect correlation and equal volatilities, rounding can\n+            // make the variance of the ratio slightly negative\n+            Real variance =\n+                std::max(Real(0.0), variance1 + variance2 - 2*rho*stdDev1*stdDev2);\n             Real stdDev = std::sqrt(variance);\n \n-            Real modRho1 = (rho * stdDev2 - stdDev1) / stdDev;\n-            Real modRho2 = (rho * stdDev1 - stdDev2) / stdDev;\n+            if (variance < QL_EPSILON) {\n+                // the ratio of the two assets is deterministic, so the\n+                // minimum is the asset with the lower forward\n+                return blackFormula(Option::Call, strike,\n+                                    std::min(forward1, forward2), stdDev1)\n+                    * riskFreeDiscount;\n+            }\n+\n+            // with perfect correlation, rounding can push the modified\n+            // correlations slightly outside [-1, 1]\n+            Real modRho1 = std::max(Real(-1.0), std::min(Real(1.0),",
+   "line": 60,
+   "path": "ql/pricingengines/basket/stulzengine.cpp",
+   "user": {
+    "login": "lballabio",
+    "type": "User"
+   }
+  },
+  {
+   "body": "Thanks, switched both to std::clamp",
+   "created_at": "2026-11-13T08:03:54Z",
+   "diff_hunk": "@@ -41,11 +41,26 @@ namespace QuantLib {\n             Real stdDev1 = std::sqrt(variance1);\n             Real stdDev2 = std::sqrt(variance2);\n \n-            Real variance = variance1 + variance2 - 2*rho*stdDev1*stdDev2;\n+            // with perfect correlation and equal volatilities, rounding can\n+            // make the variance of the ratio slightly negative\n+            Real variance =\n+                std::max(Real(0.0), variance1 + variance2 - 2*rho*stdDev1*stdDev2);\n             Real stdDev = std::sqrt(variance);\n \n-            Real modRho1 = (rho * stdDev2 - stdDev1) / stdDev;\n-            Real modRho2 = (rho * stdDev1 - stdDev2) / stdDev;\n+            if (variance < QL_EPSILON) {\n+                // the ratio of the two assets is deterministic, so the\n+                // minimum is the asset with the lower forward\n+                return blackFormula(Option::Call, strike,\n+                                    std::min(forward1, forward2), stdDev1)\n+                    * riskFreeDiscount;\n+            }\n+\n+            // with perfect correlation, rounding can push the modified\n+            // correlations slightly outside [-1, 1]\n+            Real modRho1 = std::max(Real(-1.0), std::min(Real(1.0),",
+   "line": 60,
+   "path": "ql/pricingengines/basket/stulzengine.cpp",
+   "user": {
+    "login": "csarushan1729",
+    "type": "User"
+   }
+  }
+ ],
+ "state": "closed",
+ "title": "Handle perfect correlation in `StulzEngine`",
+ "transport": "gh",
+ "user": {
+  "login": "csarushan1729",
+  "type": "User"
+ }
+}

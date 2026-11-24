@@ -1,0 +1,49 @@
+{
+ "base_ref": "master",
+ "base_sha": "831a6e4415331a42db6bc27bf95e5166b6a3c698",
+ "body": "The list of known ECB dates in `ql/time/ecb.cpp` ends on December 18th, 2024. As a result, `ECB::nextDate`, `ECB::nextDates`, `ECB::isECBdate` and `ECB::date` throw \"ECB dates after December 18th, 2024 are unknown\" for any later date, e.g. `ECB::nextDate(Date(9, November, 2026))`.\n\nThis adds the start dates of the reserve maintenance periods for 2025 to 2028, as published in the ECB indicative calendars:\n\n- 2025: https://www.ecb.europa.eu/press/pr/date/2024/html/ecb.pr240719_1~1ce84f741b.en.html\n- 2026: https://www.ecb.europa.eu/press/pr/date/2025/html/ecb.pr250424~2643533670.en.html\n- 2027: https://www.ecb.europa.eu/press/pr/date/2026/html/ecb.pr260630~9f54a0a4fb.en.html\n- 2028: https://www.ecb.europa.eu/press/pr/date/2026/html/ecb.pr260630_1~ff55b9e99a.en.html\n\nTwo of them are not Wednesdays, as published: the last period of 2025 starts on Tuesday, December 23rd, and the third period of 2027 on Thursday, May 6th. The source comment now points to the ECB page listing these calendars instead of a 2023 archived copy.\n\nThe new test case `DateTests/ecbDatesFrom2025` checks each new date through `ECB::nextDate`. It fails on master with the error above and passes with the change, as do the other date tests and the full test suite.\n",
+ "comments": [
+  {
+   "body": "[![CLA assistant check](https://cla-assistant.io/pull/badge/signed)](https://cla-assistant.io/lballabio/QuantLib?pullRequest=3032) <br/>All committers have signed the CLA.",
+   "created_at": "2026-11-09T01:34:48Z",
+   "user": {
+    "login": "CLAassistant",
+    "type": "User"
+   }
+  },
+  {
+   "body": "\n[![Coverage Status](https://coveralls.io/builds/82910245/badge)](https://coveralls.io/builds/82910245)\n\ncoverage: 79.73% (+0.001%) from 79.729% \u2014 **sohailshk:fix/ecb-dates-2025-2028** into **lballabio:master**\n",
+   "created_at": "2026-11-09T08:36:15Z",
+   "user": {
+    "login": "coveralls",
+    "type": "User"
+   }
+  },
+  {
+   "body": "Congratulations on your first merged pull request!\n",
+   "created_at": "2026-11-09T09:07:00Z",
+   "user": {
+    "login": "boring-cyborg[bot]",
+    "type": "Bot"
+   }
+  }
+ ],
+ "created_at": "2026-11-09T01:34:43Z",
+ "fetched_at": "2026-11-24T03:18:38Z",
+ "head_sha": "d14ce6bbbdd0e689610533bc48f470f5e7778dac",
+ "labels": [],
+ "linked_issues": [],
+ "merge_commit_sha": "86b3d4b51783b880599bd5f1c444cf3b0fd41686",
+ "merged_at": "2026-11-09T09:06:55Z",
+ "number": 3032,
+ "referenced_numbers": [],
+ "repo": "lballabio/QuantLib",
+ "review_comments": [],
+ "state": "closed",
+ "title": "Add ECB maintenance-period dates for 2025 to 2028",
+ "transport": "gh",
+ "user": {
+  "login": "sohailshk",
+  "type": "User"
+ }
+}

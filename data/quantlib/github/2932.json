@@ -1,0 +1,33 @@
+{
+ "base_ref": "master",
+ "base_sha": "657346746490e66681df7f756f932a72ad0d8b6c",
+ "body": "\nmaxDate() computed an approximate upper bound by ceiling the maximum interpolation time to the nearest year and converting back via optionDateFromTenor(Period(..., Years)):\n\n    //FIXME approx\n    return optionDateFromTenor(Period((int)ceil(interpolation_.xMax()), Years));\n\nThis could over- or under-estimate the true last date by up to a year depending on where in the year the last pillar falls, making extrapolation guards inconsistent with the actual data range.\n\nThe curve already stores the input dates in dates_. Returning dates_.back() gives the exact last pillar date with no approximation.",
+ "comments": [
+  {
+   "body": "\n[![Coverage Status](https://coveralls.io/builds/82943192/badge)](https://coveralls.io/builds/82943192)\n\ncoverage: 78.962% (-0.001%) from 78.963% \u2014 **Nityahapani:fix/yoy-interpolated-maxdate** into **lballabio:master**\n",
+   "created_at": "2026-11-10T11:56:49Z",
+   "user": {
+    "login": "coveralls",
+    "type": "User"
+   }
+  }
+ ],
+ "created_at": "2026-10-22T09:16:10Z",
+ "fetched_at": "2026-11-24T03:18:29Z",
+ "head_sha": "13d44855629e277605c8d0f7d74bcf117fc0d770",
+ "labels": [],
+ "linked_issues": [],
+ "merge_commit_sha": "846aa9cc0e17eaa49993e56155f39d732c3732ba",
+ "merged_at": "2026-11-10T12:41:17Z",
+ "number": 2932,
+ "referenced_numbers": [],
+ "repo": "lballabio/QuantLib",
+ "review_comments": [],
+ "state": "closed",
+ "title": "Fix `InterpolatedYoYOptionletVolatilityCurve::maxDate()` to return exact date",
+ "transport": "gh",
+ "user": {
+  "login": "Nityahapani",
+  "type": "User"
+ }
+}

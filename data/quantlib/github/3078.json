@@ -1,0 +1,41 @@
+{
+ "base_ref": "master",
+ "base_sha": "5d5dbc6556b7b28dc122346485205d5a3d6b6629",
+ "body": "### Problem\n* **Out-of-bounds crash:** The `times` vector can contain duplicates/unsorted values, making it larger than the deduplicated `timeGrid`. Looping over `times.size()` causes crashes and misaligned leverage surface data.\n* **Performance bug:** `logEntries()` calls `performCalculations()` directly, bypassing the lazy evaluation cache and forcing a full recalculation on every call.\n\n### Solution\n* Loop over `timeGrid->size()` and pass the sorted grid times to `FixedLocalVolSurface`.\n* Change `performCalculations()` to `calculate()` inside `logEntries()`.\n* Added a regression test (`testHestonSLVFDMModelMandatoryDatesCrash`) to verify duplicate/out-of-order mandatory dates are handled safely.",
+ "comments": [
+  {
+   "body": "\n[![Coverage Status](https://coveralls.io/builds/83106872/badge)](https://coveralls.io/builds/83106872)\n\ncoverage: 80.098% (+0.008%) from 80.09% \u2014 **Chaithanya5gif:fix-heston-slv-fdm-time-grid** into **lballabio:master**\n",
+   "created_at": "2026-11-17T17:18:16Z",
+   "user": {
+    "login": "coveralls",
+    "type": "User"
+   }
+  },
+  {
+   "body": "Congratulations on your first merged pull request!\n",
+   "created_at": "2026-11-17T18:21:50Z",
+   "user": {
+    "login": "boring-cyborg[bot]",
+    "type": "Bot"
+   }
+  }
+ ],
+ "created_at": "2026-11-13T17:19:11Z",
+ "fetched_at": "2026-11-24T03:17:46Z",
+ "head_sha": "68b3607fd458a86f684bcbe0c2f59f7b8c2787fd",
+ "labels": [],
+ "linked_issues": [],
+ "merge_commit_sha": "6e38bddba33ed41577583386234051aed1ccea72",
+ "merged_at": "2026-11-17T18:21:45Z",
+ "number": 3078,
+ "referenced_numbers": [],
+ "repo": "lballabio/QuantLib",
+ "review_comments": [],
+ "state": "closed",
+ "title": "Fix time grid mismatch in `HestonSLVFDMModel` with mandatory dates",
+ "transport": "gh",
+ "user": {
+  "login": "Chaithanya5gif",
+  "type": "User"
+ }
+}

@@ -1,0 +1,33 @@
+{
+ "base_ref": "master",
+ "base_sha": "cf74c9f657150750dfbf00ed6fd4c0768bc5ce36",
+ "body": "A telescopic overnight coupon with positive lockout can omit the observation immediately before the frozen tail. Its repeated tail fixings can then use a front-stub fixing instead of the last pre-lockout fixing. Retain one additional business-day observation when lockout is positive; the zero-lockout path is unchanged.\n\nThe existing overnight-leg NPV test encoded the wrong anchor. Update its reference using an independent daily SOFR deposit product and add an uncompressed-leg control, keeping the absolute tolerance at `1e-8`.\n\nValidation against `cf74c9f657150750dfbf00ed6fd4c0768bc5ce36`:\n\n- Separate clean baseline and candidate shared-library and stock-test builds on Linux x86_64 with GCC 14, C++17 and Boost 1.87 (default configuration, CMake unity build, `-O1 -g0 -DNDEBUG`, warnings as errors).\n- Full candidate stock suite: 1,714 test cases and 619,739 assertions passed, with no failures or skips. The baseline suite also passed; the updated NPV regression fails on the baseline while its uncompressed control passes.\n- Independent date-geometry checks: 4,130 checks passed. Independent daily-product and NPV checks: 52 checks passed.\n\nThis change addresses the missing pre-lockout anchor. Separate nonzero daily-spread discrepancies remain outside its scope; the broader control matrix still has 80 such failures. No claim is made for aged telescopic coupons or cutoffs inside an omitted middle interval.\n",
+ "comments": [
+  {
+   "body": "\n[![Coverage Status](https://coveralls.io/builds/83077213/badge)](https://coveralls.io/builds/83077213)\n\ncoverage: 79.745% (+0.001%) from 79.744% \u2014 **Kiril1Shevtsov:fix/telescopic-lockout-anchor** into **lballabio:master**\n",
+   "created_at": "2026-11-16T17:18:35Z",
+   "user": {
+    "login": "coveralls",
+    "type": "User"
+   }
+  }
+ ],
+ "created_at": "2026-11-11T19:04:47Z",
+ "fetched_at": "2026-11-24T03:17:56Z",
+ "head_sha": "10aeb95bd5a4f3e60cad649c96e02b03ade8b73f",
+ "labels": [],
+ "linked_issues": [],
+ "merge_commit_sha": "2be70828dcc1d2642b7d6a05cfb1721fd61afba6",
+ "merged_at": "2026-11-16T18:04:07Z",
+ "number": 3058,
+ "referenced_numbers": [],
+ "repo": "lballabio/QuantLib",
+ "review_comments": [],
+ "state": "closed",
+ "title": "Retain the pre-lockout fixing in telescopic overnight coupons",
+ "transport": "gh",
+ "user": {
+  "login": "Kiril1Shevtsov",
+  "type": "User"
+ }
+}

@@ -1,0 +1,59 @@
+{
+ "base_ref": "master",
+ "base_sha": "cf74c9f657150750dfbf00ed6fd4c0768bc5ce36",
+ "body": "## Summary\n\nThis change reduces repeated historical fixing lookups in the overnight coupon pricers.\n\nThe historical-fixing loops in `CompoundingOvernightIndexedCouponPricer::compute()` and `ArithmeticAveragedOvernightIndexedCouponPricer::averageRate()` process fixing dates in chronological order. Previously, each fixing date was looked up independently in the ordered `TimeSeries` container.\n\nThe implementation performs an initial `lower_bound()` lookup and then advances through the historical fixing series using a forward iterator.\n\n## Implementation\n\n- Add a const `TimeSeries::lower_bound()` accessor for containers that support ordered lookup.\n- Constrain the accessor using SFINAE so it is unavailable for containers without `lower_bound()`, preserving compatibility with unordered `TimeSeries` containers.\n- Replace repeated historical map lookups in both overnight coupon pricers with ordered iterator traversal.\n- Preserve the existing missing-fixing error handling through `QL_REQUIRE`.\n- Leave today's fixing and forecast-fixing paths unchanged.\n\n## Tests\n\nAdded tests covering:\n\n- `TimeSeries::lower_bound()` for empty, before-first, exact-match, between-entry, and after-last lookups.\n- Compile-time availability for ordered containers and unavailability for unordered containers.\n- Historical arithmetic-averaged overnight coupon rates.\n- Missing historical fixings in both compounded and arithmetic-averaged overnight coupons.\n\nValidation performed:\n\n- `TimeSeriesTests`: 7 test cases passed.\n- `OvernightIndexedCouponTests`: 47 test cases passed.\n- `OvernightIndexedSwapTests`: 25 test cases passed.\n- Total: 79 targeted test cases passed.\n- `git diff --check`: passed.\n\n## Performance\n\nA local synthetic microbenchmark compared the baseline and modified implementations across:\n\n- Historical periods of 1, 5, and 20 years.\n- Coupon workloads containing 21, 126, and 231 observations.\n- Both compounded and arithmetic-averaged overnight coupons.\n\nEach measurement used 21 repetitions, with 100 valuations per sample after warm-up. Two runs were performed with the execution order reversed.\n\nThe modified implementation was faster in every tested workload. Observed median speedups ranged from approximately 1.2x to 4.1x, depending on the workload. Baseline and modified implementations produced identical output checksums.\n\nThese measurements concern historical coupon-pricer calculations and should not be interpreted as end-to-end OIS swap or portfolio valuation speedups.\n\n## Scope\n\nThis is an incremental optimization of historical fixing lookup. It does not introduce a compounded-fixing cache or eliminate the per-fixing traversal and compounding work proposed in the original issue.\n\nRefs #1653",
+ "comments": [
+  {
+   "body": "Thanks for opening this pull request!  It might take a while before we look at it, so don't worry if there seems to be no feedback.  We'll get to it.\n",
+   "created_at": "2026-11-12T09:12:28Z",
+   "user": {
+    "login": "boring-cyborg[bot]",
+    "type": "Bot"
+   }
+  },
+  {
+   "body": "[![CLA assistant check](https://cla-assistant.io/pull/badge/signed)](https://cla-assistant.io/lballabio/QuantLib?pullRequest=3064) <br/>All committers have signed the CLA.",
+   "created_at": "2026-11-12T09:12:31Z",
+   "user": {
+    "login": "CLAassistant",
+    "type": "User"
+   }
+  },
+  {
+   "body": "\n[![Coverage Status](https://coveralls.io/builds/83079022/badge)](https://coveralls.io/builds/83079022)\n\ncoverage: 79.753% (+0.009%) from 79.744% \u2014 **akshatsinghrajawat:issue-1653-iterator-optimization** into **lballabio:master**\n",
+   "created_at": "2026-11-16T18:29:12Z",
+   "user": {
+    "login": "coveralls",
+    "type": "User"
+   }
+  },
+  {
+   "body": "Congratulations on your first merged pull request!\n",
+   "created_at": "2026-11-16T19:41:28Z",
+   "user": {
+    "login": "boring-cyborg[bot]",
+    "type": "Bot"
+   }
+  }
+ ],
+ "created_at": "2026-11-12T09:12:24Z",
+ "fetched_at": "2026-11-24T03:17:55Z",
+ "head_sha": "d162031d5ff775f8bfddfbcdcf97d594349fae99",
+ "labels": [],
+ "linked_issues": [],
+ "merge_commit_sha": "ca846ceab0efd4c430a5492872d60e0ff2a865b5",
+ "merged_at": "2026-11-16T19:41:24Z",
+ "number": 3064,
+ "referenced_numbers": [
+  1653
+ ],
+ "repo": "lballabio/QuantLib",
+ "review_comments": [],
+ "state": "closed",
+ "title": "Optimize historical fixing lookup in overnight coupon pricers",
+ "transport": "gh",
+ "user": {
+  "login": "akshatsinghrajawat",
+  "type": "User"
+ }
+}

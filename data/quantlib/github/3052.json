@@ -1,0 +1,67 @@
+{
+ "base_ref": "master",
+ "base_sha": "cf74c9f657150750dfbf00ed6fd4c0768bc5ce36",
+ "body": "Fixes #3041.\n\nThe underlying rate can be cached while a shared pricer has since been initialized for another coupon. The capped/floored coupon then asks that pricer for an optionlet adjustment using the wrong coupon's fixing and other state.\n\nReinitialize the pricer with the underlying coupon, or with the direct coupon when there is no underlying wrapper, before computing caplet or floorlet rates. Unrestricted coupons do not perform the extra initialization.\n\nThe regression uses two known historical fixings and checks the capped/floored rates against the contractual payoff. It covers both constructors, positive and negative gearing, a nonzero spread, caps, floors, collars and an unrestricted control, with interleaved repeated calls. On the unfixed implementation a coupon capped at 3% can return 5% after another coupon is priced.\n\nValidation on macOS arm64, AppleClang 21, Boost 1.92, C++17, Boost shared pointers, with warnings treated as errors:\n- Test-only negative control against unchanged production code: the new test fails 24 numerical checks.\n- With the fix: the new test passes all 97 assertions, and InflationCapFlooredCouponTests passes all 3 test cases.\n- Full unfiltered test suite: 1715 test cases and 619834 assertions pass, with no skipped test cases.\n- git diff --check and tools/check_test_messages.py pass.",
+ "comments": [
+  {
+   "body": "Thanks for opening this pull request!  It might take a while before we look at it, so don't worry if there seems to be no feedback.  We'll get to it.\n",
+   "created_at": "2026-11-11T14:43:07Z",
+   "user": {
+    "login": "boring-cyborg[bot]",
+    "type": "Bot"
+   }
+  },
+  {
+   "body": "[![CLA assistant check](https://cla-assistant.io/pull/badge/signed)](https://cla-assistant.io/lballabio/QuantLib?pullRequest=3052) <br/>All committers have signed the CLA.",
+   "created_at": "2026-11-11T14:43:10Z",
+   "user": {
+    "login": "CLAassistant",
+    "type": "User"
+   }
+  },
+  {
+   "body": "\n[![Coverage Status](https://coveralls.io/builds/83026258/badge)](https://coveralls.io/builds/83026258)\n\ncoverage: 79.777% (+0.03%) from 79.744% \u2014 **Kiril1Shevtsov:fix/yoy-shared-pricer-3041** into **lballabio:master**\n",
+   "created_at": "2026-11-13T16:43:01Z",
+   "user": {
+    "login": "coveralls",
+    "type": "User"
+   }
+  },
+  {
+   "body": "Congratulations on your first merged pull request!\n",
+   "created_at": "2026-11-13T17:15:05Z",
+   "user": {
+    "login": "boring-cyborg[bot]",
+    "type": "Bot"
+   }
+  }
+ ],
+ "created_at": "2026-11-11T14:43:03Z",
+ "fetched_at": "2026-11-24T03:18:08Z",
+ "head_sha": "f97743e36bd4d7ff1caf3e63f9b6810ecd8c3cf8",
+ "labels": [],
+ "linked_issues": [
+  {
+   "body": "QuantLib possible bug found: QuantLib\u2019s capped/floored year-on-year coupon never resets its shared pricer, so a leg\u2019s value depends on the order the coupons are priced in. The test reference resets the pricer for each coupon. Maybe somebody more knowledgeable than me can check this out.",
+   "labels": [],
+   "number": 3041,
+   "state": "closed",
+   "title": "QuantLib\u2019s capped/floored year-on-year coupon eventual bug"
+  }
+ ],
+ "merge_commit_sha": "5d5dbc6556b7b28dc122346485205d5a3d6b6629",
+ "merged_at": "2026-11-13T17:15:00Z",
+ "number": 3052,
+ "referenced_numbers": [
+  3041
+ ],
+ "repo": "lballabio/QuantLib",
+ "review_comments": [],
+ "state": "closed",
+ "title": "Restore shared pricer state in capped YoY inflation coupons",
+ "transport": "gh",
+ "user": {
+  "login": "Kiril1Shevtsov",
+  "type": "User"
+ }
+}

@@ -1,0 +1,43 @@
+{
+ "base_ref": "master",
+ "base_sha": "831a6e4415331a42db6bc27bf95e5166b6a3c698",
+ "body": "When `endOfMonth` is set and the schedule is generated from an end-of-month seed, `Schedule` moves every inner date to the end of its month. This includes an explicit `firstDate` or `nextToLastDate`, so the stub that was asked for is silently changed. For example,\n\n    Schedule s = MakeSchedule().from(Date(31, January, 2026))\n                               .to(Date(15, December, 2027))\n                               .withNextToLastDate(Date(15, November, 2027))\n                               .withCalendar(NullCalendar())\n                               .withTenor(6*Months)\n                               .withConvention(Unadjusted)\n                               .forwards()\n                               .endOfMonth();\n\nends with July 31st, 2027, November 30th, 2027 and December 15th, 2027 instead of having the short final stub start on November 15th. Going backwards, a `firstDate` of February 15th, 2026 becomes February 28th. With a business-day convention the date can even move to the next month: a first date of February 27th, 2026 (the last TARGET business day of the month) is moved to the 28th and then rolled to March 2nd by `Following`.\n\nThe cause is the end-of-month pass at the end of the rule-based constructor, which applies `Date::endOfMonth` to all inner dates. The explicit stub dates are now only adjusted by the business-day convention, as #1509 already does for the effective and termination dates; regular dates are still moved to the end of the month.\n\nThe new test case `ScheduleTests/testStubDatesWithEomAdjustment` covers the three cases above. It fails on master with the dates quoted here and passes with the change; the other schedule tests and the full test suite pass.\n",
+ "comments": [
+  {
+   "body": "[![CLA assistant check](https://cla-assistant.io/pull/badge/signed)](https://cla-assistant.io/lballabio/QuantLib?pullRequest=3031) <br/>All committers have signed the CLA.",
+   "created_at": "2026-11-09T01:34:47Z",
+   "user": {
+    "login": "CLAassistant",
+    "type": "User"
+   }
+  },
+  {
+   "body": "\n[![Coverage Status](https://coveralls.io/builds/83020667/badge)](https://coveralls.io/builds/83020667)\n\ncoverage: 79.731% (+0.002%) from 79.729% \u2014 **sohailshk:fix/schedule-eom-stub-dates** into **lballabio:master**\n",
+   "created_at": "2026-11-13T12:18:00Z",
+   "user": {
+    "login": "coveralls",
+    "type": "User"
+   }
+  }
+ ],
+ "created_at": "2026-11-09T01:34:40Z",
+ "fetched_at": "2026-11-24T03:18:12Z",
+ "head_sha": "9167de2b963b7c6a281f9ae29db43aac73061ea3",
+ "labels": [],
+ "linked_issues": [],
+ "merge_commit_sha": "a2037d8a60140adc24018b3669709342f515fee2",
+ "merged_at": "2026-11-13T13:56:27Z",
+ "number": 3031,
+ "referenced_numbers": [
+  1509
+ ],
+ "repo": "lballabio/QuantLib",
+ "review_comments": [],
+ "state": "closed",
+ "title": "Don't move explicit stub dates to the end of the month",
+ "transport": "gh",
+ "user": {
+  "login": "sohailshk",
+  "type": "User"
+ }
+}

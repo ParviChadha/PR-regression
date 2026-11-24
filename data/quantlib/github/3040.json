@@ -1,0 +1,33 @@
+{
+ "base_ref": "master",
+ "base_sha": "4ee80035beeba07ec063d4dea3aee4bd349a1173",
+ "body": "`ExchangeRateManager` stores and looks up rates with a key built from the numeric codes of the two currencies (`min*1000 + max`). This breaks in two cases:\n\n- CNY and CNH have the same numeric code (156), so their rates end up in the same list. After adding USD/CNY at 7.1012 and USD/CNH at 7.1236, `lookup(USD, CNY)` returns the USD/CNH rate, and converting 100,000 USD with it gives 712,360 CNH instead of 710,120 CNY. With only USD/CNY stored, `lookup(USD, CNH)` returns the USD/CNY rate instead of failing.\n- The cryptocurrencies have numeric codes from 10000 upwards, so `hashes()`, which decodes the key with `% 1000` and `/ 1000`, never recognizes a rate involving them. As a result, a derived rate can't start from them: with BTC/USD and EUR/USD stored, `lookup(EUR, BTC)` works but `lookup(BTC, EUR)` fails with \"no conversion available from BTC to EUR\".\n\nThe key is now the pair of currency codes, in alphabetical order, and the smart lookup also uses the codes to avoid cycles. Only private members change.\n\nThe two new test cases in `ExchangeRateTests` fail on master as described above and pass with the change; the other exchange-rate and money tests and the full test suite pass.\n",
+ "comments": [
+  {
+   "body": "\n[![Coverage Status](https://coveralls.io/builds/83094418/badge)](https://coveralls.io/builds/83094418)\n\ncoverage: 79.757% (+0.01%) from 79.743% \u2014 **sohailshk:fix/exchangerate-manager-currency-codes** into **lballabio:master**\n",
+   "created_at": "2026-11-17T09:02:48Z",
+   "user": {
+    "login": "coveralls",
+    "type": "User"
+   }
+  }
+ ],
+ "created_at": "2026-11-10T13:53:41Z",
+ "fetched_at": "2026-11-24T03:17:51Z",
+ "head_sha": "315c161a6a76531b1e76fba27e3af9fc46d119a1",
+ "labels": [],
+ "linked_issues": [],
+ "merge_commit_sha": "017241c269a74474419e19f896537cd4c0684bd1",
+ "merged_at": "2026-11-17T10:05:18Z",
+ "number": 3040,
+ "referenced_numbers": [],
+ "repo": "lballabio/QuantLib",
+ "review_comments": [],
+ "state": "closed",
+ "title": "Use currency codes as keys in `ExchangeRateManager`",
+ "transport": "gh",
+ "user": {
+  "login": "sohailshk",
+  "type": "User"
+ }
+}

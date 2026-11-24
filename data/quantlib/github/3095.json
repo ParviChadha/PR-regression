@@ -1,0 +1,67 @@
+{
+ "base_ref": "master",
+ "base_sha": "8c52b45180d074d899a94f990140cba5b425f2d8",
+ "body": "Fixes #3091.\n\nThe lagged overload of ZeroInflationTermStructure::zeroRate with forceLinearInterpolation=true builds the interpolation period from the lagged date d - useLag, but computes the interpolation offset dt from the un-lagged date d. With any nonzero observation lag the offset is not the within-period fraction, so the branch extrapolates past the period-end value instead of interpolating inside it (e.g. dt/dp = 3.31 instead of 0.47 for a 91-day lag).\n\nUse the lagged date for the offset, matching the sibling yoyRate branch.\n\nAdds a regression test (testLaggedZeroRateLinearInterpolation) that interpolates on a curve with known zero rates and checks the result against the manual within-period interpolation.",
+ "comments": [
+  {
+   "body": "Thanks for opening this pull request!  It might take a while before we look at it, so don't worry if there seems to be no feedback.  We'll get to it.\n",
+   "created_at": "2026-11-17T13:47:47Z",
+   "user": {
+    "login": "boring-cyborg[bot]",
+    "type": "Bot"
+   }
+  },
+  {
+   "body": "[![CLA assistant check](https://cla-assistant.io/pull/badge/signed)](https://cla-assistant.io/lballabio/QuantLib?pullRequest=3095) <br/>All committers have signed the CLA.",
+   "created_at": "2026-11-17T13:47:50Z",
+   "user": {
+    "login": "CLAassistant",
+    "type": "User"
+   }
+  },
+  {
+   "body": "\n[![Coverage Status](https://coveralls.io/builds/83188150/badge)](https://coveralls.io/builds/83188150)\n\ncoverage: 80.449% (+0.01%) from 80.437% \u2014 **Rahul19771:fix-lagged-zerorate-interpolation** into **lballabio:master**\n",
+   "created_at": "2026-11-20T16:21:49Z",
+   "user": {
+    "login": "coveralls",
+    "type": "User"
+   }
+  },
+  {
+   "body": "Congratulations on your first merged pull request!\n",
+   "created_at": "2026-11-20T17:29:23Z",
+   "user": {
+    "login": "boring-cyborg[bot]",
+    "type": "Bot"
+   }
+  }
+ ],
+ "created_at": "2026-11-17T13:47:43Z",
+ "fetched_at": "2026-11-24T03:17:32Z",
+ "head_sha": "3fafd3d996786f11d79617713987d42b13e9c1cf",
+ "labels": [],
+ "linked_issues": [
+  {
+   "body": "## Summary\n\nOn the lagged overloads of `ZeroInflationTermStructure::zeroRate` and `yoyRate` (the ones taking `instObsLag`, deprecated in 58036268f but still present and callable), the `forceLinearInterpolation = true` branch builds the inflation period `dd` from the **lagged** date but computes the interpolation offset `dt` from the **un-lagged** query date. With any nonzero observation lag the offset is not the within-period fraction the branch interpolates with, and the returned rate extrapolates past the period-end value instead of interpolating inside it.\n\n## Mechanism\n\n`ql/termstructures/inflationtermstructure.cpp`, current master:\n\n```cpp\nif (forceLinearInterpolation) {\n    std::pair<Date,Date> dd = inflationPeriod(d-useLag, frequency());\n    dd.second = dd.second + Period(1,Days);\n    Real dp = dd.second - dd.first;\n    Real dt = d - dd.first;                 // <-- the un-lagged date\n    ...\n    Rate z1 = zeroRateImpl(t1);\n    Rate z2 = zeroRateImpl(t2);\n    zeroRate = z1 + (z2-z1) * (dt/dp);\n}\n```\n\n`dd` is the period containing `d - useLag`, so the within-period fraction is `(d - useLag) - dd.first`. The sibling `yoyRate` computes exactly that for the textually identical construction (`dt = (d-useLag) - dd.first`, same file, `yoyRate`'s `forceLinearInterpolation` branch) \u2014 the two branches disagree whenever the observation lag is nonzero, which is the normal case for a real inflation curve.\n\n## Numbers\n\nQuery date 2020-01-15, observation lag 91 days, monthly frequency:\n\n| | `dt` | `dp` | `dt/dp` |\n|---|---|---|---|\n| as implemented (`dt = d - dd.first`) | 106 | 32 | **3.31** |\n| lagged-date offset (`dt = (d-useLag) - dd.first`) | 15 | 32 | **0.47** |\n\nThe implemented branch therefore evaluates `z1 + (z2 - z1) * 3.31` \u2014 extrapolating roughly 2.3\u00d7 past the period-end value `z2` rather than interpolating inside `[z1, z2]`. A daily sweep over two years with a 91-day lag leaves the fraction outside `[0, 1)` on 100% of query dates (the lag crosses a period boundary for essentially every date); the divergence grows with the lag-to-period-length ratio.\n\n## Suggested fix\n\nUse the lagged date in the offset, matching the sibling branch:\n\n```cpp\nReal dt = (d - useLag) - dd.first;\n```\n\nSince the lagged overloads are already deprecated (\"use the overload without a lag instead\"), removing them also resolves this; whichever route is taken, the two branches of the same file should agree on the interpolation offset while they coexist.\n\nFound during a blinded code audit of the module; reproducible from the source alone.\n\nPrepared with AI assistance (ZCode/GLM-5.3-flash).",
+   "labels": [],
+   "number": 3091,
+   "state": "closed",
+   "title": "ZeroInflationTermStructure::zeroRate with forceLinearInterpolation uses the un-lagged query date in its interpolation offset"
+  }
+ ],
+ "merge_commit_sha": "1e3cad8eb393e6e92bed91705c25c461197896ca",
+ "merged_at": "2026-11-20T17:29:19Z",
+ "number": 3095,
+ "referenced_numbers": [
+  3091
+ ],
+ "repo": "lballabio/QuantLib",
+ "review_comments": [],
+ "state": "closed",
+ "title": "Fix interpolation offset in lagged `ZeroInflationTermStructure::zeroRate`",
+ "transport": "gh",
+ "user": {
+  "login": "Rahul19771",
+  "type": "User"
+ }
+}

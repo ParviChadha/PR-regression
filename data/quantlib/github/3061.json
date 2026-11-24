@@ -1,0 +1,33 @@
+{
+ "base_ref": "master",
+ "base_sha": "cf74c9f657150750dfbf00ed6fd4c0768bc5ce36",
+ "body": "A lockout can repeat today's fixing across several accrual intervals. The compounding overnight coupon pricer consumes only its first occurrence, then requires a forwarding curve even when all remaining observations are already stored. Consume every consecutive occurrence and stop when today's fixing is unavailable, leaving the existing forecast path to handle unknown observations.\n\nThe regression prices a fully known coupon with an empty forwarding handle. It checks cold and cached rates, amount, effective fixing and spread, partial accrual and explicit repricing against a direct daily product. It covers full and telescopic schedule requests, enforcement on and off, and ordinary and daily-compounded spreads. Controls retain the curve requirement for missing current-date or genuinely future observations, including stored future fixings.\n\nValidation against `cf74c9f657150750dfbf00ed6fd4c0768bc5ce36`:\n- The new regression aborts on the baseline's erroneous missing-curve exception. With the fix, all 102 assertions pass using the same test executable.\n- The affected overnight-coupon suite passes all 46 cases and 265 assertions.\n- The final unfiltered stock suite passes 1,715 cases and 619,839 assertions, with no failures or skipped cases.\n- `git diff --check` and the test-message check pass.\n\nNative builds used Linux x86_64, GCC 14, Boost 1.87 and C++17, shared/default configuration, unity builds, `-O1 -g0 -DNDEBUG` and warnings as errors. The changed production and stock-test units were rebuilt and linked with hash-verified unchanged baseline objects; this was not a fresh complete rebuild.\n\nThis change is limited to `CompoundingOvernightIndexedCouponPricer`. It does not incorporate the separate pre-lockout schedule-anchor, required-today enforcement, or daily-spread forecasting corrections.\n",
+ "comments": [
+  {
+   "body": "\n[![Coverage Status](https://coveralls.io/builds/83178998/badge)](https://coveralls.io/builds/83178998)\n\ncoverage: 79.766% (+0.02%) from 79.744% \u2014 **Kiril1Shevtsov:fix/overnight-stored-today-lockout** into **lballabio:master**\n",
+   "created_at": "2026-11-20T09:20:28Z",
+   "user": {
+    "login": "coveralls",
+    "type": "User"
+   }
+  }
+ ],
+ "created_at": "2026-11-11T19:53:30Z",
+ "fetched_at": "2026-11-24T03:17:35Z",
+ "head_sha": "07b57ac7b8137cf83e1c46fd75706d6e221c3672",
+ "labels": [],
+ "linked_issues": [],
+ "merge_commit_sha": "8c52b45180d074d899a94f990140cba5b425f2d8",
+ "merged_at": "2026-11-20T11:31:18Z",
+ "number": 3061,
+ "referenced_numbers": [],
+ "repo": "lballabio/QuantLib",
+ "review_comments": [],
+ "state": "closed",
+ "title": "Consume repeated stored today fixings in overnight lockouts",
+ "transport": "gh",
+ "user": {
+  "login": "Kiril1Shevtsov",
+  "type": "User"
+ }
+}

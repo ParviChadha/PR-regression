@@ -1,0 +1,33 @@
+{
+ "base_ref": "master",
+ "base_sha": "84fbf0a0ecb9aa1cd6022ec468129f9dee5464be",
+ "body": "Newton and Halley reconstruct the previous estimate by adding the step back before falling back to NewtonSafe. An infinite Newton step makes that reconstruction NaN; a large finite step can lose the previous estimate to rounding. Halley also misses fallback when its proposed estimate is NaN.\n\nSave the previous estimate explicitly and make the bracket predicate trigger fallback for a NaN proposed estimate.\n\nAt accuracy `1e-10`, saved probes against `84fbf0a0e` and this patch give:\n\n| Function; bracket; guess | Before | After, both solvers |\n|---|---|---|\n| `x^3-8`; `[-1,5]`; `0` | Newton rejects a NaN fallback guess; Halley exhausts its budget | Root 2, 8 function calls |\n| `tanh(x-2)`; `[-20,30]`; `25` | Same failures; `1-tanh(x-2)^2` rounds to zero | Root 2, 14 function calls |\n\n`testNewtonAndHalleyFallback` checks both functions with both solvers and verifies that Newton's fallback preserves a guess of `1e-9` after a large finite step. With the baseline headers it reports five failures; with the patch it passes.\n\nI ran this on Linux with g++ 13.3 and Boost 1.83, using Release builds with warnings treated as errors: all 10 Solver1D cases and the selected solver/consumer suites (124 cases) pass in C++17 and C++20; all 1,701 cases pass in the full C++17 suite.\n\nA guess at a root with zero derivative, such as `x^3` from zero, still fails in NewtonSafe. This change addresses fallback selection and its starting estimate.\n\nAI disclosure: this was prepared with AI assistance (Claude Opus 5.5 and Claude Sonnet 5.5).\n\n\ud83e\udd16 Generated with [Claude Code](https://claude.com/claude-code)\n\nhttps://claude.ai/code/session_01JfvcPZyKcKQUG9fQGYfRMw\n",
+ "comments": [
+  {
+   "body": "\n[![Coverage Status](https://coveralls.io/builds/82946827/badge)](https://coveralls.io/builds/82946827)\n\ncoverage: 79.665% (+0.001%) from 79.664% \u2014 **Jackmeson1:fix/newton-halley-fallback** into **lballabio:master**\n",
+   "created_at": "2026-11-10T14:40:07Z",
+   "user": {
+    "login": "coveralls",
+    "type": "User"
+   }
+  }
+ ],
+ "created_at": "2026-11-03T21:45:04Z",
+ "fetched_at": "2026-11-24T03:18:27Z",
+ "head_sha": "ed1500522f8570e27b30cf106f71a42e55e1bd1f",
+ "labels": [],
+ "linked_issues": [],
+ "merge_commit_sha": "d982533b6693334af6ea8ad2ffcce5e66881d57d",
+ "merged_at": "2026-11-10T14:55:47Z",
+ "number": 3014,
+ "referenced_numbers": [],
+ "repo": "lballabio/QuantLib",
+ "review_comments": [],
+ "state": "closed",
+ "title": "Preserve Newton and Halley estimates for `NewtonSafe` fallback",
+ "transport": "gh",
+ "user": {
+  "login": "Jackmeson1",
+  "type": "User"
+ }
+}

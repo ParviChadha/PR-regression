@@ -1,0 +1,56 @@
+{
+ "base_ref": "master",
+ "base_sha": "84fbf0a0ecb9aa1cd6022ec468129f9dee5464be",
+ "body": "`AnalyticEuropeanMargrabeEngine` divides by the standard deviation of the asset ratio, $\\sigma^2 = \\sigma_1^2 + \\sigma_2^2 - 2\\rho\\sigma_1\\sigma_2$, without handling the case where it vanishes:\n\n- with perfect correlation and equal volatilities, rounding can make the variance slightly negative (about -7e-18 for 20% volatilities and a 180-day expiry), so `std::sqrt` returns NaN and the NPV and all Greeks are NaN;\n- with zero volatilities, the NPV is finite but both gammas are NaN, since `nd1/(s1*stdDev)` becomes 0/0.\n\nThis PR clamps the variance at zero and, when the standard deviation is below `QL_EPSILON`, treats the ratio as deterministic: the option is worth its discounted intrinsic value $D \\cdot \\max(Q_1F_1 - Q_2F_2, 0)$, with $N(d_{1,2})$ set to 1, 0, or 1/2 at the money (the same convention as `BlackCalculator`) and zero gammas. The non-degenerate path is unchanged.\n\n| Case | Before | After |\n|---|---|---|\n| \u03c1 = 1, \u03c3\u2081 = \u03c3\u2082 = 20%, 180 days | NPV = NaN | 9.35733 (= $S_1 e^{-q_1T} - S_2 e^{-q_2T}$) |\n| \u03c3\u2081 = \u03c3\u2082 = 0, in the money | gammas NaN | gammas 0 |\n\n**Tests:** added `testEuroExchangeDeterministicRatio` to `MargrabeOptionTests`, covering both cases above plus an out-of-the-money zero-volatility case. It fails on master and passes with this change; the existing Margrabe and basket option tests still pass.\n\n`AnalyticAmericanMargrabeEngine` computes the same combined variance; I'm happy to apply the clamp there too, here or in a separate PR.",
+ "comments": [
+  {
+   "body": "\n[![Coverage Status](https://coveralls.io/builds/82944319/badge)](https://coveralls.io/builds/82944319)\n\ncoverage: 79.718% (+0.05%) from 79.664% \u2014 **csarushan1729:fix-margrabe-deterministic-ratio** into **lballabio:master**\n",
+   "created_at": "2026-11-10T12:54:26Z",
+   "user": {
+    "login": "coveralls",
+    "type": "User"
+   }
+  }
+ ],
+ "created_at": "2026-11-03T17:42:25Z",
+ "fetched_at": "2026-11-24T03:18:28Z",
+ "head_sha": "976f956888b2dadd8596312ceb297719599407cc",
+ "labels": [],
+ "linked_issues": [],
+ "merge_commit_sha": "4ee80035beeba07ec063d4dea3aee4bd349a1173",
+ "merged_at": "2026-11-10T13:47:37Z",
+ "number": 3011,
+ "referenced_numbers": [],
+ "repo": "lballabio/QuantLib",
+ "review_comments": [
+  {
+   "body": "I would compare the variance with QL_EPSILON, instead of the stddev.",
+   "created_at": "2026-11-06T11:33:02Z",
+   "diff_hunk": "@@ -73,18 +74,29 @@ namespace QuantLib {\n \n         Real stdDev1 = std::sqrt(variance1);\n         Real stdDev2 = std::sqrt(variance2);\n-        Real variance = variance1 + variance2 - 2*rho_*stdDev1*stdDev2;\n+        // with perfect correlation and equal volatilities, rounding can make\n+        // the variance of the ratio slightly negative\n+        Real variance =\n+            std::max(Real(0.0), variance1 + variance2 - 2*rho_*stdDev1*stdDev2);\n         Real stdDev = std::sqrt(variance);\n-        Real d1 = (std::log((quantity1*forward1)/(quantity2*forward2))\n-                   + 0.5*variance) / stdDev;\n-        Real d2 = d1 - stdDev;\n         Real Nd1, Nd2, nd1, nd2;\n-        CumulativeNormalDistribution cum;\n-        NormalDistribution norm;\n-        Nd1 = cum(d1);\n-        Nd2 = cum(d2);\n-        nd1 = norm(d1);\n-        nd2 = norm(d2);\n+        if (stdDev >= QL_EPSILON) {",
+   "line": 83,
+   "path": "ql/pricingengines/exotic/analyticeuropeanmargrabeengine.cpp",
+   "user": {
+    "login": "lballabio",
+    "type": "User"
+   }
+  },
+  {
+   "body": "Done \ud83d\udc4d, both checks now compare the variance with QL_EPSILON.",
+   "created_at": "2026-11-06T12:01:10Z",
+   "diff_hunk": "@@ -73,18 +74,29 @@ namespace QuantLib {\n \n         Real stdDev1 = std::sqrt(variance1);\n         Real stdDev2 = std::sqrt(variance2);\n-        Real variance = variance1 + variance2 - 2*rho_*stdDev1*stdDev2;\n+        // with perfect correlation and equal volatilities, rounding can make\n+        // the variance of the ratio slightly negative\n+        Real variance =\n+            std::max(Real(0.0), variance1 + variance2 - 2*rho_*stdDev1*stdDev2);\n         Real stdDev = std::sqrt(variance);\n-        Real d1 = (std::log((quantity1*forward1)/(quantity2*forward2))\n-                   + 0.5*variance) / stdDev;\n-        Real d2 = d1 - stdDev;\n         Real Nd1, Nd2, nd1, nd2;\n-        CumulativeNormalDistribution cum;\n-        NormalDistribution norm;\n-        Nd1 = cum(d1);\n-        Nd2 = cum(d2);\n-        nd1 = norm(d1);\n-        nd2 = norm(d2);\n+        if (stdDev >= QL_EPSILON) {",
+   "line": 83,
+   "path": "ql/pricingengines/exotic/analyticeuropeanmargrabeengine.cpp",
+   "user": {
+    "login": "csarushan1729",
+    "type": "User"
+   }
+  }
+ ],
+ "state": "closed",
+ "title": "Handle deterministic asset ratio in the European Margrabe engine",
+ "transport": "gh",
+ "user": {
+  "login": "csarushan1729",
+  "type": "User"
+ }
+}

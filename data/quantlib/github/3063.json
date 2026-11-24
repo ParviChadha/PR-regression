@@ -1,0 +1,59 @@
+{
+ "base_ref": "master",
+ "base_sha": "89cb435ce53129aa10db6ca5b79de31e1561aedd",
+ "body": "`NaturalCubicFitting` (#2378) has no tests in the suite. This adds three cases to `fittedbonddiscountcurve.cpp`:\n\n- evaluation: with given parameters, the curve starts at 1, passes through the knots, matches `CubicNaturalSpline` between them and is flat after the last one; knots can be passed unsorted and with duplicates;\n- knot validation: the errors for too few knots and for a negative knot time;\n- calibration: a fit to ten annual bonds priced off a flat 3% curve stays within 1e-3 of that curve's discount factors and reprices the bonds within 0.05.\n\nWhile writing them I found that a negative knot time was accepted. The constructor adds t = 0, sorts the knots and pins the discount factor at the first one to 1, so with knots `{-1, 1, 2}` the constraint moved to t = -1 and `d(0)` became a free parameter. The constructor now rejects negative knot times.\n\nI also updated the class comment: it mentioned a `constrainAtZero` argument that the class does not have, and did not say that the curve is flat after the last knot.\n\nThe calibration tolerances leave room over what I measured (2.7e-4 and 0.011 at most over 450 evaluation dates between 2015 and 2030).\n\nI used an AI assistant while preparing this and have reviewed and run all of it myself.\n",
+ "comments": [
+  {
+   "body": "Thanks for opening this pull request!  It might take a while before we look at it, so don't worry if there seems to be no feedback.  We'll get to it.\n",
+   "created_at": "2026-11-12T06:50:49Z",
+   "user": {
+    "login": "boring-cyborg[bot]",
+    "type": "Bot"
+   }
+  },
+  {
+   "body": "[![CLA assistant check](https://cla-assistant.io/pull/badge/signed)](https://cla-assistant.io/lballabio/QuantLib?pullRequest=3063) <br/>All committers have signed the CLA.",
+   "created_at": "2026-11-12T06:50:51Z",
+   "user": {
+    "login": "CLAassistant",
+    "type": "User"
+   }
+  },
+  {
+   "body": "\n[![Coverage Status](https://coveralls.io/builds/83033379/badge)](https://coveralls.io/builds/83033379)\n\ncoverage: 80.094%. remained the same \u2014 **Allan-dq:natural-cubic-fitting-tests** into **lballabio:master**\n",
+   "created_at": "2026-11-13T18:07:00Z",
+   "user": {
+    "login": "coveralls",
+    "type": "User"
+   }
+  },
+  {
+   "body": "Congratulations on your first merged pull request!\n",
+   "created_at": "2026-11-14T06:19:25Z",
+   "user": {
+    "login": "boring-cyborg[bot]",
+    "type": "Bot"
+   }
+  }
+ ],
+ "created_at": "2026-11-12T06:50:45Z",
+ "fetched_at": "2026-11-24T03:18:05Z",
+ "head_sha": "a49ed03ce91aec80a9a64c2f2a443ca8533cea28",
+ "labels": [],
+ "linked_issues": [],
+ "merge_commit_sha": "ab984dd7328fbca531262ea0afffd33faeaacdc9",
+ "merged_at": "2026-11-14T06:19:22Z",
+ "number": 3063,
+ "referenced_numbers": [
+  2378
+ ],
+ "repo": "lballabio/QuantLib",
+ "review_comments": [],
+ "state": "closed",
+ "title": "Add tests for `NaturalCubicFitting` and reject negative knot times",
+ "transport": "gh",
+ "user": {
+  "login": "Allan-dq",
+  "type": "User"
+ }
+}

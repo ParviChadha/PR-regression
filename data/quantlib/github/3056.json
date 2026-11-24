@@ -1,0 +1,88 @@
+{
+ "base_ref": "master",
+ "base_sha": "cf74c9f657150750dfbf00ed6fd4c0768bc5ce36",
+ "body": "Fixes #3046.\n\n### Summary of Changes\n\nWhen `fixedKappa` is specified in `ExponentialSplinesFitting`, the parameter array `x` contains only the spline coefficients and does not include $\\kappa$ at the end. \n\nIn `ExponentialSplinesFitting::discountFunction()`, `size()` returns the number of optimization parameters in `x`. Stopping the loop at `N - 1` inadvertently dropped the last coefficient in both the unconstrained and constrained cases.\n\n- Evaluates all `N` coefficients in `discountFunction()` when `fixedKappa` is set.\n- Added regression test `testExponentialSplinesFixedKappa` in `test-suite/fittedbonddiscountcurve.cpp` covering constrained and unconstrained variants and verifying sensitivity to the last coefficient.",
+ "comments": [
+  {
+   "body": "\n[![Coverage Status](https://coveralls.io/builds/83027176/badge)](https://coveralls.io/builds/83027176)\n\ncoverage: 80.019% (+0.3%) from 79.744% \u2014 **RAJ-A58:fix/exponential-splines-fixed-kappa** into **lballabio:master**\n",
+   "created_at": "2026-11-13T17:26:45Z",
+   "user": {
+    "login": "coveralls",
+    "type": "User"
+   }
+  }
+ ],
+ "created_at": "2026-11-11T18:26:31Z",
+ "fetched_at": "2026-11-24T03:18:07Z",
+ "head_sha": "3c04bb805d06ea489e4483c39291c443f5b8ecb8",
+ "labels": [],
+ "linked_issues": [
+  {
+   "body": "## Problem\n\nWith `ExponentialSplinesFitting(..., numCoeffs=3, fixedKappa=0.1)`, the last\ncoefficient has no effect on the discount curve. The same coefficients and\nkappa passed to the free-kappa variant give a different discount factor.\nThis occurs both with and without `constrainAtZero`.\n\n## Reproduction\n\nRun with Python 3.12 and QuantLib 1.44; no market data, calibration or network\nis required:\n\n```python\nimport QuantLib as ql\n\ndef curve(method, parameters):\n    return ql.FittedBondDiscountCurve(\n        ql.Date(11, 11, 2026), method, parameters,\n        ql.Date(11, 11, 2056), ql.Actual365Fixed(),\n    )\n\nfor constrained, coefficients in [(False, [0.2, 0.3, 0.5]), (True, [0.3, 0.5])]:\n    fixed = ql.ExponentialSplinesFitting(constrained, [], [], 0., 1e100, 3, 0.1)\n    free = ql.ExponentialSplinesFitting(constrained, [], [], 0., 1e100, 3)\n    bumped = coefficients.copy()\n    bumped[-1] += 0.1\n    print(constrained,\n          curve(fixed, coefficients).discount(1.0),\n          curve(free, coefficients + [0.1]).discount(1.0),\n          curve(fixed, bumped).discount(1.0))\n```\n\nObserved output (`constrained`, fixed, free, fixed with last coefficient bumped):\n\n```text\nFalse 0.4265867095305864 0.7969958198714453 0.4265867095305864\nTrue  0.8790054185485661 0.7969958198714453 0.8790054185485661\n```\n\nThe expected unperturbed discount factor in both cases is\n`0.2*exp(-0.1) + 0.3*exp(-0.2) + 0.5*exp(-0.3) = 0.7969958198714454`.\nThe constrained variant infers the first coefficient as `1 - 0.3 - 0.5`.\n\n## Source investigation and scope\n\nThe same loop structure is present at master\n`cf74c9f657150750dfbf00ed6fd4c0768bc5ce36`, in\n`ql/termstructures/yield/nonlinearfittingmethods.cpp`:\n\n- `size()` removes the kappa slot when kappa is fixed.\n- `discountFunction()` sets `N = size()` but both loops still stop at `N - 1`.\n- Therefore an additional coefficient is omitted when kappa is fixed.\n\nThe report uses the released Python binary for execution, with current source\ninspection as supporting evidence; I have not built the complete master C++\nsuite. This is not a calibration-convergence or market-convention claim.\n\nWould it be appropriate to distinguish the number of coefficients from the\nnumber of optimization parameters in these loops, with a regression comparing\nfixed/free kappa and perturbing every coefficient? I found the original\nfeature PR #952, but no report of this specific omission in the issue/PR search.\n\nAI-assisted investigation; the numerical output and source path were checked locally.\n",
+   "labels": [],
+   "number": 3046,
+   "state": "closed",
+   "title": "ExponentialSplinesFitting ignores the last coefficient when kappa is fixed"
+  }
+ ],
+ "merge_commit_sha": "89cb435ce53129aa10db6ca5b79de31e1561aedd",
+ "merged_at": "2026-11-13T19:02:19Z",
+ "number": 3056,
+ "referenced_numbers": [
+  3046
+ ],
+ "repo": "lballabio/QuantLib",
+ "review_comments": [
+  {
+   "body": "There's no constructor that takes these arguments.  Did you try compiling your changes?",
+   "created_at": "2026-11-13T09:12:51Z",
+   "diff_hunk": "@@ -340,6 +340,56 @@ BOOST_AUTO_TEST_CASE(testConstraint) {\n     BOOST_CHECK_GT(positiveCurve.fitResults().solution()[0], 0.0);\n }\n \n+BOOST_AUTO_TEST_CASE(testExponentialSplinesFixedKappa) {\n+    BOOST_TEST_MESSAGE(\"Testing exponential splines fitting with fixed kappa...\");\n+\n+    Date today = Settings::instance().evaluationDate();\n+    Date maxDate = today + Period(30, Years);\n+    Actual365Fixed dayCounter;\n+    Real t = 1.0;\n+    Real kappa = 0.1;\n+\n+    // Expected discount factor:\n+    // d(1.0) = 0.2 * exp(-0.1 * 1.0) + 0.3 * exp(-0.2 * 1.0) + 0.5 * exp(-0.3 * 1.0)\n+    Real expected = 0.2 * std::exp(-kappa * 1.0 * t) +\n+                    0.3 * std::exp(-kappa * 2.0 * t) +\n+                    0.5 * std::exp(-kappa * 3.0 * t);\n+\n+    // 1. Unconstrained: 3 coefficients, fixed kappa\n+    ExponentialSplinesFitting unconstrainedFixed(false, 3, kappa);\n+    Array unconstrainedCoeffs = {0.2, 0.3, 0.5};\n+    FittedBondDiscountCurve curveUnconstrainedFixed(today, unconstrainedFixed, unconstrainedCoeffs, maxDate, dayCounter);\n+    BOOST_CHECK_CLOSE(curveUnconstrainedFixed.discount(t), expected, 1e-10);\n+\n+    // Free kappa with same parameters\n+    ExponentialSplinesFitting unconstrainedFree(false, 3);",
+   "line": 365,
+   "path": "test-suite/fittedbonddiscountcurve.cpp",
+   "user": {
+    "login": "lballabio",
+    "type": "User"
+   }
+  },
+  {
+   "body": "Sorry about that, my bad . Did not realize fixedKappa did not have a default there.i only built the core library locally so I missed the test failure ,Fixed and pushed with   Null<Real>().",
+   "created_at": "2026-11-13T09:26:37Z",
+   "diff_hunk": "@@ -340,6 +340,56 @@ BOOST_AUTO_TEST_CASE(testConstraint) {\n     BOOST_CHECK_GT(positiveCurve.fitResults().solution()[0], 0.0);\n }\n \n+BOOST_AUTO_TEST_CASE(testExponentialSplinesFixedKappa) {\n+    BOOST_TEST_MESSAGE(\"Testing exponential splines fitting with fixed kappa...\");\n+\n+    Date today = Settings::instance().evaluationDate();\n+    Date maxDate = today + Period(30, Years);\n+    Actual365Fixed dayCounter;\n+    Real t = 1.0;\n+    Real kappa = 0.1;\n+\n+    // Expected discount factor:\n+    // d(1.0) = 0.2 * exp(-0.1 * 1.0) + 0.3 * exp(-0.2 * 1.0) + 0.5 * exp(-0.3 * 1.0)\n+    Real expected = 0.2 * std::exp(-kappa * 1.0 * t) +\n+                    0.3 * std::exp(-kappa * 2.0 * t) +\n+                    0.5 * std::exp(-kappa * 3.0 * t);\n+\n+    // 1. Unconstrained: 3 coefficients, fixed kappa\n+    ExponentialSplinesFitting unconstrainedFixed(false, 3, kappa);\n+    Array unconstrainedCoeffs = {0.2, 0.3, 0.5};\n+    FittedBondDiscountCurve curveUnconstrainedFixed(today, unconstrainedFixed, unconstrainedCoeffs, maxDate, dayCounter);\n+    BOOST_CHECK_CLOSE(curveUnconstrainedFixed.discount(t), expected, 1e-10);\n+\n+    // Free kappa with same parameters\n+    ExponentialSplinesFitting unconstrainedFree(false, 3);",
+   "line": 365,
+   "path": "test-suite/fittedbonddiscountcurve.cpp",
+   "user": {
+    "login": "RAJ-A58",
+    "type": "User"
+   }
+  },
+  {
+   "body": "Thanks.  It would be good practice to compile and run the tests you're adding, too.  Let me know how that goes.",
+   "created_at": "2026-11-13T09:35:32Z",
+   "diff_hunk": "@@ -340,6 +340,56 @@ BOOST_AUTO_TEST_CASE(testConstraint) {\n     BOOST_CHECK_GT(positiveCurve.fitResults().solution()[0], 0.0);\n }\n \n+BOOST_AUTO_TEST_CASE(testExponentialSplinesFixedKappa) {\n+    BOOST_TEST_MESSAGE(\"Testing exponential splines fitting with fixed kappa...\");\n+\n+    Date today = Settings::instance().evaluationDate();\n+    Date maxDate = today + Period(30, Years);\n+    Actual365Fixed dayCounter;\n+    Real t = 1.0;\n+    Real kappa = 0.1;\n+\n+    // Expected discount factor:\n+    // d(1.0) = 0.2 * exp(-0.1 * 1.0) + 0.3 * exp(-0.2 * 1.0) + 0.5 * exp(-0.3 * 1.0)\n+    Real expected = 0.2 * std::exp(-kappa * 1.0 * t) +\n+                    0.3 * std::exp(-kappa * 2.0 * t) +\n+                    0.5 * std::exp(-kappa * 3.0 * t);\n+\n+    // 1. Unconstrained: 3 coefficients, fixed kappa\n+    ExponentialSplinesFitting unconstrainedFixed(false, 3, kappa);\n+    Array unconstrainedCoeffs = {0.2, 0.3, 0.5};\n+    FittedBondDiscountCurve curveUnconstrainedFixed(today, unconstrainedFixed, unconstrainedCoeffs, maxDate, dayCounter);\n+    BOOST_CHECK_CLOSE(curveUnconstrainedFixed.discount(t), expected, 1e-10);\n+\n+    // Free kappa with same parameters\n+    ExponentialSplinesFitting unconstrainedFree(false, 3);",
+   "line": 365,
+   "path": "test-suite/fittedbonddiscountcurve.cpp",
+   "user": {
+    "login": "lballabio",
+    "type": "User"
+   }
+  },
+  {
+   "body": "built and ran testExponentialSplinesFixedKappa locally on my laptop .all assertions for both the constrained and unconstrained cases passed with no errors. Thank you for the review\r\n<img width=\"1917\" height=\"973\" alt=\"Screenshot 2026-11-13 151918\" src=\"https://github.com/user-attachments/assets/882e8181-5033-4cd6-a0b5-d2419a3355fc\" />\r\n",
+   "created_at": "2026-11-13T09:50:35Z",
+   "diff_hunk": "@@ -340,6 +340,56 @@ BOOST_AUTO_TEST_CASE(testConstraint) {\n     BOOST_CHECK_GT(positiveCurve.fitResults().solution()[0], 0.0);\n }\n \n+BOOST_AUTO_TEST_CASE(testExponentialSplinesFixedKappa) {\n+    BOOST_TEST_MESSAGE(\"Testing exponential splines fitting with fixed kappa...\");\n+\n+    Date today = Settings::instance().evaluationDate();\n+    Date maxDate = today + Period(30, Years);\n+    Actual365Fixed dayCounter;\n+    Real t = 1.0;\n+    Real kappa = 0.1;\n+\n+    // Expected discount factor:\n+    // d(1.0) = 0.2 * exp(-0.1 * 1.0) + 0.3 * exp(-0.2 * 1.0) + 0.5 * exp(-0.3 * 1.0)\n+    Real expected = 0.2 * std::exp(-kappa * 1.0 * t) +\n+                    0.3 * std::exp(-kappa * 2.0 * t) +\n+                    0.5 * std::exp(-kappa * 3.0 * t);\n+\n+    // 1. Unconstrained: 3 coefficients, fixed kappa\n+    ExponentialSplinesFitting unconstrainedFixed(false, 3, kappa);\n+    Array unconstrainedCoeffs = {0.2, 0.3, 0.5};\n+    FittedBondDiscountCurve curveUnconstrainedFixed(today, unconstrainedFixed, unconstrainedCoeffs, maxDate, dayCounter);\n+    BOOST_CHECK_CLOSE(curveUnconstrainedFixed.discount(t), expected, 1e-10);\n+\n+    // Free kappa with same parameters\n+    ExponentialSplinesFitting unconstrainedFree(false, 3);",
+   "line": 365,
+   "path": "test-suite/fittedbonddiscountcurve.cpp",
+   "user": {
+    "login": "RAJ-A58",
+    "type": "User"
+   }
+  }
+ ],
+ "state": "closed",
+ "title": "Include all coefficients in `ExponentialSplinesFitting` when kappa is fixed",
+ "transport": "gh",
+ "user": {
+  "login": "RAJ-A58",
+  "type": "User"
+ }
+}

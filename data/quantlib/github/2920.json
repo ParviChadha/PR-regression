@@ -1,0 +1,88 @@
+{
+ "base_ref": "master",
+ "base_sha": "d5ba68cbe122ac0e64db01803718c32518b6285a",
+ "body": "Since 2025, Teachers' Day (September 28th), Taiwan Retrocession Day (October 25th) and Constitution Day (December 25th) are days off in Taiwan. They were added by the Act on the Implementation of Commemorative Days and Holidays, promulgated on May 28th, 2025 and in force from that date (https://law.moj.gov.tw/LawClass/LawAll.aspx?pcode=D0020095, articles 4 and 6, with article 8 for the substitute days when they fall on a weekend).\n\nThe TWSE holiday schedule (https://www.twse.com.tw/en/trading/holiday.html) lists them for 2025 and 2026, together with the adjusted days:\n\n- 2025: September 29th (Teachers' Day falls on Sunday), October 24th (Retrocession Day falls on Saturday) and December 25th;\n- 2026: September 28th, October 26th (Retrocession Day falls on Sunday) and December 25th.\n\nThe data behind that page is at https://www.twse.com.tw/rwd/en/holidaySchedule/holidaySchedule?date=20250101&response=json and https://www.twse.com.tw/rwd/en/holidaySchedule/holidaySchedule?date=20260101&response=json.\n\nThe calendar was updated for 2025 and 2026 in #2462, but these days aren't there, so all six dates above are currently business days.\n\nThis adds the three dates to the rules from 2025 on, moved to the preceding Friday when they fall on a Saturday and to the following Monday when they fall on a Sunday (point 3 of the DGPA guidelines implementing article 8, https://www.dgpa.gov.tw/information?uid=84&pid=12576).\n\nThe same rule has applied to the other fixed holidays since 2015. It was added to the previous Regulations on the Implementation of Commemorative Days and Holidays as article 5-1 by the amendment of June 11th, 2014, in force from January 1st, 2015 (https://law.moj.gov.tw/LawClass/LawAll.aspx?pcode=D0020033; the 2012 version, https://law.moj.gov.tw/LawClass/LawOldVer.aspx?pcode=D0020033&lnndate=20120925&lser=001, doesn't have it), and the DGPA page for the 2015 calendar quotes it (https://www.dgpa.gov.tw/en/information?uid=353&pid=6182). Labor Day wasn't a day off for government offices until the 2025 Act, but the exchange closed on the adjusted days in the same way (May 2nd, 2016, April 30th, 2021 and May 2nd, 2022). So New Year's Day, Peace Memorial Day, Labor Day and National Day now also move to Friday or Monday from 2015 on, and the ad-hoc adjusted days that the rule replaces are removed from the yearly lists:\n\n- 2015: February 27th and October 9th;\n- 2016: February 29th and May 2nd;\n- 2017: January 2nd;\n- 2020: October 9th;\n- 2021: March 1st, April 30th, October 11th and December 31st (New Year's Day 2022 falls on Saturday);\n- 2022: May 2nd;\n- 2023: January 2nd;\n- 2026: February 27th and October 9th.\n\nThese are all in the TWSE lists (archived for 2015-2017, e.g. https://web.archive.org/web/20160320195836/http://www.twse.com.tw/en/trading/trading_days.php for 2016, and in the JSON data for 2021-2026) and, except for Labor Day, in the government calendars (https://www.dgpa.gov.tw/informationlist?uid=30; October 9th, 2020 is in the 2020 one, https://www.dgpa.gov.tw/information?uid=30&pid=9811). The holidays from 2002 to 2026 in the calendar are the same as before. The change adds the adjusted days in later years, e.g. March 1st, April 30th, October 11th and December 31st, 2027 (New Year's Day 2028 falls on Saturday), which are all off in the DGPA 2027 calendar (https://www.dgpa.gov.tw/information?uid=30&pid=12982) together with December 24th. Years before 2015 are not affected; for instance, February 27th, 2009 is still a business day.\n\nChildren's Day and Tomb Sweeping Day are still listed year by year, since Tomb Sweeping Day doesn't fall on a fixed date and the two days interact (when they coincide, the day before is off instead).\n\nThe class docs are updated as well (they also still said that data was available up to 2024 only).\n\nThe Taiwan test now checks the 2025 and 2026 dates above, the 2027 adjusted days, the adjusted days removed from the yearly lists, and that December 25th, 2024, December 24th, 2021, February 27th, 2009 and March 1st, 2032 (Peace Memorial Day on a Saturday in a leap year) are business days. The new 2025-2027 holiday checks fail on master and pass with the change; the rest of the calendar tests and the swap tests (which use the Taiwan calendar) still pass.\n",
+ "comments": [
+  {
+   "body": "Congratulations on your first merged pull request!\n",
+   "created_at": "2026-11-05T18:42:10Z",
+   "user": {
+    "login": "boring-cyborg[bot]",
+    "type": "Bot"
+   }
+  },
+  {
+   "body": "\n[![Coverage Status](https://coveralls.io/builds/82853872/badge)](https://coveralls.io/builds/82853872)\n\ncoverage: 79.685% (+0.8%) from 78.857% \u2014 **raams95:taiwan-2025-holidays** into **lballabio:master**\n",
+   "created_at": "2026-11-05T18:42:23Z",
+   "user": {
+    "login": "coveralls",
+    "type": "User"
+   }
+  }
+ ],
+ "created_at": "2026-10-20T05:34:17Z",
+ "fetched_at": "2026-11-24T03:18:44Z",
+ "head_sha": "c04b43f39bf6823f32be648ec7c9160fe54b812d",
+ "labels": [],
+ "linked_issues": [],
+ "merge_commit_sha": "915bfffffeade26d140162d683777894c89640f5",
+ "merged_at": "2026-11-05T18:42:07Z",
+ "number": 2920,
+ "referenced_numbers": [
+  2462
+ ],
+ "repo": "lballabio/QuantLib",
+ "review_comments": [
+  {
+   "body": "If these adjustments have a rule (e.g., a holiday on Saturday or Sunday falls on the next Monday) they can be written as a general rule instead of ad-hoc additional days; see, for instance, the way that New Year's Day is adjusted in the Australian calendar at https://github.com/lballabio/QuantLib/blob/v1.44/ql/time/calendars/australia.cpp#L49-L50",
+   "created_at": "2026-10-21T11:19:59Z",
+   "diff_hunk": "@@ -472,8 +478,12 @@ namespace QuantLib {\n                 || (d == 4 && m == April)\n                 // adjusted holiday\n                 || (d == 30 && m == May)\n+                // adjusted holiday (Teachers' Day falls on Sunday)\n+                || (d == 29 && m == September)",
+   "line": 482,
+   "path": "ql/time/calendars/taiwan.cpp",
+   "user": {
+    "login": "lballabio",
+    "type": "User"
+   }
+  },
+  {
+   "body": "Done, thanks. The rule is point 3 of the DGPA guidelines that implement article 8 of the Act (https://www.dgpa.gov.tw/information?uid=84&pid=12576): a holiday falling on a Saturday is made up on the previous working day and one falling on a Sunday on the next one, so the three new holidays now move to Friday or Monday and the ad-hoc 2025/2026 days are gone (I also added a check for December 24th, 2027, which is off in the 2027 government calendar). The same rule applies to the other fixed holidays too; I left those alone here, but I can do the same for them if you'd like.\n",
+   "created_at": "2026-10-23T21:08:41Z",
+   "diff_hunk": "@@ -472,8 +478,12 @@ namespace QuantLib {\n                 || (d == 4 && m == April)\n                 // adjusted holiday\n                 || (d == 30 && m == May)\n+                // adjusted holiday (Teachers' Day falls on Sunday)\n+                || (d == 29 && m == September)",
+   "line": 482,
+   "path": "ql/time/calendars/taiwan.cpp",
+   "user": {
+    "login": "raams95",
+    "type": "User"
+   }
+  },
+  {
+   "body": "Yes, please, let's fix the other rules as well.  Thanks!",
+   "created_at": "2026-10-26T10:11:09Z",
+   "diff_hunk": "@@ -472,8 +478,12 @@ namespace QuantLib {\n                 || (d == 4 && m == April)\n                 // adjusted holiday\n                 || (d == 30 && m == May)\n+                // adjusted holiday (Teachers' Day falls on Sunday)\n+                || (d == 29 && m == September)",
+   "line": 482,
+   "path": "ql/time/calendars/taiwan.cpp",
+   "user": {
+    "login": "lballabio",
+    "type": "User"
+   }
+  },
+  {
+   "body": "Done, thanks. The same rule has applied to the other fixed holidays since 2015 (article 5-1 of the previous Regulations on the Implementation of Commemorative Days and Holidays, https://law.moj.gov.tw/LawClass/LawAll.aspx?pcode=D0020033), so New Year's Day, Peace Memorial Day, Labor Day and National Day now follow it from 2015 on, and the ad-hoc days it covers in 2015-2026 are gone. The holidays up to 2026 don't change, and the new ones for 2027 (March 1st, April 30th, October 11th and December 31st) match the DGPA 2027 calendar. Children's Day and Tomb Sweeping Day are still listed by year, since the latter doesn't fall on a fixed date. I updated the PR description too.",
+   "created_at": "2026-11-05T07:55:41Z",
+   "diff_hunk": "@@ -472,8 +478,12 @@ namespace QuantLib {\n                 || (d == 4 && m == April)\n                 // adjusted holiday\n                 || (d == 30 && m == May)\n+                // adjusted holiday (Teachers' Day falls on Sunday)\n+                || (d == 29 && m == September)",
+   "line": 482,
+   "path": "ql/time/calendars/taiwan.cpp",
+   "user": {
+    "login": "raams95",
+    "type": "User"
+   }
+  }
+ ],
+ "state": "closed",
+ "title": "Add Teachers' Day, Retrocession Day and Constitution Day to Taiwan calendar",
+ "transport": "gh",
+ "user": {
+  "login": "raams95",
+  "type": "User"
+ }
+}

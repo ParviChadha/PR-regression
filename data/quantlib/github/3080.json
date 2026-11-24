@@ -1,0 +1,57 @@
+{
+ "base_ref": "master",
+ "base_sha": "9ba30347b4ea179a5f4daec446cd221d21b8721f",
+ "body": "`BachelierCalculator::theta()` used `gamma(spot)` in the diffusion term. The normal volatility in the calculator is the volatility of the forward, so the term needs the forward gamma; with the spot gamma it is off by a factor (F/S)\u00b2 whenever the forward and the spot differ, that is, whenever r \u2260 q. With the change, theta is the derivative of the price with respect to time to maturity, as `BlackCalculator::theta()` already is (it matches the same finite difference).\n\n`vanna()` left out the discount factor that `vega()` includes, so it wasn't the derivative of `vega()`. It is now written in terms of `vega()`, as `BlackCalculator::vanna()` is. The header describes it as the sensitivity of vega to spot, but it takes no spot and the existing finite-difference test checks it against the forward, so I kept the forward.\n\nCall with S = 98, K = 105, r = 4%, q = 1%, \u03c3 = 20, T = 1.5 (forward 102.51, discount 0.9418):\n\n| | before | after | finite difference |\n|---|---|---|---|\n| theta | -4.34703 | -4.05962 | -4.05962 (price with T \u00b1 h) |\n| vanna | 0.0020167 | 0.0018992 | 0.0018992 (vega with F \u00b1 h) |\n\nFor the put, theta goes from -1.35703 to -1.06962. The old vanna is the right one divided by the discount.\n\nThe theta and vanna references in `testBachelierCalculatorGreeks` matched the previous formulas (spot 98 vs forward 100, discount 0.95), so I updated them. The new test checks both against finite differences with non-zero carry, for a call and a put; it fails before the change and passes after.",
+ "comments": [
+  {
+   "body": "Thanks for opening this pull request!  It might take a while before we look at it, so don't worry if there seems to be no feedback.  We'll get to it.\n",
+   "created_at": "2026-11-14T14:19:30Z",
+   "user": {
+    "login": "boring-cyborg[bot]",
+    "type": "Bot"
+   }
+  },
+  {
+   "body": "[![CLA assistant check](https://cla-assistant.io/pull/badge/signed)](https://cla-assistant.io/lballabio/QuantLib?pullRequest=3080) <br/>All committers have signed the CLA.",
+   "created_at": "2026-11-14T14:19:33Z",
+   "user": {
+    "login": "CLAassistant",
+    "type": "User"
+   }
+  },
+  {
+   "body": "\n[![Coverage Status](https://coveralls.io/builds/83082436/badge)](https://coveralls.io/builds/83082436)\n\ncoverage: 80.093%. remained the same \u2014 **nishant9144:nishant9144-patch-1** into **lballabio:master**\n",
+   "created_at": "2026-11-16T20:32:51Z",
+   "user": {
+    "login": "coveralls",
+    "type": "User"
+   }
+  },
+  {
+   "body": "Congratulations on your first merged pull request!\n",
+   "created_at": "2026-11-16T21:24:12Z",
+   "user": {
+    "login": "boring-cyborg[bot]",
+    "type": "Bot"
+   }
+  }
+ ],
+ "created_at": "2026-11-14T14:19:26Z",
+ "fetched_at": "2026-11-24T03:17:53Z",
+ "head_sha": "84102a1ecb29dff0a19d6da2fadc2d57e0fffe8f",
+ "labels": [],
+ "linked_issues": [],
+ "merge_commit_sha": "e4090768195f9c5b0bf8a6d0cb6802238342c50d",
+ "merged_at": "2026-11-16T21:24:08Z",
+ "number": 3080,
+ "referenced_numbers": [],
+ "repo": "lballabio/QuantLib",
+ "review_comments": [],
+ "state": "closed",
+ "title": "Fix theta and vanna in BachelierCalculator",
+ "transport": "gh",
+ "user": {
+  "login": "nishant9144",
+  "type": "User"
+ }
+}

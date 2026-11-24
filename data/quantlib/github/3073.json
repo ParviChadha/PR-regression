@@ -1,0 +1,56 @@
+{
+ "base_ref": "master",
+ "base_sha": "c4748743ecbb90309f391e8ad7df5b4f49e0fe5c",
+ "body": "## Summary\n\n`AnalyticPTDHestonEngine` is not defined at zero time to maturity. With the expiry\ndate equal to the term structures' reference date and\n`Settings::includeReferenceDateEvents()` enabled (so the instrument is not marked\nexpired), the engine runs its piecewise-terminal-distribution expansion with a zero\ntime argument and returns an arbitrary value instead of the option's payoff.\n\nReproduced on current master: spot 100, strike 90, expiry on the reference date\nreturns 9.7647 under the Gatheral log formula with a 5-point Gauss-Laguerre\nintegration, and throws `stdDev (-nan) must be non-negative` under\nAndersen-Piterbarg with Gauss-Lobatto. The correct value at zero time to maturity\nis the undiscounted payoff, 10.\n\n## Fix\n\nReturn the payoff directly when the computed time to maturity is exactly zero,\nbefore any grid or characteristic-function machinery runs:\n\n```cpp\nif (term == 0.0) {\n    results_.value = (*payoff)(spotPrice);\n    return;\n}\n```\n\nThis is the same convention `blackFormula` already applies at zero standard\ndeviation: return the deterministic limit rather than evaluate a degenerate\nformula. No other code path changes; positive maturities are untouched.\n\n## Testing\n\n| test | state | checks |\n|---|---|---|\n| `testPiecewiseTimeDependentZeroMaturity` (new) | expiry on reference date, `includeReferenceDateEvents` on, spot 100 / strike 90 | both Gatheral/Gauss-Laguerre and Andersen-Piterbarg/Gauss-Lobatto return exactly 10.0; the settings flag is RAII-restored |\n\nPre-fix the test fails with 9.7647 (Laguerre) and a NaN stdDev exception\n(Lobatto); post-fix it passes. The full `HestonModelTests` suite and the complete\ntest suite (1710 cases) pass with the fix applied.\n\nA Lean formalization of the zero-maturity collapse (the transform profile degenerates to the point-mass moment-generating function; the European price collapses to the undiscounted payoff) is submitted alongside this fix at formal-applied-math/formal-mathfin.\n\nPrepared with AI assistance (ZCode/GLM-5.3-flash).\n\n",
+ "comments": [
+  {
+   "body": "\n[![Coverage Status](https://coveralls.io/builds/83093651/badge)](https://coveralls.io/builds/83093651)\n\ncoverage: 80.121% (+0.1%) from 80.011% \u2014 **leafyoung:fix/ptd-heston-zero-maturity** into **lballabio:master**\n",
+   "created_at": "2026-11-17T08:24:51Z",
+   "user": {
+    "login": "coveralls",
+    "type": "User"
+   }
+  }
+ ],
+ "created_at": "2026-11-12T21:22:03Z",
+ "fetched_at": "2026-11-24T03:17:52Z",
+ "head_sha": "345b437a7ac8d009532640ced12718df1c17ab0e",
+ "labels": [],
+ "linked_issues": [],
+ "merge_commit_sha": "5766fc92aa9046a7b0020ee7b714a97a712bbb08",
+ "merged_at": "2026-11-17T08:38:23Z",
+ "number": 3073,
+ "referenced_numbers": [],
+ "repo": "lballabio/QuantLib",
+ "review_comments": [
+  {
+   "body": "we should also set `evaluations_` to 0 before returning",
+   "created_at": "2026-11-16T12:26:32Z",
+   "diff_hunk": "@@ -258,17 +258,30 @@ namespace QuantLib {\n         ext::shared_ptr<PlainVanillaPayoff> payoff =\n             ext::dynamic_pointer_cast<PlainVanillaPayoff>(arguments_.payoff);\n         QL_REQUIRE(payoff, \"non-striked payoff given\");\n-        \n+\n         const Real v0 = model_->v0();\n         const Real spotPrice = model_->s0();\n         QL_REQUIRE(spotPrice > 0.0, \"negative or null underlying given\");\n-        \n+\n         const Real strike = payoff->strike();\n-        const Real term \n+        const Real term\n             = model_->riskFreeRate()->dayCounter().yearFraction(\n-                                     model_->riskFreeRate()->referenceDate(), \n+                                     model_->riskFreeRate()->referenceDate(),\n                                      arguments_.exercise->lastDate());\n \n+        // Zero time to maturity: the option's value degenerates to its\n+        // (undiscounted) payoff. The piecewise-terminal-distribution\n+        // machinery below is not defined there - its characteristic\n+        // function's time argument is zero, and the expansion integrals\n+        // return arbitrary values (e.g. 5.33 or 5.00 for an option whose\n+        // intrinsic is 10, depending on the integration scheme) instead\n+        // of the limit. This mirrors blackFormula's own zero-stdDev\n+        // convention of returning the deterministic limit.\n+        if (term == 0.0) {\n+            results_.value = (*payoff)(spotPrice);\n+            return;",
+   "line": 283,
+   "path": "ql/pricingengines/vanilla/analyticptdhestonengine.cpp",
+   "user": {
+    "login": "lballabio",
+    "type": "User"
+   }
+  },
+  {
+   "body": "Done \u2014 576ab4c69 sets `evaluations_ = 0` before the early return, so `numberOfEvaluations()` reports 0 after a degenerate calculation instead of a stale count from a previous one.",
+   "created_at": "2026-11-17T03:47:12Z",
+   "diff_hunk": "@@ -258,17 +258,30 @@ namespace QuantLib {\n         ext::shared_ptr<PlainVanillaPayoff> payoff =\n             ext::dynamic_pointer_cast<PlainVanillaPayoff>(arguments_.payoff);\n         QL_REQUIRE(payoff, \"non-striked payoff given\");\n-        \n+\n         const Real v0 = model_->v0();\n         const Real spotPrice = model_->s0();\n         QL_REQUIRE(spotPrice > 0.0, \"negative or null underlying given\");\n-        \n+\n         const Real strike = payoff->strike();\n-        const Real term \n+        const Real term\n             = model_->riskFreeRate()->dayCounter().yearFraction(\n-                                     model_->riskFreeRate()->referenceDate(), \n+                                     model_->riskFreeRate()->referenceDate(),\n                                      arguments_.exercise->lastDate());\n \n+        // Zero time to maturity: the option's value degenerates to its\n+        // (undiscounted) payoff. The piecewise-terminal-distribution\n+        // machinery below is not defined there - its characteristic\n+        // function's time argument is zero, and the expansion integrals\n+        // return arbitrary values (e.g. 5.33 or 5.00 for an option whose\n+        // intrinsic is 10, depending on the integration scheme) instead\n+        // of the limit. This mirrors blackFormula's own zero-stdDev\n+        // convention of returning the deterministic limit.\n+        if (term == 0.0) {\n+            results_.value = (*payoff)(spotPrice);\n+            return;",
+   "line": 283,
+   "path": "ql/pricingengines/vanilla/analyticptdhestonengine.cpp",
+   "user": {
+    "login": "leafyoung",
+    "type": "User"
+   }
+  }
+ ],
+ "state": "closed",
+ "title": "Return the payoff at zero maturity in `AnalyticPTDHestonEngine`",
+ "transport": "gh",
+ "user": {
+  "login": "leafyoung",
+  "type": "User"
+ }
+}

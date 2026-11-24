@@ -1,0 +1,58 @@
+{
+ "base_ref": "master",
+ "base_sha": "84fbf0a0ecb9aa1cd6022ec468129f9dee5464be",
+ "body": "## Summary\r\n\r\n`FdG2SwaptionEngine::calculate()` and `FdHullWhiteSwaptionEngine::calculate()` never checked `arguments_.settlementType`/`settlementMethod` at all. Both value a European swaption with `FdmAffineModelSwapInnerValue`, which replicates the exercise payoff from the underlying swap's own cashflows under the short-rate model \u2014 the same physical-style payoff a `Physical` and a `Cash`+`CollateralizedCashPrice` settled swaption share by definition. Without a guard, a `Cash`+`ParYieldCurve` swaption \u2014 whose payoff genuinely differs (an annuity-based formula this approach doesn't implement) \u2014 was silently priced as if it were physically exercised instead of being rejected.\r\n\r\nEvery other engine valuing a swaption this way already guards with `settlementMethod != Settlement::ParYieldCurve`:\r\n\r\n- `JamshidianSwaptionEngine`\r\n- `Gaussian1dJamshidianSwaptionEngine`\r\n- `Gaussian1dSwaptionEngine`\r\n- `Gaussian1dNonstandardSwaptionEngine`\r\n- `Gaussian1dFloatFloatSwaptionEngine`\r\n- `TreeSwaptionEngine`\r\n- `G2SwaptionEngine` (per #2996)\r\n\r\nThese two finite-difference engines were simply missing the check entirely \u2014 a related but distinct defect from #2996 (that one over-rejected a valid input with a loud error; this one silently mis-prices an unsupported one with no error at all).\r\n\r\n## Test plan\r\n\r\n- Added `testFdSwaptionEnginesCashSettlement` in `test-suite/bermudanswaption.cpp`: for both `FdHullWhiteSwaptionEngine` and `FdG2SwaptionEngine`, prices the same European swaption under `Settlement::Physical` and `Settlement::Cash`+`CollateralizedCashPrice` and checks the NPVs match, and confirms `Cash`+`ParYieldCurve` is now correctly rejected.\r\n- Verified the new test fails without the guard (`\"exception Error expected but not raised\"` on the `ParYieldCurve` case, for both engines) and passes with the fix.\r\n- Ran the full `BermudanSwaptionTests` suite \u2014 all pass.\r\n\r\n\ud83e\udd16 Co-worked with [Claude Code](https://claude.com/claude-code)\r\n",
+ "comments": [
+  {
+   "body": "\n[![Coverage Status](https://coveralls.io/builds/82992248/badge)](https://coveralls.io/builds/82992248)\n\ncoverage: 79.664%. remained the same \u2014 **leafyoung:fix-fd-swaption-engines-settlement-method** into **lballabio:master**\n",
+   "created_at": "2026-11-12T09:47:02Z",
+   "user": {
+    "login": "coveralls",
+    "type": "User"
+   }
+  }
+ ],
+ "created_at": "2026-11-01T06:01:59Z",
+ "fetched_at": "2026-11-24T03:18:24Z",
+ "head_sha": "180e4624bd1f2fc94f2d3012b5515eee72e11068",
+ "labels": [],
+ "linked_issues": [],
+ "merge_commit_sha": "c1fe8adbf6d1f552c54b4e02e3f628d1fa779031",
+ "merged_at": "2026-11-12T10:05:39Z",
+ "number": 2997,
+ "referenced_numbers": [
+  2996
+ ],
+ "repo": "lballabio/QuantLib",
+ "review_comments": [
+  {
+   "body": "This describes the pre-fix behavior as current behavior: both engines now validate `settlementMethod` and reject `ParYieldCurve`, rather than silently pricing it as physical settlement. Please use past tense for the original defect or describe the rejection that this test verifies.",
+   "created_at": "2026-11-01T06:04:01Z",
+   "diff_hunk": "@@ -310,6 +311,79 @@ BOOST_AUTO_TEST_CASE(testCachedG2Values) {\n     }\n }\n \n+BOOST_AUTO_TEST_CASE(testFdSwaptionEnginesCashSettlement) {\n+    BOOST_TEST_MESSAGE(\n+        \"Testing finite-difference swaption engines with cash-settled \"\n+        \"(CollateralizedCashPrice) swaptions...\");\n+\n+    CommonVars vars;\n+\n+    vars.today = Date(15, September, 2016);\n+    Settings::instance().evaluationDate() = vars.today;\n+    vars.settlement = Date(19, September, 2016);\n+\n+    vars.termStructure.linkTo(flatRate(vars.settlement, 0.04875825, Actual365Fixed()));\n+\n+    const Rate atmRate = vars.makeSwap(0.0)->fairRate();\n+    const ext::shared_ptr<VanillaSwap> swap = vars.makeSwap(atmRate);\n+    const ext::shared_ptr<Exercise> exercise =\n+        ext::make_shared<EuropeanExercise>(swap->fixedSchedule().startDate());\n+\n+    // Both finite-difference engines value a European swaption with an\n+    // inner-value calculator (FdmAffineModelSwapInnerValue) that replicates\n+    // the exercise payoff from the underlying swap's own cashflows -- the\n+    // same physical-style payoff a Physical and a Cash+CollateralizedCashPrice\n+    // settled swaption share by definition. Neither engine validates\n+    // settlementType/settlementMethod at all, so a Cash+ParYieldCurve\n+    // swaption (whose payoff genuinely differs -- an annuity-based formula\n+    // this approach doesn't implement) is silently priced as if it were\n+    // physically exercised instead of being rejected.",
+   "line": 340,
+   "path": "test-suite/bermudanswaption.cpp",
+   "user": {
+    "login": "Copilot",
+    "type": "Bot"
+   }
+  },
+  {
+   "body": "Good catch, fixed in 16fc39471 \u2014 reworded to past tense for the original defect and added a sentence stating what the test verifies now (that Physical/Cash+CollateralizedCashPrice still price identically and Cash+ParYieldCurve is rejected).",
+   "created_at": "2026-11-01T12:09:18Z",
+   "diff_hunk": "@@ -310,6 +311,79 @@ BOOST_AUTO_TEST_CASE(testCachedG2Values) {\n     }\n }\n \n+BOOST_AUTO_TEST_CASE(testFdSwaptionEnginesCashSettlement) {\n+    BOOST_TEST_MESSAGE(\n+        \"Testing finite-difference swaption engines with cash-settled \"\n+        \"(CollateralizedCashPrice) swaptions...\");\n+\n+    CommonVars vars;\n+\n+    vars.today = Date(15, September, 2016);\n+    Settings::instance().evaluationDate() = vars.today;\n+    vars.settlement = Date(19, September, 2016);\n+\n+    vars.termStructure.linkTo(flatRate(vars.settlement, 0.04875825, Actual365Fixed()));\n+\n+    const Rate atmRate = vars.makeSwap(0.0)->fairRate();\n+    const ext::shared_ptr<VanillaSwap> swap = vars.makeSwap(atmRate);\n+    const ext::shared_ptr<Exercise> exercise =\n+        ext::make_shared<EuropeanExercise>(swap->fixedSchedule().startDate());\n+\n+    // Both finite-difference engines value a European swaption with an\n+    // inner-value calculator (FdmAffineModelSwapInnerValue) that replicates\n+    // the exercise payoff from the underlying swap's own cashflows -- the\n+    // same physical-style payoff a Physical and a Cash+CollateralizedCashPrice\n+    // settled swaption share by definition. Neither engine validates\n+    // settlementType/settlementMethod at all, so a Cash+ParYieldCurve\n+    // swaption (whose payoff genuinely differs -- an annuity-based formula\n+    // this approach doesn't implement) is silently priced as if it were\n+    // physically exercised instead of being rejected.",
+   "line": 340,
+   "path": "test-suite/bermudanswaption.cpp",
+   "user": {
+    "login": "leafyoung",
+    "type": "User"
+   }
+  }
+ ],
+ "state": "closed",
+ "title": "Reject `ParYieldCurve`-settled swaptions in the finite-difference swaption engines",
+ "transport": "gh",
+ "user": {
+  "login": "leafyoung",
+  "type": "User"
+ }
+}

@@ -1,0 +1,72 @@
+{
+ "base_ref": "master",
+ "base_sha": "831a6e4415331a42db6bc27bf95e5166b6a3c698",
+ "body": "`AnalyticDoubleBarrierEngine` never reads `arguments_.rebate`, so a non-zero rebate is silently ignored. For a 100-strike call with barriers 80/130, rebate 3, 25% volatility and 180 days, it returns 3.544 for the knock-out and 4.139 for the knock-in, while `BinomialDoubleBarrierEngine` gives 4.567 and 6.051.\n\nThis PR adds the rebate using the same convention as the lattice and Monte Carlo engines:\n\n* for knock-outs it is paid at the first hit of either barrier, which is the sum of the KIKO and KOKI binaries priced by `AnalyticDoubleBarrierBinaryEngine`;\n* for knock-ins it is paid at expiry if no barrier is hit, which is the knock-out (double no-touch) binary.\n\nThe binaries use the option strike, so that they pick the same volatility as the option when there's a smile.\n\nWith the fix the engine returns 4.562 and 6.056. The rebate value agrees with the lattice engine to about 0.4%, and the remaining difference has the sign expected from the lattice's discrete barrier monitoring (it misses some hits, so it slightly underprices the knock-out rebate and overprices the knock-in one). The code only runs for a non-zero rebate, so existing results are unchanged.\n\nThe quanto engine, which passes the rebate through to this engine, now includes it as well. `VannaVolgaDoubleBarrierEngine` now rejects a non-zero rebate, since its smile adjustment and in-out parity don't account for it yet; proper support can follow in a separate PR.\n\n**Tests:** `testAnalyticRebate` checks both rebate values against `BinomialDoubleBarrierEngine`, checks that with zero rates the knock-out and knock-in rebates add up to the rebate itself, and checks that with a volatility smile the price matches a flat volatility equal to the smile at the option strike. `testVannaVolgaRejectsRebate` checks that the vanna-volga engine throws for a non-zero rebate and still prices without one. Both fail on master and pass with this change.",
+ "comments": [
+  {
+   "body": "I've let an AI reviewer loose on your PR.  Here's the oracle:\n\n---\n\nThe description says the vanna-volga and quanto engines \"now include [the rebate] as well\". That holds for knock-outs. For knock-ins in VannaVolgaDoubleBarrierEngine the result is now wrong.\n\n**Cause**. vannavolgadoublebarrierengine.hpp always prices a knock-out with the Black-Scholes engine, passing arguments_.rebate (lines ~187-189). It smile-adjusts that price and caps it to [0, vanilla]. For a knock-in it then uses parity (line ~392):\n\ninPrice = vanillaOption - outPrice;\n\nBefore this PR the BS engine ignored the rebate, so outPrice was rebate-free and parity was consistent. Now outPrice includes the at-hit knock-out rebate.\n\n**Effect**. Let KO\u2080 and KI\u2080 be the prices without a rebate, so vanilla = KO\u2080 + KI\u2080. Let A be the value of the at-hit rebate (KIKO + KOKI) and N the value of the expiry rebate (double no-touch).\n\n- Correct knock-in with rebate: KI\u2080 + N.\n- Vanna-volga now: vanilla \u2212 (KO\u2080 + A) = KI\u2080 \u2212 A.\n\nThe knock-in subtracts a rebate it never pays and omits the one it does pay. The error is \u2212(A + N), roughly the full rebate times the discount factor. So adding a rebate now makes the vanna-volga knock-in cheaper, which is the wrong direction.\n\n**Other effects on the knock-out path**:\n\n- The cap min(vanillaOption, outPrice) assumes a knock-out can't exceed the vanilla. With a rebate it can, for example with a large rebate on an out-of-the-money option. The result is then silently clipped.\n\n---\n\nBack to a human comment.  Given that fixing the Vanna-Volga engine might not be trivial, for the time being we might be better off adding a QL_REQUIRE to it that checks that the rebate is 0.  This PR might then be merged, and a proper treatment of the rebate for Vanna-Volga left for later.",
+   "created_at": "2026-11-17T08:14:55Z",
+   "user": {
+    "login": "lballabio",
+    "type": "User"
+   }
+  },
+  {
+   "body": "Ha, the oracle has spoken, and it\u2019s right on both counts! I\u2019ve pushed the fixes: the rebate now uses the option strike, and the vanna-volga engine rejects non-zero rebates with a QL_REQUIRE, with tests for both. I\u2019ve also corrected the description, which overstated what the vanna-volga engine does. Happy to look into proper rebate support for vanna-volga as a follow-up PR once this one is in.",
+   "created_at": "2026-11-17T09:01:07Z",
+   "user": {
+    "login": "csarushan1729",
+    "type": "User"
+   }
+  },
+  {
+   "body": "\n[![Coverage Status](https://coveralls.io/builds/83123682/badge)](https://coveralls.io/builds/83123682)\n\ncoverage: 80.128% (+0.4%) from 79.729% \u2014 **csarushan1729:fix-double-barrier-rebate** into **lballabio:master**\n",
+   "created_at": "2026-11-18T08:56:56Z",
+   "user": {
+    "login": "coveralls",
+    "type": "User"
+   }
+  }
+ ],
+ "created_at": "2026-11-07T07:43:45Z",
+ "fetched_at": "2026-11-24T03:17:44Z",
+ "head_sha": "692f2883d4da9d97370b6cf1a52cc2b08c484ad9",
+ "labels": [],
+ "linked_issues": [],
+ "merge_commit_sha": "4cb81c9aa8e32baf8967de1fabefec0d26fbaeaa",
+ "merged_at": "2026-11-18T09:49:54Z",
+ "number": 3028,
+ "referenced_numbers": [],
+ "repo": "lballabio/QuantLib",
+ "review_comments": [
+  {
+   "body": "We should use the actual option strike here, so that we pick the correct volatility in case there's a smile.",
+   "created_at": "2026-11-17T08:15:28Z",
+   "diff_hunk": "@@ -18,12 +18,53 @@\n */\n \n #include <ql/exercise.hpp>\n+#include <ql/instruments/payoffs.hpp>\n+#include <ql/pricingengines/barrier/analyticdoublebarrierbinaryengine.hpp>\n #include <ql/pricingengines/barrier/analyticdoublebarrierengine.hpp>\n #include <ql/pricingengines/blackcalculator.hpp>\n #include <utility>\n \n namespace QuantLib {\n \n+    namespace {\n+\n+        /* Value of the rebate, which is paid at the first hit of either\n+           barrier for knock-outs and at expiry if neither barrier was hit\n+           for knock-ins (the same convention as the lattice and Monte\n+           Carlo engines). Both are double-barrier binary options.\n+        */\n+        Real rebateValue(const ext::shared_ptr<GeneralizedBlackScholesProcess>& process,\n+                         const DoubleBarrierOption::arguments& arguments) {\n+            auto engine = ext::make_shared<AnalyticDoubleBarrierBinaryEngine>(process);\n+            auto cash = ext::make_shared<CashOrNothingPayoff>(Option::Call, 0.0,",
+   "line": 39,
+   "path": "ql/pricingengines/barrier/analyticdoublebarrierengine.cpp",
+   "user": {
+    "login": "lballabio",
+    "type": "User"
+   }
+  },
+  {
+   "body": "Done! With a strike-dependent surface the old version actually threw, since strike 0 was outside the surface\u2019s range, so good catch. The test now checks that the price with a smile matches a flat vol equal to the smile at the option strike.",
+   "created_at": "2026-11-17T09:06:13Z",
+   "diff_hunk": "@@ -18,12 +18,53 @@\n */\n \n #include <ql/exercise.hpp>\n+#include <ql/instruments/payoffs.hpp>\n+#include <ql/pricingengines/barrier/analyticdoublebarrierbinaryengine.hpp>\n #include <ql/pricingengines/barrier/analyticdoublebarrierengine.hpp>\n #include <ql/pricingengines/blackcalculator.hpp>\n #include <utility>\n \n namespace QuantLib {\n \n+    namespace {\n+\n+        /* Value of the rebate, which is paid at the first hit of either\n+           barrier for knock-outs and at expiry if neither barrier was hit\n+           for knock-ins (the same convention as the lattice and Monte\n+           Carlo engines). Both are double-barrier binary options.\n+        */\n+        Real rebateValue(const ext::shared_ptr<GeneralizedBlackScholesProcess>& process,\n+                         const DoubleBarrierOption::arguments& arguments) {\n+            auto engine = ext::make_shared<AnalyticDoubleBarrierBinaryEngine>(process);\n+            auto cash = ext::make_shared<CashOrNothingPayoff>(Option::Call, 0.0,",
+   "line": 39,
+   "path": "ql/pricingengines/barrier/analyticdoublebarrierengine.cpp",
+   "user": {
+    "login": "csarushan1729",
+    "type": "User"
+   }
+  }
+ ],
+ "state": "closed",
+ "title": "Add rebates to the analytic double-barrier engine",
+ "transport": "gh",
+ "user": {
+  "login": "csarushan1729",
+  "type": "User"
+ }
+}

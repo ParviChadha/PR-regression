@@ -1,0 +1,78 @@
+{
+ "base_ref": "master",
+ "base_sha": "84fbf0a0ecb9aa1cd6022ec468129f9dee5464be",
+ "body": "## Summary\n\n`CapFloor::setupArguments()` pre-adjusts `capRates`/`floorRates` to `(strike-spread)/gearing` before any pricing engine sees them \u2014 the analytic, Black and Bachelier cap/floor engines all rely on this pre-adjustment and place no restriction on the spread. `Gaussian1dCapFloorEngine` alone rejected every non-zero spread outright:\n\n```cpp\nfor (Real spread : arguments_.spreads)\n    QL_REQUIRE(spread == 0.0, \"Non zero spreads (\" << spread << \") are not allowed.\");\n```\n\neven though its own calculation (`max(forward - capRate, 0) * gearing * nominal * accrual`, in both the deterministic and stochastic branches) uses the exact same pre-adjusted-strike pattern as the other engines and is already algebraically correct for any spread: substituting the pre-adjusted strike gives `max(gearing*forward + spread - K, 0) * nominal * accrual`, the correct capped-coupon payoff. The check was simply unnecessary and blocked valid inputs that every sibling engine already supports.\n\n## Fix\n\nRemoved the restriction; left a comment explaining why it's safe to remove (the pre-adjustment already generalizes the payoff).\n\n## Test\n\nAdded `testCapFloorNonZeroSpreadConsistency` to `test-suite/gsr.cpp`: prices a capped floating leg with a non-zero spread via `Gaussian1dCapFloorEngine` and checks it agrees with the mathematically equivalent zero-spread cap at a shifted strike. Confirmed it fails with the old check (throws `Non zero spreads (0.001) are not allowed.`) and passes with the fix. Full `GsrTests` and `MarkovFunctionalTests` suites (the latter being the only other test consumer of this engine) pass with no regressions.\n\n\ud83e\udd16 Co-worked with [Claude Code](https://claude.com/claude-code)",
+ "comments": [
+  {
+   "body": "\n[![Coverage Status](https://coveralls.io/builds/83002286/badge)](https://coveralls.io/builds/83002286)\n\ncoverage: 80.01% (+0.3%) from 79.664% \u2014 **leafyoung:fix-gaussian1dcapfloorengine-nonzero-spread** into **lballabio:master**\n",
+   "created_at": "2026-11-12T17:00:27Z",
+   "user": {
+    "login": "coveralls",
+    "type": "User"
+   }
+  }
+ ],
+ "created_at": "2026-11-01T13:53:28Z",
+ "fetched_at": "2026-11-24T03:18:17Z",
+ "head_sha": "4af9c77f5a1d6f9bc8c080072f700765075d986d",
+ "labels": [],
+ "linked_issues": [],
+ "merge_commit_sha": "de0fe17768a2a52f50d377acdd465e10fe257581",
+ "merged_at": "2026-11-12T17:30:40Z",
+ "number": 2999,
+ "referenced_numbers": [],
+ "repo": "lballabio/QuantLib",
+ "review_comments": [
+  {
+   "body": "The fourth `Gsr` argument is mean reversion; with `50.0`, all forwards on this integration grid stay below the adjusted strike, so both cap NPVs are zero. The equality therefore passes even if the spread adjustment is ignored. Use a smaller mean reversion and require a positive reference NPV before comparing the prices.",
+   "created_at": "2026-11-01T13:57:41Z",
+   "diff_hunk": "@@ -1166,6 +1168,64 @@ BOOST_AUTO_TEST_CASE(testNonstandardCopyOfAmortisingOvernightSwap) {\n     }\n }\n \n+BOOST_AUTO_TEST_CASE(testCapFloorNonZeroSpreadConsistency) {\n+    BOOST_TEST_MESSAGE(\"Testing Gaussian1dCapFloorEngine with a non-zero \"\n+                        \"floating-leg spread...\");\n+\n+    // Gaussian1dCapFloorEngine used to QL_REQUIRE every spread to be exactly\n+    // zero, even though CapFloor::setupArguments() already pre-adjusts\n+    // capRates/floorRates to (strike-spread)/gearing before the engine ever\n+    // sees them -- exactly the same pre-adjustment the other cap/floor\n+    // engines (analytic, Black, Bachelier) rely on without any such\n+    // restriction. A cap with gearing 1 and spread s, strike K, is therefore\n+    // mathematically identical to a zero-spread cap with strike K-s: both\n+    // reduce to max(forward - (K-s), 0) once the adjustment is applied. This\n+    // test prices both and checks they agree -- it would have thrown on the\n+    // old, overly strict check before even reaching the comparison.\n+\n+    Date referenceDate(14, November, 2012);\n+    Settings::instance().evaluationDate() = referenceDate;\n+\n+    Handle<YieldTermStructure> yts(\n+        flatRate(referenceDate, 0.02, Actual365Fixed()));\n+    ext::shared_ptr<IborIndex> index(new Euribor(6 * Months, yts));\n+\n+    Schedule schedule(referenceDate + 2 * Days, referenceDate + 5 * Years,\n+                       6 * Months, index->fixingCalendar(), ModifiedFollowing,\n+                       ModifiedFollowing, DateGeneration::Forward, false);\n+\n+    Spread spread = 0.0010;\n+    Rate strike = 0.025;\n+\n+    Leg spreadLeg = IborLeg(schedule, index)\n+                        .withNotionals(1.0)\n+                        .withSpreads(spread)\n+                        .withPaymentDayCounter(index->dayCounter());\n+    CapFloor spreadCap(CapFloor::Cap, spreadLeg,\n+                        std::vector<Rate>(1, strike));\n+\n+    Leg zeroSpreadLeg = IborLeg(schedule, index)\n+                            .withNotionals(1.0)\n+                            .withPaymentDayCounter(index->dayCounter());\n+    CapFloor shiftedCap(CapFloor::Cap, zeroSpreadLeg,\n+                         std::vector<Rate>(1, strike - spread));\n+\n+    std::vector<Date> stepDates;\n+    std::vector<Real> vols(1, 0.01);\n+    ext::shared_ptr<Gsr> gsr(new Gsr(yts, stepDates, vols, 50.0));\n+    ext::shared_ptr<PricingEngine> engine(\n+        new Gaussian1dCapFloorEngine(gsr, 64, 7.0));\n+\n+    spreadCap.setPricingEngine(engine);\n+    shiftedCap.setPricingEngine(engine);\n+\n+    Real spreadCapNpv = spreadCap.NPV(); // must not throw\n+    Real shiftedCapNpv = shiftedCap.NPV();\n+\n+    BOOST_CHECK(std::isfinite(spreadCapNpv));",
+   "line": 1225,
+   "path": "test-suite/gsr.cpp",
+   "user": {
+    "login": "Copilot",
+    "type": "Bot"
+   }
+  },
+  {
+   "body": "Good catch, fixed in 020c8fdbd \u2014 lowered mean reversion to 0.01 and the strike to 0.01 (in-the-money against the 2% flat forward), and added a BOOST_REQUIRE that the reference NPV is non-trivially positive before comparing. Reference NPV is now ~0.061 rather than 0.\n\n_\ud83e\udd16 Addressed by [Claude Code](https://claude.com/claude-code)_",
+   "created_at": "2026-11-01T14:10:58Z",
+   "diff_hunk": "@@ -1166,6 +1168,64 @@ BOOST_AUTO_TEST_CASE(testNonstandardCopyOfAmortisingOvernightSwap) {\n     }\n }\n \n+BOOST_AUTO_TEST_CASE(testCapFloorNonZeroSpreadConsistency) {\n+    BOOST_TEST_MESSAGE(\"Testing Gaussian1dCapFloorEngine with a non-zero \"\n+                        \"floating-leg spread...\");\n+\n+    // Gaussian1dCapFloorEngine used to QL_REQUIRE every spread to be exactly\n+    // zero, even though CapFloor::setupArguments() already pre-adjusts\n+    // capRates/floorRates to (strike-spread)/gearing before the engine ever\n+    // sees them -- exactly the same pre-adjustment the other cap/floor\n+    // engines (analytic, Black, Bachelier) rely on without any such\n+    // restriction. A cap with gearing 1 and spread s, strike K, is therefore\n+    // mathematically identical to a zero-spread cap with strike K-s: both\n+    // reduce to max(forward - (K-s), 0) once the adjustment is applied. This\n+    // test prices both and checks they agree -- it would have thrown on the\n+    // old, overly strict check before even reaching the comparison.\n+\n+    Date referenceDate(14, November, 2012);\n+    Settings::instance().evaluationDate() = referenceDate;\n+\n+    Handle<YieldTermStructure> yts(\n+        flatRate(referenceDate, 0.02, Actual365Fixed()));\n+    ext::shared_ptr<IborIndex> index(new Euribor(6 * Months, yts));\n+\n+    Schedule schedule(referenceDate + 2 * Days, referenceDate + 5 * Years,\n+                       6 * Months, index->fixingCalendar(), ModifiedFollowing,\n+                       ModifiedFollowing, DateGeneration::Forward, false);\n+\n+    Spread spread = 0.0010;\n+    Rate strike = 0.025;\n+\n+    Leg spreadLeg = IborLeg(schedule, index)\n+                        .withNotionals(1.0)\n+                        .withSpreads(spread)\n+                        .withPaymentDayCounter(index->dayCounter());\n+    CapFloor spreadCap(CapFloor::Cap, spreadLeg,\n+                        std::vector<Rate>(1, strike));\n+\n+    Leg zeroSpreadLeg = IborLeg(schedule, index)\n+                            .withNotionals(1.0)\n+                            .withPaymentDayCounter(index->dayCounter());\n+    CapFloor shiftedCap(CapFloor::Cap, zeroSpreadLeg,\n+                         std::vector<Rate>(1, strike - spread));\n+\n+    std::vector<Date> stepDates;\n+    std::vector<Real> vols(1, 0.01);\n+    ext::shared_ptr<Gsr> gsr(new Gsr(yts, stepDates, vols, 50.0));\n+    ext::shared_ptr<PricingEngine> engine(\n+        new Gaussian1dCapFloorEngine(gsr, 64, 7.0));\n+\n+    spreadCap.setPricingEngine(engine);\n+    shiftedCap.setPricingEngine(engine);\n+\n+    Real spreadCapNpv = spreadCap.NPV(); // must not throw\n+    Real shiftedCapNpv = shiftedCap.NPV();\n+\n+    BOOST_CHECK(std::isfinite(spreadCapNpv));",
+   "line": 1225,
+   "path": "test-suite/gsr.cpp",
+   "user": {
+    "login": "leafyoung",
+    "type": "User"
+   }
+  },
+  {
+   "body": "The comment without the QL_REQUIRE is kind of puzzling :)\nI'd just remove it.",
+   "created_at": "2026-11-12T12:25:51Z",
+   "diff_hunk": "@@ -25,8 +25,11 @@ namespace QuantLib {\n \n     void Gaussian1dCapFloorEngine::calculate() const {\n \n-        for (Real spread : arguments_.spreads)\n-            QL_REQUIRE(spread == 0.0, \"Non zero spreads (\" << spread << \") are not allowed.\");\n+        // Non-zero spreads are already accounted for: CapFloor::setupArguments()\n+        // pre-adjusts capRates/floorRates to (strike-spread)/gearing, so the\n+        // max(forward-strike,0)*gearing computation below is correct for any\n+        // spread, exactly as in the other cap/floor engines (analytic, Black,\n+        // Bachelier), none of which restrict the spread either.",
+   "line": 32,
+   "path": "ql/pricingengines/capfloor/gaussian1dcapfloorengine.cpp",
+   "user": {
+    "login": "lballabio",
+    "type": "User"
+   }
+  },
+  {
+   "body": "Yes, removed.",
+   "created_at": "2026-11-12T14:55:33Z",
+   "diff_hunk": "@@ -25,8 +25,11 @@ namespace QuantLib {\n \n     void Gaussian1dCapFloorEngine::calculate() const {\n \n-        for (Real spread : arguments_.spreads)\n-            QL_REQUIRE(spread == 0.0, \"Non zero spreads (\" << spread << \") are not allowed.\");\n+        // Non-zero spreads are already accounted for: CapFloor::setupArguments()\n+        // pre-adjusts capRates/floorRates to (strike-spread)/gearing, so the\n+        // max(forward-strike,0)*gearing computation below is correct for any\n+        // spread, exactly as in the other cap/floor engines (analytic, Black,\n+        // Bachelier), none of which restrict the spread either.",
+   "line": 32,
+   "path": "ql/pricingengines/capfloor/gaussian1dcapfloorengine.cpp",
+   "user": {
+    "login": "leafyoung",
+    "type": "User"
+   }
+  }
+ ],
+ "state": "closed",
+ "title": "Allow non-zero spreads in `Gaussian1dCapFloorEngine`",
+ "transport": "gh",
+ "user": {
+  "login": "leafyoung",
+  "type": "User"
+ }
+}

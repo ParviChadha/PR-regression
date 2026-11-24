@@ -1,0 +1,33 @@
+{
+ "base_ref": "master",
+ "base_sha": "cf74c9f657150750dfbf00ed6fd4c0768bc5ce36",
+ "body": "The `Serbia` calendar (Belgrade Stock Exchange) has a few problems:\n\n- It derives from `WesternImpl`, so Good Friday and Easter Monday follow the Western Easter. BELEX closes on the Orthodox ones: in 2026 it was open on April 3rd and 6th and closed on April 10th and 13th, while the calendar has it the other way around. The implementation now derives from `OrthodoxImpl`, as `NorthMacedonia` does.\n- Labour Day is on May 1st and 2nd; the second day was missing (e.g. Friday, May 2nd, 2025).\n- When a day of New Year (January 1st and 2nd), Statehood Day (February 15th and 16th), Labour Day or Armistice Day (November 11th) falls on a Sunday, the first following working day is a holiday; this is from the Law on State and Other Holidays, as quoted in the BELEX decisions, and doesn't apply to Christmas and Easter. The calendar only had February 17th when both the 15th and the 16th fall on a weekend, so it missed for instance Tuesday, February 17th, 2026 (the 15th was a Sunday and the 16th a holiday anyway).\n\nI checked the result against the BELEX trading calendars:\n\n- 2025 and 2026: https://bgdx.rs/eng/trzista_i_hartije/kalendar and https://bgdx.rs/files/oberzi/2%20Odluka%20o%20utvr%C4%91ivanju%20berzanskog%20kalendara%20za%202026.%20godinu.pdf\n- 2024: https://web.archive.org/web/20251109101859/https://www.belex.rs/files/oberzi/BERZANSKI%20KALENDAR-2024-OBJAVA_SRB.pdf\n- 2022 and 2023: https://web.archive.org/web/20230308060957/http://www.belex.rs/eng/trzista_i_hartije/kalendar\n- 2018: https://web.archive.org/web/20180502204431/http://www.belex.rs/eng/trzista_i_hartije/kalendar\n- 2017: https://web.archive.org/web/20170915093732/http://www.belex.rs/eng/trzista_i_hartije/kalendar\n- 2016: https://web.archive.org/web/20160623235145/http://www.belex.rs/eng/trzista_i_hartije/kalendar\n\nFor these years the holidays now match the published lists, except for the closures that BELEX decides separately: the one-off closures (work on the trading platform on January 4th-6th, 2023, January 3rd and 6th, 2025 and January 6th, 2026; the move of the CSD's servers on November 10th, 2025) and the year-end closure, which was on December 30th in 2022 and December 29th in 2023. I left those out; I can add them if you want the calendar to include them.\n\nIn 2027 Orthodox Easter is on May 2nd, which is also the second day of Labour Day; since May 3rd is Easter Monday, the moved holiday is Tuesday, May 4th (the same happened in 2021). BELEX's 2021 list: https://web.archive.org/web/20210416144149/http://www.belex.rs/trzista_i_hartije/kalendar\n\n`testSerbia` now compares the holiday list for 2024 to 2027 (2027 from the rules) and checks some of the moved holidays of the earlier years. It fails on master with 22 errors and passes with the change.\n",
+ "comments": [
+  {
+   "body": "\n[![Coverage Status](https://coveralls.io/builds/83162421/badge)](https://coveralls.io/builds/83162421)\n\ncoverage: 79.744%. remained the same \u2014 **sohailshk:fix/serbia-orthodox-easter** into **lballabio:master**\n",
+   "created_at": "2026-11-19T16:45:53Z",
+   "user": {
+    "login": "coveralls",
+    "type": "User"
+   }
+  }
+ ],
+ "created_at": "2026-11-11T08:05:34Z",
+ "fetched_at": "2026-11-24T03:17:36Z",
+ "head_sha": "baf301488012ebcf9493500417816e8b4b821feb",
+ "labels": [],
+ "linked_issues": [],
+ "merge_commit_sha": "8e321c4dec314115364ca67b51c18a3aaa280c60",
+ "merged_at": "2026-11-19T18:12:09Z",
+ "number": 3051,
+ "referenced_numbers": [],
+ "repo": "lballabio/QuantLib",
+ "review_comments": [],
+ "state": "closed",
+ "title": "Fix Easter, Labour Day and Sunday holidays in the Serbia calendar",
+ "transport": "gh",
+ "user": {
+  "login": "sohailshk",
+  "type": "User"
+ }
+}

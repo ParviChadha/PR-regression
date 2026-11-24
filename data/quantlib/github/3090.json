@@ -1,0 +1,46 @@
+{
+ "base_ref": "master",
+ "base_sha": "8c52b45180d074d899a94f990140cba5b425f2d8",
+ "body": "Closes #1393. Supersedes #2699.\n\nThis completes #2699 by @snigdhachoppac (credited as co-author), rebased on master. It adds an optional `DateGeneration::Rule` to the three `SwapRateHelper` constructors, defaulting to `Backward` so existing behaviour is unchanged, and passes it to both legs of the underlying swap.\n\nFollowing the review in #2699, the test now uses the IMM rule (`ThirdWednesday`) on a swap between two IMM dates and checks, for both legs, the rule and the generated dates against the expected schedule, all of which are IMM dates. It also checks that the default rule is unchanged and that the tenor-based constructor passes the rule through.\n\n**Tests:** `testSwapRateHelperDateGenerationRule` passes; if the helper ignores the rule, it fails. The existing `PiecewiseYieldCurveTests` still pass.",
+ "comments": [
+  {
+   "body": "\n[![Coverage Status](https://coveralls.io/builds/83186474/badge)](https://coveralls.io/builds/83186474)\n\ncoverage: 80.446% (+0.009%) from 80.437% \u2014 **csarushan1729:complete-swap-helper-date-rule** into **lballabio:master**\n",
+   "created_at": "2026-11-20T15:15:12Z",
+   "user": {
+    "login": "coveralls",
+    "type": "User"
+   }
+  }
+ ],
+ "created_at": "2026-11-16T11:41:20Z",
+ "fetched_at": "2026-11-24T03:17:33Z",
+ "head_sha": "3b7999a760cf1c66e70cf61fc6a9bc485cad7236",
+ "labels": [],
+ "linked_issues": [
+  {
+   "body": "As far as i can tell, neither SwapRateHelper nor OISRateHelper take a DateGeneration::Rule parameter, and so always default to backward date generation. This means they can't be used to incorporate quotes for IMM-rolls swaps into curves, which we sometimes want to do.\r\n\r\nWe've used the magic of copy and paste to make a version of SwapRateHelper which allows customisation of the date generation rule, and it seems to work fine. We now face the need to do this again for OISRateHelper.\r\n\r\nCould these helpers be enhanced to support custom date generation rules? I am happy to write a PR if you think this is sensible.\r\n\r\nIn a sense, this is a distant sequel to #318. Is there a policy that all the options in MakeVanillaSwap / MakeOIS should be exposed in the corresponding helpers? If so, should we ensure that is the case?\r\n\r\nMore speculatively, is there a way to avoid having to do this manually? Keeping the instruments and the helpers in sync by hand is something of a burden.\r\n",
+   "labels": [
+    "help wanted"
+   ],
+   "number": 1393,
+   "state": "closed",
+   "title": "Using IMM-rolls swaps to build curves"
+  }
+ ],
+ "merge_commit_sha": "c0f41282885950eafdc00629a1eed3bda8f4fd3f",
+ "merged_at": "2026-11-20T16:00:15Z",
+ "number": 3090,
+ "referenced_numbers": [
+  1393,
+  2699
+ ],
+ "repo": "lballabio/QuantLib",
+ "review_comments": [],
+ "state": "closed",
+ "title": "Add date-generation rule to `SwapRateHelper`",
+ "transport": "gh",
+ "user": {
+  "login": "csarushan1729",
+  "type": "User"
+ }
+}

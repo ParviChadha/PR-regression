@@ -1,0 +1,33 @@
+{
+ "base_ref": "master",
+ "base_sha": "cf74c9f657150750dfbf00ed6fd4c0768bc5ce36",
+ "body": "When `Settings::enforcesTodaysHistoricFixings()` is enabled, the compounding overnight coupon pricer can bypass a missing current-date fixing through its telescopic discount-factor shortcut. Check the required history before entering the today-fixing fallback, outside its catch block.\n\nThe regression covers missing, stored-null and present current-date fixings with enforcement on and off, full and telescopic schedules, lookback and observation shift. Present and optional-history cases are checked against independently enumerated overnight deposit products. A future-only coupon remains forecastable without today's fixing.\n\nValidation against `cf74c9f657150750dfbf00ed6fd4c0768bc5ce36`:\n- The same new-test executable fails 12 assertions with the baseline library and passes all 86 assertions with the candidate.\n- The affected overnight-coupon suite passes all 46 cases and 249 assertions.\n- The final unfiltered stock suite passes 1,715 cases and 619,823 assertions, with no failures or skipped cases.\n- `git diff --check` and the test-message check pass.\n\nNative builds used Linux x86_64, GCC 14, Boost 1.87 and C++17, shared/default configuration, unity builds, `-O1 -g0 -DNDEBUG` and warnings as errors. The changed production and stock-test units were rebuilt and linked with hash-verified unchanged baseline objects; this was not a fresh complete rebuild.\n\nThis change is limited to `CompoundingOvernightIndexedCouponPricer`. Arithmetic averaging and the separate lockout and daily-spread corrections are outside its scope.\n",
+ "comments": [
+  {
+   "body": "\n[![Coverage Status](https://coveralls.io/builds/83126903/badge)](https://coveralls.io/builds/83126903)\n\ncoverage: 80.093% (+0.3%) from 79.744% \u2014 **Kiril1Shevtsov:fix/overnight-required-today-fixing** into **lballabio:master**\n",
+   "created_at": "2026-11-18T11:24:32Z",
+   "user": {
+    "login": "coveralls",
+    "type": "User"
+   }
+  }
+ ],
+ "created_at": "2026-11-11T19:48:44Z",
+ "fetched_at": "2026-11-24T03:17:41Z",
+ "head_sha": "1c760a0fcb0d55a40e191c96d13db786725abb7b",
+ "labels": [],
+ "linked_issues": [],
+ "merge_commit_sha": "1afc06383f8d3a428ab9a03dac9dee3063dd759d",
+ "merged_at": "2026-11-18T12:19:46Z",
+ "number": 3060,
+ "referenced_numbers": [],
+ "repo": "lballabio/QuantLib",
+ "review_comments": [],
+ "state": "closed",
+ "title": "Enforce required today's fixing before overnight coupon projection",
+ "transport": "gh",
+ "user": {
+  "login": "Kiril1Shevtsov",
+  "type": "User"
+ }
+}

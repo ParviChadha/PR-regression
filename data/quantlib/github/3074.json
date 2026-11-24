@@ -1,0 +1,33 @@
+{
+ "base_ref": "master",
+ "base_sha": "7c1e97454941851e1f4741518c212af8efe6c066",
+ "body": "`YoYInflationCapFloorEngine` (and therefore the Black, unit-displaced Black and Bachelier YoY engines) always takes the optionlet forward from the YoY term structure and applies volatility to it, even when the fixing has already been published. Seasoned caps and floors are therefore mispriced on their current period.\n\nFor a coupon that fixed in November 2025 at 2.1% and pays in February 2026, with the curve forecasting 2.5% (Bachelier engine, 40% vol):\n\n| Cap strike | Before | Expected (intrinsic on the 2.1% fixing) |\n|---|---|---|\n| 2.2% | 3212.20 | 0 |\n| 1.8% | 6970.33 | 2983.92 |\n\n`CapFloor` already uses the actual fixing for IBOR coupons whose fixing is known; this brings the YoY engine in line. When `index()->needsForecast(fixingDate)` is false, the optionlet now uses `index()->fixing(fixingDate)` with zero variance, so it's worth its intrinsic value. Fixings that still need a forecast go through the same code as before, including those whose fixing date has passed but whose index value isn't published yet (as in `testTimeValueNearVolatilityBaseDate`).\n\n**Tests:** the new `testKnownFixing` checks caps and floors at two strikes with each of the three engines against the intrinsic value on the known fixing. It fails on master and passes with this change; the existing `InflationCapFloorTests`, `InflationCapFlooredCouponTests` and `InflationVolTests` still pass.",
+ "comments": [
+  {
+   "body": "\n[![Coverage Status](https://coveralls.io/builds/83105356/badge)](https://coveralls.io/builds/83105356)\n\ncoverage: 80.018% (-0.001%) from 80.019% \u2014 **csarushan1729:fix-yoy-capfloor-known-fixings** into **lballabio:master**\n",
+   "created_at": "2026-11-17T16:25:54Z",
+   "user": {
+    "login": "coveralls",
+    "type": "User"
+   }
+  }
+ ],
+ "created_at": "2026-11-13T10:53:31Z",
+ "fetched_at": "2026-11-24T03:17:47Z",
+ "head_sha": "1d5aa94b28ebb07260d5dd567b98213500fd2c91",
+ "labels": [],
+ "linked_issues": [],
+ "merge_commit_sha": "56a7316223d4ad5896799edc45201f407bad52a2",
+ "merged_at": "2026-11-17T17:00:18Z",
+ "number": 3074,
+ "referenced_numbers": [],
+ "repo": "lballabio/QuantLib",
+ "review_comments": [],
+ "state": "closed",
+ "title": "Use known fixings for YoY inflation optionlets",
+ "transport": "gh",
+ "user": {
+  "login": "csarushan1729",
+  "type": "User"
+ }
+}

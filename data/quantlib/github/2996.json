@@ -1,0 +1,33 @@
+{
+ "base_ref": "master",
+ "base_sha": "c1fe8adbf6d1f552c54b4e02e3f628d1fa779031",
+ "body": "## Summary\n\n`G2SwaptionEngine::calculate()` rejects every `Settlement::Cash` swaption outright, including `CollateralizedCashPrice`, even though its valuation never reads `settlementType`/`settlementMethod` again after the guard and has the same payoff for `Physical` and `Cash`+`CollateralizedCashPrice` settlement \u2014 the two differ only in whether the underlying swap is physically entered into or cash-settled after exercise, not in price.\n\nEvery other engine performing the same style of valuation (replicating the exercise payoff from the underlying swap's own cashflows under a short-rate model) already guards with the strictly broader `settlementMethod != Settlement::ParYieldCurve`:\n\n- `JamshidianSwaptionEngine`\n- `Gaussian1dJamshidianSwaptionEngine`\n- `Gaussian1dSwaptionEngine`\n- `Gaussian1dNonstandardSwaptionEngine`\n- `Gaussian1dFloatFloatSwaptionEngine`\n- `TreeSwaptionEngine`\n\nwhich admits `CollateralizedCashPrice` and rejects only `ParYieldCurve` (the one convention whose payoff genuinely differs \u2014 it needs an annuity-based formula none of these engines implement). `G2SwaptionEngine` appears to have been missed when the other six were updated to this convention; this brings it in line with the rest of the module.\n\n## Test plan\n\n- Added `testG2SwaptionEngineCashSettlement` in `test-suite/bermudanswaption.cpp`: prices the same European swaption under `Settlement::Physical` and `Settlement::Cash`+`CollateralizedCashPrice` with `G2SwaptionEngine` and checks the NPVs match, and confirms `Cash`+`ParYieldCurve` is still correctly rejected.\n- Verified the new test fails with the old guard (`cash-settled swaptions not priced with G2 engine`) and passes with the fix.\n- Ran the full `BermudanSwaptionTests` suite (`testCachedValues`, `testCachedG2Values`, `testTreeEngineTimeSnapping`, `testBermudanOISSwaptionWithHW`, `testBermudanOISSwaptionWithG2`, `testBermudanOISSwaptionPreservesFeatures`) \u2014 all pass.\n\n\ud83e\udd16 Co-worked with [Claude Code](https://claude.com/claude-code)\n\n",
+ "comments": [
+  {
+   "body": "\n[![Coverage Status](https://coveralls.io/builds/82993610/badge)](https://coveralls.io/builds/82993610)\n\nNo base build to compare \u2014 **leafyoung:fix-g2swaptionengine-settlement-method** into **lballabio:master**\n",
+   "created_at": "2026-11-12T10:18:24Z",
+   "user": {
+    "login": "coveralls",
+    "type": "User"
+   }
+  }
+ ],
+ "created_at": "2026-11-01T03:46:14Z",
+ "fetched_at": "2026-11-24T03:18:22Z",
+ "head_sha": "d0c13426f6b0ae25cef9c4b465453b95a78ef108",
+ "labels": [],
+ "linked_issues": [],
+ "merge_commit_sha": "d6c2248067fd6bcf7c57aa2d973976086a446277",
+ "merged_at": "2026-11-12T13:45:47Z",
+ "number": 2996,
+ "referenced_numbers": [],
+ "repo": "lballabio/QuantLib",
+ "review_comments": [],
+ "state": "closed",
+ "title": "Allow `G2SwaptionEngine` to price cash-settled (`CollateralizedCashPrice`) swaptions",
+ "transport": "gh",
+ "user": {
+  "login": "leafyoung",
+  "type": "User"
+ }
+}

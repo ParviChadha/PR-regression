@@ -1,0 +1,33 @@
+{
+ "base_ref": "master",
+ "base_sha": "cf74c9f657150750dfbf00ed6fd4c0768bc5ce36",
+ "body": "`InterestRate::impliedRate` returned a constant 0 whenever the compound factor was 1. That's correct for `double`, but with AD types it drops the dependence on the inputs, so sensitivities through a zero rate come out as zero. The shortcut is now limited to t = 0. For t > 0 the regular formulas already give exactly 0.\n\nTested: the test suite passes, and `double` results are unchanged. With AD, an American option's dividend rho at zero dividend yield now matches finite differences.\n",
+ "comments": [
+  {
+   "body": "\n[![Coverage Status](https://coveralls.io/builds/83074966/badge)](https://coveralls.io/builds/83074966)\n\ncoverage: 79.744%. remained the same \u2014 **auto-differentiation-dev:fix/implied-rate-zero-derivative** into **lballabio:master**\n",
+   "created_at": "2026-11-16T15:50:54Z",
+   "user": {
+    "login": "coveralls",
+    "type": "User"
+   }
+  }
+ ],
+ "created_at": "2026-11-11T19:04:04Z",
+ "fetched_at": "2026-11-24T03:17:57Z",
+ "head_sha": "b7bc2608977c0898990c4de1362a55cc0540c37a",
+ "labels": [],
+ "linked_issues": [],
+ "merge_commit_sha": "f463e7e75bbbeb34533c6b6e53d7b208fe30a994",
+ "merged_at": "2026-11-16T16:48:54Z",
+ "number": 3057,
+ "referenced_numbers": [],
+ "repo": "lballabio/QuantLib",
+ "review_comments": [],
+ "state": "closed",
+ "title": "Keep the derivative of an implied rate when the compound factor is 1",
+ "transport": "gh",
+ "user": {
+  "login": "auto-differentiation-dev",
+  "type": "User"
+ }
+}

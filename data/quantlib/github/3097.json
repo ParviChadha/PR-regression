@@ -1,0 +1,35 @@
+{
+ "base_ref": "master",
+ "base_sha": "1e3cad8eb393e6e92bed91705c25c461197896ca",
+ "body": "## Summary\r\n\r\n`(1-exp(-kappa*t))/(kappa*t)` was guarded against `kappa=0` by adding\r\n`QL_EPSILON` to `kappa` and `t` separately before dividing. At `kappa=0`\r\nexactly the numerator is also exactly 0 (`1-exp(0)=0`), so the whole\r\nguarded expression evaluates to 0 -- but the true limit of\r\n`(1-exp(-kappa*t))/(kappa*t)` as `kappa->0` is 1 (standard Taylor\r\nexpansion), a *different value*, not a small perturbation. This gives\r\n`NelsonSiegelFitting` a zero rate of `c0-c2` at `kappa=0` instead of the\r\ncorrect `c0+c1`; Svensson's second guarded term (`kappa1`) is off by its\r\nown `-c3` for the same reason. Same species as `#2599` (Vasicek `A(t,T)`\r\nhardcoded to 0 for small mean-reversion).\r\n\r\n## Fix\r\n\r\nReused the same technique `Vasicek::oneMinusExpOverX` already uses\r\nelsewhere in the library: `(1-exp(-x))/x` via `std::expm1(-x)/-x`, which\r\nis both exact at `x=0` (returns 1) and accurate for small nonzero `x`.\r\n\r\n## Testing\r\n\r\nAdded `testNelsonSiegelSvenssonKappaZeroLimit`, calling `discount()`\r\ndirectly with chosen parameters (`kappa=0` for Nelson-Siegel,\r\n`kappa=kappa1=0` for Svensson) and checking against the correct zero\r\nrate, plus a continuity check against the formula's own value at small\r\npositive `kappa`. Confirmed it fails against the pre-fix code with\r\nexactly the predicted wrong values (`c0-c2`, `c0-c2-c3`) and passes\r\npost-fix. `FittedBondDiscountCurveTests` passes in full.\r\n\r\nA Lean formalization of the guarded-limit values (the loading tends to 1, the zero rate to c0 + c1, the Svensson second term to 0 at vanishing decay) is submitted alongside this fix at formal-applied-math/formal-mathfin (PR https://github.com/formal-applied-math/formal-mathfin/pull/502).\r\n",
+ "comments": [
+  {
+   "body": "\n[![Coverage Status](https://coveralls.io/builds/83190529/badge)](https://coveralls.io/builds/83190529)\n\nNo base build to compare \u2014 **leafyoung:fix/nelson-siegel-svensson-kappa-zero-limit** into **lballabio:master**\n",
+   "created_at": "2026-11-20T17:42:19Z",
+   "user": {
+    "login": "coveralls",
+    "type": "User"
+   }
+  }
+ ],
+ "created_at": "2026-11-17T15:29:12Z",
+ "fetched_at": "2026-11-24T03:17:30Z",
+ "head_sha": "0fcfc98a3b9bd4c4ba2404eeb76effcf38ab3ac4",
+ "labels": [],
+ "linked_issues": [],
+ "merge_commit_sha": "26a44f1fc884c71f16c9d5c0e505f82349609088",
+ "merged_at": "2026-11-20T18:57:21Z",
+ "number": 3097,
+ "referenced_numbers": [
+  2599
+ ],
+ "repo": "lballabio/QuantLib",
+ "review_comments": [],
+ "state": "closed",
+ "title": "Fix `NelsonSiegelFitting`/`SvenssonFitting` wrong guarded limit at kappa=0",
+ "transport": "gh",
+ "user": {
+  "login": "leafyoung",
+  "type": "User"
+ }
+}

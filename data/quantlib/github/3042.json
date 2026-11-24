@@ -1,0 +1,33 @@
+{
+ "base_ref": "master",
+ "base_sha": "cf74c9f657150750dfbf00ed6fd4c0768bc5ce36",
+ "body": "The analytic cliquet and performance engines use each reset interval's forward rate in theta. When spot and calendar-date forward rates and forward variances stay fixed as the curve reference dates advance, the time dependence is in the pre-reset discount factors. Using the interval rate can therefore disagree with the derivative of the engine's own value.\n\nUse the dividend reference-date rate for cliquet and the risk-free reference-date rate for performance. The cliquet calculation retains its existing per-period conversion to the risk-free day counter. `forwardRate(d, d)` averages over the first 0.0001 curve years, so smooth-curve theta retains that approximation. Forward-option wrappers are unchanged.\n\nFor the call cases in `testThetaOnNonFlatCurves` with Actual/365 Fixed:\n\n| Engine | Theta on `84fbf0a0e` | This PR | Central finite difference |\n|---|---:|---:|---:|\n| Cliquet | 0.330287 | 0.0912821 | 0.0912821 |\n| Performance | 0.00507849 | 0.00180367 | 0.00180367 |\n\nThe setup uses spot 100, volatility 25%, moneyness 105%, resets at 90/180/270 days and maturity at 360 days. Dividend forwards through days 30/120/240/400 are 1%/4%/1.5%/6%; risk-free forwards are 2%/5%/8%/3%. The finite difference shifts the evaluation and curve reference dates by \u00b11 day while retaining the calendar nodes.\n\nThe new test checks calls and puts for both engines, flat and non-flat curves, and Actual/365 Fixed or Actual/360 risk-free day counters, against finite differences at 1e-7 relative tolerance. The dividend day counter stays Actual/365 Fixed. Against `84fbf0a0e`, all eight non-flat assertions fail and all eight flat controls pass.\n\nImplementation validation on Ubuntu 24.04 with g++ 13.3.0, Boost 1.83.0, Release and warnings as errors: all five `CliquetOptionTests` cases pass in C++17 and C++20. MSVC, Clang, AAD and the full suite were not run.\n\n    ./build/test-suite/quantlib-test-suite --run_test=QuantLibTests/CliquetOptionTests --log_level=message\n\nAI disclosure: this was prepared with AI assistance (Claude Opus 5.5 and Claude Sonnet 5.5).\n\n\ud83e\udd16 Generated with [Claude Code](https://claude.com/claude-code)\n\nhttps://claude.ai/code/session_01JfvcPZyKcKQUG9fQGYfRMw\n",
+ "comments": [
+  {
+   "body": "\n[![Coverage Status](https://coveralls.io/builds/83023274/badge)](https://coveralls.io/builds/83023274)\n\ncoverage: 79.746% (+0.002%) from 79.744% \u2014 **Jackmeson1:fix/cliquet-theta-nonflat** into **lballabio:master**\n",
+   "created_at": "2026-11-13T14:35:01Z",
+   "user": {
+    "login": "coveralls",
+    "type": "User"
+   }
+  }
+ ],
+ "created_at": "2026-11-10T17:54:43Z",
+ "fetched_at": "2026-11-24T03:18:11Z",
+ "head_sha": "336ce1dc86071370fcf3f3bcece5d00bc1044d68",
+ "labels": [],
+ "linked_issues": [],
+ "merge_commit_sha": "40d2a746edaa55c1fd96b43feb5fb11ede7b782c",
+ "merged_at": "2026-11-13T15:05:06Z",
+ "number": 3042,
+ "referenced_numbers": [],
+ "repo": "lballabio/QuantLib",
+ "review_comments": [],
+ "state": "closed",
+ "title": "Fix theta of the cliquet and performance engines on non-flat curves",
+ "transport": "gh",
+ "user": {
+  "login": "Jackmeson1",
+  "type": "User"
+ }
+}

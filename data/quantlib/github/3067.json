@@ -1,0 +1,33 @@
+{
+ "base_ref": "master",
+ "base_sha": "685761a047f650cb1603706460e3765f01181acb",
+ "body": "On `84fbf0a0e`, separate gamma and denominator calculations overflow in `StudentDistribution::operator()`. At x = 0, the saved double-precision results are:\n\n| Degrees of freedom | Before | With the fix |\n|---|---:|---:|\n| 342 | 0 | 0.398650762904614 |\n| 343 | NaN | 0.398651612497840 |\n| 1000 | NaN | 0.398842557313888 |\n\nEvaluate the density in log space using the existing `GammaFunction::logValue` and `log1p`. Convert the degrees of freedom to `Real` before adding one, avoiding signed overflow at the default 32-bit integer maximum.\n\nSubtracting large log-gamma values still loses accuracy: a saved comparison with Boost.Math 1.83.0 in long double measured about 1.2e-9 relative error near one million degrees of freedom and 1.5e-6 at n = 2147483647, x = 0.\n\n`testStudentDistributionLargeDegreesOfFreedom` checks mpmath references for controls, the overflow transition, larger parameters, a positive tiny density and the default integer boundary.\n\nOn Linux (Ubuntu 24.04, GCC 13.3.0, Boost 1.83.0, Release, warnings as errors) this commit builds in C++17 and C++20, `DistributionTests` passes in both, and the full C++17 test suite passes. With the production file from the parent commit, the new test fails (`positive argument required`).\n\nAI disclosure: this was prepared with AI assistance (Claude Opus 5.5 and Claude Sonnet 5.5).\n\n\ud83e\udd16 Generated with [Claude Code](https://claude.com/claude-code)\n\nhttps://claude.ai/code/session_01JfvcPZyKcKQUG9fQGYfRMw\n",
+ "comments": [
+  {
+   "body": "\n[![Coverage Status](https://coveralls.io/builds/83128645/badge)](https://coveralls.io/builds/83128645)\n\ncoverage: 80.002%. remained the same \u2014 **Jackmeson1:fix/student-distribution-large-dof** into **lballabio:master**\n",
+   "created_at": "2026-11-18T12:49:29Z",
+   "user": {
+    "login": "coveralls",
+    "type": "User"
+   }
+  }
+ ],
+ "created_at": "2026-11-12T14:56:14Z",
+ "fetched_at": "2026-11-24T03:17:40Z",
+ "head_sha": "6c60782339bbe65eaa03e8fd32386a3c7e2e99ab",
+ "labels": [],
+ "linked_issues": [],
+ "merge_commit_sha": "01af6178f3f0ad201d4ecbe7ba6c329d271fe824",
+ "merged_at": "2026-11-18T13:40:33Z",
+ "number": 3067,
+ "referenced_numbers": [],
+ "repo": "lballabio/QuantLib",
+ "review_comments": [],
+ "state": "closed",
+ "title": "Fix `StudentDistribution` overflow at large degrees of freedom",
+ "transport": "gh",
+ "user": {
+  "login": "Jackmeson1",
+  "type": "User"
+ }
+}

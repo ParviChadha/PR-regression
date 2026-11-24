@@ -1,0 +1,80 @@
+{
+ "base_ref": "master",
+ "base_sha": "9ba30347b4ea179a5f4daec446cd221d21b8721f",
+ "body": "Related to https://github.com/lballabio/QuantLib/issues/2862\r\n\r\nAdd EquityIndex::ReturnType (Price, TotalReturn, ExcessReturn) as the\r\nlast constructor argument, defaulting to Price. The forward is\r\nprojected as:\r\n\r\n- Price: spot * P_D(T) / P_R(T) (unchanged)\r\n- TotalReturn: spot / P_R(T)\r\n- ExcessReturn: spot\r\n\r\nPast fixings are unaffected and clone() preserves the return type.\r\nEquityQuantoCashFlowPricer now rejects non-price return indexes.",
+ "comments": [
+  {
+   "body": "[![CLA assistant check](https://cla-assistant.io/pull/badge/signed)](https://cla-assistant.io/lballabio/QuantLib?pullRequest=3023) <br/>All committers have signed the CLA.",
+   "created_at": "2026-11-05T21:15:28Z",
+   "user": {
+    "login": "CLAassistant",
+    "type": "User"
+   }
+  },
+  {
+   "body": "Thanks!  Please check the CLAassistant comment.",
+   "created_at": "2026-11-12T12:40:03Z",
+   "user": {
+    "login": "lballabio",
+    "type": "User"
+   }
+  },
+  {
+   "body": "\n[![Coverage Status](https://coveralls.io/builds/83066209/badge)](https://coveralls.io/builds/83066209)\n\ncoverage: 80.094% (+0.001%) from 80.093% \u2014 **ThiagoRodriguess:feature/issue-2862-equity-index-return-type** into **lballabio:master**\n",
+   "created_at": "2026-11-16T09:41:12Z",
+   "user": {
+    "login": "coveralls",
+    "type": "User"
+   }
+  },
+  {
+   "body": "Congratulations on your first merged pull request!\n",
+   "created_at": "2026-11-16T10:51:14Z",
+   "user": {
+    "login": "boring-cyborg[bot]",
+    "type": "Bot"
+   }
+  }
+ ],
+ "created_at": "2026-11-05T21:15:21Z",
+ "fetched_at": "2026-11-24T03:18:02Z",
+ "head_sha": "0bf72c3f83be5f709b7e2f616298db89de207285",
+ "labels": [],
+ "linked_issues": [],
+ "merge_commit_sha": "c98e9059fd1370a3005bda84e06d21853b414138",
+ "merged_at": "2026-11-16T10:51:11Z",
+ "number": 3023,
+ "referenced_numbers": [],
+ "repo": "lballabio/QuantLib",
+ "review_comments": [
+  {
+   "body": "Is it the index itself that quotes with the funding already deduced (or that reinvests the dividends), or is it the calculation of the cash flow that deducts the funding from the return of the index?\n\n(Trying to figure out if this enum belongs here or in `EquityCashFlow`.)",
+   "created_at": "2026-11-12T12:43:15Z",
+   "diff_hunk": "@@ -59,15 +59,51 @@ namespace QuantLib {\n         To forecast future fixings, the user can either provide a\n         handle to the current index spot. If spot handle is empty,\n         today's fixing will be used, instead.\n+\n+        The formulas above apply to price indexes, which is the\n+        default return type. The return type determines how the\n+        index level is published, and therefore how its forward\n+        is projected:\n+        - \\c Price: the index level excludes dividends, so the\n+          forward is as described above. The interest rate curve\n+          is required, the dividend curve is optional.\n+        - \\c TotalReturn: dividends are reinvested in the index,\n+          so they are not deducted from the forward:\n+          \\f[\n+          I(t, T) = I(t, t) \\frac{1}{P_{R}(t, T)}.\n+          \\f]\n+          The interest rate curve is required, the dividend curve\n+          is ignored.\n+        - \\c ExcessReturn: the cost of funding is already deducted\n+          from the index level, so the forward is the spot level:\n+          \\f[\n+          I(t, T) = I(t, t).\n+          \\f]\n+          Neither the interest rate nor the dividend curve is\n+          required.\n+\n+        Past fixings do not depend on the return type.\n+\n+        \\warning EquityQuantoCashFlowPricer applies the quanto\n+                 adjustment through the dividend curve of the index,\n+                 so it only supports price return indexes.\n     */\n     class EquityIndex : public Index {\n       public:\n+        //! Determines how the forward of the index is projected\n+        enum ReturnType {",
+   "line": 103,
+   "path": "ql/indexes/equityindex.hpp",
+   "user": {
+    "login": "lballabio",
+    "type": "User"
+   }
+  },
+  {
+   "body": "It's the index itself. The return type describes how the provider builds the published level (e.g. S&P 500 vs S&P 500 Total Return, or Bloomberg Commodity ER vs TR), so it determines both the past fixings and the projected forward, regardless of the instrument referencing the index.\r\n\r\n`EquityCashFlow` only computes N\u00b7(I(T)/I(0) \u2212 1), and in `EquityTotalReturnSwap` any funding paid on top of the index return is already modelled by the interest-rate leg, so deducting it in the cash flow would count it twice. That's why I kept the enum in `EquityIndex`.\r\n\r\nI've amended the original commit (the branch was force-pushed) to make this explicit in the docs: the return type is now documented as a property of the published index, with funding left to the instrument. I also documented that the excess-return forward assumes the index deducts funding at the rate of the interest curve; if the deducted rate differs (a spread over the overnight rate or a fixed decrement), a price index whose dividend curve carries that rate can be used instead.\r\n\r\nI'll also sign the CLA.",
+   "created_at": "2026-11-14T22:44:50Z",
+   "diff_hunk": "@@ -59,15 +59,51 @@ namespace QuantLib {\n         To forecast future fixings, the user can either provide a\n         handle to the current index spot. If spot handle is empty,\n         today's fixing will be used, instead.\n+\n+        The formulas above apply to price indexes, which is the\n+        default return type. The return type determines how the\n+        index level is published, and therefore how its forward\n+        is projected:\n+        - \\c Price: the index level excludes dividends, so the\n+          forward is as described above. The interest rate curve\n+          is required, the dividend curve is optional.\n+        - \\c TotalReturn: dividends are reinvested in the index,\n+          so they are not deducted from the forward:\n+          \\f[\n+          I(t, T) = I(t, t) \\frac{1}{P_{R}(t, T)}.\n+          \\f]\n+          The interest rate curve is required, the dividend curve\n+          is ignored.\n+        - \\c ExcessReturn: the cost of funding is already deducted\n+          from the index level, so the forward is the spot level:\n+          \\f[\n+          I(t, T) = I(t, t).\n+          \\f]\n+          Neither the interest rate nor the dividend curve is\n+          required.\n+\n+        Past fixings do not depend on the return type.\n+\n+        \\warning EquityQuantoCashFlowPricer applies the quanto\n+                 adjustment through the dividend curve of the index,\n+                 so it only supports price return indexes.\n     */\n     class EquityIndex : public Index {\n       public:\n+        //! Determines how the forward of the index is projected\n+        enum ReturnType {",
+   "line": 103,
+   "path": "ql/indexes/equityindex.hpp",
+   "user": {
+    "login": "ThiagoRodriguess",
+    "type": "User"
+   }
+  }
+ ],
+ "state": "closed",
+ "title": "Add return type to `EquityIndex`",
+ "transport": "gh",
+ "user": {
+  "login": "ThiagoRodriguess",
+  "type": "User"
+ }
+}

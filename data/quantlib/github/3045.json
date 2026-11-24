@@ -1,0 +1,51 @@
+{
+ "base_ref": "master",
+ "base_sha": "cf74c9f657150750dfbf00ed6fd4c0768bc5ce36",
+ "body": "Closes #3018.\n\nUse the analytic limits `y = log(k/F)` at beta = 1 and `Dint = -y/alpha` at nu = 0. Both parameter values are allowed by the SABR model, but currently produce NaN away from the near-ATM Taylor branch.\n\nFor nonzero values, evaluate the power difference with `expm1` and rationalize the distance logarithm before using `log1p`. This also avoids the cancellation near those limits, without choosing an arbitrary parameter cutoff.\n\nThe regression covers the two exact boundaries, beta approaching 1, small nonzero nu, and constant volatility on both sides of the near-ATM switch. Reference values were independently evaluated at 70 decimal digits; existing published-example and ATM-smoothness tests are retained.\n\nValidation:\n- The new regression reports six failures against the original implementation, including NaNs and cancellation errors.\n- CMake GCC Release build of the library and test executable succeeds (C++17, Boost 1.85, unity build).\n- The full `QuantLibTests/InterpolationTests` suite passes.\n- `git diff --check` passes.\n\nThe full QuantLib test suite, MSVC/macOS and non-default/AAD builds were not run. No remote workflows were dispatched.\n",
+ "comments": [
+  {
+   "body": "\n[![Coverage Status](https://coveralls.io/builds/83024660/badge)](https://coveralls.io/builds/83024660)\n\ncoverage: 79.745% (+0.001%) from 79.744% \u2014 **jackiectl2:fix-sabr-floch-kennedy-limits** into **lballabio:master**\n",
+   "created_at": "2026-11-13T15:36:08Z",
+   "user": {
+    "login": "coveralls",
+    "type": "User"
+   }
+  },
+  {
+   "body": "Congratulations on your first merged pull request!\n",
+   "created_at": "2026-11-13T16:29:20Z",
+   "user": {
+    "login": "boring-cyborg[bot]",
+    "type": "Bot"
+   }
+  }
+ ],
+ "created_at": "2026-11-10T22:08:42Z",
+ "fetched_at": "2026-11-24T03:18:10Z",
+ "head_sha": "6d0d8d8b3989d0639c19938cd328efdcbcb4a82b",
+ "labels": [],
+ "linked_issues": [
+  {
+   "body": "`sabrFlochKennedyVolatility` returns NaN at beta=1 and at nu=0, both removable singularities\n\n`sabrFlochKennedyVolatility` (the Le Floc'h\u2013Kennedy SABR normal-volatility approximation,\n`ql/termstructures/volatility/sabr.cpp`) returns `nan` at two parameter values that\n`validateSabrParameters` explicitly admits (`beta` in `[0,1]`, `nu >= 0`, no exception\ncarved out for either boundary):\n\n```\nbeta=0.5 nu=0.4    K=0.02: QL=0.22614443614774477    exact=0.226144436148\nbeta=0.5 nu=1e-06  K=0.0301: QL=0.17317237634036786    exact=0.173169004638\nbeta=0.5 nu=1e-08  K=0.0301: QL=0.1725330202008982     exact=0.173169006451\nbeta=0.5 nu=0      K=0.02: QL=nan                     exact=0.191500988522\nbeta=1.0 nu=0.4    K=0.02: QL=nan                     exact=0.0721962184624\nbeta=1.0 nu=0      K=0.04: QL=nan                     exact=0.03\n```\n\n(QuantLib-Python 1.44, also reproduces against the current `master` C++ source \u2014 `sabr.cpp`\nhasn't changed since the Floc'h\u2013Kennedy formula was added.)\n\n#### Where\n\nThe function builds `y(k) = -(F^(1-beta) - k^(1-beta))/(1-beta)` and, separately, a distance\n`Dint` that divides by `nu`. Both are `0/0` (or `log(1)/0`) at their respective degenerate\nvalue, not a domain violation:\n\n- At `beta = 1`: `y(k) = -(F^0 - k^0)/0 = 0/0`. The removable limit, by L'Hopital on the\n  exponent (or equivalently the derivative of `eps -> k^eps - F^eps` at `eps = 0`), is\n  `-log(F/k)`.\n- At `nu = 0`: `Dint = (1/nu) * log(1) = 0/0` (the argument of `log` is exactly 1 when\n  `nu = 0`). The removable limit is `-y/alpha`.\n\nBoth are genuinely removable, not just small near the boundary: for small nonzero `nu` the\nfunction is accurate (1.95e-5 relative error at `nu=1e-6`, matching the row above), it's\nexactly `nu = 0` and `beta = 1` that fall through to `nan`. `beta = 1` is also the most common\ncase in practice (lognormal SABR).\n\n#### Suggested fix\n\nSubstitute the two closed-form limits directly at the boundary (a `std::abs(1 - beta) < eps`\nguard for the first, `std::abs(nu) < eps` for the second \u2014 or a short Taylor series in `nu`\nnear zero, since the exact `nu = 0` substitution and the `nu -> 0` limit agree here, unlike\nsome of the library's other removable-singularity guards).\n\nWe hit this independently during a review of the library's degenerate-parameter handling and\nchecked the two limits by hand-deriving and then machine-checking them in Lean (the `beta -> 1`\nlimit as a derivative of `k^eps - F^eps` at `eps = 0`, the `nu -> 0` limit by direct\nsubstitution into the closed form) \u2014 happy to share the exact derivations if useful, though\nthe two limits above are straightforward enough that it's probably not necessary.\n\n\ud83e\udd16 Co-worked with [Claude Code](https://claude.com/claude-code)\n",
+   "labels": [],
+   "number": 3018,
+   "state": "closed",
+   "title": "sabrFlochKennedyVolatility returns NaN at beta=1 and at nu=0, both removable singularities"
+  }
+ ],
+ "merge_commit_sha": "be3716bc33d03cdbf68a79a104b751a8e84404b3",
+ "merged_at": "2026-11-13T16:29:16Z",
+ "number": 3045,
+ "referenced_numbers": [
+  3018
+ ],
+ "repo": "lballabio/QuantLib",
+ "review_comments": [],
+ "state": "closed",
+ "title": "Handle Floch-Kennedy SABR parameter limits without cancellation",
+ "transport": "gh",
+ "user": {
+  "login": "jackiectl2",
+  "type": "User"
+ }
+}

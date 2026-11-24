@@ -1,0 +1,33 @@
+{
+ "base_ref": "master",
+ "base_sha": "831a6e4415331a42db6bc27bf95e5166b6a3c698",
+ "body": "### Summary\n\nGMRES previously stopped before processing the current Hessenberg column when a Krylov breakdown occurred. On the first iteration, this could lead to an out-of-bounds access; on a later iteration, it could discard a column needed for convergence.\n\nThis change processes the final column before stopping, tracks the number of processed columns independently of the basis size, and reports a singular Krylov system instead of dividing by zero.\n\n### Tests\n\n- Added regressions for exact breakdown on the first and a later iteration, including checks of the actual residual.\n- Added singular and near-breakdown tests that check the reported error.\n- Confirmed the two exact-breakdown regressions fail with the original solver.\n- Built the test target and ran the focused GMRES and existing solver tests successfully.",
+ "comments": [
+  {
+   "body": "\n[![Coverage Status](https://coveralls.io/builds/83017422/badge)](https://coveralls.io/builds/83017422)\n\ncoverage: 79.733% (+0.004%) from 79.729% \u2014 **losterbr:fix/gmres-happy-breakdown** into **lballabio:master**\n",
+   "created_at": "2026-11-13T09:31:24Z",
+   "user": {
+    "login": "coveralls",
+    "type": "User"
+   }
+  }
+ ],
+ "created_at": "2026-11-07T16:22:50Z",
+ "fetched_at": "2026-11-24T03:18:14Z",
+ "head_sha": "d8463eaf91fe2c4252cdca4c1f4ba260bbc11f02",
+ "labels": [],
+ "linked_issues": [],
+ "merge_commit_sha": "7c1e97454941851e1f4741518c212af8efe6c066",
+ "merged_at": "2026-11-13T10:37:26Z",
+ "number": 3029,
+ "referenced_numbers": [],
+ "repo": "lballabio/QuantLib",
+ "review_comments": [],
+ "state": "closed",
+ "title": "Fix handling of Krylov breakdown in GMRES",
+ "transport": "gh",
+ "user": {
+  "login": "losterbr",
+  "type": "User"
+ }
+}

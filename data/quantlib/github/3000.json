@@ -1,0 +1,56 @@
+{
+ "base_ref": "master",
+ "base_sha": "84fbf0a0ecb9aa1cd6022ec468129f9dee5464be",
+ "body": "## Summary\n\n`Fd2dBlackScholesVanillaEngine::calculate()` does:\n\n```cpp\nconst ext::shared_ptr<BasketPayoff> payoff =\n    ext::dynamic_pointer_cast<BasketPayoff>(arguments_.payoff);\n```\n\nwith no check that the cast succeeded. Its sibling `FdNdimBlackScholesVanillaEngine` performs the identical cast and immediately follows it with `QL_REQUIRE(payoff, \"basket payoff expected\");` \u2014 `Fd2dBlackScholesVanillaEngine` is missing that guard. A failed cast leaves `payoff` null, which is stored and later dereferenced unconditionally in `FdmLogBasketInnerValue::innerValue()` via `(*payoff_)(x)` \u2014 undefined behavior instead of a clean, actionable error.\n\n`BasketOption`'s own constructor only accepts an `ext::shared_ptr<BasketPayoff>`, so this isn't reachable through normal `BasketOption` construction \u2014 but the engine's own `getArguments()`/`calculate()` interface is public API independent of any specific instrument wrapper (as the N-dim engine's existing guard already anticipates), and nothing stops a non-basket payoff from being set directly through it.\n\n## Fix\n\nAdded the same `QL_REQUIRE(payoff, \"basket payoff expected\");` the N-dim sibling already has, right after the cast.\n\n## Test\n\nAdded `testFd2dBlackScholesVanillaEngineRejectsNonBasketPayoff` to `test-suite/basketoption.cpp`: drives the engine directly through `getArguments()`/`calculate()` with a non-basket payoff after confirming normal `BasketOption` usage still works. Without the fix this hits an uncaught Boost `shared_ptr` null-dereference assertion (`px != 0`) rather than the library's own clean error; with the fix it throws a `QuantLib::Error` as expected. Full `BasketOptionTests` suite (33 cases) passes with no regressions.\n\n\ud83e\udd16 Co-worked with [Claude Code](https://claude.com/claude-code)",
+ "comments": [
+  {
+   "body": "\n[![Coverage Status](https://coveralls.io/builds/82998364/badge)](https://coveralls.io/builds/82998364)\n\ncoverage: 79.665% (+0.001%) from 79.664% \u2014 **leafyoung:fix-fd2dblackscholesvanillaengine-payoff-check** into **lballabio:master**\n",
+   "created_at": "2026-11-12T14:24:49Z",
+   "user": {
+    "login": "coveralls",
+    "type": "User"
+   }
+  }
+ ],
+ "created_at": "2026-11-01T13:53:42Z",
+ "fetched_at": "2026-11-24T03:18:19Z",
+ "head_sha": "638e6fd24be9e36e62844bba097d87815b8571f8",
+ "labels": [],
+ "linked_issues": [],
+ "merge_commit_sha": "40af289be9c5aad1bdfe5b98b6a78c6bb6b2c248",
+ "merged_at": "2026-11-12T15:14:49Z",
+ "number": 3000,
+ "referenced_numbers": [],
+ "repo": "lballabio/QuantLib",
+ "review_comments": [
+  {
+   "body": "The new quote allocations wrap raw `new` expressions in shared pointers, contrary to the factory convention in `AGENTS.md:64\u201366`. Use `auto` with `ext::make_shared`; apply the same change to the process, exercise, and engine allocations at lines 3066\u20133081.",
+   "created_at": "2026-11-01T13:56:32Z",
+   "diff_hunk": "@@ -3033,6 +3033,74 @@ BOOST_AUTO_TEST_CASE(testGaussianCopulaSpreadEngineParityAcrossVols) {\n     }\n }\n \n+BOOST_AUTO_TEST_CASE(testFd2dBlackScholesVanillaEngineRejectsNonBasketPayoff) {\n+    BOOST_TEST_MESSAGE(\n+        \"Testing Fd2dBlackScholesVanillaEngine's guard against a \"\n+        \"non-basket payoff...\");\n+\n+    // Fd2dBlackScholesVanillaEngine::calculate() dynamic_pointer_casts\n+    // arguments_.payoff to BasketPayoff but, unlike its sibling\n+    // FdNdimBlackScholesVanillaEngine (which QL_REQUIREs the cast to\n+    // succeed), used to have no check at all: a null cast would silently\n+    // flow into FdmLogBasketInnerValue::innerValue()'s unconditional\n+    // (*payoff_)(x) dereference. That is a null-pointer dereference\n+    // (undefined behavior), not a catchable exception, so it cannot safely\n+    // be exercised pre-fix in an automated test -- this test instead\n+    // demonstrates the fixed engine's behavior: driving it directly through\n+    // its own PricingEngine::getArguments()/calculate() interface (the same\n+    // entry point BasketOption itself uses, but without BasketOption's\n+    // constructor-level type safety) with a non-basket payoff throws a\n+    // clean QuantLib::Error instead.\n+\n+    DayCounter dc = Actual360();\n+    Date today = Settings::instance().evaluationDate();\n+\n+    ext::shared_ptr<SimpleQuote> spot1(new SimpleQuote(100.0));\n+    ext::shared_ptr<SimpleQuote> spot2(new SimpleQuote(100.0));",
+   "line": 3059,
+   "path": "test-suite/basketoption.cpp",
+   "user": {
+    "login": "Copilot",
+    "type": "Bot"
+   }
+  },
+  {
+   "body": "Good catch, fixed in ab3d85efc \u2014 switched the quote, process, exercise, and engine allocations to auto + ext::make_shared.\n\n_\ud83e\udd16 Addressed by [Claude Code](https://claude.com/claude-code)_",
+   "created_at": "2026-11-01T14:12:50Z",
+   "diff_hunk": "@@ -3033,6 +3033,74 @@ BOOST_AUTO_TEST_CASE(testGaussianCopulaSpreadEngineParityAcrossVols) {\n     }\n }\n \n+BOOST_AUTO_TEST_CASE(testFd2dBlackScholesVanillaEngineRejectsNonBasketPayoff) {\n+    BOOST_TEST_MESSAGE(\n+        \"Testing Fd2dBlackScholesVanillaEngine's guard against a \"\n+        \"non-basket payoff...\");\n+\n+    // Fd2dBlackScholesVanillaEngine::calculate() dynamic_pointer_casts\n+    // arguments_.payoff to BasketPayoff but, unlike its sibling\n+    // FdNdimBlackScholesVanillaEngine (which QL_REQUIREs the cast to\n+    // succeed), used to have no check at all: a null cast would silently\n+    // flow into FdmLogBasketInnerValue::innerValue()'s unconditional\n+    // (*payoff_)(x) dereference. That is a null-pointer dereference\n+    // (undefined behavior), not a catchable exception, so it cannot safely\n+    // be exercised pre-fix in an automated test -- this test instead\n+    // demonstrates the fixed engine's behavior: driving it directly through\n+    // its own PricingEngine::getArguments()/calculate() interface (the same\n+    // entry point BasketOption itself uses, but without BasketOption's\n+    // constructor-level type safety) with a non-basket payoff throws a\n+    // clean QuantLib::Error instead.\n+\n+    DayCounter dc = Actual360();\n+    Date today = Settings::instance().evaluationDate();\n+\n+    ext::shared_ptr<SimpleQuote> spot1(new SimpleQuote(100.0));\n+    ext::shared_ptr<SimpleQuote> spot2(new SimpleQuote(100.0));",
+   "line": 3059,
+   "path": "test-suite/basketoption.cpp",
+   "user": {
+    "login": "leafyoung",
+    "type": "User"
+   }
+  }
+ ],
+ "state": "closed",
+ "title": "Guard `Fd2dBlackScholesVanillaEngine` against a non-basket payoff",
+ "transport": "gh",
+ "user": {
+  "login": "leafyoung",
+  "type": "User"
+ }
+}

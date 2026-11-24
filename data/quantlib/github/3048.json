@@ -1,0 +1,56 @@
+{
+ "base_ref": "master",
+ "base_sha": "2bce52b5ce5930d213b5423b62a23d70e3a782a7",
+ "body": "`Malta::MseImpl::isWeekend` returns true for Fridays and Saturdays, so the calendar treats every Friday as a holiday and every Sunday as a business day. The class documentation already lists Saturdays and Sundays, and the Malta Stock Exchange trades from Monday to Friday. The existing test reflected this: it expected Sundays such as December 13th, 2026 and August 15th, 2027 to be holidays, and left out holidays falling on a Friday, such as May 1st and December 25th, 2026.\n\nThe calendar also missed two days on which MSE doesn't trade: January 2nd and June 7th (Sette Giugno). With the change, its holidays match the \"No Trading\" days of the MSE trading and settlement calendars for every year from 2019 to 2026, for instance:\n\n- 2026: https://cdn.borzamalta.com.mt/download/2026%20Trading%20Calendar%20EUR_GBP_USD%20Final.pdf\n- 2025: https://cdn.borzamalta.com.mt/download/2025%20Trading%20Calendar%20EUR_GBP_USD%20Final.pdf\n- 2024: https://cdn.borzamalta.com.mt/download/2024%20Trading%20Calendar%20EUR_GBP_USD.pdf\n\n(the earlier ones are linked from https://borzamalta.com.mt/publications-and-statistics?category=54).\n\nI also removed \"Orthodox calendar\" from the Good Friday line of the documentation; the code uses the Western Easter, which is the right one for Malta.\n\n`testMalta` now checks the weekend days and compares the holiday list for 2024 to 2027 (2024-2026 from the MSE calendars, 2027 from the rules). It fails on master with 28 errors and passes with the change.\n",
+ "comments": [
+  {
+   "body": "\n[![Coverage Status](https://coveralls.io/builds/83160412/badge)](https://coveralls.io/builds/83160412)\n\ncoverage: 80.436% (+0.002%) from 80.434% \u2014 **sohailshk:fix/malta-calendar-weekend** into **lballabio:master**\n",
+   "created_at": "2026-11-19T14:33:51Z",
+   "user": {
+    "login": "coveralls",
+    "type": "User"
+   }
+  }
+ ],
+ "created_at": "2026-11-11T04:30:30Z",
+ "fetched_at": "2026-11-24T03:17:38Z",
+ "head_sha": "ed7fad8c43ba043e9c310d0a4844f68bff443d84",
+ "labels": [],
+ "linked_issues": [],
+ "merge_commit_sha": "8296bd2f1ded41f7ea1cdcbf796740c1a35ff145",
+ "merged_at": "2026-11-19T15:53:34Z",
+ "number": 3048,
+ "referenced_numbers": [],
+ "repo": "lballabio/QuantLib",
+ "review_comments": [
+  {
+   "body": "This is now the same as the implementation inherited from `WesternCalendar`, so there's no need for this class to define the method.",
+   "created_at": "2026-11-18T08:12:45Z",
+   "diff_hunk": "@@ -28,7 +28,7 @@ namespace QuantLib {\n     }\n \n     bool Malta::MseImpl::isWeekend(Weekday w) const {\n-        return w == Friday || w == Saturday;\n+        return w == Saturday || w == Sunday;\n     }",
+   "line": 32,
+   "path": "ql/time/calendars/malta.cpp",
+   "user": {
+    "login": "lballabio",
+    "type": "User"
+   }
+  },
+  {
+   "body": "Thanks, you're right. Removed the `isWeekend` override from `Malta::MseImpl` (declaration in `malta.hpp`, definition in `malta.cpp`) in 14498c3a5, so the class inherits `Calendar::WesternImpl::isWeekend` (Saturday and Sunday).\n\nChecked by compiling `malta.cpp` with the change and calling `Malta()` directly: Saturday and Sunday are weekends and non-business days, Friday is a business day, and 2 January and 7 June are holidays. I did not run the full `test-suite` against the change.\n",
+   "created_at": "2026-11-18T15:53:02Z",
+   "diff_hunk": "@@ -28,7 +28,7 @@ namespace QuantLib {\n     }\n \n     bool Malta::MseImpl::isWeekend(Weekday w) const {\n-        return w == Friday || w == Saturday;\n+        return w == Saturday || w == Sunday;\n     }",
+   "line": 32,
+   "path": "ql/time/calendars/malta.cpp",
+   "user": {
+    "login": "sohailshk",
+    "type": "User"
+   }
+  }
+ ],
+ "state": "closed",
+ "title": "Fix weekend days and add missing holidays to the Malta calendar",
+ "transport": "gh",
+ "user": {
+  "login": "sohailshk",
+  "type": "User"
+ }
+}

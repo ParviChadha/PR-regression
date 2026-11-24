@@ -1,0 +1,33 @@
+{
+ "base_ref": "master",
+ "base_sha": "84fbf0a0ecb9aa1cd6022ec468129f9dee5464be",
+ "body": "`ForwardPerformanceVanillaEngine` scales missing vega, rho and\ndividend rho without checking `Null<Real>()`. The resulting numbers\nno longer match the sentinel, so the option accessors return them\ninstead of reporting \"not provided\".\n\nGuard each result as `ForwardVanillaEngine` already does. Provided\nGreeks retain their existing formulas; delta, gamma and theta are\nunchanged.\n\nA standalone implementation probe, not included in the test suite,\nused spot 100, moneyness 1, r = 5%, q = 2%, volatility 20%,\nActual/365 (Fixed), reset after 90 days and expiry after 365 days:\n\n| Wrapped engine | `84fbf0a0e` | With this change |\n|---|---|---|\n| `IntegralEngine` or `FdBlackScholesVanillaEngine` | All three Greeks \u2248 3.36112840081e36 | Each accessor reports \"not provided\" |\n| `AnalyticEuropeanEngine` | Provides all three Greeks | Same values |\n\nThe large number is the default build's null sentinel multiplied by\n`exp(-0.05*90/365)/100`: the factor includes division by spot.\n\n`testPerformanceGreeksNotProvided` removes each Greek independently\nfrom an analytic engine and also exercises `IntegralEngine`. It checks\nmissing-Greek messages, retained Greeks within 1e-12, and NPV within\n1e-6.\n\nImplementation validation on Linux used GCC 13.3.0, Boost 1.83.0,\nRelease and `QL_COMPILE_WARNING_AS_ERROR=ON`. The base header fails six\nassertions in the new case. With the fix, all nine `ForwardOptionTests`\ncases and `QuantoOptionTests` pass in C++17 and C++20. The quanto suite\ndoes not cover composition with a partial-Greek performance engine.\n\nAI disclosure: this was prepared with AI assistance (Claude Opus 5.5 and Claude Sonnet 5.5).\n\n\ud83e\udd16 Generated with [Claude Code](https://claude.com/claude-code)\n\nhttps://claude.ai/code/session_01JfvcPZyKcKQUG9fQGYfRMw\n",
+ "comments": [
+  {
+   "body": "\n[![Coverage Status](https://coveralls.io/builds/82948193/badge)](https://coveralls.io/builds/82948193)\n\ncoverage: 79.665% (+0.001%) from 79.664% \u2014 **Jackmeson1:fix/forward-performance-null-greeks** into **lballabio:master**\n",
+   "created_at": "2026-11-10T15:29:29Z",
+   "user": {
+    "login": "coveralls",
+    "type": "User"
+   }
+  }
+ ],
+ "created_at": "2026-11-04T01:17:30Z",
+ "fetched_at": "2026-11-24T03:18:26Z",
+ "head_sha": "34e781869688bdde4549c9a3165d3f87410016d8",
+ "labels": [],
+ "linked_issues": [],
+ "merge_commit_sha": "918a7f1d9d510d3edd104aee81cacca0ee1a92fe",
+ "merged_at": "2026-11-10T16:08:14Z",
+ "number": 3015,
+ "referenced_numbers": [],
+ "repo": "lballabio/QuantLib",
+ "review_comments": [],
+ "state": "closed",
+ "title": "Keep missing Greeks unavailable in `ForwardPerformanceVanillaEngine`",
+ "transport": "gh",
+ "user": {
+  "login": "Jackmeson1",
+  "type": "User"
+ }
+}

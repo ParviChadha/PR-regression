@@ -1,0 +1,85 @@
+{
+ "base_ref": "master",
+ "base_sha": "f24923d30b58bb97264d355da30edb4f47acc1de",
+ "body": "Fixes #2988.\n\n`Schedule` fails with `year outside valid range` when `DateGeneration::Zero` is combined with `endOfMonth = true` and a non-zero tenor. The zero branch never sets `seed`, so the end-of-month pass after the switch calls `calendar_.isEndOfMonth` on a null date.\n\nThe other rules that can't use the convention raise `endOfMonth convention incompatible with <rule> date generation rule`. This adds the same check to the zero branch, as the issue suggests.\n\nA zero tenor isn't affected: `allowsEndOfMonth` already turns the flag off, so `Period(Once)` schedules, including the ones `MakeOIS` builds, work as before. The new test covers the rejected case, the zero tenor with the flag set, and a non-zero tenor with the flag off.\n\n**Testing:** I couldn't build QuantLib on my machine, so neither the change nor the new test has been compiled or run. CI will be the first run.\n\n**AI disclosure:** Claude Code (Claude Opus 5.5) traced the code and wrote the change, the test and this description.\n\n\ud83e\udd16 Generated with [Claude Code](https://claude.com/claude-code)\n",
+ "comments": [
+  {
+   "body": "[![CLA assistant check](https://cla-assistant.io/pull/badge/signed)](https://cla-assistant.io/lballabio/QuantLib?pullRequest=3017) <br/>All committers have signed the CLA.",
+   "created_at": "2026-11-04T10:05:25Z",
+   "user": {
+    "login": "CLAassistant",
+    "type": "User"
+   }
+  },
+  {
+   "body": "Thanks for opening this pull request!  It might take a while before we look at it, so don't worry if there seems to be no feedback.  We'll get to it.\n",
+   "created_at": "2026-11-04T10:05:27Z",
+   "user": {
+    "login": "boring-cyborg[bot]",
+    "type": "Bot"
+   }
+  },
+  {
+   "body": "If you can't compile or run QuantLib on your machine, you can enable GitHub Actions on your account so that the CI builds are run when you push to your fork; some tasks will fail because you'll be missing some required token, but you'll be able to check at least the compilations.  Please let me know if that works.",
+   "created_at": "2026-11-13T07:39:41Z",
+   "user": {
+    "login": "lballabio",
+    "type": "User"
+   }
+  },
+  {
+   "body": "Thanks, that worked. I enabled Actions on my fork and ran CI on the PR commit: https://github.com/1AbdullahButt/QuantLib/actions?query=branch%3Aci%2F2988-check\n\nThe Linux (all configurations), Windows, macOS 15 and CMake builds compile and the test suite passes, including the new test. The macOS 26 job was cancelled before it got a runner, and the jobs that open automated PRs failed on the missing token, as you said.\n",
+   "created_at": "2026-11-13T22:05:31Z",
+   "user": {
+    "login": "1AbdullahButt",
+    "type": "User"
+   }
+  },
+  {
+   "body": "\n[![Coverage Status](https://coveralls.io/builds/83064556/badge)](https://coveralls.io/builds/83064556)\n\ncoverage: 79.679% (+0.005%) from 79.674% \u2014 **1AbdullahButt:fix/2988-zero-rule-end-of-month** into **lballabio:master**\n",
+   "created_at": "2026-11-16T08:31:31Z",
+   "user": {
+    "login": "coveralls",
+    "type": "User"
+   }
+  },
+  {
+   "body": "Congratulations on your first merged pull request!\n",
+   "created_at": "2026-11-16T09:16:51Z",
+   "user": {
+    "login": "boring-cyborg[bot]",
+    "type": "Bot"
+   }
+  }
+ ],
+ "created_at": "2026-11-04T10:05:19Z",
+ "fetched_at": "2026-11-24T03:18:04Z",
+ "head_sha": "0f0142e614e8ae2a8a40f4d0adb62012d3d87178",
+ "labels": [],
+ "linked_issues": [
+  {
+   "body": "**Summary**\n\n`DateGeneration::Zero` combined with `endOfMonth = true` crashes with `RuntimeError: year outside valid range` on every input, instead of the clean rule-incompatibility message that every sibling rule produces.\n\n**Repro** (QuantLib-Python 1.44, Python 3.14; same code path at current master):\n\n```python\nimport QuantLib as ql\nql.MakeSchedule(ql.Date(15,1,2025), ql.Date(15,1,2026), ql.Period('3M'),\n                calendar=ql.TARGET(), rule=ql.DateGeneration.Zero,\n                endOfMonth=True)\n# RuntimeError: year outside valid range\n```\n\nThe error fires for all combinations of calendar, effective date, tenor, and termination date that we tested (440 combos).\n\n**Mechanism**\n\nThe end-of-month incompatibility guard in `ql/time/schedule.cpp` (`! *endOfMonth_` requirement) lists Twentieth, TwentiethIMM, ThirdWednesday, ThirdWednesdayInclusive, OldCDS, CDS, and CDS2015 as incompatible rules, but not `Zero`. The Zero branch then sets `tenor_ = 0*Years` and leaves the `seed` date null. The post-generation EOM pass (`if (*endOfMonth_ && calendar_.isEndOfMonth(seed))`) decomposes the null date, which dies deep in `date.cpp` at the `y >= 1900 && y <= 2200` requirement.\n\n**Impact**\n\nDiagnostic quality, not wrong numbers: a user leaving `endOfMonth = true` on a Zero-rule schedule gets a cryptic year-range error from the date layer instead of the clean rule-incompatibility message every sibling rule produces.\n\n**Suggested fix**\n\nAdd `Zero` to the list of rules rejected by the `endOfMonth` compatibility requirement in `schedule.cpp`.\n\n**Environment**\n\nQuantLib-Python 1.44; verified in source at master `e429e9f1` (`ql/time/schedule.cpp`).\n\n<sub>Found by a formal-verification audit of historical QuantLib PRs; AI-assisted (ZCode/GLM-5.3-flash).</sub>\n",
+   "labels": [
+    "help wanted"
+   ],
+   "number": 2988,
+   "state": "closed",
+   "title": "DateGeneration::Zero with endOfMonth = true crashes with 'year outside valid range'"
+  }
+ ],
+ "merge_commit_sha": "e482247c9d29493ea041ccd1e8301b9287500095",
+ "merged_at": "2026-11-16T09:16:26Z",
+ "number": 3017,
+ "referenced_numbers": [
+  2988
+ ],
+ "repo": "lballabio/QuantLib",
+ "review_comments": [],
+ "state": "closed",
+ "title": "Reject the end-of-month convention with the zero date-generation rule",
+ "transport": "gh",
+ "user": {
+  "login": "1AbdullahButt",
+  "type": "User"
+ }
+}

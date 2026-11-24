@@ -1,0 +1,33 @@
+{
+ "base_ref": "master",
+ "base_sha": "e0247baf5a3e7d4cb7f1e357d5a688e1fc0c94c0",
+ "body": "`AnalyticDoubleBarrierBinaryEngine` requires European exercise for `DoubleBarrier::KnockIn`, so a knock-in pays its cash at expiry. When the spot is already on or beyond a barrier, though, the engine returns the undiscounted cash, so the price jumps at the barrier (cash 10, barriers 80/120, r = 5%, 90 days):\n\n| Spot | Before | After |\n|---|---|---|\n| 80.0001 | 9.87568 | 9.87568 |\n| 80 | 10.00000 | 9.87578 |\n| 79 | 10.00000 | 9.87578 |\n\nThe fixed value agrees with:\n- `BinomialDoubleBarrierEngine`, which gives 9.875778 for the knocked-in option;\n- the engine's own formula $D(T)\\,\\text{cash} - \\text{KO}$, which tends to the discounted cash at the barriers;\n- Haug's table in `testHaugValues`, where the 95/105 knock-in at 50% volatility is 9.8758.\n\nThe knocked-in rho is now $-t \\cdot \\text{value}$ instead of 0. KIKO and KOKI are unchanged: they have American exercise and pay at the hit, so the undiscounted cash is correct there.\n\n**Tests:** the two degenerate knock-in rows in `testHaugValues` expected 10.0000; they weren't Haug values but matched the previous behaviour, and now expect 9.8758 ($10 e^{-0.05 \\cdot 0.25}$). A new `testKnockedInValue` checks value and rho on and beyond both barriers, and continuity just inside them. Both fail on master and pass with this change.",
+ "comments": [
+  {
+   "body": "\n[![Coverage Status](https://coveralls.io/builds/83016396/badge)](https://coveralls.io/builds/83016396)\n\ncoverage: 79.718% (+0.001%) from 79.717% \u2014 **csarushan1729:fix-double-barrier-binary-knockin** into **lballabio:master**\n",
+   "created_at": "2026-11-13T08:39:57Z",
+   "user": {
+    "login": "coveralls",
+    "type": "User"
+   }
+  }
+ ],
+ "created_at": "2026-11-06T12:12:39Z",
+ "fetched_at": "2026-11-24T03:18:15Z",
+ "head_sha": "912b83eb05f412c4bf2f8a3f0ba07eec02081bbe",
+ "labels": [],
+ "linked_issues": [],
+ "merge_commit_sha": "d4a8b46987898655bd4a9aaad7b38a1e4f852ef8",
+ "merged_at": "2026-11-13T09:18:51Z",
+ "number": 3026,
+ "referenced_numbers": [],
+ "repo": "lballabio/QuantLib",
+ "review_comments": [],
+ "state": "closed",
+ "title": "Discount the cash of knocked-in double-barrier binary options",
+ "transport": "gh",
+ "user": {
+  "login": "csarushan1729",
+  "type": "User"
+ }
+}

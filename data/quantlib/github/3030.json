@@ -1,0 +1,45 @@
+{
+ "base_ref": "master",
+ "base_sha": "831a6e4415331a42db6bc27bf95e5166b6a3c698",
+ "body": "Adds `NewZealand::NZFMA`, which follows the NZFMA recommended holidays, updated earlier this year. Wellington and Auckland Anniversary Days are considered holidays through 2025 and business days from 2026 onward.\n\nPlease see https://swapsmonitor.com/%f0%9f%93%8c-new-zealand-business-day-nzbd-calendar-update/",
+ "comments": [
+  {
+   "body": "\n[![Coverage Status](https://coveralls.io/builds/82915120/badge)](https://coveralls.io/builds/82915120)\n\ncoverage: 79.732% (+0.003%) from 79.729% \u2014 **sdacek:nzfma_calendar** into **lballabio:master**\n",
+   "created_at": "2026-11-09T12:43:54Z",
+   "user": {
+    "login": "coveralls",
+    "type": "User"
+   }
+  }
+ ],
+ "created_at": "2026-11-08T03:50:23Z",
+ "fetched_at": "2026-11-24T03:18:35Z",
+ "head_sha": "d9ff452a84b9d18df29e694fe1313be6dcca3810",
+ "labels": [],
+ "linked_issues": [],
+ "merge_commit_sha": "3dd43c3d3c579c063c2ab560d77476b4aa99c67e",
+ "merged_at": "2026-11-09T13:34:48Z",
+ "number": 3030,
+ "referenced_numbers": [],
+ "repo": "lballabio/QuantLib",
+ "review_comments": [
+  {
+   "body": "These helpers are usually declared as `(Day d, Month m, Year y, Weekday w)` or similar to avoid recomputing date fields, which is a non-trivial computation.\r\n\r\nYou can apply this to `NewZealand::CommonImpl::isBusinessDay()` as well for the same reason (which is an improvement on the current code). To do so you'll have to rename it and drop `override`, so you can change the signature.",
+   "created_at": "2026-11-09T02:50:29Z",
+   "diff_hunk": "@@ -21,6 +21,24 @@\n \n namespace QuantLib {\n \n+    namespace {\n+\n+        // Wellington Anniversary Day, Monday nearest to January 22nd\n+        bool isWellingtonAnniversary(const Date& date) {",
+   "line": 27,
+   "path": "ql/time/calendars/newzealand.cpp",
+   "user": {
+    "login": "eltoder",
+    "type": "User"
+   }
+  }
+ ],
+ "state": "closed",
+ "title": "Add New Zealand NZFMA calendar",
+ "transport": "gh",
+ "user": {
+  "login": "sdacek",
+  "type": "User"
+ }
+}

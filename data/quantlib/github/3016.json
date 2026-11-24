@@ -1,0 +1,33 @@
+{
+ "base_ref": "master",
+ "base_sha": "84fbf0a0ecb9aa1cd6022ec468129f9dee5464be",
+ "body": "`CumulativeGammaDistribution` limits its series and continued fraction to 100 iterations without exposing a budget. On `84fbf0a0e`, ordinary finite inputs such as gamma shape 500 at x = 500 throw \"too few iterations\". Central chi-square inherits the failure through its gamma-CDF call.\n\nReturn `boost::math::gamma_p`, already used elsewhere in QuantLib, while keeping the `x <= 0` guard and constructor validation.\n\n| Call | `84fbf0a0e` | This PR | mpmath reference |\n|---|---|---:|---:|\n| Gamma shape 500, x = 500 | throws | 0.50594714617076031 | 0.50594714617076036 |\n| Chi-square df = 1000, x = 1000 | throws | 0.50594714617076031 | 0.50594714617076036 |\n\n`testCumulativeGammaDistributionLargeShapes` adds 19 reference cases; `testCumulativeChiSquareDistributionLargeDegreesOfFreedom` adds seven. References use mpmath 1.3.0 at 60 digits, checked at 1e-12 relative tolerance, covering moderate and large parameters and both sides of the distribution. Against `84fbf0a0e`, 22 rows fail, including eight exceptions; four upper-side controls pass.\n\nBoost's numerical and error policies now apply after the guard. In throwaway probes with Boost 1.83.0, gamma shape 1 returned 1 at +infinity and NaN at a NaN argument; chi-square with infinite degrees of freedom returned NaN at x = 2. These previously threw. Gamma at a = x = 1e15 still threw, now a Boost exception rather than `QuantLib::Error`.\n\nA throwaway single-thread benchmark at seven inputs measured approximately 0.24\u20131.2 microseconds per call, versus 0.07\u20130.34 previously. Poisson, binomial, non-central chi-square and the explicitly budgeted incomplete functions are unchanged.\n\nImplementation validation on Ubuntu 24.04 with g++ 13.3.0, Boost 1.83.0, Release and warnings as errors: all 38 cases in `FunctionsTests` and `DistributionTests` pass in C++17 and C++20. MSVC, Clang, AAD, other Boost versions and the full suite were not run.\n\n    ./build/test-suite/quantlib-test-suite --run_test=QuantLibTests/FunctionsTests:QuantLibTests/DistributionTests --log_level=message\n\nAI disclosure: this was prepared with AI assistance (Claude Opus 5.5 and Claude Sonnet 5.5).\n\n\ud83e\udd16 Generated with [Claude Code](https://claude.com/claude-code)\n\nhttps://claude.ai/code/session_01JfvcPZyKcKQUG9fQGYfRMw\n",
+ "comments": [
+  {
+   "body": "\n[![Coverage Status](https://coveralls.io/builds/82996659/badge)](https://coveralls.io/builds/82996659)\n\ncoverage: 79.66% (-0.004%) from 79.664% \u2014 **Jackmeson1:fix/gamma-cdf-large-shapes** into **lballabio:master**\n",
+   "created_at": "2026-11-12T13:14:28Z",
+   "user": {
+    "login": "coveralls",
+    "type": "User"
+   }
+  }
+ ],
+ "created_at": "2026-11-04T01:30:12Z",
+ "fetched_at": "2026-11-24T03:18:21Z",
+ "head_sha": "daa0af42ebc39a0fa366fa26cad686161877e153",
+ "labels": [],
+ "linked_issues": [],
+ "merge_commit_sha": "685761a047f650cb1603706460e3765f01181acb",
+ "merged_at": "2026-11-12T14:00:48Z",
+ "number": 3016,
+ "referenced_numbers": [],
+ "repo": "lballabio/QuantLib",
+ "review_comments": [],
+ "state": "closed",
+ "title": "Fix the gamma and chi-square CDFs for large parameters",
+ "transport": "gh",
+ "user": {
+  "login": "Jackmeson1",
+  "type": "User"
+ }
+}
