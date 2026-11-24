@@ -1,7 +1,98 @@
 // Upstream tests at the PR's parent commit 1e9222f95 that use the changed code.
-// Names searched (test lines using each): view_serializer (0), plain_output_run (0), output_buffer (0), ascii_copyable_run (0), ascii_stop_mask (0), depth_counter (0), ascii_stop_bits (0), get (682), leave (0), dump_text (0), enter (0), value (2410), dump_ascii (0), dump_pretty (0), write_ascii (0), write_decoded (0), dump_compact (0), write_escaped (0), put_repeated (0), dump_compact_ascii (0), newline (0), write_ascii_string (0), write_scalar (0), write_string (0)
+// Names searched (test lines using each): dump (676), view_serializer (0), plain_output_run (0), output_buffer (0), write_ascii (0), dump_text (0), ascii_copyable_run (0), dump_ascii (0), ascii_stop_mask (0), dump_pretty (0), write_decoded (0), ascii_stop_bits (0), depth_counter (0), enter (0), get (682), leave (0), value (2410), write_scalar (0), write_escaped (0), write_string (0), dump_compact (0), dump_compact_ascii (0), newline (0), put_repeated (0), frame (0), write_ascii_string (0), end (1121), first (261), object (1066), pos (51)
 
-// ---- tests/src/unit-json_view_edit_values.cpp:37-45  (uses: get, value)
+// ---- tests/src/unit-json_view.cpp:792-838  (uses: dump, end, first, get, value)
+    SECTION("duplicate keys: lookups find the first member, iteration all")
+    {
+        const json_document d = json_document::parse(R"({"a":1,"b":2,"a":3})");
+        const json_view v = d.root();
+        CHECK(v.size() == 3);
+        CHECK(v["a"].materialize() == 1);
+        CHECK(v.at("a").materialize() == 1);
+        CHECK(v.find("a") == v.begin());
+        CHECK(v.find("a").value().materialize() == 1);
+        CHECK(v.find("b") == std::next(v.begin()));
+        CHECK(v.count("a") == 2); // every member, unlike materialize()
+        CHECK(v.count("b") == 1);
+        CHECK(v.contains("a"));
+        CHECK(v.value("a", 0) == 1);
+        CHECK(v.materialize()["a"] == 3); // materialize() keeps the last value, unlike the lookups
+        // JSON pointers resolve to the first member at every level
+        const json_document dp = json_document::parse(R"({"a":{"b":1},"a":{"b":2,"b":3}})");
+        CHECK(dp.root()[json::json_pointer("/a/b")].materialize() == 1);
+        CHECK(dp.root().at(json::json_pointer("/a/b")).materialize() == 1);
+        CHECK(dp.root().value(json::json_pointer("/a/b"), 0) == 1);
+        CHECK(dp.root().materialize()[json::json_pointer("/a/b")] == 3);
+        // get<map> keeps the last value, as materialize()
+        CHECK((v.get<std::map<std::string, int>>() == std::map<std::string, int> {{"a", 3}, {"b", 2}}));
+        // keys of every length class (the 16-byte short compare and memcmp)
+        for (const std::size_t n :
+                {
+                    0u, 1u, 3u, 7u, 8u, 15u, 16u, 17u, 40u
+                })
+        {
+            const std::string key(n, 'k');
+            const json_document dk = json_document::parse("{\"" + key + "\":1,\"" + key + "x\":2,\"" + key + "\":3,\"" + key + "\":4}"); // NOLINT(performance-inefficient-string-concatenation)
+            CAPTURE(n)
+            CHECK(dk.root()[key].materialize() == 1);
+            CHECK(dk.root().at(key).materialize() == 1);
+            CHECK(dk.root().find(key) == dk.root().begin());
+            CHECK(dk.root().value(key, 0) == 1);
+            CHECK(dk.root()[key + "x"].materialize() == 2);
+        }
+        std::string order;
+        for (auto it = v.begin(); it != v.end(); ++it)
+        {
+            order += std::string(it.key().data(), it.key().size()) + it->materialize().dump();
+        }
+        CHECK(order == "a1b2a3");
+        CHECK(v.back().materialize() == 3);
+        CHECK(v.materialize() == json::parse(R"({"a":1,"b":2,"a":3})")); // the last value, as parse()
+    }
+
+// ---- tests/src/unit-cbor.cpp:1810-1849  (uses: end, first, object, value)
+        SECTION("non-string key (see #2766 and #3381)")
+        {
+            // only text strings map to JSON object keys; any other key is
+            // rejected with a message naming its type
+            const std::vector<std::pair<std::vector<std::uint8_t>, std::string>> cases =
+            {
+                {{0xA1, 0x01, 0x01}, "an unsigned integer; last byte: 0x01"},
+                {{0xA1, 0x20, 0x01}, "a negative integer; last byte: 0x20"},
+                {{0xA1, 0x41, 0x61, 0x01}, "a byte string; last byte: 0x41"},
+                {{0xA1, 0x80, 0x01}, "an array; last byte: 0x80"},
+                {{0xA1, 0xA0, 0x01}, "a map; last byte: 0xA0"},
+                {{0xA1, 0xC0, 0x61, 0x61, 0x01}, "a tag; last byte: 0xC0"},
+                {{0xA1, 0xF4, 0x01}, "a boolean; last byte: 0xF4"},
+                {{0xA1, 0xF5, 0x01}, "a boolean; last byte: 0xF5"},
+                {{0xA1, 0xF6, 0x01}, "null; last byte: 0xF6"},
+                {{0xA1, 0xF7, 0x01}, "undefined; last byte: 0xF7"},
+                {{0xA1, 0xF9, 0x3C, 0x00, 0x01}, "a floating-point number; last byte: 0xF9"},
+                {{0xA1, 0xFA, 0x3F, 0x80, 0x00, 0x00, 0x01}, "a floating-point number; last byte: 0xFA"},
+                {{0xA1, 0xFB, 0x3F, 0xF0, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x01}, "a floating-point number; last byte: 0xFB"},
+                {{0xA1, 0xE0, 0x01}, "a simple value; last byte: 0xE0"},
+                {{0xA1, 0xF8, 0x20, 0x01}, "a simple value; last byte: 0xF8"},
+                // indefinite-length map
+                {{0xBF, 0x01, 0x01, 0xFF}, "an unsigned integer; last byte: 0x01"},
+            };
+
+            for (const auto& c : cases)
+            {
+                CAPTURE(c.first)
+                const std::string expected = "[json.exception.parse_error.113] parse error at byte 2: syntax error while parsing CBOR object key: only string keys are supported, but found " + c.second;
+                json _;
+                CHECK_THROWS_WITH_AS(_ = json::from_cbor(c.first), expected.c_str(), json::parse_error&);
+                CHECK(json::from_cbor(c.first, true, false).is_discarded());
+            }
+
+            // a key of major type 3 with a reserved length is still reported as
+            // a malformed string, and a missing key as the end of input
+            json _;
+            CHECK_THROWS_WITH_AS(_ = json::from_cbor(std::vector<uint8_t>({0xA1})), "[json.exception.parse_error.110] parse error at byte 2: syntax error while parsing CBOR string: unexpected end of input", json::parse_error&);
+            CHECK_THROWS_WITH_AS(_ = json::from_cbor(std::vector<uint8_t>({0xA1, 0x7C, 0x01})), "[json.exception.parse_error.113] parse error at byte 2: syntax error while parsing CBOR string: expected length specification (0x60-0x7B) or indefinite string type (0x7F); last byte: 0x7C", json::parse_error&);
+        }
+
+// ---- tests/src/unit-json_view_edit_values.cpp:37-45  (uses: dump, get, value)
     SECTION("a value that is no longer part of the document")
     {
         json_editable_document d = json_editable_document::parse("[[[1,2]]]");
@@ -12,131 +103,12 @@
         CHECK(inner.get<int>() == 5);
     }
 
-// ---- tests/src/unit-json_view_edit_values.cpp:47-66  (uses: get, value)
-    SECTION("views keep referring to their value")
+// ---- tests/src/unit-ordered_json.cpp:202-209  (uses: dump, object, value)
+    SECTION("lvalue value")
     {
-        json_editable_document d = json_editable_document::parse(R"({"a": [10, 20, 30], "b": {"c": "text"}})");
-        const json_editable_view a = d.root()["a"];
-        const json_editable_view twenty = a[1];
-        const json_editable_view c = d.root()["b"]["c"];
-        d.insert(a, 0, 5);
-        d.push_back(a, 40);
-        CHECK(twenty.get<int>() == 20);
-        CHECK(a[2].get<int>() == 20);
-        d.erase(a, 2);
-        CHECK(twenty.get<int>() == 20); // an erased value keeps its last value
-        d.set(c, 7);
-        CHECK(c.get<int>() == 7); // a held view sees an assignment
-        d.set(d.root()["b"], json::array({1, 2}));
-        CHECK(d.root()["b"].dump() == "[1,2]");
-        CHECK(d.root().dump() == R"({"a":[5,10,30,40],"b":[1,2]})");
-        CHECK(d.root()["a"][0].source_offset() == static_cast<std::size_t>(-1)); // a new value
-        CHECK(d.root()["a"][1].source_offset() != static_cast<std::size_t>(-1));
+        ordered_json oj = ordered_json::object();
+        ordered_json value = 1;
+        auto res = oj.emplace("a", value);
+        CHECK(res.second == true);
+        CHECK(oj.dump() == "{\"a\":1}");
     }
-
-// ---- tests/src/unit-algorithms.cpp:35-45  (uses: get, value)
-        SECTION("std::any_of")
-        {
-            CHECK(std::any_of(j_array.begin(), j_array.end(), [](const json & value)
-            {
-                return value.is_string() && value.get<std::string>() == "foo";
-            }));
-            CHECK(std::any_of(j_object.begin(), j_object.end(), [](const json & value)
-            {
-                return value.get<int>() > 1;
-            }));
-        }
-
-// ---- tests/src/unit-algorithms.cpp:47-57  (uses: get, value)
-        SECTION("std::none_of")
-        {
-            CHECK(std::none_of(j_array.begin(), j_array.end(), [](const json & value)
-            {
-                return value.empty();
-            }));
-            CHECK(std::none_of(j_object.begin(), j_object.end(), [](const json & value)
-            {
-                return value.get<int>() <= 0;
-            }));
-        }
-
-// ---- tests/src/unit-alt-string.cpp:418-451  (uses: get, value)
-    SECTION("conversion between basic_json specializations (#2649)")
-    {
-        // explicit conversions are always possible
-        CHECK(std::is_constructible<nlohmann::json, alt_json>::value);
-        CHECK(std::is_constructible<alt_json, nlohmann::json>::value);
-        CHECK(std::is_constructible<nlohmann::json, nlohmann::ordered_json>::value);
-        CHECK(std::is_constructible<nlohmann::ordered_json, nlohmann::json>::value);
-
-        // specializations with the same string type are implicitly convertible
-        CHECK(std::is_convertible<nlohmann::ordered_json, nlohmann::json>::value);
-        CHECK(std::is_convertible<nlohmann::json, nlohmann::ordered_json>::value);
-
-        // specializations with different string types are only implicitly convertible
-        // if implicit conversions are enabled
-#if JSON_USE_IMPLICIT_CONVERSIONS
-        CHECK(std::is_convertible<alt_json, nlohmann::json>::value);
-        CHECK(std::is_convertible<nlohmann::json, alt_json>::value);
-#else
-        CHECK_FALSE(std::is_convertible<alt_json, nlohmann::json>::value);
-        CHECK_FALSE(std::is_convertible<nlohmann::json, alt_json>::value);
-#endif
-
-        // get<BasicJsonType>() works in either case
-        const nlohmann::json j = {{"foo", 1}, {"bar", true}};
-        CHECK(j.get<nlohmann::ordered_json>() == nlohmann::ordered_json(j));
-        // (only a number is converted here, as objects and strings are affected by #3425)
-        CHECK(nlohmann::json(42).get<alt_json>() == 42);
-        CHECK(alt_json(nlohmann::json(42)) == 42);
-
-        // get_to() also works in either case
-        alt_json a;
-        nlohmann::json(42).get_to(a);
-        CHECK(a == 42);
-    }
-
-// ---- tests/src/unit-alt-string.cpp:453-466  (uses: get, value)
-    SECTION("strict enum")
-    {
-        // regression test for #5667: NLOHMANN_JSON_SERIALIZE_ENUM_STRICT's from_json
-        // built its exception message with "..." + j.dump(), which does not compile
-        // when j.dump() returns a custom string_t (here alt_string) instead of
-        // std::string
-        alt_json doc;
-        doc = "red";
-        CHECK(doc.get<alt_color>() == alt_color::red);
-
-        alt_json _;
-        doc = "blue";
-        CHECK_THROWS_WITH_AS(_ = doc.get<alt_color>(), "[json.exception.out_of_range.410] enum value out of range for alt_color: \"blue\"", alt_json::out_of_range&);
-    }
-
-// ---- tests/src/unit-class_parser.cpp:2541-2555  (uses: get, value)
-    SECTION("the library's own handlers do not need the text")
-    {
-        using lexer_adapter = nlohmann::detail::iterator_input_adapter<const char*>;
-        CHECK(nlohmann::detail::sax_ignores_number_text<nlohmann::detail::json_sax_dom_parser<json, lexer_adapter>>::value);
-        CHECK(nlohmann::detail::sax_ignores_number_text<nlohmann::detail::json_sax_dom_callback_parser<json, lexer_adapter>>::value);
-        CHECK(nlohmann::detail::sax_ignores_number_text<nlohmann::detail::json_sax_acceptor<json>>::value);
-        CHECK_FALSE(nlohmann::detail::sax_ignores_number_text<SaxEventLogger>::value);
-
-        // and the values are the same as when the text is read
-        const json j = json::parse(doc);
-        CHECK(j[0] == 1.5);
-        CHECK(j[5].get<double>() == 12345678901234567890.5);
-        CHECK(j[7]["b"][0] == 6.02e23);
-        CHECK(json::accept(doc));
-    }
-
-// ---- tests/src/unit-conversions2.cpp:598-607  (uses: get, value)
-TEST_CASE("NLOHMANN_JSON_SERIALIZE_ENUM_STRICT in a namespace with a colliding name")
-{
-    using ns_with_colliding_name::colliding_enum;
-
-    CHECK(json(colliding_enum::a) == "a");
-    CHECK(colliding_enum::b == json("b"));
-
-    json _;
-    CHECK_THROWS_WITH_AS(_ = json("nope").get<colliding_enum>(), "[json.exception.out_of_range.410] enum value out of range for colliding_enum: \"nope\"", json::out_of_range&);
-}

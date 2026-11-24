@@ -1,0 +1,169 @@
+// Upstream tests at the PR's parent commit 5d5dbc655 that use the changed code.
+// Names searched (test lines using each): ExponentialSplinesFitting (0), clone (7), discount (294), size (1196), discountFunction (0)
+
+// ---- test-suite/equityindex.cpp:128-147  (uses: clone, discount)
+BOOST_AUTO_TEST_CASE(testFixingForecastWithoutDividend) {
+    BOOST_TEST_MESSAGE("Testing fixing forecast without dividend...");
+
+    CommonVars vars;
+    const Real tolerance = 1.0e-8;
+
+    Date forecastedDate(20, May, 2030);
+
+    auto equityIndexExDiv =
+        vars.equityIndex->clone(vars.interestHandle, Handle<YieldTermStructure>(), vars.spotHandle);
+
+    Real forecast = equityIndexExDiv->fixing(forecastedDate);
+    Real expectedForecast =
+        vars.spotHandle->value() / vars.interestHandle->discount(forecastedDate);
+
+    if ((std::fabs(forecast - expectedForecast) > tolerance))
+        BOOST_ERROR("could not replicate index forecast without dividend\n"
+                    << "    actual forecast:    " << forecast << "\n"
+                    << "    expected forecast:    " << expectedForecast << "\n");
+}
+
+// ---- test-suite/equityindex.cpp:149-169  (uses: clone, discount)
+BOOST_AUTO_TEST_CASE(testFixingForecastWithoutSpot) {
+    BOOST_TEST_MESSAGE("Testing fixing forecast without spot handle...");
+
+    CommonVars vars;
+    const Real tolerance = 1.0e-8;
+
+    Date forecastedDate(20, May, 2030);
+
+    auto equityIndexExSpot =
+        vars.equityIndex->clone(vars.interestHandle, vars.dividendHandle, Handle<Quote>());
+
+    Real forecast = equityIndexExSpot->fixing(forecastedDate);
+    Real expectedForecast = equityIndexExSpot->pastFixing(vars.today) *
+                            vars.dividendHandle->discount(forecastedDate) /
+                            vars.interestHandle->discount(forecastedDate);
+
+    if ((std::fabs(forecast - expectedForecast) > tolerance))
+        BOOST_ERROR("could not replicate index forecast without spot handle\n"
+                    << "    actual forecast:    " << forecast << "\n"
+                    << "    expected forecast:    " << expectedForecast << "\n");
+}
+
+// ---- test-suite/equitycashflow.cpp:116-140  (uses: clone)
+    vars.fxVolHandle.linkTo(flatVol(0.25, vars.dayCount));
+
+    vars.spotHandle.linkTo(ext::make_shared<SimpleQuote>(8710.0));
+}
+
+void checkQuantoCorrection(bool includeDividend, bool bumpData = false) {
+    const Real tolerance = 1.0e-6;
+
+    CommonVars vars;
+    ext::shared_ptr<EquityIndex> equityIndex =
+        includeDividend ?
+            vars.equityIndex :
+            vars.equityIndex->clone(vars.localCcyInterestHandle, Handle<YieldTermStructure>(),
+                                    vars.spotHandle);
+
+    auto cf = vars.createEquityQuantoCashFlow(equityIndex);
+
+    if (bumpData)
+        bumpMarketData(vars);
+
+    Real strike = vars.equityIndex->fixing(cf->fixingDate());
+    Real indexStart = vars.equityIndex->fixing(cf->baseDate());
+
+    Real time = vars.localCcyInterestHandle->timeFromReference(cf->fixingDate());
+    Real rf = vars.localCcyInterestHandle->zeroRate(time, Continuous);
+
+// ---- test-suite/indexes.cpp:159-183  (uses: clone)
+    valCal.addHoliday(Date(21, January, 2025));
+
+    auto matCal = BespokeCalendar("Maturity");
+    matCal.addHoliday(Date(7, January, 2025));
+    matCal.addHoliday(Date(15, January, 2025));
+    matCal.addHoliday(Date(23, April, 2025));
+    matCal.addHoliday(Date(30, April, 2025));
+
+    auto ibor = CustomIborIndex(
+        "Custom Ibor", 3*Months, 2, Currency(), fixCal, valCal, matCal, // NOLINT(cppcoreguidelines-slicing)
+        ModifiedFollowing, true, Actual360()
+    );
+    auto iborClone = ibor.clone(Handle<YieldTermStructure>());
+
+    for (IborIndex* index : {static_cast<IborIndex*>(&ibor), iborClone.get()}) {
+        auto* as_custom = dynamic_cast<CustomIborIndex*>(index);
+        BOOST_CHECK_EQUAL(index->fixingCalendar(), fixCal);
+        BOOST_CHECK_EQUAL(as_custom->valueCalendar(), valCal);
+        BOOST_CHECK_EQUAL(as_custom->maturityCalendar(), matCal);
+
+        BOOST_CHECK_EXCEPTION(
+            index->valueDate(Date(8, January, 2025)), Error,
+            ExpectedErrorMessage("Fixing date January 8th, 2025 is not valid"));
+
+        BOOST_CHECK_EQUAL(index->valueDate(Date(7, January, 2025)),
+
+// ---- test-suite/fittedbonddiscountcurve.cpp:40-76  (uses: discount)
+BOOST_AUTO_TEST_CASE(testEvaluation) {
+
+    BOOST_TEST_MESSAGE("Testing that fitted bond curves work as evaluators...");
+
+    Date today = Settings::instance().evaluationDate();
+    Date maxDate = today + Period(10, Years);
+
+    ExponentialSplinesFitting fittingMethod;
+
+    Array parameters = {
+        -51293.44,
+        -212240.36,
+        168668.51,
+        88792.74,
+        120712.13,
+        -34332.83,
+        -66479.66,
+        13605.17,
+        0.0
+    };
+
+    FittedBondDiscountCurve curve1(
+        today, fittingMethod, parameters, maxDate, Actual365Fixed());
+
+    FittedBondDiscountCurve curve2(
+        0, TARGET(), fittingMethod, parameters, maxDate, Actual365Fixed());
+
+    // they work...
+    BOOST_CHECK_NO_THROW(curve1.discount(3.0));
+    BOOST_CHECK_NO_THROW(curve2.discount(3.0));
+
+    // ...but not after the max date
+    BOOST_CHECK_EXCEPTION(curve1.discount(12.0), Error,
+                          ExpectedErrorMessage("past max curve time"));
+    BOOST_CHECK_EXCEPTION(curve2.discount(12.0), Error,
+                          ExpectedErrorMessage("past max curve time"));
+}
+
+// ---- test-suite/fittedbonddiscountcurve.cpp:260-286  (uses: discount)
+BOOST_AUTO_TEST_CASE(testGuessSize) {
+
+    BOOST_TEST_MESSAGE("Testing that fitted bond curves check the guess size when given...");
+
+    Date today = Settings::instance().evaluationDate();
+    auto bond1 = ext::make_shared<ZeroCouponBond>(3, TARGET(), 100.0, today + Period(1, Years));
+    auto bond2 = ext::make_shared<ZeroCouponBond>(3, TARGET(), 100.0, today + Period(2, Years));
+    auto bond3 = ext::make_shared<ZeroCouponBond>(3, TARGET(), 100.0, today + Period(5, Years));
+    auto bond4 = ext::make_shared<ZeroCouponBond>(3, TARGET(), 100.0, today + Period(10, Years));
+
+    std::vector<ext::shared_ptr<BondHelper> > helpers(4);
+    helpers[0] = ext::make_shared<BondHelper>(makeQuoteHandle(99.0), bond1);
+    helpers[1] = ext::make_shared<BondHelper>(makeQuoteHandle(98.0), bond2);
+    helpers[2] = ext::make_shared<BondHelper>(makeQuoteHandle(95.0), bond3);
+    helpers[3] = ext::make_shared<BondHelper>(makeQuoteHandle(90.0), bond4);
+
+    NelsonSiegelFitting fittingMethod;
+
+    Real accuracy = 1e-10;
+    Size maxIterations = 10000;
+    Array guess = { 0.01, 0.0, 0.0 };  // too few
+    FittedBondDiscountCurve curve(0, TARGET(), helpers, Actual365Fixed(),
+                                  fittingMethod, accuracy, maxIterations, guess);
+
+    BOOST_CHECK_EXCEPTION(curve.discount(3.0), Error,
+                          ExpectedErrorMessage("wrong size for guess"));
+}

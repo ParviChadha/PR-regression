@@ -1,0 +1,106 @@
+// Upstream tests at the PR's parent commit e3c43d39b that use the changed code.
+// Names searched (test lines using each): averageRate (0), effectiveIndexFixing (1), effectiveSpread (1), swapletRate (1), compute (10)
+
+// ---- test-suite/overnightindexedcoupon.cpp:1645-1669  (uses: swapletRate)
+
+        auto checkInterface = [&](const auto& pricer) {
+            capped->setPricer(pricer);
+
+            // prices are not provided
+            BOOST_CHECK_THROW(pricer->swapletPrice(), Error);
+            BOOST_CHECK_THROW(pricer->capletPrice(0.045), Error);
+            BOOST_CHECK_THROW(pricer->floorletPrice(0.035), Error);
+
+            pricer->initialize(*capped);
+            BOOST_CHECK(pricer->effectiveCapletVolatility() == Null<Real>());
+            BOOST_CHECK(pricer->effectiveFloorletVolatility() == Null<Real>());
+            CHECK_OIS_COUPON_RESULT("swaplet rate", pricer->swapletRate(), underlying->rate(), 1e-12);
+
+            // the short signatures default to the cap/floor on the whole coupon
+            QL_CHECK_SMALL(pricer->capletRate(0.045) - pricer->capletRate(0.045, false), 1e-14);
+            QL_CHECK_SMALL(pricer->floorletRate(0.035) - pricer->floorletRate(0.035, false), 1e-14);
+            BOOST_CHECK(pricer->capletRate(0.045, true) >= 0.0);
+            BOOST_CHECK(pricer->floorletRate(0.035, true) >= 0.0);
+        };
+        if (averaging == RateAveraging::Compound)
+            checkInterface(ext::make_shared<BlackCompoundingOvernightIndexedCouponPricer>(vars.vol));
+        else
+            checkInterface(ext::make_shared<BlackAveragingOvernightIndexedCouponPricer>(vars.vol));
+
+
+// ---- test-suite/overnightindexedcoupon.cpp:1847-1871  (uses: effectiveIndexFixing)
+                        product *= 1.0L +
+                            (static_cast<long double>(rates[fixing]) + spread) * weight;
+                        indexProduct *= 1.0L + static_cast<long double>(rates[fixing]) * weight;
+                    }
+                    const Time tau = dc.yearFraction(accrualDates.front(), accrualDates.back());
+                    const Rate expected = Real((product - 1.0L) / tau);
+                    const Rate expectedIndex = Real((indexProduct - 1.0L) / tau);
+                    for (bool telescopic : {false, true}) {
+                        OvernightIndexedCoupon coupon(end, nominal, start, end, index, 1.0, spread,
+                            Date(), Date(), dc, telescopic, RateAveraging::Compound,
+                            lookback, lockout, shift, true);
+                        QL_CHECK_SMALL(coupon.rate() - expected, 2e-11);
+                        QL_CHECK_SMALL(coupon.effectiveIndexFixing() - expectedIndex, 2e-11);
+                        QL_CHECK_SMALL(coupon.effectiveSpread() - (expected - expectedIndex),
+                                       2e-11);
+                        QL_CHECK_SMALL(
+                            coupon.amount() - nominal * dc.yearFraction(start, end) * expected,
+                                       2e-7);
+
+                        // Unshifted partial periods include only elapsed calendar days,
+                        // including a cutoff within a Friday-to-Monday deposit.
+                        if (!shift) {
+                            for (const Date& cutoff : std::vector<Date>{Date(6, October, 2026),
+                                                                       Date(18, October, 2026)}) {
+                                long double partial = 1.0L;
+
+// ---- test-suite/cms.cpp:509-533  (uses: compute)
+                          CmsMarketCalibration::reversionTransformInverse(0.01)),
+                      0.01, 1e-12);
+
+    for (CmsMarketCalibration::CalibrationType calibrationType : {
+             CmsMarketCalibration::OnSpread,
+             CmsMarketCalibration::OnPrice,
+             CmsMarketCalibration::OnForwardCmsPrice}) {
+        CmsMarketCalibration calibration(vars.SabrVolCube1, cmsMarket, weights,
+                                         calibrationType);
+        Array guess(2);
+        guess[0] = 0.5;
+        guess[1] = 0.01;
+        Array result = calibration.compute(endCriteria, method, guess, false);
+        BOOST_CHECK_EQUAL(result.size(), 2);
+        BOOST_CHECK(result[0] > 0.0 && result[0] < 1.0);
+        BOOST_CHECK(result[1] >= 0.0);
+        BOOST_CHECK(std::isfinite(calibration.error()));
+        BOOST_CHECK(calibration.error() < 1.0);
+    }
+
+    CmsMarketCalibration fixedCalibration(vars.SabrVolCube1, cmsMarket, weights,
+                                           CmsMarketCalibration::OnSpread);
+    Array fixedGuess(2);
+    fixedGuess[0] = 0.5;
+    fixedGuess[1] = 0.01;
+
+// ---- test-suite/cms.cpp:560-580  (uses: compute)
+    BOOST_CHECK_EQUAL(freeParametricResult.rows(), 3);
+    BOOST_CHECK_EQUAL(freeParametricResult.columns(), 2);
+    BOOST_CHECK(freeParametricResult[0][1] >= 0.0);
+
+    BOOST_CHECK_THROW(CmsMarketCalibration(vars.SabrVolCube1, cmsMarket,
+                                           Matrix(2, 1, 1.0),
+                                           CmsMarketCalibration::OnSpread),
+                      Error);
+    BOOST_CHECK_THROW(CmsMarketCalibration(vars.SabrVolCube1, cmsMarket,
+                                           Matrix(1, 2, 1.0),
+                                           CmsMarketCalibration::OnSpread),
+                      Error);
+    BOOST_CHECK_THROW(fixedCalibration.compute(endCriteria, method, Array(1, 0.5), false),
+                      Error);
+    BOOST_CHECK_THROW(fixedCalibration.compute(endCriteria, method, Matrix(5, 1, 0.5),
+                                               true, 0.01),
+                      Error);
+    BOOST_CHECK_THROW(fixedCalibration.computeParametric(
+                          endCriteria, method, Matrix(2, 1, 0.5), true, 0.01),
+                      Error);
+}

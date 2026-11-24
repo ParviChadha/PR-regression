@@ -1,0 +1,164 @@
+// Upstream tests at the PR's parent commit 5766fc92a that use the changed code.
+// Names searched (test lines using each): add (150), lookup (22), calculateFxConversionFactor (0), hash (0), Key (0), smartLookup (0), hashes (0)
+
+// ---- test-suite/commodityunitofmeasure.cpp:43-67  (uses: lookup)
+
+    BOOST_TEST_MESSAGE("Testing direct commodity unit of measure conversions...");
+
+    UnitOfMeasureConversionManager& UOMManager =
+        UnitOfMeasureConversionManager::instance();
+
+    //MB to BBL
+    Quantity actual =
+        UnitOfMeasureConversion(NullCommodityType(), MBUnitOfMeasure(),
+                                BarrelUnitOfMeasure(), 1000)
+        .convert(Quantity(NullCommodityType(), MBUnitOfMeasure(), 1000));
+    Quantity calc =
+        UOMManager.lookup(NullCommodityType(), BarrelUnitOfMeasure(),
+                          MBUnitOfMeasure(), UnitOfMeasureConversion::Direct)
+        .convert(Quantity(NullCommodityType(), MBUnitOfMeasure(), 1000));
+
+     if (!close(calc,actual)) {
+        BOOST_FAIL("Wrong result for MB to BBL Conversion: \n"
+                   << "    actual:     " << actual << "\n"
+                   << "    calculated: " << calc);
+    }
+
+     //BBL to Gallon 
+     actual =
+         UnitOfMeasureConversion(NullCommodityType(), BarrelUnitOfMeasure(),
+
+// ---- test-suite/commodityunitofmeasure.cpp:76-100  (uses: lookup)
+     if (!close(calc,actual)) {
+        BOOST_FAIL("Wrong result for BBL to Gallon Conversion: \n"
+                   << "    actual:     " << actual << "\n"
+                   << "    calculated: " << calc);
+     }
+
+     //BBL to Litre 
+     actual =
+         UnitOfMeasureConversion(NullCommodityType(), BarrelUnitOfMeasure(),
+                                 LitreUnitOfMeasure(), 158.987)
+         .convert(Quantity(NullCommodityType(), LitreUnitOfMeasure(), 1000));
+     calc =
+         UOMManager.lookup(NullCommodityType(),BarrelUnitOfMeasure(),
+                           LitreUnitOfMeasure(),
+                           UnitOfMeasureConversion::Direct)
+         .convert(Quantity(NullCommodityType(), LitreUnitOfMeasure(), 1000));
+
+     if (!close(calc,actual)) {
+        BOOST_FAIL("Wrong result for BBL to Litre Conversion: \n"
+                   << "    actual:     " << actual << "\n"
+                   << "    calculated: " << calc);
+     }
+
+     //BBL to KL 
+     actual =
+
+// ---- test-suite/exchangerate.cpp:108-132  (uses: lookup)
+    Currency EUR = EURCurrency(), USD = USDCurrency();
+
+    ExchangeRate eur_usd1 = ExchangeRate(EUR, USD, 1.1983);
+    ExchangeRate eur_usd2 = ExchangeRate(USD, EUR, 1.0/1.2042);
+    rateManager.add(eur_usd1, Date(4,August,2004));
+    rateManager.add(eur_usd2, Date(5,August,2004));
+
+    Money m1 = 50000.0 * EUR;
+    Money m2 = 100000.0 * USD;
+
+    Money::Settings::instance().conversionType() = Money::NoConversion;
+
+    ExchangeRate eur_usd = rateManager.lookup(EUR, USD,
+                                              Date(4,August,2004),
+                                              ExchangeRate::Direct);
+    Money calculated = eur_usd.exchange(m1);
+    Money expected(m1.value()*eur_usd1.rate(), USD);
+
+    if (!close(calculated,expected)) {
+        BOOST_FAIL("Wrong result: \n"
+                   << "    expected:   " << expected << "\n"
+                   << "    calculated: " << calculated);
+    }
+
+    eur_usd = rateManager.lookup(EUR, USD,
+
+// ---- test-suite/exchangerate.cpp:145-169  (uses: lookup)
+                                              Date(4,August,2004),
+                                              ExchangeRate::Direct);
+
+    calculated = usd_eur.exchange(m2);
+    expected = Money(m2.value()/eur_usd1.rate(), EUR);
+
+    if (!close(calculated,expected)) {
+        BOOST_FAIL("Wrong result: \n"
+                   << "    expected:   " << expected << "\n"
+                   << "    calculated: " << calculated);
+    }
+
+    usd_eur = rateManager.lookup(USD, EUR,
+                                 Date(5,August,2004),
+                                 ExchangeRate::Direct);
+
+    calculated = usd_eur.exchange(m2);
+    expected = Money(m2.value()*eur_usd2.rate(), EUR);
+
+    if (!close(calculated,expected)) {
+        BOOST_FAIL("Wrong result: \n"
+                   << "    expected:   " << expected << "\n"
+                   << "    calculated: " << calculated);
+    }
+}
+
+// ---- test-suite/americanoption.cpp:2411-2435  (uses: add)
+            for (auto q: qy) {
+                qRate->setValue(q);
+                for (auto v: sig) {
+                    vol->setValue(v);
+                    for (auto s: S) {
+                        spot->setValue(s);
+
+                        option.setPricingEngine(qdFpFastAmericanEngine);
+                        const Real fast = option.NPV();
+
+                        option.setPricingEngine(qdFpAccurateAmericanEngine);
+                        const Real accurate = option.NPV();
+                        statsAccurate.add(std::abs(fast-accurate));
+
+                        option.setPricingEngine(qdFpGaussLobattoAmericanEngine);
+                        const Real lobatto = option.NPV();
+                        statsLobatto.add(std::abs(accurate-lobatto));
+                    }
+                }
+            }
+        }
+    }
+
+
+    const Real tolStdDev = 1e-4;
+
+// ---- test-suite/basisswapratehelpers.cpp:763-787  (uses: add)
+        StubIndexSelection{StubIndexSelection::Interpolated, {shortIndex, longIndex}});
+    auto basis = ext::make_shared<Curve>(
+        today, std::vector<ext::shared_ptr<RateHelper>>{helper}, dc);
+    basis->discount(helper->pillarDate());
+    const Leg& leg = helper->swap()->leg(1);
+    auto stub = ext::dynamic_pointer_cast<StubIborCoupon>(leg.front());
+    auto regular = ext::dynamic_pointer_cast<IborCoupon>(leg.back());
+    BOOST_REQUIRE(stub && regular);
+    BOOST_REQUIRE(stub->fixingDate() > today);
+    BOOST_REQUIRE(regular->date() > regular->fixingMaturityDate());
+
+    CurveJacobianGraph graph;
+    graph.add(basis);
+    graph.add(forecast);
+    // Hold the basis nodes fixed while independently repricing at bumped deposit quotes.
+    basis->freeze();
+    auto checkRow = [&](bool expectAnalytic) {
+        std::vector<bool> analytic;
+        Matrix jacobian = graph.crossJacobian(*basis, *forecast, &analytic);
+        BOOST_REQUIRE_EQUAL(analytic.size(), 1);
+        BOOST_CHECK_EQUAL(analytic.front(), expectAnalytic);
+        const Rate baseRate = rate->value();
+        const Real bump = 1.0e-5;
+        rate->setValue(baseRate + bump);
+        Real up = helper->impliedQuote();

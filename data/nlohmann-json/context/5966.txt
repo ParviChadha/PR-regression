@@ -1,56 +1,132 @@
 // Upstream tests at the PR's parent commit d20c4dcd8 that use the changed code.
-// Names searched (test lines using each): basic_json_view (10), is_editable (0)
+// Names searched (test lines using each): basic_json_view (10), back (105), count (70), dump (708), materialize (176), at (514), contains (186), find (199), operator[] (26), is_editable (0)
 
-// ---- tests/src/unit-json_view_edit_values.cpp:28-52  (uses: basic_json_view)
-#include <string>
-#include <type_traits>
-#include <utility>
-#include <vector>
-
-// These tests were split off unit-json_view_edit.cpp, whose object file got too
-// large for the MinGW linker (see json_view_test_helpers.hpp).
-
-namespace
-{
-// the three ways a function can accept views: editable ones, read-only ones, or both
-template<typename BasicJsonType>
-int accepts_editable(nlohmann::basic_json_view<BasicJsonType, nlohmann::view_mode::editable> /*unused*/)
-{
-    return 1;
-}
-
-template<typename BasicJsonType>
-int accepts_read_only(nlohmann::basic_json_view<BasicJsonType, nlohmann::view_mode::read_only> /*unused*/)
-{
-    return 2;
-}
-
-template<typename BasicJsonType, nlohmann::view_mode Mode>
-int accepts_any(nlohmann::basic_json_view<BasicJsonType, Mode> /*unused*/)
-
-// ---- tests/src/unit-json_view_edit_values.cpp:56-80  (uses: basic_json_view)
-
-// overloads that differ only in the mode; deduction ignores the conversion from
-// read-only to editable views, so each view picks the overload of its own mode
-// (two templates that differ only in a decltype return type are a redefinition
-// for MSVC 2015)
-template<typename BasicJsonType>
-int overload(nlohmann::basic_json_view<BasicJsonType, nlohmann::view_mode::editable> v)
-{
-    return accepts_editable(v);
-}
-
-template<typename BasicJsonType>
-int overload(nlohmann::basic_json_view<BasicJsonType, nlohmann::view_mode::read_only> v)
-{
-    return accepts_read_only(v);
-}
-
-// a function (no template) that takes an editable view also accepts a read-only one
-std::size_t sum_of(json_editable_view v)
-{
-    std::size_t sum = 0;
-    for (const json_editable_view x : v.at("values"))
+// ---- tests/src/unit-json_view.cpp:913-959  (uses: at, back, contains, count, dump, find, materialize)
+    SECTION("duplicate keys: lookups find the first member, iteration all")
     {
-        sum += x.get<std::size_t>();
+        const json_document d = json_document::parse(R"({"a":1,"b":2,"a":3})");
+        const json_view v = d.root();
+        CHECK(v.size() == 3);
+        CHECK(v["a"].materialize() == 1);
+        CHECK(v.at("a").materialize() == 1);
+        CHECK(v.find("a") == v.begin());
+        CHECK(v.find("a").value().materialize() == 1);
+        CHECK(v.find("b") == std::next(v.begin()));
+        CHECK(v.count("a") == 2); // every member, unlike materialize()
+        CHECK(v.count("b") == 1);
+        CHECK(v.contains("a"));
+        CHECK(v.value("a", 0) == 1);
+        CHECK(v.materialize()["a"] == 3); // materialize() keeps the last value, unlike the lookups
+        // JSON pointers resolve to the first member at every level
+        const json_document dp = json_document::parse(R"({"a":{"b":1},"a":{"b":2,"b":3}})");
+        CHECK(dp.root()[json::json_pointer("/a/b")].materialize() == 1);
+        CHECK(dp.root().at(json::json_pointer("/a/b")).materialize() == 1);
+        CHECK(dp.root().value(json::json_pointer("/a/b"), 0) == 1);
+        CHECK(dp.root().materialize()[json::json_pointer("/a/b")] == 3);
+        // get<map> keeps the last value, as materialize()
+        CHECK((v.get<std::map<std::string, int>>() == std::map<std::string, int> {{"a", 3}, {"b", 2}}));
+        // keys of every length class (the 16-byte short compare and memcmp)
+        for (const std::size_t n :
+                {
+                    0u, 1u, 3u, 7u, 8u, 15u, 16u, 17u, 40u
+                })
+        {
+            const std::string key(n, 'k');
+            const json_document dk = json_document::parse("{\"" + key + "\":1,\"" + key + "x\":2,\"" + key + "\":3,\"" + key + "\":4}"); // NOLINT(performance-inefficient-string-concatenation)
+            CAPTURE(n)
+            CHECK(dk.root()[key].materialize() == 1);
+            CHECK(dk.root().at(key).materialize() == 1);
+            CHECK(dk.root().find(key) == dk.root().begin());
+            CHECK(dk.root().value(key, 0) == 1);
+            CHECK(dk.root()[key + "x"].materialize() == 2);
+        }
+        std::string order;
+        for (auto it = v.begin(); it != v.end(); ++it)
+        {
+            order += std::string(it.key().data(), it.key().size()) + it->materialize().dump();
+        }
+        CHECK(order == "a1b2a3");
+        CHECK(v.back().materialize() == 3);
+        CHECK(v.materialize() == json::parse(R"({"a":1,"b":2,"a":3})")); // the last value, as parse()
+    }
+
+// ---- tests/src/unit-json_view.cpp:961-1008  (uses: at, back, contains, count, find, materialize)
+    SECTION("errors are those of const basic_json")
+    {
+        for (const char* text :
+                {"null", "true", "42", "-1", "1.5", "\"s\"", "[]", "[1,2]", "{}", "{\"a\":1}"
+                })
+        {
+            CAPTURE(text)
+            const json_document d = json_document::parse(text);
+            const json_view v = d.root();
+            const json j = v.materialize();
+#if !defined(JSON_NOEXCEPTION)
+            if (!j.is_object())
+            {
+                CHECK(exception_of([&] { static_cast<void>(v["a"]); }) == json_exception_of([&] { static_cast<void>(j["a"]); }));
+            }
+            if (!j.is_array())
+            {
+                CHECK(exception_of([&] { static_cast<void>(v[0]); }) == json_exception_of([&] { static_cast<void>(j[0]); }));
+            }
+            CHECK(exception_of([&] { static_cast<void>(v.at("a")); }) == json_exception_of([&] { static_cast<void>(j.at("a")); }));
+            CHECK(exception_of([&] { static_cast<void>(v.at("missing")); }) == json_exception_of([&] { static_cast<void>(j.at("missing")); }));
+            CHECK(exception_of([&] { static_cast<void>(v.at(0)); }) == json_exception_of([&] { static_cast<void>(j.at(0)); }));
+            CHECK(exception_of([&] { static_cast<void>(v.at(5)); }) == json_exception_of([&] { static_cast<void>(j.at(5)); }));
+            if (!(j.is_object() && j.empty())) // (key() of an end iterator)
+            {
+                CHECK(exception_of([&] { static_cast<void>(v.begin().key()); }) == json_exception_of([&] { static_cast<void>(j.begin().key()); }));
+            }
+            if (!j.empty() || j.is_null())
+            {
+                CHECK(exception_of([&] { static_cast<void>(v.front()); }) == json_exception_of([&] { static_cast<void>(j.front()); }));
+                CHECK(exception_of([&] { static_cast<void>(v.back()); }) == json_exception_of([&] { static_cast<void>(j.back()); }));
+            }
+#endif
+            CHECK(v.contains("a") == j.contains("a"));
+            CHECK(v.count("a") == j.count("a"));
+            CHECK((v.find("a") == v.end()) == (j.find("a") == j.end())); // NOLINT(readability-container-contains): find() is what is tested
+        }
+
+        // where basic_json has undefined behavior, the view answers safely
+        const json_document d = json_document::parse(R"({"a":[]})");
+        CHECK(d.root()["b"].is_discarded());
+        CHECK(d.root()["a"][0].is_discarded());
+        CHECK_THROWS_WITH_AS(d.root()["a"].front(), "[json.exception.invalid_iterator.214] cannot get value", json::invalid_iterator&);
+        CHECK_THROWS_WITH_AS(d.root()["a"].back(), "[json.exception.invalid_iterator.214] cannot get value", json::invalid_iterator&);
+        const json_view invalid{};
+        CHECK(invalid.begin() == invalid.end());
+        CHECK(std::string(invalid.type_name()) == "discarded");
+    }
+
+// ---- tests/src/unit-custom-object-type.cpp:461-478  (uses: at, contains, count, find)
+    SECTION("creating and accessing values")
+    {
+        no_key_compare_json j;
+        j["one"] = 1;
+        j["two"] = "zwei";
+        j["three"]["nested"] = true;
+
+        CHECK(j.size() == 3);
+        CHECK(j.at("one") == 1);
+        CHECK(j["two"] == "zwei");
+        CHECK(j["three"]["nested"] == true);
+        CHECK(j.contains("one"));
+        CHECK(!j.contains("four"));
+        CHECK(j.find("one") != j.end());
+        CHECK(j.count("one") == 1);
+        CHECK(j.erase("one") == 1);
+        CHECK(j.size() == 2);
+    }
+
+// ---- tests/src/unit-no_automatic_udls.cpp:79-87  (uses: at, contains, dump)
+    SECTION("the rest of the library keeps working")
+    {
+        const json j = json::parse(R"({"foo": {"bar": 42}})");
+        CHECK(j.dump() == R"({"foo":{"bar":42}})");
+
+        const json::json_pointer ptr("/foo/bar");
+        CHECK(j.at(ptr) == 42);
+        CHECK(j.contains(ptr));
     }

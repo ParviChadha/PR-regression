@@ -1,0 +1,169 @@
+// Upstream tests at the PR's parent commit d4a8b4698 that use the changed code.
+// Names searched (test lines using each): solve (22), solveWithRestart (1), solveImpl (0)
+
+// ---- test-suite/fdmlinearop.cpp:1268-1289  (uses: solveWithRestart)
+                "\n tolerance:  " << tol <<
+                "\n error:      " << error);
+    }
+
+    if (std::fabs(error - errorCalculated) > 10*QL_EPSILON) {
+        BOOST_FAIL("Calculation if the error in GMRES went wrong" <<
+                "\n calculated: " << errorCalculated <<
+                "\n error:      " << error);
+
+    }
+
+    const GMRES gmresRestart(matmult, 5, tol, precond);
+    const GMRESResult resultRestart = gmresRestart.solveWithRestart(5, b, b);
+    const Real errorWithRestart = resultRestart.errors.back();
+
+    if (errorWithRestart > tol) {
+        BOOST_FAIL("Error calculating the inverse using "
+                "GMRES with restarts" <<
+                "\n tolerance:  " << tol <<
+                "\n error:      " << errorWithRestart);
+    }
+}
+
+// ---- test-suite/solvers.cpp:58-82  (uses: solve)
+    Real secondDerivative(Real x) const {
+        const Real u = x-1.0;
+        return -2*u/((1.0+u*u)*(1.0+u*u));
+    }
+};
+
+template <class S, class F>
+void test_not_bracketed(const S& solver, const std::string& name,
+                        const F& f, Real guess) {
+    Real accuracy[] = { 1.0e-4, 1.0e-6, 1.0e-8 };
+    Real expected = 1.0;
+    for (Real& i : accuracy) {
+        Real root = solver.solve(f, i, guess, 0.1);
+        if (std::fabs(root - expected) > i) {
+            BOOST_FAIL(name << " solver (not bracketed):\n"
+                       << "    expected:   " << expected << "\n"
+                       << "    calculated: " << root << "\n"
+                       << "    accuracy:   " << i);
+        }
+    }
+}
+
+template <class S, class F>
+void test_bracketed(const S& solver, const std::string& name,
+                    const F& f, Real guess) {
+
+// ---- test-suite/solvers.cpp:117-141  (uses: solve)
+    Real mins[] = { 3.0, 2.25, 1.5, 1.0 };
+    Real maxs[] = { 7.0, 5.75, 4.5, 3.0 };
+    Real steps[] = { 0.2, 0.2, 0.1, 0.1 };
+    Real offsets[] = { 25.0, 11.0, 5.0, 1.0 };
+    Real guesses[] = { 4.5, 4.5, 2.5, 2.5 };
+    //Real expected[] = { 5.0, 4.0, 3.0, 2.0 };
+
+    Real argument = 0.0;
+    Real result;
+
+    for (Size i=0; i<4; ++i) {
+        if (bracketed) {
+            result = solver.solve(Probe(argument, offsets[i]), accuracy,
+                                  guesses[i], mins[i], maxs[i]);
+        } else {
+            result = solver.solve(Probe(argument, offsets[i]), accuracy,
+                                  guesses[i], steps[i]);
+        }
+
+        Real error = std::fabs(result-argument);
+        // the solver should have called the function with
+        // the very same value it's returning. But the internal
+        // 80bit length of the x87 FPU register might lead to
+        // a very small glitch when compiled with -mfpmath=387 on gcc
+        if (error > 2*QL_EPSILON) {
+
+// ---- test-suite/fdmlinearop.cpp:1198-1233  (uses: solve)
+BOOST_AUTO_TEST_CASE(testBiCGstab) {
+    BOOST_TEST_MESSAGE(
+        "Testing bi-conjugated gradient stabilized algorithm...");
+
+    const Size n=41, m=21;
+    const Real theta = 1.0;
+    const boost::numeric::ublas::compressed_matrix<Real> a
+        = createTestMatrix(n, m, theta);
+
+    const std::function<Array(const Array&)> matmult
+        = [&](const Array& _x) { return axpy(a, _x); };
+
+    SparseILUPreconditioner ilu(a, 4);
+    std::function<Array(const Array&)> precond
+        = [&](const Array& _x) { return ilu.apply(_x); };
+
+    Array b(n*m);
+    MersenneTwisterUniformRng rng(1234);
+    for (Real& i : b) {
+        i = rng.next().value;
+    }
+
+    const Real tol = 1e-10;
+
+    const BiCGstab biCGstab(matmult, n*m, tol, precond);
+    const Array x = biCGstab.solve(b).x;
+
+    const Real error = std::sqrt(DotProduct(b-axpy(a, x),
+                                 b-axpy(a, x))/DotProduct(b,b));
+
+    if (error > tol) {
+        BOOST_FAIL("Error calculating the inverse using BiCGstab" <<
+                "\n tolerance:  " << tol <<
+                "\n error:      " << error);
+    }
+}
+
+// ---- test-suite/hestonslvmodel.cpp:213-237  (uses: solve)
+        }
+    }
+
+    return FdmMesherIntegral(mesher,
+                             DiscreteSimpsonIntegral()).integrate(p);
+}
+
+Real hestonPxBoundary(Time maturity, Real eps,
+                      const ext::shared_ptr<HestonModel>& model) {
+
+    const AnalyticPDFHestonEngine pdfEngine(model);
+    const Real sInit = model->process()->s0()->value();
+    const Real xMin = Brent().solve(
+            [&](Real x) -> Real { return pdfEngine.cdf(x, maturity) - eps; },
+            sInit*1e-3, sInit, sInit*0.001, 1000*sInit);
+
+    return xMin;
+}
+
+struct FokkerPlanckFwdTestCase {
+    const Real s0, r, q, v0, kappa, theta, rho, sigma;
+    const Size xGrid, vGrid, tGridPerYear, tMinGridPerYear;
+    const Real avgEps, eps;
+    const FdmSquareRootFwdOp::TransformationType trafoType;
+    const FdmHestonGreensFct::Algorithm greensAlgorithm;
+
+// ---- test-suite/marketmodel_smmcapletalphacalibration.cpp:109-130  (uses: solve)
+BOOST_AUTO_TEST_CASE(testAlphaFinderExactBisectionRoot) {
+    BOOST_TEST_MESSAGE("Testing AlphaFinder exact bisection roots...");
+    for (bool increasing : {false, true}) {
+        BOOST_TEST_CONTEXT("increasing=" << increasing) {
+            auto form = ext::make_shared<BoundedLinearAlphaForm>(increasing ? 0.0 : 1.0,
+                                                                increasing ? 1.0 : -1.0);
+            AlphaFinder finder(form);
+            std::vector<Volatility> calibratedVols(3);
+            Real alpha, scale, lastScale;
+            bool success = false;
+            BOOST_REQUIRE_NO_THROW(success = finder.solve(
+                increasing ? 1.0 : 0.0, 1, {1.0, 0.0}, {1.0, 1.0, 1.0}, {-1.0, 0.0},
+                1.0, 1.0, 1.0 - 0.8, 1.0e-12, 1.0, 0.0, 100,
+                alpha, scale, lastScale, calibratedVols));
+            BOOST_REQUIRE(success);
+            QL_CHECK_SMALL(alpha - 0.5, 1.0e-12);
+            QL_CHECK_SMALL(calibratedVols[0] - 0.8, 1.0e-12);
+            QL_CHECK_SMALL(calibratedVols[1] - 0.4, 1.0e-12);
+            QL_CHECK_SMALL(calibratedVols[2] - std::sqrt(2.2), 1.0e-12);
+        }
+    }
+}

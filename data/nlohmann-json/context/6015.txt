@@ -1,0 +1,166 @@
+// Upstream tests at the PR's parent commit b18b6fc7e that use the changed code.
+// Names searched (test lines using each): front (41), at (526), get_string (18), number_token (10), value (537), operator[] (28), diagnostics (0)
+
+// ---- tests/src/unit-json_view.cpp:1490-1502  (uses: get_string, number_token)
+    SECTION("number tokens")
+    {
+        const json_document d = json_document::parse(R"([1.50, 1E2, -0, 123456789012345678901234567890, -12, 7, "x"])");
+        const json_view v = d.root();
+        CHECK(v[0].number_token() == "1.50");
+        CHECK(v[1].number_token() == "1E2");
+        CHECK(v[2].number_token() == "-0");
+        CHECK(v[3].number_token() == "123456789012345678901234567890");
+        CHECK(v[4].number_token() == "-12");
+        CHECK(v[5].number_token() == "7");
+        CHECK_THROWS_WITH_AS(v[6].number_token(), json_view_test::message("type_error.302", "/6", 56, 59, "type must be number, but is string").c_str(), json::type_error&);
+        CHECK_THROWS_WITH_AS(v.get_string(), json_view_test::message("type_error.302", "", 0, 60, "type must be string, but is array").c_str(), json::type_error&);
+    }
+
+// ---- tests/src/unit-json_view_edit.cpp:744-788  (uses: at, get_string, value)
+TEST_CASE("json_view edits: an editable document before and after its first edit")
+{
+    // until the first edit, an editable document is read like a read-only one; views made before the edit
+    // keep working after it
+    const std::string text = R"({"a":[1,2,{"x":"y"},4],"b":{"c":true,"d":null},"e":"text","f":[]})";
+    const json_document read_only = json_document::parse(text);
+    json_editable_document d = json_editable_document::parse(text);
+    const auto root = d.root();
+    const auto same_as_read_only = [&]
+    {
+        CHECK(root.dump() == read_only.root().dump());
+        CHECK(root.dump(2) == read_only.root().dump(2));
+        CHECK(root.materialize() == read_only.root().materialize());
+        CHECK(root["a"][2]["x"].get_string() == "y");
+        CHECK(root["a"].at(3).get<int>() == 4);
+        CHECK(root["a"].back().get<int>() == 4);
+        CHECK(root.contains("b"));
+        CHECK(!root.contains("zz"));
+        CHECK(root.find("e")->get_string() == "text");
+        CHECK(root.find("zz") == root.end());
+        CHECK(root["b"]["c"].get<bool>());
+        CHECK(root.value("e", "none") == "text");
+        std::size_t count = 0;
+        for (const auto m : root["a"])
+        {
+            CHECK(m.materialize() == read_only.root()["a"][count].materialize());
+            ++count;
+        }
+        CHECK(count == 4);
+    };
+    same_as_read_only();
+    // an edit that changes a scalar in place, then one that moves an array
+    d.set(root["e"], "other");
+    CHECK(root["e"].get_string() == "other");
+    CHECK(root["a"][2]["x"].get_string() == "y");
+    CHECK(root["a"].back().get<int>() == 4);
+    d.push_back(root["f"], 7);
+    CHECK(root["f"][0].get<int>() == 7);
+    CHECK(root["f"].back().get<int>() == 7);
+    CHECK(root.dump() == R"({"a":[1,2,{"x":"y"},4],"b":{"c":true,"d":null},"e":"other","f":[7]})");
+    d.set(root["a"], 2, json::array({1, 2}));
+    CHECK(root["a"][2][1].get<int>() == 2);
+    CHECK(root["a"].dump() == "[1,2,[1,2],4]");
+    CHECK(root.materialize() == json::parse(R"({"a":[1,2,[1,2],4],"b":{"c":true,"d":null},"e":"other","f":[7]})"));
+}
+
+// ---- tests/src/unit-json_view_edit.cpp:886-922  (uses: at, get_string)
+    SECTION("a large object with an index")
+    {
+        std::string text = R"({"a":0,"k7":"first")";
+        for (int i = 0; i < 200; ++i)
+        {
+            text += ",\"k" + std::to_string(i) + "\":" + std::to_string(i);
+        }
+        text += R"(,"a":1,"k7":"last","a":2})";
+        json_editable_document d = json_editable_document::parse(text);
+        check_first_wins(d.root(), 0);
+        CHECK(d.root()["k7"].get_string() == "first");
+        CHECK(d.root()["k199"].get<int>() == 199);
+
+        // a value assigned in place: the index stays in use
+        d.set(d.root()["a"], 3);
+        check_first_wins(d.root(), 3);
+        d.set(d.root()["k7"], "changed");
+        CHECK(d.root()["k7"].get_string() == "changed");
+        CHECK(d.root()["k199"].get<int>() == 199);
+
+        // an appended member moves the members: the lookup scans them
+        d.set(d.root(), "new", 1);
+        check_first_wins(d.root(), 3);
+        CHECK(d.root()["k7"].get_string() == "changed");
+        CHECK(d.root()["k7"].get_string() == d.root().at("k7").get_string());
+        CHECK(d.root()["k199"].get<int>() == 199);
+        CHECK(d.root()["new"].get<int>() == 1);
+
+        // a value replaced by a container, in an object that was not moved
+        d = json_editable_document::parse(text);
+        d.set(d.root()["a"], json{{"x", 1}});
+        CHECK(d.root()["a"]["x"].get<int>() == 1);
+        CHECK(d.root()["k7"].get_string() == "first");
+        CHECK(d.erase(d.root(), "k7") == 3); // (the key occurs three times)
+        CHECK(d.root()["k7"].is_discarded());
+        CHECK(d.root()["a"]["x"].get<int>() == 1);
+    }
+
+// ---- tests/src/unit-diagnostics.cpp:708-730  (uses: at, operator[])
+    SECTION("operator[] growth and at()")
+    {
+        J obj = J::object();
+        for (int i = 0; i < 500; ++i)
+        {
+            obj[std::to_string(i)] = J::array({i});
+            CHECK(obj[std::to_string(i / 2)].m_parent == &obj);
+        }
+        CHECK(parents_consistent(obj));
+
+        J arr = J::array();
+        for (int i = 0; i < 500; ++i)
+        {
+            arr[static_cast<size_t>(i)] = J::object({{"x", i}});
+        }
+        for (size_t i = 0; i < 500; ++i)
+        {
+            CHECK(arr.at(i).m_parent == &arr);
+        }
+        CHECK(obj.at("3").m_parent == &obj);
+        CHECK(parents_consistent(arr));
+        CHECK(parents_consistent(obj));
+    }
+
+// ---- tests/src/unit-custom-array-type.cpp:87-108  (uses: at, front)
+    SECTION("accessing and modifying elements")
+    {
+        auto j = deque_json::parse(R"([1,2,3])");
+
+        CHECK(j[1] == 2);
+        CHECK(j.at(2) == 3);
+
+        // growing through operator[] fills up with null values
+        j[5] = 6;
+        CHECK(j.size() == 6);
+        CHECK(j[4].is_null());
+        CHECK(j[5] == 6);
+
+        j.erase(0);
+        CHECK(j == deque_json({2, 3, nullptr, nullptr, 6}));
+
+        auto it = j.erase(j.begin());
+        CHECK(*it == 3);
+
+        j.insert(j.begin(), 1);
+        CHECK(j.front() == 1);
+    }
+
+// ---- tests/src/unit-regression1.cpp:600-611  (uses: at, value)
+    SECTION("issue #283 - value() does not work with _json_pointer types")
+    {
+        json j =
+        {
+            {"object", {{"key1", 1}, {"key2", 2}}},
+        };
+
+        const int at_integer{j.at("/object/key2"_json_pointer)};
+        const int val_integer = j.value("/object/key2"_json_pointer, 0);
+
+        CHECK(at_integer == val_integer);
+    }

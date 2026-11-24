@@ -1,0 +1,156 @@
+// Upstream tests at the PR's parent commit 2bce52b5c that use the changed code.
+// Names searched (test lines using each): isBusinessDay (185), Malta (0), sinkingSchedule (1), historicalForwardRatesAnalysis (0), FloatingDigitalLeg (0), FloatingLeg (0), AbcdAtmVolCurve (0), name (75), AmortizingFixedRateBond (0), isWeekend (1), operator!= (0), operator<< (0), operator== (0)
+
+// ---- test-suite/calendars.cpp:4097-4121  (uses: isBusinessDay, isWeekend)
+        {8, May, 2027},
+        {26, Sep, 2027},
+        {9, Oct, 2027},
+    };
+
+    Calendar c = China(China::IB);
+    Date start(1, Jan, 2014);
+    Date end(31, Dec, 2027);
+
+    Size k = 0;
+
+    while (start <= end) {
+        if (c.isBusinessDay(start) && c.isWeekend(start.weekday())) {
+            if (expectedWorkingWeekEnds[k] != start)
+                BOOST_FAIL("expected working weekend was "
+                           << expectedWorkingWeekEnds[k] << " while calculated working weekend is "
+                           << start);
+            ++k;
+        }
+        ++start;
+    }
+
+    if (k != (expectedWorkingWeekEnds.size()))
+        BOOST_FAIL("there were " << expectedWorkingWeekEnds.size()
+                                 << " expected working weekends, while there are " << k
+
+// ---- test-suite/amortizingbond.cpp:47-71  (uses: sinkingSchedule)
+                      0.477415295, 0.536821623, 0.599550525,
+                      0.665302495, 0.733764574, 0.804622617,
+                      0.877571570, 0.952323396, 1.028612597};
+
+    Frequency freq = Monthly;
+
+    Date refDate = Settings::instance().evaluationDate();
+
+    const Real tolerance = 1.0e-6;
+
+    for (Size i=0; i<std::size(rates); ++i) {
+
+        auto schedule = sinkingSchedule(refDate, Period(30, Years), freq, NullCalendar());
+        auto notionals = sinkingNotionals(Period(30, Years), freq, rates[i], 100.0);
+
+        AmortizingFixedRateBond myBond(0, notionals, schedule, {rates[i]},
+                                       ActualActual(ActualActual::ISMA));
+
+        const Leg& cashflows = myBond.cashflows();
+
+        for (Size k=0; k < cashflows.size() / 2; ++k) {
+            Real coupon = cashflows[2*k]->amount();
+            Real principal = cashflows[2*k+1]->amount();
+            Real totalAmount = coupon + principal;
+
+
+// ---- test-suite/calendars.cpp:523-531  (uses: isBusinessDay, name)
+BOOST_AUTO_TEST_CASE(testUSLiborImpactCalendar) {
+    BOOST_TEST_MESSAGE("Testing US calendar with Libor impact...");
+    Calendar settlement = UnitedStates(UnitedStates::Settlement);
+    Calendar liborImpact = UnitedStates(UnitedStates::LiborImpact);
+    BOOST_CHECK_EQUAL(liborImpact.name(), "US with Libor impact");
+    Date observedIndependenceDay(3, July, 2020);
+    BOOST_CHECK(settlement.isHoliday(observedIndependenceDay));
+    BOOST_CHECK(liborImpact.isBusinessDay(observedIndependenceDay));
+}
+
+// ---- test-suite/cliquetoption.cpp:329-361  (uses: name)
+BOOST_AUTO_TEST_CASE(testThetaOnNonFlatCurves) {
+    BOOST_TEST_MESSAGE("Testing cliquet and performance option theta on non-flat curves...");
+
+    // forward rates up to 30, 120, 240 and 400 days after the evaluation date; the first reset
+    // date is 90 days after it
+    const std::vector<Rate> flatQ(4, 0.02), flatR(4, 0.05);
+    const std::vector<Rate> varyingQ = {0.01, 0.04, 0.015, 0.06};
+    const std::vector<Rate> varyingR = {0.02, 0.05, 0.08, 0.03};
+
+    // theta is in years of the risk-free curve's day counter, also when the dividend curve
+    // has another one
+    const DayCounter divdc = Actual365Fixed();
+    const DayCounter rfdcs[] = {Actual365Fixed(), Actual360()};
+
+    auto checkTheta = [&](const char* curves, const std::vector<Rate>& q,
+                          const std::vector<Rate>& r) {
+        for (const DayCounter& rfdc : rfdcs) {
+            BOOST_TEST_CONTEXT(curves << ", risk-free day counter " << rfdc.name()) {
+                BOOST_TEST_CONTEXT("AnalyticCliquetEngine") {
+                    testThetaOnForwardCurves<AnalyticCliquetEngine>(q, r, divdc, rfdc);
+                }
+                BOOST_TEST_CONTEXT("AnalyticPerformanceEngine") {
+                    testThetaOnForwardCurves<AnalyticPerformanceEngine>(q, r, divdc, rfdc);
+                }
+            }
+        }
+    };
+
+    // theta on flat curves does not change
+    checkTheta("flat curves", flatQ, flatR);
+    // the rates before the first reset date differ from those after it
+    checkTheta("non-flat curves", varyingQ, varyingR);
+}
+
+// ---- test-suite/cms.cpp:291-314  (uses: name)
+        coupon.setPricer(vars.analyticPricers[j]);
+        Rate rate1 = coupon.rate();
+
+        Spread difference =  std::fabs(rate1-rate0);
+        Spread tol = 2.0e-4;
+        bool linearTsr = j==vars.yieldCurveModels.size()-1;
+
+        if (difference > tol)
+            BOOST_FAIL("\nCoupon payment date: " << paymentDate <<
+                       "\nCoupon start date:   " << startDate <<
+                       "\nCoupon floor:        " << io::rate(infiniteFloor) <<
+                       "\nCoupon gearing:      " << io::rate(gearing) <<
+                       "\nCoupon swap index:   " << swapIndex->name() <<
+                       "\nCoupon spread:       " << io::rate(spread) <<
+                       "\nCoupon cap:          " << io::rate(infiniteCap) <<
+                       "\nCoupon DayCounter:   " << vars.iborIndex->dayCounter()<<
+                       "\nYieldCurve Model:    " << vars.yieldCurveModels[j] <<
+                       "\nNumerical Pricer:    " << io::rate(rate0) <<
+                                   (linearTsr ? " (Linear TSR Model)" : "") <<
+                       "\nAnalytic Pricer:     " << io::rate(rate1) <<
+                       "\ndifference:          " << io::rate(difference) <<
+                       "\ntolerance:           " << io::rate(tol));
+    }
+}
+
+// ---- test-suite/commodityunitofmeasure.cpp:33-40  (uses: name)
+BOOST_AUTO_TEST_CASE(testCommodityType) {
+    BOOST_TEST_MESSAGE("Testing commodity type...");
+
+    CommodityType commodityType("Heating Oil", "HO");
+
+    BOOST_CHECK_EQUAL(commodityType.name(), "Heating Oil");
+    BOOST_CHECK_EQUAL(commodityType.code(), "HO");
+}
+
+// ---- test-suite/creditdefaultswap.cpp:1063-1078  (uses: name)
+    first = coupon_cast(cds->coupons().front());
+    last = coupon_cast(cds->coupons().back());
+
+    BOOST_CHECK_EQUAL(first->dayCounter().name(), "Actual/365 (Fixed)");
+    BOOST_CHECK_EQUAL(last->dayCounter().name(), "Actual/360 (inc)");
+
+    cds = MakeCreditDefaultSwap(5 * Years, 0.01)
+        .withLastPeriodDayCounter(Actual365Fixed());
+
+    first = coupon_cast(cds->coupons().front());
+    last = coupon_cast(cds->coupons().back());
+
+    BOOST_CHECK_EQUAL(first->dayCounter().name(), "Actual/360");
+    BOOST_CHECK_EQUAL(last->dayCounter().name(), "Actual/365 (Fixed)");
+
+}

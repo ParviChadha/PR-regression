@@ -1,0 +1,155 @@
+// Upstream tests at the PR's parent commit e482247c9 that use the changed code.
+// Names searched (test lines using each): forecastFixing (1), EquityIndex (12), initialize (0), clone (7), ReturnType (0), ExcessReturn (0), Price (108), TotalReturn (0), returnType (0), spot (4), returnType_ (0), spot_ (3)
+
+// ---- test-suite/indexes.cpp:206-225  (uses: forecastFixing)
+BOOST_AUTO_TEST_CASE(testCdiIndex) {
+    BOOST_TEST_MESSAGE("Testing Brazil CDI forecastFixing...");
+    Date today = Settings::instance().evaluationDate();
+    auto flatRate = ext::make_shared<SimpleQuote>(0.05);
+    Handle<YieldTermStructure> ts(
+        ext::make_shared<FlatForward>(today, Handle<Quote>(flatRate), Business252()));
+
+
+    auto cdi = ext::make_shared<Cdi>(ts);
+    auto testFixingDate = Brazil(Brazil::Settlement).advance(today, Period(1, Months));
+    auto forecast = cdi->forecastFixing(testFixingDate);
+
+    DiscountFactor discountStart = ts->discount(testFixingDate);
+    DiscountFactor discountEnd = ts->discount(
+        Brazil(Brazil::Settlement).advance(testFixingDate, Period(1, Days)));
+    
+    auto approx = pow(discountStart / discountEnd, 252.0) - 1.0;
+    QL_ASSERT(std::fabs(0.05127 - forecast) < 1e-5, "discrepancy in fixing forecast computation\n");
+    QL_ASSERT(std::fabs(approx - forecast) < 1e-6, "discrepancy in fixing forecast computation with approximation\n");
+}
+
+// ---- test-suite/riskneutraldensitycalculator.cpp:217-241  (uses: spot_)
+// http://www.researchgate.net/publication/46493859_Implied_volatility_in_oil_markets
+class DumasParametricVolSurface : public BlackVolatilityTermStructure {
+  public:
+    DumasParametricVolSurface(Real b1,
+                              Real b2,
+                              Real b3,
+                              Real b4,
+                              Real b5,
+                              ext::shared_ptr<Quote> spot,
+                              const ext::shared_ptr<YieldTermStructure>& rTS,
+                              ext::shared_ptr<YieldTermStructure> qTS)
+    : BlackVolatilityTermStructure(0, NullCalendar(), Following, rTS->dayCounter()), b1_(b1),
+      b2_(b2), b3_(b3), b4_(b4), b5_(b5), spot_(std::move(spot)), rTS_(rTS),
+      qTS_(std::move(qTS)) {}
+
+    Date maxDate() const override { return Date::maxDate(); }
+    Rate minStrike() const override { return 0.0; }
+    Rate maxStrike() const override { return QL_MAX_REAL; }
+
+  protected:
+    Volatility blackVolImpl(Time t, Real strike) const override {
+        QL_REQUIRE(t >= 0.0, "t must be >= 0");
+
+        if (t < QL_EPSILON)
+            return b1_;
+
+// ---- test-suite/equityindex.cpp:187-207  (uses: spot)
+BOOST_AUTO_TEST_CASE(testSpotChange) {
+    BOOST_TEST_MESSAGE("Testing spot change...");
+
+    CommonVars vars;
+    const Real tolerance = 1.0e-8;
+
+    ext::shared_ptr<Quote> newSpot = ext::make_shared<SimpleQuote>(9000.0);
+    vars.spotHandle.linkTo(newSpot);
+
+    if ((std::fabs(newSpot->value() - vars.equityIndex->spot()->value()) > tolerance))
+        BOOST_ERROR("could not re-link spot quote to new value\n"
+                    << "    actual spot:    " << vars.equityIndex->spot()->value() << "\n"
+                    << "    expected spot:    " << newSpot->value() << "\n");
+
+    vars.spotHandle.linkTo(vars.spot);
+
+    if ((std::fabs(vars.spot->value() - vars.equityIndex->spot()->value()) > tolerance))
+        BOOST_ERROR("could not re-link spot quote back to old value\n"
+                    << "    actual spot:    " << vars.equityIndex->spot()->value() << "\n"
+                    << "    expected spot:    " << vars.spot->value() << "\n");
+}
+
+// ---- test-suite/equityindex.cpp:28-52  (uses: EquityIndex)
+using namespace boost::unit_test_framework;
+
+BOOST_FIXTURE_TEST_SUITE(QuantLibTests, TopLevelFixture)
+
+BOOST_AUTO_TEST_SUITE(EquityIndexTests)
+
+struct CommonVars {
+
+    Date today;
+    Calendar calendar;
+    DayCounter dayCount;
+
+    ext::shared_ptr<EquityIndex> equityIndex;
+    RelinkableHandle<YieldTermStructure> interestHandle;
+    RelinkableHandle<YieldTermStructure> dividendHandle;
+    ext::shared_ptr<Quote> spot;
+    RelinkableHandle<Quote> spotHandle;
+
+    // utilities
+
+    CommonVars(bool addTodaysFixing = true) {
+        calendar = TARGET();
+        dayCount = Actual365Fixed();
+
+        equityIndex = ext::make_shared<EquityIndex>("eqIndex", calendar, EURCurrency(), interestHandle,
+
+// ---- test-suite/equitycashflow.cpp:116-140  (uses: clone)
+    vars.fxVolHandle.linkTo(flatVol(0.25, vars.dayCount));
+
+    vars.spotHandle.linkTo(ext::make_shared<SimpleQuote>(8710.0));
+}
+
+void checkQuantoCorrection(bool includeDividend, bool bumpData = false) {
+    const Real tolerance = 1.0e-6;
+
+    CommonVars vars;
+    ext::shared_ptr<EquityIndex> equityIndex =
+        includeDividend ?
+            vars.equityIndex :
+            vars.equityIndex->clone(vars.localCcyInterestHandle, Handle<YieldTermStructure>(),
+                                    vars.spotHandle);
+
+    auto cf = vars.createEquityQuantoCashFlow(equityIndex);
+
+    if (bumpData)
+        bumpMarketData(vars);
+
+    Real strike = vars.equityIndex->fixing(cf->fixingDate());
+    Real indexStart = vars.equityIndex->fixing(cf->baseDate());
+
+    Real time = vars.localCcyInterestHandle->timeFromReference(cf->fixingDate());
+    Real rf = vars.localCcyInterestHandle->zeroRate(time, Continuous);
+
+// ---- test-suite/indexes.cpp:159-183  (uses: clone)
+    valCal.addHoliday(Date(21, January, 2025));
+
+    auto matCal = BespokeCalendar("Maturity");
+    matCal.addHoliday(Date(7, January, 2025));
+    matCal.addHoliday(Date(15, January, 2025));
+    matCal.addHoliday(Date(23, April, 2025));
+    matCal.addHoliday(Date(30, April, 2025));
+
+    auto ibor = CustomIborIndex(
+        "Custom Ibor", 3*Months, 2, Currency(), fixCal, valCal, matCal, // NOLINT(cppcoreguidelines-slicing)
+        ModifiedFollowing, true, Actual360()
+    );
+    auto iborClone = ibor.clone(Handle<YieldTermStructure>());
+
+    for (IborIndex* index : {static_cast<IborIndex*>(&ibor), iborClone.get()}) {
+        auto* as_custom = dynamic_cast<CustomIborIndex*>(index);
+        BOOST_CHECK_EQUAL(index->fixingCalendar(), fixCal);
+        BOOST_CHECK_EQUAL(as_custom->valueCalendar(), valCal);
+        BOOST_CHECK_EQUAL(as_custom->maturityCalendar(), matCal);
+
+        BOOST_CHECK_EXCEPTION(
+            index->valueDate(Date(8, January, 2025)), Error,
+            ExpectedErrorMessage("Fixing date January 8th, 2025 is not valid"));
+
+        BOOST_CHECK_EQUAL(index->valueDate(Date(7, January, 2025)),

@@ -1,0 +1,195 @@
+// Upstream tests at the PR's parent commit e0dd88850 that use the changed code.
+// Names searched (test lines using each): calculate (6), postAdjustValues (0), DiscretizedCallableFixedRateBond (0), mandatoryTimes (1), reset (24), preAdjustValues (0), calculateWithSpread (0), postAdjustValuesImpl (0), preAdjustValuesImpl (0)
+
+// ---- test-suite/timegrid.cpp:151-162  (uses: mandatoryTimes)
+BOOST_AUTO_TEST_CASE(testMandatoryTimes)
+{
+    BOOST_TEST_MESSAGE("Testing that mandatory times are recalled correctly...");
+    std::vector<Time> test_times = {1.0, 2.0, 4.0};
+    const TimeGrid tg(test_times.begin(), test_times.end(), 8);
+    
+    // Mandatory times are those provided by the original iterator.
+    const std::vector<Time>& tg_mandatory_times = tg.mandatoryTimes();
+    BOOST_CHECK_EQUAL_COLLECTIONS(
+        tg_mandatory_times.begin(), tg_mandatory_times.end(),
+        test_times.begin(), test_times.end());
+}
+
+// ---- test-suite/basketoption.cpp:3144-3157  (uses: calculate)
+    const Real basketNpv = basketOption.NPV();
+    BOOST_REQUIRE(basketNpv > 1.0);
+
+    // Now drive the same engine instance directly, bypassing BasketOption's
+    // constructor-level BasketPayoff requirement, with a plain (non-basket)
+    // payoff -- exactly the misuse the sibling N-dim engine's own guard
+    // exists to catch.
+    auto* arguments = dynamic_cast<Option::arguments*>(engine->getArguments());
+    BOOST_REQUIRE(arguments != nullptr);
+    arguments->payoff = ext::make_shared<PlainVanillaPayoff>(Option::Call, 100.0);
+    arguments->exercise = exercise;
+
+    BOOST_CHECK_THROW(engine->calculate(), Error);
+}
+
+// ---- test-suite/garch.cpp:169-183  (uses: calculate)
+BOOST_AUTO_TEST_CASE(testCalculation) {
+    BOOST_TEST_MESSAGE("Testing GARCH model calculation...");
+
+    Date d(7, July, 1962);
+    TimeSeries<Volatility> ts;
+    Garch11 garch(0.2, 0.3, 0.4);
+
+    Volatility r = 0.1;
+    for (std::size_t i = 0; i < 10; ++i, d += 1) {
+        ts[d] = r;
+    }
+
+    TimeSeries<Volatility> tsout = garch.calculate(ts);
+    std::for_each(tsout.cbegin(), tsout.cend(), check_ts);
+}
+
+// ---- test-suite/hestonmodel.cpp:3027-3044  (uses: calculate)
+BOOST_AUTO_TEST_CASE(testHestonEngineIntegration) {
+    BOOST_TEST_MESSAGE("Testing Heston engine integration signature...");
+
+    auto square = [](Real x) -> Real { return x * x; };
+
+    const AnalyticHestonEngine::Integration integration =
+        AnalyticHestonEngine::Integration::gaussLobatto(1e-12, 1e-12);
+
+    const Real c1 = integration.calculate(1.0, square, Real(1.0));
+
+    HestonIntegrationMaxBoundTestFct testFct(1.0);
+    const Real c2 = integration.calculate(1.0, square, testFct);
+
+    if (testFct.getCallCounter() == 0 ||
+            std::fabs(c1 - 1/3.) > 1e-10 || std::fabs(c2 - 1/3.) > 1e-10) {
+        BOOST_ERROR("failed to test Heston engine integration signature");
+    }
+}
+
+// ---- test-suite/volatilitymodels.cpp:35-50  (uses: calculate)
+BOOST_AUTO_TEST_CASE(testConstruction) {
+
+    BOOST_TEST_MESSAGE("Testing volatility model construction...");
+
+    TimeSeries<Real> ts;
+    ts[Date(25, March, 2005)] = 1.2;
+    ts[Date(29, March, 2005)] = 2.3;
+    ts[Date(15, March, 2005)] = 0.3;
+
+    SimpleLocalEstimator sle(1/360.0);
+    TimeSeries<Volatility> locale = sle.calculate(ts);
+
+    ConstantEstimator ce(1);
+    TimeSeries<Volatility> sv = ce.calculate(locale);
+    sv.begin();
+}
+
+// ---- test-suite/inflationvolatility.cpp:63-87  (uses: reset)
+
+std::vector<Rate> cStrikesUK;
+std::vector<Rate> fStrikesUK;
+std::vector<Period> cfMaturitiesUK;
+ext::shared_ptr<Matrix> cPriceUK;
+ext::shared_ptr<Matrix> fPriceUK;
+
+ext::shared_ptr<InterpolatedYoYCapFloorTermPriceSurface<Bicubic,Cubic> > priceSurfEU;
+
+void reset() {
+    nominalEUR = Handle<YieldTermStructure>();
+    nominalGBP = Handle<YieldTermStructure>();
+    priceSurfEU.reset();
+    yoyEU.reset();
+    yoyUK.reset();
+    yoyIndexUK.reset();
+    yoyIndexEU.reset();
+    cPriceEU.reset();
+    fPriceEU.reset();
+    cPriceUK.reset();
+    fPriceUK.reset();
+    yoyIndexUK.reset();
+
+    cStrikesEU.clear();        
+    fStrikesEU.clear();
+
+// ---- test-suite/lowdiscrepancysequences.cpp:520-544  (uses: reset)
+        Real error = std::fabs(mean[0] - 0.5);
+        if (error > tolerance) {
+            BOOST_ERROR("First dimension mean (" << std::fixed << mean[0]
+                        << ") at the end of the " << io::ordinal(j+1)
+                        << " cycle in Halton sequence is not " << 0.5
+                        << std::scientific
+                        << " (error = " << error << ")");
+        }
+    }
+
+    // reset generator and gaussianstatistics
+    rsg  = HaltonRsg(dimensionality, 0, false, false);
+    stat.reset(dimensionality);
+    k = 0;
+    for (j=1; j<3; j++) { // three cycle
+        points = Size(std::pow(3.0, j))-1; // base 3
+        for (; k<points; k++) {
+            point = rsg.nextSequence().value;
+            stat.add(point);
+        }
+        mean = stat.mean();
+        Real error = std::fabs(mean[1] - 0.5);
+        if (error > tolerance) {
+            BOOST_ERROR("Second dimension mean (" << std::fixed << mean[1]
+                        << ") at the end of the " << io::ordinal(j+1)
+
+// ---- test-suite/lowdiscrepancysequences.cpp:834-858  (uses: reset)
+    #endif
+    for (Integer i = 0; i<8; i++) {
+        #ifdef PRINT_ONLY
+        outStream << std::endl;
+        #endif
+
+        dim = dimensionality[i];
+        DiscrepancyStatistics stat(dim);
+
+        typename T::generator_type rsg = generatorFactory.make(dim, seed);
+
+        Size j, k=0, jMin=10;
+        stat.reset();
+        #ifdef PRINT_ONLY
+        outStream << "const Real dim" << dim
+                  << arrayName << "[] = {" ;
+        #endif
+        for (j=jMin; j<jMin+sampleLoops; j++) {
+            Size points = Size(std::pow(2.0, Integer(j)))-1;
+            for (; k<points; k++) {
+                point = rsg.nextSequence().value;
+                stat.add(point);
+            }
+
+            discr = stat.discrepancy();
+
+// ---- test-suite/marketmodel.cpp:2862-2886  (uses: reset)
+                }
+
+                std::vector<Real> oneStepDFs(evolution.numberOfRates()+1);
+                oneStepDFs[0] = 1.0;
+
+
+                Size numberFailures=0;
+                Size numberFailures2=0;
+
+                for (Size l=0; l < pathsToDo; ++l)
+                {
+                    evolver.startNewPath();
+                    product.reset();
+                    generator->nextPath();
+
+                    bool done;
+                    newRates = marketModel->initialRates();
+                    Size currentStep =0;
+
+                    do
+                    {
+                        oldRates = newRates;
+
+
+                        evolver.advanceStep();

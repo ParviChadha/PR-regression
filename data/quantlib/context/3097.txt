@@ -1,0 +1,175 @@
+// Upstream tests at the PR's parent commit 1e3cad8eb that use the changed code.
+// Names searched (test lines using each): discount (316), SvenssonFitting (0), clone (11), size (1215), NelsonSiegelFitting (0), discountFunction (0)
+
+// ---- test-suite/equityindex.cpp:128-147  (uses: clone, discount)
+BOOST_AUTO_TEST_CASE(testFixingForecastWithoutDividend) {
+    BOOST_TEST_MESSAGE("Testing fixing forecast without dividend...");
+
+    CommonVars vars;
+    const Real tolerance = 1.0e-8;
+
+    Date forecastedDate(20, May, 2030);
+
+    auto equityIndexExDiv =
+        vars.equityIndex->clone(vars.interestHandle, Handle<YieldTermStructure>(), vars.spotHandle);
+
+    Real forecast = equityIndexExDiv->fixing(forecastedDate);
+    Real expectedForecast =
+        vars.spotHandle->value() / vars.interestHandle->discount(forecastedDate);
+
+    if ((std::fabs(forecast - expectedForecast) > tolerance))
+        BOOST_ERROR("could not replicate index forecast without dividend\n"
+                    << "    actual forecast:    " << forecast << "\n"
+                    << "    expected forecast:    " << expectedForecast << "\n");
+}
+
+// ---- test-suite/equityindex.cpp:149-169  (uses: clone, discount)
+BOOST_AUTO_TEST_CASE(testFixingForecastWithoutSpot) {
+    BOOST_TEST_MESSAGE("Testing fixing forecast without spot handle...");
+
+    CommonVars vars;
+    const Real tolerance = 1.0e-8;
+
+    Date forecastedDate(20, May, 2030);
+
+    auto equityIndexExSpot =
+        vars.equityIndex->clone(vars.interestHandle, vars.dividendHandle, Handle<Quote>());
+
+    Real forecast = equityIndexExSpot->fixing(forecastedDate);
+    Real expectedForecast = equityIndexExSpot->pastFixing(vars.today) *
+                            vars.dividendHandle->discount(forecastedDate) /
+                            vars.interestHandle->discount(forecastedDate);
+
+    if ((std::fabs(forecast - expectedForecast) > tolerance))
+        BOOST_ERROR("could not replicate index forecast without spot handle\n"
+                    << "    actual forecast:    " << forecast << "\n"
+                    << "    expected forecast:    " << expectedForecast << "\n");
+}
+
+// ---- test-suite/fittedbonddiscountcurve.cpp:396-428  (uses: discount, size)
+BOOST_AUTO_TEST_CASE(testNaturalCubicFittingEvaluation) {
+
+    BOOST_TEST_MESSAGE("Testing natural cubic fitting method as evaluator...");
+
+    Date today = Settings::instance().evaluationDate();
+    Date maxDate = today + Period(12, Years);
+
+    // knots can be passed unsorted and with duplicates; t = 0 is added if missing
+    NaturalCubicFitting fittingMethod({10.0, 2.0, 5.0, 1.0, 2.0});
+
+    // the parameters are the discount factors at the knots after t = 0
+    std::vector<Time> knots = {0.0, 1.0, 2.0, 5.0, 10.0};
+    std::vector<Real> discounts = {1.0};
+    for (Size i = 1; i < knots.size(); ++i)
+        discounts.push_back(std::exp(-0.03 * knots[i]));
+    Array parameters(discounts.begin() + 1, discounts.end());
+
+    FittedBondDiscountCurve curve(today, fittingMethod, parameters, maxDate, Actual365Fixed());
+
+    BOOST_CHECK_EQUAL(curve.fitResults().size(), parameters.size());
+
+    // the curve passes through the knots...
+    for (Size i = 0; i < knots.size(); ++i)
+        QL_CHECK_CLOSE(curve.discount(knots[i]), discounts[i], 1e-10);
+
+    // ...interpolates between them with a natural cubic spline...
+    CubicNaturalSpline spline(knots.begin(), knots.end(), discounts.begin());
+    for (Time t : std::vector<Time>{0.25, 0.5, 1.5, 3.0, 7.5, 9.9})
+        QL_CHECK_CLOSE(curve.discount(t), spline(t), 1e-10);
+
+    // ...and is flat after the last one
+    QL_CHECK_CLOSE(curve.discount(11.0), discounts.back(), 1e-10);
+}
+
+// ---- test-suite/equitycashflow.cpp:116-140  (uses: clone)
+    vars.fxVolHandle.linkTo(flatVol(0.25, vars.dayCount));
+
+    vars.spotHandle.linkTo(ext::make_shared<SimpleQuote>(8710.0));
+}
+
+void checkQuantoCorrection(bool includeDividend, bool bumpData = false) {
+    const Real tolerance = 1.0e-6;
+
+    CommonVars vars;
+    ext::shared_ptr<EquityIndex> equityIndex =
+        includeDividend ?
+            vars.equityIndex :
+            vars.equityIndex->clone(vars.localCcyInterestHandle, Handle<YieldTermStructure>(),
+                                    vars.spotHandle);
+
+    auto cf = vars.createEquityQuantoCashFlow(equityIndex);
+
+    if (bumpData)
+        bumpMarketData(vars);
+
+    Real strike = vars.equityIndex->fixing(cf->fixingDate());
+    Real indexStart = vars.equityIndex->fixing(cf->baseDate());
+
+    Real time = vars.localCcyInterestHandle->timeFromReference(cf->fixingDate());
+    Real rf = vars.localCcyInterestHandle->zeroRate(time, Continuous);
+
+// ---- test-suite/fittedbonddiscountcurve.cpp:43-79  (uses: discount)
+BOOST_AUTO_TEST_CASE(testEvaluation) {
+
+    BOOST_TEST_MESSAGE("Testing that fitted bond curves work as evaluators...");
+
+    Date today = Settings::instance().evaluationDate();
+    Date maxDate = today + Period(10, Years);
+
+    ExponentialSplinesFitting fittingMethod;
+
+    Array parameters = {
+        -51293.44,
+        -212240.36,
+        168668.51,
+        88792.74,
+        120712.13,
+        -34332.83,
+        -66479.66,
+        13605.17,
+        0.0
+    };
+
+    FittedBondDiscountCurve curve1(
+        today, fittingMethod, parameters, maxDate, Actual365Fixed());
+
+    FittedBondDiscountCurve curve2(
+        0, TARGET(), fittingMethod, parameters, maxDate, Actual365Fixed());
+
+    // they work...
+    BOOST_CHECK_NO_THROW(curve1.discount(3.0));
+    BOOST_CHECK_NO_THROW(curve2.discount(3.0));
+
+    // ...but not after the max date
+    BOOST_CHECK_EXCEPTION(curve1.discount(12.0), Error,
+                          ExpectedErrorMessage("past max curve time"));
+    BOOST_CHECK_EXCEPTION(curve2.discount(12.0), Error,
+                          ExpectedErrorMessage("past max curve time"));
+}
+
+// ---- test-suite/americanoption.cpp:1421-1445  (uses: discount)
+   const Real americanNPV = option.NPV();
+
+   VanillaOption option2(
+       ext::make_shared<PlainVanillaPayoff>(Option::Put, 100.0),
+       ext::make_shared<AmericanExercise>(today, maturityDate)
+   );
+
+   option2.setPricingEngine(
+       ext::make_shared<FdBlackScholesShoutEngine>(process, dividends, 50, 50));
+
+   Real shoutNPV = option2.NPV();
+
+   const DiscountFactor df = r->discount(maturityDate)/r->discount(dividendDate);
+
+   const Real tol = 1e-3;
+   Real diff = std::fabs(americanNPV - shoutNPV/df);
+
+   if (diff > tol) {
+       BOOST_FAIL("failed to reproduce American option NPV with "
+                  "shout option pricing engine for "
+                  << "\n    calculated: " << shoutNPV/df
+                  << "\n    expected  : " << americanNPV
+                  << "\n    difference: " << diff
+                  << "\n    tolerance:  " << tol);
+   }

@@ -1,5 +1,5 @@
 // Upstream tests at the PR's parent commit 81d66291c that use the changed code.
-// Names searched (test lines using each): binary_reader (2), skip_cbor_key_tags (0)
+// Names searched (test lines using each): sax_parse (0), from_bson (0), from_cbor (0), from_msgpack (0), from_ubjson (0), from_bjdata (0), from_bon8 (0), get_cbor_string (0), binary_reader (2), get_string (17), parse_cbor_internal (0), skip_cbor_key_tags (0)
 
 // ---- tests/src/unit-bjdata.cpp:76-111  (uses: binary_reader)
     SECTION("binary_reader BJData lookup tables")
@@ -37,4 +37,106 @@
             CHECK(std::string(name) == type.second);
         }
         CHECK(reader_t::bjd_type_name(static_cast<unsigned char>('x')) == nullptr);
+    }
+
+// ---- tests/src/unit-json_view.cpp:1233-1257  (uses: get_string)
+            }
+            CHECK(bits(v.get<double>()) == bits(j.get<double>()));
+            if (std::abs(j.get<double>()) < 1e9)
+            {
+                CHECK(v.get<int>() == j.get<int>());
+            }
+            const auto token = v.number_token();
+            CHECK(text.compare(v.source_offset(), token.size(), token.data(), token.size()) == 0);
+            break;
+        }
+        case json::value_t::string:
+            CHECK(v.get<std::string>() == j.get<std::string>());
+            CHECK(std::string(v.get_string().data(), v.get_string().size()) == j.get<std::string>());
+            break;
+        case json::value_t::boolean:
+            CHECK(v.get<bool>() == j.get<bool>());
+            CHECK(v.get<int>() == j.get<int>());
+            break;
+        case json::value_t::null:
+            CHECK(v.get<std::nullptr_t>() == nullptr);
+            break;
+        case json::value_t::array:
+            CHECK(v.get<std::vector<ordered_json>>() == j.get<std::vector<ordered_json>>());
+            break;
+        case json::value_t::object:
+
+// ---- tests/src/unit-json_view.cpp:1414-1426  (uses: get_string)
+    SECTION("number tokens")
+    {
+        const json_document d = json_document::parse(R"([1.50, 1E2, -0, 123456789012345678901234567890, -12, 7, "x"])");
+        const json_view v = d.root();
+        CHECK(v[0].number_token() == "1.50");
+        CHECK(v[1].number_token() == "1E2");
+        CHECK(v[2].number_token() == "-0");
+        CHECK(v[3].number_token() == "123456789012345678901234567890");
+        CHECK(v[4].number_token() == "-12");
+        CHECK(v[5].number_token() == "7");
+        CHECK_THROWS_WITH_AS(v[6].number_token(), "[json.exception.type_error.302] type must be number, but is string", json::type_error&);
+        CHECK_THROWS_WITH_AS(v.get_string(), "[json.exception.type_error.302] type must be string, but is array", json::type_error&);
+    }
+
+// ---- tests/src/unit-json_view_dump.cpp:545-569  (uses: get_string)
+        const json_document d = json_document::parse(text);
+        const json_view v = d.root();
+        const json j = json::parse(text);
+        for (std::size_t i = 0; i < members; ++i)
+        {
+            const std::string key = std::string(i % 23, 'k') + std::to_string(i) + (i % 7 == 0 ? "\n" : "");
+            CHECK(v[key].get<std::size_t>() == i);
+            CHECK(v.contains(key));
+            CHECK(v.find(key).key() == key);
+            CHECK(v.at(key).get<std::size_t>() == i);
+            CHECK(!v.contains(key + "x"));
+        }
+        CHECK(v[""].get_string() == "empty key");
+        CHECK(v["k1"].get<int>() == 1); // the first of duplicate keys, as for small objects
+        CHECK(!v.contains("missing"));
+        CHECK_THROWS_WITH_AS(v.at("missing"), "[json.exception.out_of_range.403] key 'missing' not found", json::out_of_range&);
+        CHECK(v == j);
+        CHECK(v.materialize() == j);
+    }
+
+    SECTION("duplicate keys: the first member wins, with and without a table")
+    {
+        // an object of `total` members: the keys "k0".."k<n-1>" in order, then
+        // three keys repeated twice more (one copy in the middle, one at the
+        // end), and two keys repeated once; the value of a member is its
+
+// ---- tests/src/unit-json_view_edit_values.cpp:68-78  (uses: get_string)
+    SECTION("strings stay valid while more edits come")
+    {
+        json_editable_document d = json_editable_document::parse("[]");
+        const auto first = d.push_back(d.root(), std::string(100, 'x')).get_string();
+        for (int i = 0; i < 1000; ++i)
+        {
+            d.push_back(d.root(), std::string(static_cast<std::size_t>(i % 50), 'y'));
+        }
+        CHECK(std::string(first.data(), first.size()) == std::string(100, 'x'));
+        CHECK(d.root().size() == 1001);
+    }
+
+// ---- tests/src/unit-json_view_edit_values.cpp:158-175  (uses: get_string)
+    SECTION("large objects")
+    {
+        std::string text = "{";
+        for (int i = 0; i < 200; ++i)
+        {
+            text += (i != 0 ? ",\"k" : "\"k") + std::to_string(i) + "\":" + std::to_string(i);
+        }
+        text += '}';
+        json_editable_document d = json_editable_document::parse(text);
+        d.set(d.root(), "k7", "seven"); // assigned in place: the index stays in use
+        CHECK(d.root()["k7"].get_string() == "seven");
+        d.set(d.root(), "new", 1); // appended: the members move, the lookup is linear
+        CHECK(d.root()["new"].get<int>() == 1);
+        CHECK(d.root()["k199"].get<int>() == 199);
+        d.erase(d.root(), "k0");
+        CHECK(!d.root().contains("k0"));
+        CHECK(d.root().size() == 200);
     }

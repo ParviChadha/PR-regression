@@ -1,0 +1,182 @@
+// Upstream tests at the PR's parent commit 6042ed01b that use the changed code.
+// Names searched (test lines using each): NewZealand (0), Market (19), isBusinessDay (160), sinkingSchedule (1), historicalForwardRatesAnalysis (0), FloatingDigitalLeg (0), FloatingLeg (0), AbcdAtmVolCurve (0), name (74), AmortizingFixedRateBond (0), operator!= (0), operator<< (0), operator== (0), CommonImpl (0), isCommonBusinessDay (0), NZFMAImpl (0), AucklandImpl (0)
+
+// ---- test-suite/amortizingbond.cpp:47-71  (uses: sinkingSchedule)
+                      0.477415295, 0.536821623, 0.599550525,
+                      0.665302495, 0.733764574, 0.804622617,
+                      0.877571570, 0.952323396, 1.028612597};
+
+    Frequency freq = Monthly;
+
+    Date refDate = Settings::instance().evaluationDate();
+
+    const Real tolerance = 1.0e-6;
+
+    for (Size i=0; i<std::size(rates); ++i) {
+
+        auto schedule = sinkingSchedule(refDate, Period(30, Years), freq, NullCalendar());
+        auto notionals = sinkingNotionals(Period(30, Years), freq, rates[i], 100.0);
+
+        AmortizingFixedRateBond myBond(0, notionals, schedule, {rates[i]},
+                                       ActualActual(ActualActual::ISMA));
+
+        const Leg& cashflows = myBond.cashflows();
+
+        for (Size k=0; k < cashflows.size() / 2; ++k) {
+            Real coupon = cashflows[2*k]->amount();
+            Real principal = cashflows[2*k+1]->amount();
+            Real totalAmount = coupon + principal;
+
+
+// ---- test-suite/marketmodel.cpp:360-384  (uses: Market)
+}
+
+enum MeasureType { ProductSuggested, Terminal,
+                   MoneyMarket, MoneyMarketPlus };
+
+std::string measureTypeToString(MeasureType type) {
+    switch (type) {
+      case ProductSuggested:
+        return "ProductSuggested measure";
+      case Terminal:
+        return "Terminal measure";
+      case MoneyMarket:
+        return "Money Market measure";
+      case MoneyMarketPlus:
+        return "Money Market Plus measure";
+      default:
+        QL_FAIL("unknown measure type");
+    }
+}
+
+std::vector<Size> makeMeasure(const MarketModelMultiProduct& product,
+                              MeasureType measureType) {
+    std::vector<Size> result;
+    const EvolutionDescription& evolution(product.evolution());
+    switch (measureType) {
+
+// ---- test-suite/marketmodel_cms.cpp:259-283  (uses: Market)
+}
+
+enum MeasureType { ProductSuggested, Terminal,
+                   MoneyMarket, MoneyMarketPlus };
+
+std::string measureTypeToString(MeasureType type) {
+    switch (type) {
+      case ProductSuggested:
+        return "ProductSuggested measure";
+      case Terminal:
+        return "Terminal measure";
+      case MoneyMarket:
+        return "Money Market measure";
+      case MoneyMarketPlus:
+        return "Money Market Plus measure";
+      default:
+        QL_FAIL("unknown measure type");
+    }
+}
+
+std::vector<Size> makeMeasure(const MarketModelMultiProduct& product,
+                              MeasureType measureType) {
+    std::vector<Size> result;
+    const EvolutionDescription& evolution(product.evolution());
+    switch (measureType) {
+
+// ---- test-suite/marketmodel_smm.cpp:255-279  (uses: Market)
+}
+
+enum MeasureType { ProductSuggested, Terminal,
+                   MoneyMarket, MoneyMarketPlus };
+
+std::string measureTypeToString(MeasureType type) {
+    switch (type) {
+      case ProductSuggested:
+        return "ProductSuggested measure";
+      case Terminal:
+        return "Terminal measure";
+      case MoneyMarket:
+        return "Money Market measure";
+      case MoneyMarketPlus:
+        return "Money Market Plus measure";
+      default:
+        QL_FAIL("unknown measure type");
+    }
+}
+
+std::vector<Size> makeMeasure(const MarketModelMultiProduct& product,
+                              MeasureType measureType) {
+    std::vector<Size> result;
+    const EvolutionDescription& evolution(product.evolution());
+    switch (measureType) {
+
+// ---- test-suite/daycounters.cpp:1141-1173  (uses: Market)
+BOOST_AUTO_TEST_CASE(testActualActualOutOfScheduleRange) {
+    BOOST_TEST_MESSAGE("Testing usage of actual/actual out of schedule...");
+
+    Date today = Date(10, November, 2020);
+    Date temp = Settings::instance().evaluationDate();
+    Settings::instance().evaluationDate() = today;
+
+    Date effectiveDate = Date(21, May, 2019);
+    Date terminationDate = Date(21, May, 2029);
+    Period tenor = Period(1, Years);
+    Calendar calendar = China(China::Market::IB);
+    BusinessDayConvention convention = Unadjusted;
+    BusinessDayConvention terminationDateConvention = convention;
+    DateGeneration::Rule rule = DateGeneration::Backward;
+    bool endOfMonth = false;
+
+    Schedule schedule = Schedule(effectiveDate, terminationDate, tenor, calendar, convention,
+                                 terminationDateConvention, rule, endOfMonth);
+    DayCounter dayCounter = ActualActual(ActualActual::Convention::Bond, schedule);
+    bool raised = false;
+
+    try {
+        dayCounter.yearFraction(today, today + Period(9, Years));
+    } catch (const std::exception&) {
+        raised = true;
+    }
+       
+    if (!raised) {
+        BOOST_FAIL("Exception expected but did not happen!");
+    }
+
+    Settings::instance().evaluationDate() = temp;
+}
+
+// ---- test-suite/markovfunctional.cpp:1062-1086  (uses: Market)
+                 MarkovFunctional::ModelSettings::KahaleSmile |
+                 MarkovFunctional::ModelSettings::SmileExponentialExtrapolation)
+            .withSmileMoneynessCheckpoints(money)));
+
+    MarkovFunctional::ModelOutputs outputs1 =
+        mf1->modelOutputs(); // this costs a lot of time, so only use it if you
+                             // want to check the calibration
+    // BOOST_TEST_MESSAGE(outputs1);
+
+    for (Size i = 0; i < outputs1.expiries_.size(); i++) {
+        if (fabs(outputs1.marketZerorate_[i] - outputs1.modelZerorate_[i]) >
+            tol0)
+            BOOST_ERROR("Basket 1 / flat termstructures : Market zero rate ("
+                        << outputs1.marketZerorate_[i]
+                        << ") and model zero rate ("
+                        << outputs1.modelZerorate_[i] << ") do not agree.");
+    }
+
+    for (Size i = 0; i < outputs1.expiries_.size(); i++) {
+        for (Size j = 0; j < outputs1.smileStrikes_[i].size(); j++) {
+            if (fabs(outputs1.marketCallPremium_[i][j] -
+                     outputs1.modelCallPremium_[i][j]) > tol1)
+                BOOST_ERROR(
+                    "Basket 1 / flat termstructures : Market call premium ("
+                    << outputs1.marketCallPremium_[i][j]
+
+// ---- test-suite/commodityunitofmeasure.cpp:33-40  (uses: name)
+BOOST_AUTO_TEST_CASE(testCommodityType) {
+    BOOST_TEST_MESSAGE("Testing commodity type...");
+
+    CommodityType commodityType("Heating Oil", "HO");
+
+    BOOST_CHECK_EQUAL(commodityType.name(), "Heating Oil");
+    BOOST_CHECK_EQUAL(commodityType.code(), "HO");
+}

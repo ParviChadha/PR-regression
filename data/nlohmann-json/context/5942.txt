@@ -1,5 +1,5 @@
 // Upstream tests at the PR's parent commit 21ec9bd80 that use the changed code.
-// Names searched (test lines using each): basic_json_document (7)
+// Names searched (test lines using each): set (129), basic_json_document (7)
 
 // ---- tests/src/unit-json_view.cpp:278-306  (uses: basic_json_document)
     SECTION("overflow of the floating-point type")
@@ -98,3 +98,30 @@ TEST_CASE("json_view modes")
         CHECK(d.root().dump() == "[1.5,null,null]");
         CHECK(d.root().dump(2) == json_float::parse("[1.5, null, null]").dump(2));
     }
+
+// ---- tests/src/unit-json_view_edit.cpp:387-411  (uses: set)
+            std::vector<ptr_t> paths;
+            collect(j, ptr_t(), paths);
+            const ptr_t p = paths[static_cast<std::size_t>(r(static_cast<int>(paths.size())))];
+            const ordered_json& target = j[p];
+            const ordered_json_editable_view tv = d.root().at(p);
+            const int op = r(12);
+            {
+                if (op == 0) // assign a scalar
+                {
+                    const ordered_json v = random_scalar();
+                    if (v.is_string() && r(2) == 0)
+                    {
+                        d.set(tv, v.get<std::string>());
+                    }
+                    else if (v.is_number_unsigned() && r(2) == 0)
+                    {
+                        d.set(tv, v.get<std::uint64_t>());
+                    }
+                    else
+                    {
+                        d.set(tv, v);
+                    }
+                    j[p] = v;
+                }
+                else if (op == 1) // assign a new array/object (or anything), sometimes via the pointer API

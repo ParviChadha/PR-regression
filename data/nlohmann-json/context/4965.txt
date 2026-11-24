@@ -1,5 +1,5 @@
 // Upstream tests at the PR's parent commit e8b747e4b that use the changed code.
-// Names searched (test lines using each): basic_json (30), merge_diff (0), format_as (23), to_string (78), array (0), operator<< (81), operator>> (76), merge_diff_frame (0), merge_diff_added_members (0), member (147), patch (396), source (94), target (106), merge_diff_iteratively (0), merge_diff_recursively (0)
+// Names searched (test lines using each): basic_json (30), merge_diff (0), merge_diff_iteratively (0), merge_diff_recursively (0), merge_diff_added_members (0), merge_diff_frame (0), member (147), patch (396), source (94), target (106)
 
 // ---- tests/src/unit-json_patch.cpp:688-729  (uses: patch, source, target)
         SECTION("documentation GIF")
@@ -115,68 +115,64 @@ void reference_merge_patch(json& target, const json& patch)
         CHECK(dest == expected);
     }
 
-// ---- tests/src/unit-regression2.cpp:576-591  (uses: member, operator<<, operator>>)
-    SECTION("issue #1647 - compile error when deserializing enum if both non-default from_json and non-member operator== exists for other type")
+// ---- tests/src/unit-modifiers.cpp:8-32  (uses: source, target)
+
+#include "doctest_compatibility.h"
+
+#include <nlohmann/json.hpp>
+using nlohmann::json;
+
+#include <string>
+
+namespace
+{
+// update(source, true) as documented, written recursively; only usable on
+// values nested a few hundred levels deep
+void reference_update(json& target, const json& source)
+{
+    for (auto it = source.begin(); it != source.end(); ++it)
     {
-        // does not compile on ICPC when targeting C++20
-#if !(defined(__INTEL_COMPILER) && __cplusplus >= 202000)
+        const auto existing = target.find(it.key());
+        if (it.value().is_object() && existing != target.end() && existing->is_object())
         {
-            const json j;
-            const NonDefaultFromJsonStruct x(j);
-            NonDefaultFromJsonStruct y;
-            CHECK(x == y);
+            reference_update(*existing, it.value());
         }
+        else
+        {
+            target[it.key()] = it.value();
+        }
+
+// ---- tests/src/unit-diagnostic-positions.cpp:196-209  (uses: patch, target)
+    SECTION("JSON patch add to primitive parent (#4292)")
+    {
+        // the JSON Patch "add" target /foo/bar/baz has a string parent
+        // (/foo/bar); the position of that parent is reported in the message
+        const json doc = json::parse(R"({"foo":{"bar":"a string"}})");
+        const json patch = json::parse(R"([{"op":"add","path":"/foo/bar/baz","value":1}])");
+#if JSON_DIAGNOSTICS
+        CHECK_THROWS_WITH_AS(doc.patch(patch),
+                             "[json.exception.out_of_range.411] (/foo/bar) (bytes 14-24) cannot add value: the JSON Patch 'add' target's parent is of type string, but must be an object or array", json::out_of_range);
+#else
+        CHECK_THROWS_WITH_AS(doc.patch(patch),
+                             "[json.exception.out_of_range.411] (bytes 14-24) cannot add value: the JSON Patch 'add' target's parent is of type string, but must be an object or array", json::out_of_range);
 #endif
-
-        auto val = nlohmann::json("one").get<for_1647>();
-        CHECK(val == for_1647::one);
-        const json j = val;
     }
 
-// ---- tests/src/unit-deserialization.cpp:96-108  (uses: operator<<, operator>>)
-TEST_CASE("deserialization")
-{
-    SECTION("successful deserialization")
+// ---- tests/src/unit-diagnostics.cpp:590-603  (uses: patch, target)
+    SECTION("update()")
     {
-        SECTION("stream")
+        json j = target;
+        j.update(patch, true);
+
+        // walk down through const references, which leave m_parent alone
+        const json* p = &j;
+        for (std::size_t i = 0; i < depth; ++i)
         {
-            std::stringstream ss1;
-            std::stringstream ss2;
-            std::stringstream ss3;
-            ss1 << R"(["foo",1,2,3,false,{"one":1}])";
-            ss2 << R"(["foo",1,2,3,false,{"one":1}])";
-            ss3 << R"(["foo",1,2,3,false,{"one":1}])";
-            const json j = json::parse(ss1);
-
-// ---- tests/src/unit-deserialization.cpp:205-217  (uses: operator<<, operator>>)
-    SECTION("unsuccessful deserialization")
-    {
-        SECTION("stream")
-        {
-            std::stringstream ss1;
-            std::stringstream ss3;
-            std::stringstream ss4;
-            std::stringstream ss5;
-            ss1 << R"(["foo",1,2,3,false,{"one":1})";
-            ss3 << R"(["foo",1,2,3,false,{"one":1})";
-            ss4 << R"(["foo",1,2,3,false,{"one":1})";
-            ss5 << R"(["foo",1,2,3,false,{"one":1})";
-
-
-// ---- tests/src/unit-precise-stream-position.cpp:88-100  (uses: operator<<, operator>>)
-TEST_CASE("JSON_PRECISE_STREAM_POSITION")
-{
-    SECTION("the macro is part of the ABI tag")
-    {
-        const std::string ns = STRINGIZE(NLOHMANN_JSON_NAMESPACE);
-        // other tags may come before it, e.g. json_abi_diag_psp
-        CHECK(ns.find("_psp") != std::string::npos);
+            p = &p->at("a");
+        }
+        CHECK_THROWS_WITH_AS(p->at("x").at(0), expected_x.c_str(), json::type_error);
+        CHECK_THROWS_WITH_AS(p->at("y").at(0), expected_y.c_str(), json::type_error);
     }
-
-    SECTION("a number does not consume the character that terminates it")
-    {
-        // a number is only terminated by the character following it; that
-        // character must be given back so the stream is positioned right
 
 // ---- tests/src/unit-ordered_json2.cpp:466-470  (uses: patch, target)
     SECTION("patch")

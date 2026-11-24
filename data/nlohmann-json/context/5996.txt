@@ -1,5 +1,24 @@
 // Upstream tests at the PR's parent commit bdc737db6 that use the changed code.
-// Names searched (test lines using each): basic_json (54), set_parents_on_exit (0), m_value (122)
+// Names searched (test lines using each): insert (297), basic_json (54), insert_iterator (0), set_parents_on_exit (0), m_value (122)
+
+// ---- tests/src/unit-json_view_edit.cpp:907-923  (uses: basic_json, insert)
+    SECTION("objects in moved arrays and in new values")
+    {
+        json_editable_document d = json_editable_document::parse(R"([{"a": 1, "a": 2}, {"a": 3, "b": 0, "a": 4}])");
+        check_first_wins(d.root()[0], 1);
+        check_first_wins(d.root()[1], 3);
+        d.insert(d.root(), 0, json::parse(R"({"a": 0})"));
+        d.push_back(d.root(), json::parse(R"({"a": 5, "a": 6})")); // (a basic_json value has one member)
+        check_first_wins(d.root()[1], 1);
+        check_first_wins(d.root()[2], 3);
+        CHECK(d.root()[3]["a"].get<int>() == 6);
+        d.set(d.root()[1], "a", 8);
+        check_first_wins(d.root()[1], 8);
+        CHECK(d.root()[1].dump() == R"({"a":8})");
+        d.erase(d.root(), 0);
+        check_first_wins(d.root()[1], 3);
+        CHECK(d.root().dump() == R"([{"a":8},{"a":3,"b":0,"a":4},{"a":6}])");
+    }
 
 // ---- tests/src/fuzzer-parse_json_view.cpp:1-24  (uses: basic_json)
 //     __ _____ _____ _____
@@ -130,38 +149,3 @@ TEST_CASE("UTF-8 error_handler for the binary readers and writers")
             CAPTURE(c.name)
             const json jval = c.bytes;
 
-
-// ---- tests/src/unit-custom-number-types.cpp:85-109  (uses: basic_json)
-template<>
-class numeric_limits<class_int>
-{
-  public:
-    static constexpr bool is_signed = true;
-    static constexpr int digits = std::numeric_limits<std::int64_t>::digits;
-};
-} // namespace std
-
-namespace
-{
-
-using class_int_json = nlohmann::basic_json<std::map, std::vector, std::string, bool, class_int, std::uint64_t, double>;
-
-class_int_json make_class_int(std::int64_t v)
-{
-    class_int_json j(class_int_json::value_t::number_integer);
-    j.get_ref<class_int&>() = class_int(v);
-    return j;
-}
-
-} // namespace
-
-// the serializer cannot print an integer of class type, so doctest must not
-// try when an assertion fails
-
-// ---- tests/src/unit-explicit_instantiation.cpp:32-37  (uses: basic_json)
-TEST_CASE("explicit instantiation of basic_json (#4825)")
-{
-    const json j = {1, "two", 3.0};
-    CHECK(j.size() == 3);
-    CHECK(json::from_bjdata(json::to_bjdata(j)) == j);
-}

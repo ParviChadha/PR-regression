@@ -1,5 +1,5 @@
 // Upstream tests at the PR's parent commit 0c2329d0e that use the changed code.
-// Names searched (test lines using each): basic_json (74), to_json (0), format_as (23), to_string (76), array (0), operator<< (79), operator>> (76), external_constructor (0), construct (0), json_value (11), replace_value (0)
+// Names searched (test lines using each): basic_json (0), binary (0), to_json (0), format_as (23), to_string (76), operator<< (79), operator>> (76), operator!= (52), operator< (185), external_constructor (0), construct (0), json_value (11), replace_value (0)
 
 // ---- tests/src/unit-deserialization.cpp:236-248  (uses: operator<<, operator>>)
 TEST_CASE("deserialization")
@@ -59,107 +59,121 @@ TEST_CASE("JSON_PRECISE_STREAM_POSITION")
         CHECK(remaining(is) == "true");
     }
 
-// ---- tests/src/unit-allocator.cpp:127-169  (uses: json_value)
-    SECTION("class json_value")
-    {
-        SECTION("json_value(value_t)")
+// ---- tests/src/unit-comparison.cpp:73-85  (uses: operator!=, operator<)
+TEST_CASE("lexicographical comparison operators")
+{
+    constexpr auto f_ = false;
+    constexpr auto _t = true;
+    constexpr auto nan = std::numeric_limits<json::number_float_t>::quiet_NaN();
+#if JSON_HAS_THREE_WAY_COMPARISON
+    constexpr auto lt = std::partial_ordering::less;
+    constexpr auto gt = std::partial_ordering::greater;
+    constexpr auto eq = std::partial_ordering::equivalent;
+    constexpr auto un = std::partial_ordering::unordered;
+#endif
+
+#if JSON_HAS_THREE_WAY_COMPARISON
+
+// ---- tests/src/unit-comparison.cpp:127-147  (uses: operator!=, operator<)
+        SECTION("comparison: less")
         {
-            SECTION("object")
+            REQUIRE(expected_lt.size() == j_types.size());
+            for (size_t i = 0; i < j_types.size(); ++i)
             {
-                next_construct_fails = false;
-                auto t = my_json::value_t::object;
-                CHECK_NOTHROW(my_allocator_clean_up(my_json::json_value(t).object));
-                next_construct_fails = true;
-                CHECK_THROWS_AS(my_json::json_value(t), std::bad_alloc&);
-                next_construct_fails = false;
-            }
-            SECTION("array")
-            {
-                next_construct_fails = false;
-                auto t = my_json::value_t::array;
-                CHECK_NOTHROW(my_allocator_clean_up(my_json::json_value(t).array));
-                next_construct_fails = true;
-                CHECK_THROWS_AS(my_json::json_value(t), std::bad_alloc&);
-                next_construct_fails = false;
-            }
-            SECTION("string")
-            {
-                next_construct_fails = false;
-                auto t = my_json::value_t::string;
-                CHECK_NOTHROW(my_allocator_clean_up(my_json::json_value(t).string));
-                next_construct_fails = true;
-                CHECK_THROWS_AS(my_json::json_value(t), std::bad_alloc&);
-                next_construct_fails = false;
+                REQUIRE(expected_lt[i].size() == j_types.size());
+                for (size_t j = 0; j < j_types.size(); ++j)
+                {
+                    CAPTURE(i)
+                    CAPTURE(j)
+                    // check precomputed values
+#if JSON_HAS_THREE_WAY_COMPARISON
+                    // JSON_HAS_CPP_20 (do not remove; see note at top of file)
+                    CHECK((j_types[i] < j_types[j]) == expected_lt[i][j]);
+#else
+                    CHECK(operator<(j_types[i], j_types[j]) == expected_lt[i][j]);
+#endif
+                    CHECK(f(j_types[i], j_types[j]) == expected_lt[i][j]);
+                }
             }
         }
 
-        SECTION("json_value(const string_t&)")
+// ---- tests/src/unit-ordered_json.cpp:73-83  (uses: operator<, operator>>)
+TEST_CASE("regression test for issue #3732 - iteration_proxy_value<iter_impl<ordered_json>>")
+{
+    // Naming the proxy type in a function-parameter position forces eager
+    // instantiation of basic_json<ordered_map>; previously this hit an
+    // incomplete-type error in set_parents().
+    auto fn = [](nlohmann::detail::iteration_proxy_value<nlohmann::detail::iter_impl<nlohmann::ordered_json>> const & val)
+    {
+        return val.value();
+    };
+    static_cast<void>(fn);
+}
+
+// ---- tests/src/unit-ordered_map.cpp:579-595  (uses: operator<, to_string)
+    SECTION("elements keep their order and values over many growths")
+    {
+        ordered_map<std::string, counted> om;
+        for (int i = 0; i < 1000; ++i)
         {
-            next_construct_fails = false;
-            const my_json::string_t v("foo");
-            CHECK_NOTHROW(my_allocator_clean_up(my_json::json_value(v).string));
-            next_construct_fails = true;
-            CHECK_THROWS_AS(my_json::json_value(v), std::bad_alloc&);
-            next_construct_fails = false;
+            om.emplace(std::to_string(i), counted(i));
+        }
+
+        CHECK(om.size() == 1000);
+        int i = 0;
+        for (const auto& element : om)
+        {
+            CHECK(element.first == std::to_string(i));
+            CHECK(element.second.payload == i);
+            ++i;
         }
     }
 
-// ---- tests/src/unit-locale-cpp.cpp:170-179  (uses: basic_json, operator<<)
-        SECTION("serializing a long double")
+// ---- tests/src/unit-ordered_map.cpp:633-649  (uses: operator<, to_string)
+        SECTION("ordered_json")
         {
-            // a floating-point type that is not a float or a double is written
-            // with snprintf, whose locale-specific decimal point and thousands
-            // separator are undone afterwards
-            using long_double_json = nlohmann::basic_json<std::map, std::vector, std::string, bool, std::int64_t, std::uint64_t, long double>;
-            CHECK(long_double_json(12345.5L).dump() == "12345.5");
-            CHECK(long_double_json(1.0L).dump() == "1.0");
-            CHECK(long_double_json(-0.25L).dump() == "-0.25");
-        }
-
-// ---- tests/src/unit-bon8.cpp:635-647  (uses: operator<<, operator>>)
-TEST_CASE("BON8 strings from contiguous and stream input")
-{
-    // contiguous input copies the valid UTF-8 of a string in bulk, a stream
-    // is read byte by byte; both must end strings and report errors alike
-    const std::string ascii(20, 'a');
-    const std::vector<bytes> inputs =
-    {
-        // the string ends at 0xFF, at a marker, and at an integer
-        concat(concat(bytes(ascii.begin(), ascii.end()), {0xC3, 0xA4}), {0xFF}),
-        concat(concat({0x82}, bytes(ascii.begin(), ascii.end())), {0x91}),
-        concat(concat({0x85}, bytes(ascii.begin(), ascii.end())), {0xFE}),
-        concat(concat({0x82}, bytes(ascii.begin(), ascii.end())), {0xC2, 0x05}),
-        concat(concat({0x87}, bytes(ascii.begin(), ascii.end())), {0xE2, 0x82, 0xAC, 0xF0, 0x05, 0x00, 0x00}),
-
-// ---- tests/src/unit-bon8.cpp:765-771  (uses: operator<<, operator>>)
-            SECTION("std::ostringstream")
+            auto j = nlohmann::ordered_json::object();
+            auto& object = j.get_ref<nlohmann::ordered_json::object_t&>();
+            object.reserve(4);
+            while (object.size() < object.capacity())
             {
-                std::basic_ostringstream<char> ss;
-                json::to_bon8(j1, ss);
-                json j3 = json::from_bon8(ss.str());
-                CHECK(j1 == j3);
+                const auto i = std::to_string(object.size());
+                j[i] = "a value that is too long for the small string optimization " + i;
             }
+            const auto size = j.size();
 
-// ---- tests/src/unit-bson.cpp:905-917  (uses: operator<<, operator>>)
-TEST_CASE("BSON input/output_adapters")
-{
-    const json json_representation =
-    {
-        {"double", 42.5},
-        {"entry", 4.2},
-        {"number", 12345},
-        {"object", {{ "string", "value" }}}
-    };
-
-    const std::vector<std::uint8_t> bson_representation =
-    {
-        /*size */ 0x4f, 0x00, 0x00, 0x00,
-
-// ---- tests/src/unit-bson.cpp:936-942  (uses: operator<<, operator>>)
-        SECTION("std::ostringstream")
-        {
-            std::basic_ostringstream<char> ss;
-            json::to_bson(json_representation, ss);
-            const json j3 = json::from_bson(ss.str());
-            CHECK(json_representation == j3);
+            j.emplace("new", std::move(j["0"]));
+            CHECK(j.size() == size + 1);
+            CHECK(j["new"] == "a value that is too long for the small string optimization 0");
+            CHECK(j["0"].is_null());
         }
+
+// ---- tests/src/unit-serialization.cpp:30-57  (uses: operator<, operator<<)
+    SECTION("operator<<")
+    {
+        SECTION("no given width")
+        {
+            std::stringstream ss;
+            const json j = {"foo", 1, 2, 3, false, {{"one", 1}}};
+            ss << j;
+            CHECK(ss.str() == "[\"foo\",1,2,3,false,{\"one\":1}]");
+        }
+
+        SECTION("given width")
+        {
+            std::stringstream ss;
+            const json j = {"foo", 1, 2, 3, false, {{"one", 1}}};
+            ss << std::setw(4) << j;
+            CHECK(ss.str() ==
+                  "[\n    \"foo\",\n    1,\n    2,\n    3,\n    false,\n    {\n        \"one\": 1\n    }\n]");
+        }
+
+        SECTION("given fill")
+        {
+            std::stringstream ss;
+            const json j = {"foo", 1, 2, 3, false, {{"one", 1}}};
+            ss << std::setw(1) << std::setfill('\t') << j;
+            CHECK(ss.str() ==
+                  "[\n\t\"foo\",\n\t1,\n\t2,\n\t3,\n\tfalse,\n\t{\n\t\t\"one\": 1\n\t}\n]");
+        }
+    }

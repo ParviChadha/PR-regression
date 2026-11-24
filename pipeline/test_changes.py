@@ -220,6 +220,13 @@ class WithLibclang(unittest.TestCase):
         self.assertEqual(d["access"], "private")
         self.assertIn("lib::Shape::area()", [v["name"] for v in self.an.reached_via(d["usr"])])
 
+    def test_fatal_parse_error_stops_instead_of_partial_results(self):
+        from pipeline.changes import Analyzer
+        (self.tmp / "include" / "lib" / "broken.hpp").write_text("#include <no_such_header.hpp>\nint f();\n")
+        an = Analyzer(self.an.t, self.tmp, self.an.resdir)
+        with self.assertRaisesRegex(RuntimeError, "fatal parse error"):
+            an.entities_in("include/lib/broken.hpp")
+
     def test_public_and_private_members(self):
         self.assertEqual(self.at_line("    int size() const { return n; }")["access"], "public")
         d = self.at_line("    int grow() { return ++n; }")

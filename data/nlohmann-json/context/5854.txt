@@ -1,5 +1,5 @@
 // Upstream tests at the PR's parent commit e9970066c that use the changed code.
-// Names searched (test lines using each): parse (11), lexer (96), scan_after_whitespace (0), sax_parse_internal (0), scan_literal_bulk (0), scan_literal (0)
+// Names searched (test lines using each): sax_parse (0), from_bson (0), from_cbor (0), from_msgpack (0), from_ubjson (0), from_bjdata (0), from_bon8 (0), accept (12), parse (11), operator>> (94), scan_after_whitespace (0), lexer (96), sax_parse_internal (0), scan_literal_bulk (0), scan_literal (0)
 
 // ---- tests/src/unit-class_parser.cpp:47-71  (uses: parse)
 using utils::SaxEventLogger;
@@ -97,82 +97,84 @@ TEST_CASE("lexer class")
             CHECK((scan_string(":") == json::lexer::token_type::name_separator));
         }
 
-// ---- tests/src/unit-std-format.cpp:105-126  (uses: parse)
-    SECTION("a format spec may run to the end of the parse context")
-    {
-        // std::format always hands parse() a range that still holds the closing
-        // '}', but a parse context may also end right after the spec
-        const auto parse = [](const char* spec)
-        {
-            std::format_parse_context ctx(spec);
-            std::formatter<json> f;
-            CHECK(f.parse(ctx) == ctx.end());
-            return f;
-        };
-
-        CHECK(parse("").indent == -1);
-        CHECK(parse(">").indent == -1);
-        CHECK(parse("#").indent == 4);
-        CHECK(parse("3").indent == 3);
-        CHECK(parse("#12").indent == 12);
-
-        const auto f = parse(".>");
-        CHECK(f.indent == -1);
-        CHECK(f.indent_char == '.');
-    }
-
-// ---- tests/src/unit-locale-cpp.cpp:261-273  (uses: lexer)
-TEST_CASE("locale changes between lexer construction and number conversion (#5198)")
+// ---- tests/src/unit-deserialization.cpp:97-109  (uses: operator>>)
+TEST_CASE("deserialization")
 {
-    // float and double are converted without the locale. A long double that
-    // is not binary64 can take the strtold fallback, which honors the locale
-    // that is current at conversion time. The numbers are chosen so that it
-    // does: too many significant digits for Clinger's fast path, an underflow
-    // that std::from_chars rejects, and a plain value.
-    const std::vector<std::string> numbers = {"3.14159265358979323846", "1.5e-400", "12.34", "-0.000123456789012345678"};
-    std::string text = "[";
-    for (const auto& n : numbers)
+    SECTION("successful deserialization")
     {
-        text += (text.size() == 1 ? "" : ",") + n;
-    }
-
-// ---- tests/src/unit-regression1.cpp:230-250  (uses: lexer)
-    SECTION("issue #82 - lexer::get_number return NAN")
-    {
-        const auto* const content = R"(
+        SECTION("stream")
         {
-            "Test":"Test1",
-            "Number":100,
-            "Foo":42.42
-        })";
+            std::stringstream ss1;
+            std::stringstream ss2;
+            std::stringstream ss3;
+            ss1 << R"(["foo",1,2,3,false,{"one":1}])";
+            ss2 << R"(["foo",1,2,3,false,{"one":1}])";
+            ss3 << R"(["foo",1,2,3,false,{"one":1}])";
+            const json j = json::parse(ss1);
 
-        std::stringstream ss;
-        ss << content;
-        json j;
-        ss >> j;
-
-        auto test = j["Test"].get<std::string>();
-        CHECK(test == "Test1");
-        const int number{j["Number"]};
-        CHECK(number == 100);
-        const float foo{j["Foo"]};
-        CHECK(static_cast<double>(foo) == Approx(42.42));
-    }
-
-// ---- tests/src/unit-stream-bulk-scan.cpp:391-406  (uses: lexer)
-    SECTION("the adapter keeps no token unless the lexer starts one")
-    {
-        // the binary readers read through the same adapter, but never start a
-        // token; refilling the get area must then not collect the input
-        chunked_streambuf buf(std::string(1000, 'x'), 7);
-        std::istream is(&buf);
-        nlohmann::detail::input_stream_adapter ia(is);
-        for (int i = 0; i < 1000; ++i)
+// ---- tests/src/unit-deserialization.cpp:174-181  (uses: operator>>)
+        SECTION("operator>>")
         {
-            CHECK(ia.get_character() == 'x');
+            std::stringstream ss;
+            ss << R"(["foo",1,2,3,false,{"one":1}])";
+            json j;
+            ss >> j;
+            CHECK(j == json({"foo", 1, 2, 3, false, {{"one", 1}}}));
         }
 
-        std::vector<char> token;
-        ia.copy_token(token, false);
-        CHECK(token.empty());
+// ---- tests/src/unit-precise-stream-position.cpp:123-135  (uses: operator>>)
+TEST_CASE("JSON_PRECISE_STREAM_POSITION")
+{
+    SECTION("the macro is part of the ABI tag")
+    {
+        const std::string ns = STRINGIZE(NLOHMANN_JSON_NAMESPACE);
+        // other tags may come before it, e.g. json_abi_diag_psp
+        CHECK(ns.find("_psp") != std::string::npos);
     }
+
+    SECTION("a number does not consume the character that terminates it")
+    {
+        // a number is only terminated by the character following it; that
+        // character must be given back so the stream is positioned right
+
+// ---- tests/src/unit-precise-stream-position.cpp:181-193  (uses: operator>>)
+    SECTION("a number at the end of the input leaves nothing behind")
+    {
+        for (const std::string s :
+                {"1", "12", "-3.5e2", " 7 "
+                })
+        {
+            CAPTURE(s)
+            std::istringstream ss(s);
+            json j;
+            ss >> j;
+            CHECK(remaining(ss).find_first_not_of(" \t\n\r") == std::string::npos);
+        }
+    }
+
+// ---- tests/src/unit-stream-bulk-scan.cpp:191-203  (uses: operator>>)
+TEST_CASE("parsing from a std::istream scans the get area in bulk")
+{
+#if !defined(JSON_NOEXCEPTION)
+    SECTION("results do not depend on the get area")
+    {
+        const std::vector<read_mode> read_modes = {read_mode::extract, read_mode::parse, read_mode::parse_lenient};
+        for (const auto& input : corpus())
+        {
+            for (const read_mode mode : read_modes)
+            {
+                // no get area: the character-at-a-time path
+                const std::string expected = observe(input, 0, mode);
+                for (const std::size_t chunk_size : chunk_sizes())
+
+// ---- tests/src/unit-bjdata.cpp:3767-3776  (uses: operator>>)
+TEST_CASE("BJData input that cannot be read is discarded by every overload")
+{
+    std::vector<std::uint8_t> input = json::to_bjdata(json({{"a", {1, 2}}}));
+    input.pop_back();
+
+    json _;
+    CHECK_THROWS_AS(_ = json::from_bjdata(input.begin(), input.end()), json::parse_error&);
+    CHECK(json::from_bjdata(input, true, false).is_discarded());
+    CHECK(json::from_bjdata(input.begin(), input.end(), true, false).is_discarded());
+}

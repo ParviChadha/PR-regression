@@ -1,0 +1,152 @@
+// Upstream tests at the PR's parent commit 40af289be that use the changed code.
+// Names searched (test lines using each): calculate (6), QdPlusAmericanEngine (0), getPutExerciseBoundary (0), putExerciseBoundaryAtTau (2), xMax (0), QdPlusBoundaryEvaluator (0)
+
+// ---- test-suite/americanoption.cpp:1780-1829  (uses: putExerciseBoundaryAtTau)
+BOOST_AUTO_TEST_CASE(testQdPlusBoundaryValues) {
+    BOOST_TEST_MESSAGE("Testing QD+ boundary approximation...");
+
+    const DayCounter dc = Actual365Fixed();
+    const Real S = 100;
+    const Real K = 120;
+    const Rate r = 0.1;
+    const Rate q = 0.03;
+    const Volatility sigma = 0.25;
+    const Time maturity = 5.0;
+
+    const QdPlusAmericanEngine qrPlusEngine(
+        ext::shared_ptr<GeneralizedBlackScholesProcess>(), 10);
+
+    std::vector<std::pair<Real, Real> > testCaseSpecs = {
+        {4.9, 87.76960949965387},
+        {4.0, 88.39053003614612},
+        {2.5, 90.14327315762256},
+        {1.0, 94.49793803095984},
+        {0.1, 106.2588964442338}
+    };
+
+    for (const auto& testCaseSpec: testCaseSpecs) {
+        const auto calculated
+            = qrPlusEngine.putExerciseBoundaryAtTau(
+                S, K, r, q, sigma, maturity, testCaseSpec.first);
+
+        const Real boundary = calculated.second;
+        const Size nrEvaluations = calculated.first;
+
+        const Real expected = testCaseSpec.second;
+
+        const Real diff = std::fabs(boundary - expected);
+        const Real tol = 1e-12;
+
+        if (diff > tol) {
+            BOOST_FAIL("failed to reproduce QR+ boundary approximation"
+                    << "\n    calculated: " << boundary
+                    << "\n    expected:   " << expected
+                    << "\n    difference: " << diff
+                    << "\n    tolerance : " << tol);
+        }
+
+        if (nrEvaluations > 10) {
+            BOOST_FAIL("failed to reproduce rate of convergence"
+                    << "\n    evaluations: " << nrEvaluations
+                    << "\n    max eval :   " << 10);
+        }
+    }
+}
+
+// ---- test-suite/americanoption.cpp:1860-1884  (uses: putExerciseBoundaryAtTau)
+        { QdPlusAmericanEngine::SuperHalley, "SuperHalley" }
+    };
+
+    for (const auto& testCase: testCases) {
+        for (const auto& solverType : solverTypes) {
+            const QdPlusAmericanEngine qrPlusEngine(
+                ext::shared_ptr<GeneralizedBlackScholesProcess>(),
+                Null<Size>(), solverType.first, 1e-8);
+
+            Size nrEvaluations = 0;
+
+            for (Real t=0.0; t < maturity; t+=0.1) {
+                const auto calculated = qrPlusEngine.putExerciseBoundaryAtTau(
+                    S, testCase.strike, testCase.r,
+                    testCase.q, sigma, maturity, t);
+                nrEvaluations += calculated.first;
+            }
+
+            const Size maxEvaluations =
+                (   solverType.first == QdPlusAmericanEngine::Halley
+                 || solverType.first == QdPlusAmericanEngine::SuperHalley)
+                 ? 750 : testCase.maxEvaluations;
+
+            if (nrEvaluations > maxEvaluations) {
+                BOOST_FAIL("QR+ boundary approximation failed to converge "
+
+// ---- test-suite/basketoption.cpp:3087-3100  (uses: calculate)
+    const Real basketNpv = basketOption.NPV();
+    BOOST_REQUIRE(basketNpv > 1.0);
+
+    // Now drive the same engine instance directly, bypassing BasketOption's
+    // constructor-level BasketPayoff requirement, with a plain (non-basket)
+    // payoff -- exactly the misuse the sibling N-dim engine's own guard
+    // exists to catch.
+    auto* arguments = dynamic_cast<Option::arguments*>(engine->getArguments());
+    BOOST_REQUIRE(arguments != nullptr);
+    arguments->payoff = ext::make_shared<PlainVanillaPayoff>(Option::Call, 100.0);
+    arguments->exercise = exercise;
+
+    BOOST_CHECK_THROW(engine->calculate(), Error);
+}
+
+// ---- test-suite/garch.cpp:169-183  (uses: calculate)
+BOOST_AUTO_TEST_CASE(testCalculation) {
+    BOOST_TEST_MESSAGE("Testing GARCH model calculation...");
+
+    Date d(7, July, 1962);
+    TimeSeries<Volatility> ts;
+    Garch11 garch(0.2, 0.3, 0.4);
+
+    Volatility r = 0.1;
+    for (std::size_t i = 0; i < 10; ++i, d += 1) {
+        ts[d] = r;
+    }
+
+    TimeSeries<Volatility> tsout = garch.calculate(ts);
+    std::for_each(tsout.cbegin(), tsout.cend(), check_ts);
+}
+
+// ---- test-suite/hestonmodel.cpp:3027-3044  (uses: calculate)
+BOOST_AUTO_TEST_CASE(testHestonEngineIntegration) {
+    BOOST_TEST_MESSAGE("Testing Heston engine integration signature...");
+
+    auto square = [](Real x) -> Real { return x * x; };
+
+    const AnalyticHestonEngine::Integration integration =
+        AnalyticHestonEngine::Integration::gaussLobatto(1e-12, 1e-12);
+
+    const Real c1 = integration.calculate(1.0, square, Real(1.0));
+
+    HestonIntegrationMaxBoundTestFct testFct(1.0);
+    const Real c2 = integration.calculate(1.0, square, testFct);
+
+    if (testFct.getCallCounter() == 0 ||
+            std::fabs(c1 - 1/3.) > 1e-10 || std::fabs(c2 - 1/3.) > 1e-10) {
+        BOOST_ERROR("failed to test Heston engine integration signature");
+    }
+}
+
+// ---- test-suite/volatilitymodels.cpp:35-50  (uses: calculate)
+BOOST_AUTO_TEST_CASE(testConstruction) {
+
+    BOOST_TEST_MESSAGE("Testing volatility model construction...");
+
+    TimeSeries<Real> ts;
+    ts[Date(25, March, 2005)] = 1.2;
+    ts[Date(29, March, 2005)] = 2.3;
+    ts[Date(15, March, 2005)] = 0.3;
+
+    SimpleLocalEstimator sle(1/360.0);
+    TimeSeries<Volatility> locale = sle.calculate(ts);
+
+    ConstantEstimator ce(1);
+    TimeSeries<Volatility> sv = ce.calculate(locale);
+    sv.begin();
+}

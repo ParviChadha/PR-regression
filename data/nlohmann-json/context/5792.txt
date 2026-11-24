@@ -1,61 +1,133 @@
 // Upstream tests at the PR's parent commit 374dfe4f0 that use the changed code.
-// Names searched (test lines using each): json_pointer (158)
+// Names searched (test lines using each): json_pointer (158), operator/ (0), operator<< (81), operator!= (52), operator< (186), operator== (57), flatten (14), frame (0), container (72), index (119), member (129), path_length (0), object_const_iterator (0)
 
-// ---- tests/src/unit-json_pointer.cpp:31-55  (uses: json_pointer)
-    SECTION("errors")
+// ---- tests/src/unit-json_pointer.cpp:755-804  (uses: json_pointer, operator!=, operator<, operator==)
+    SECTION("equality comparison")
     {
-        CHECK_THROWS_WITH_AS(json::json_pointer("foo"),
-                             "[json.exception.parse_error.107] parse error at byte 1: JSON pointer must be empty or begin with '/' - was: 'foo'", json::parse_error&);
+        std::string ptr_string{"/foo/bar"};
+        auto ptr1 = json::json_pointer(ptr_string);
+        auto ptr2 = json::json_pointer(ptr_string);
 
-        CHECK_THROWS_WITH_AS(json::json_pointer("/~~"),
-                             "[json.exception.parse_error.108] parse error: escape character '~' must be followed with '0' or '1'", json::parse_error&);
+        // build with C++20 to test rewritten candidates
+        // JSON_HAS_CPP_20
 
-        CHECK_THROWS_WITH_AS(json::json_pointer("/~"),
-                             "[json.exception.parse_error.108] parse error: escape character '~' must be followed with '0' or '1'", json::parse_error&);
+        CHECK(ptr1 == ptr2);
 
-        json::json_pointer p;
-        CHECK_THROWS_WITH_AS(p.top(),
-                             "[json.exception.out_of_range.405] JSON pointer has no parent", json::out_of_range&);
-        CHECK_THROWS_WITH_AS(p.pop_back(),
-                             "[json.exception.out_of_range.405] JSON pointer has no parent", json::out_of_range&);
+        CHECK_FALSE(ptr1 != ptr2);
 
-        SECTION("array index error")
+#ifndef JSON_TEST_DEPRECATED_FUNCTIONS_DELETED
+        const char* ptr_cpstring = "/foo/bar";
+        const char ptr_castring[] = "/foo/bar"; // NOLINT(misc-const-correctness,hicpp-avoid-c-arrays,modernize-avoid-c-arrays,cppcoreguidelines-avoid-c-arrays)
+
+        CHECK(ptr1 == "/foo/bar");
+        CHECK(ptr1 == ptr_cpstring);
+        CHECK(ptr1 == ptr_castring);
+        CHECK(ptr1 == ptr_string);
+
+        CHECK("/foo/bar" == ptr1);
+        CHECK(ptr_cpstring == ptr1);
+        CHECK(ptr_castring == ptr1);
+        CHECK(ptr_string == ptr1);
+
+        CHECK_FALSE(ptr1 != "/foo/bar");
+        CHECK_FALSE(ptr1 != ptr_cpstring);
+        CHECK_FALSE(ptr1 != ptr_castring);
+        CHECK_FALSE(ptr1 != ptr_string);
+
+        CHECK_FALSE("/foo/bar" != ptr1);
+        CHECK_FALSE(ptr_cpstring != ptr1);
+        CHECK_FALSE(ptr_castring != ptr1);
+        CHECK_FALSE(ptr_string != ptr1);
+
+        SECTION("exceptions")
         {
-            json v = {1, 2, 3, 4};
-            json::json_pointer const ptr("/10e");
-            CHECK_THROWS_WITH_AS(v[ptr],
-                                 "[json.exception.out_of_range.404] unresolved reference token '10e'", json::out_of_range&);
+            CHECK_THROWS_WITH_AS(ptr1 == "foo",
+                                 "[json.exception.parse_error.107] parse error at byte 1: JSON pointer must be empty or begin with '/' - was: 'foo'", json::parse_error&);
+            CHECK_THROWS_WITH_AS("foo" == ptr1,
+                                 "[json.exception.parse_error.107] parse error at byte 1: JSON pointer must be empty or begin with '/' - was: 'foo'", json::parse_error&);
+            CHECK_THROWS_WITH_AS(ptr1 == "/~~",
+                                 "[json.exception.parse_error.108] parse error: escape character '~' must be followed with '0' or '1'", json::parse_error&);
+            CHECK_THROWS_WITH_AS("/~~" == ptr1,
+                                 "[json.exception.parse_error.108] parse error: escape character '~' must be followed with '0' or '1'", json::parse_error&);
         }
+#endif
     }
 
-// ---- tests/src/unit-json_pointer.cpp:65-89  (uses: json_pointer)
-                "a/b": 1,
-                "c%d": 2,
-                "e^f": 3,
-                "g|h": 4,
-                "i\\j": 5,
-                "k\"l": 6,
-                " ": 7,
-                "m~n": 8
+// ---- tests/src/unit-json_pointer.cpp:806-820  (uses: json_pointer, operator!=, operator<, operator==)
+    SECTION("less-than comparison")
+    {
+        auto ptr1 = json::json_pointer("/foo/a");
+        auto ptr2 = json::json_pointer("/foo/b");
+
+        CHECK(ptr1 < ptr2);
+        CHECK_FALSE(ptr2 < ptr1);
+
+        // build with C++20
+        // JSON_HAS_CPP_20
+#if JSON_HAS_THREE_WAY_COMPARISON
+        CHECK((ptr1 <=> ptr2) == std::strong_ordering::less); // *NOPAD*
+        CHECK(ptr2 > ptr1);
+#endif
+    }
+
+// ---- tests/src/unit-ordered_json2.cpp:434-450  (uses: flatten, operator<)
+TEST_CASE("ordered_json through flatten/unflatten")
+{
+    const ordered_json original = make_rich_ordered_json();
+    const std::vector<std::string> original_keys = collect_keys(original);
+    const std::vector<std::string> original_mango_keys = collect_keys(original["mango"]);
+
+    const ordered_json flat = original.flatten();
+    const ordered_json unflattened = flat.unflatten();
+
+    CHECK(unflattened == original);
+    // flatten() walks the value depth-first in iteration order and
+    // unflatten() re-inserts each flattened key via operator[] in the flat
+    // object's iteration order, so for ordered_json the original key order
+    // (both top-level and nested) is preserved end-to-end.
+    CHECK(collect_keys(unflattened) == original_keys);
+    CHECK(collect_keys(unflattened["mango"]) == original_mango_keys);
+}
+
+// ---- tests/src/unit-comparison.cpp:73-85  (uses: operator!=, operator<, operator==)
+TEST_CASE("lexicographical comparison operators")
+{
+    constexpr auto f_ = false;
+    constexpr auto _t = true;
+    constexpr auto nan = std::numeric_limits<json::number_float_t>::quiet_NaN();
+#if JSON_HAS_THREE_WAY_COMPARISON
+    constexpr auto lt = std::partial_ordering::less;
+    constexpr auto gt = std::partial_ordering::greater;
+    constexpr auto eq = std::partial_ordering::equivalent;
+    constexpr auto un = std::partial_ordering::unordered;
+#endif
+
+#if JSON_HAS_THREE_WAY_COMPARISON
+
+// ---- tests/src/unit-comparison.cpp:127-147  (uses: operator!=, operator<, operator==)
+        SECTION("comparison: less")
+        {
+            REQUIRE(expected_lt.size() == j_types.size());
+            for (size_t i = 0; i < j_types.size(); ++i)
+            {
+                REQUIRE(expected_lt[i].size() == j_types.size());
+                for (size_t j = 0; j < j_types.size(); ++j)
+                {
+                    CAPTURE(i)
+                    CAPTURE(j)
+                    // check precomputed values
+#if JSON_HAS_THREE_WAY_COMPARISON
+                    // JSON_HAS_CPP_20 (do not remove; see note at top of file)
+                    CHECK((j_types[i] < j_types[j]) == expected_lt[i][j]);
+#else
+                    CHECK(operator<(j_types[i], j_types[j]) == expected_lt[i][j]);
+#endif
+                    CHECK(f(j_types[i], j_types[j]) == expected_lt[i][j]);
+                }
             }
-            )"_json;
+        }
 
-            // the whole document
-            CHECK(j[json::json_pointer()] == j);
-            CHECK(j[json::json_pointer("")] == j);
-            CHECK(j.contains(json::json_pointer()));
-            CHECK(j.contains(json::json_pointer("")));
-
-            // array access
-            CHECK(j[json::json_pointer("/foo")] == j["foo"]);
-            CHECK(j.contains(json::json_pointer("/foo")));
-            CHECK(j[json::json_pointer("/foo/0")] == j["foo"][0]);
-            CHECK(j[json::json_pointer("/foo/1")] == j["foo"][1]);
-            CHECK(j["/foo/1"_json_pointer] == j["foo"][1]);
-            CHECK(j.contains(json::json_pointer("/foo/0")));
-            CHECK(j.contains(json::json_pointer("/foo/1")));
-
-// ---- tests/src/unit-alt-string.cpp:328-349  (uses: json_pointer)
+// ---- tests/src/unit-alt-string.cpp:328-349  (uses: flatten, json_pointer)
     SECTION("JSON pointer")
     {
         // Direct conversion from a json literal to alt_json is not supported due to issue #3425:
@@ -78,75 +150,3 @@
         CHECK(alt_json::json_pointer("/~0~1~0~0~1~1").to_string() == alt_string("/~0~1~0~0~1~1"));
         CHECK(j2.flatten().unflatten() == j2);
     }
-
-// ---- tests/src/unit-alt-string.cpp:351-374  (uses: json_pointer)
-    SECTION("contains(json_pointer)")
-    {
-        // contains(json_pointer) must compile and work with a string_t that has
-        // no c_str() and no comparison with const char* (see #5666)
-        auto j = alt_json::parse(R"({"foo": ["bar", "baz"]})");
-
-        // present: object key and array indices
-        CHECK(j.contains(alt_json::json_pointer("/foo")));
-        CHECK(j.contains(alt_json::json_pointer("/foo/0")));
-        CHECK(j.contains(alt_json::json_pointer("/foo/1")));
-
-        // missing: absent object key and out-of-range array index
-        CHECK_FALSE(j.contains(alt_json::json_pointer("/bar")));
-        CHECK_FALSE(j.contains(alt_json::json_pointer("/foo/2")));
-
-        // "-" always fails the range check
-        CHECK_FALSE(j.contains(alt_json::json_pointer("/foo/-")));
-
-        // an array index must not have a leading zero
-        CHECK_FALSE(j.contains(alt_json::json_pointer("/foo/01")));
-
-        // a reference token that is not a number
-        CHECK_FALSE(j.contains(alt_json::json_pointer("/foo/bar")));
-    }
-
-// ---- tests/src/unit-custom-array-type.cpp:150-166  (uses: json_pointer)
-TEST_CASE("array type without at()")
-{
-    // built in memory rather than parsed, so that the exception message does
-    // not gain a byte range with JSON_DIAGNOSTIC_POSITIONS
-    no_at_json j = {1, 2, 3};
-    const auto& jc = j;
-
-    CHECK(j.at(0) == 1);
-    CHECK(j.at(2) == 3);
-    CHECK(jc.at(2) == 3);
-
-    CHECK_THROWS_WITH_AS(j.at(3), "[json.exception.out_of_range.401] array index 3 is out of range", no_at_json::out_of_range);
-    CHECK_THROWS_WITH_AS(jc.at(3), "[json.exception.out_of_range.401] array index 3 is out of range", no_at_json::out_of_range);
-
-    CHECK(j.at(no_at_json::json_pointer("/1")) == 2);
-    CHECK_THROWS_AS(j.at(no_at_json::json_pointer("/3")), no_at_json::out_of_range);
-}
-
-// ---- tests/src/unit-custom-base-class.cpp:251-275  (uses: json_pointer)
-    template <class Fnc>
-    void visit(const Fnc& fnc) const;
-  private:
-    template <class Ptr, class Fnc>
-    void do_visit(const Ptr& ptr, const Fnc& fnc) const;
-};
-
-using json_with_visitor_t = nlohmann::json::with_base_class_t<visitor_adaptor>;
-
-template <class Fnc>
-void visitor_adaptor::visit(const Fnc& fnc) const
-{
-    do_visit(json_with_visitor_t::json_pointer{}, fnc);
-}
-
-template <class Ptr, class Fnc>
-void visitor_adaptor::do_visit(const Ptr& ptr, const Fnc& fnc) const
-{
-    using value_t = nlohmann::detail::value_t;
-    const json_with_visitor_t& json = *static_cast<const json_with_visitor_t*>(this); // NOLINT(cppcoreguidelines-pro-type-static-cast-downcast)
-    switch (json.type())
-    {
-        case value_t::object:
-            for (const auto& entry : json.items())
-            {

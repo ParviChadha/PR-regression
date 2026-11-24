@@ -1,5 +1,5 @@
 // Upstream tests at the PR's parent commit 6c3ab966d that use the changed code.
-// Names searched (test lines using each): binary_reader (2), get_cbor_float (0), byte_swap (0), get (784)
+// Names searched (test lines using each): sax_parse (0), from_bson (0), from_cbor (0), from_msgpack (0), from_ubjson (0), from_bjdata (0), from_bon8 (0), binary_reader (2), parse_cbor_value (0), byte_swap (0), get_cbor_float (0), get (784)
 
 // ---- tests/src/unit-bjdata.cpp:76-111  (uses: binary_reader)
     SECTION("binary_reader BJData lookup tables")
@@ -152,29 +152,29 @@ int main()
         CHECK(a == 42);
     }
 
-// ---- tests/src/unit-binary_writer_sinks.cpp:233-257  (uses: get)
-    }
-}
-
-// the CBOR encoding of an integer value
-void reference_cbor_integer(std::vector<std::uint8_t>& out, const json& j)
-{
-    if (j.is_number_unsigned())
-    {
-        reference_cbor_head(out, 0x00, j.get<std::uint64_t>());
+// ---- tests/src/unit-binary_writer_sinks.cpp:283-307  (uses: get)
+        }
+        else if (u <= 0xFFFFFFFF)
+        {
+            put(0xCE, u, 4);
+        }
+        else
+        {
+            put(0xCF, u, 8);
+        }
         return;
     }
 
     const auto n = j.get<std::int64_t>();
-    if (n >= 0)
+    const auto bits = static_cast<std::uint64_t>(n);
+    if (n >= -32)
     {
-        reference_cbor_head(out, 0x00, static_cast<std::uint64_t>(n));
+        out.push_back(static_cast<std::uint8_t>(bits));
     }
-    else
+    else if (n >= -128)
     {
-        reference_cbor_head(out, 0x20, static_cast<std::uint64_t>(-1 - n));
+        put(0xD0, bits, 1);
     }
-}
-
-// the MessagePack encoding of an integer value, encoded independently of
-// binary_writer
+    else if (n >= -32768)
+    {
+        put(0xD1, bits, 2);

@@ -1,146 +1,144 @@
 // Upstream tests at the PR's parent commit 0660d78b9 that use the changed code.
-// Names searched (test lines using each): basic_json (64), JSON_RECURSION_DEPTH_LIMIT (0), format_as (23), to_string (192), array (0), merge_patch (108), merge_diff (0), diff (0), update (51), to_bjdata (0), to_bon8 (0), operator<< (104), operator>> (108), operator() (37), operator<=> (147), recursion_depth_limit (12), nesting_depth_guard (0), recursion_depth_limit_is_char_or_bool (0)
+// Names searched (test lines using each): basic_json (64), JSON_RECURSION_DEPTH_LIMIT (0), merge_patch (108), merge_diff (0), diff (0), update (51), to_bjdata (0), to_bon8 (0), format_as (23), to_string (192), operator() (37), operator< (229), operator== (77), operator<< (104), operator>> (108), operator!= (72), operator<=> (147), recursion_depth_limit (12), nesting_depth_guard (0), update_members (0), recursion_depth_limit_is_char_or_bool (0)
 
-// ---- tests/src/unit-deserialization.cpp:1294-1339  (uses: operator<<, operator>>, to_string)
-TEST_CASE("parse error positions are the same for contiguous and stream input")
+// ---- tests/src/unit-comparison.cpp:74-86  (uses: operator!=, operator<, operator<=>, operator==)
+TEST_CASE("lexicographical comparison operators")
 {
-    // contiguous input derives the position from the input on error, stream
-    // input counts it while reading (see lexer::lazy_position); the cases
-    // cover newlines before the error, ungetting a newline after a number,
-    // newlines inside a string, a comment, and reads at the end of input
-    struct test_case
-    {
-        std::string input;
-        std::size_t byte;
-        std::string message;
-    };
-    const std::vector<test_case> cases =
-    {
-        {"[\n  1,\n  2\n", 12, "[json.exception.parse_error.101] parse error at line 4, column 1: syntax error while parsing array - unexpected end of input; expected ']'"},
-        {"[1\n,2,\n]", 8, "[json.exception.parse_error.101] parse error at line 3, column 1: syntax error while parsing value - unexpected ']'; expected '[', '{', or a literal"},
-        {"[1\n x]", 5, "[json.exception.parse_error.101] parse error at line 2, column 2: syntax error while parsing array - invalid literal; last read: '1<U+000A> x'; expected ']'"},
-        {"1\n2", 3, "[json.exception.parse_error.101] parse error at line 2, column 1: syntax error while parsing value - unexpected number literal; expected end of input"},
+    constexpr auto f_ = false;
+    constexpr auto _t = true;
+    constexpr auto nan = std::numeric_limits<json::number_float_t>::quiet_NaN();
+#if JSON_HAS_THREE_WAY_COMPARISON
+    constexpr auto lt = std::partial_ordering::less;
+    constexpr auto gt = std::partial_ordering::greater;
+    constexpr auto eq = std::partial_ordering::equivalent;
+    constexpr auto un = std::partial_ordering::unordered;
+#endif
+
+#if JSON_HAS_THREE_WAY_COMPARISON
+
+// ---- tests/src/unit-comparison.cpp:128-148  (uses: operator!=, operator<, operator<=>, operator==)
+        SECTION("comparison: less")
         {
-            "{\"a\":\n\"b\nc\"}", 9, R"([json.exception.parse_error.101] parse error at line 3, column 0: syntax error while parsing value - invalid string: control character U+000A (LF) must be escaped to \u000A or \n; last read: '"b<U+000A>')"
-        },
-        {"/* a\n b */\n x", 13, "[json.exception.parse_error.101] parse error at line 3, column 2: syntax error while parsing value - invalid literal; last read: '/* a<U+000A> b */<U+000A> x'"},
-        {"\n\n", 3, "[json.exception.parse_error.101] parse error at line 3, column 1: syntax error while parsing value - unexpected end of input; expected '[', '{', or a literal"},
-        {"[\"a\",\n 1e\n]", 10, "[json.exception.parse_error.101] parse error at line 3, column 0: syntax error while parsing value - invalid number; expected '+', '-', or digit after exponent; last read: '1e<U+000A>'"},
-        {"[tru\n]", 5, "[json.exception.parse_error.101] parse error at line 2, column 0: syntax error while parsing value - invalid literal; last read: '[tru<U+000A>'"},
-    };
-
-    for (const auto& c : cases)
-    {
-        CAPTURE(c.input)
-        const std::string expected = std::to_string(c.byte) + " " + c.message;
-
-        SaxErrorRecorder string_sax;
-        CHECK_FALSE(json::sax_parse(c.input, &string_sax, json::input_format_t::json, true, true));
-        CHECK(string_sax.error == expected);
-
-        SaxErrorRecorder pointer_sax;
-        CHECK_FALSE(json::sax_parse(c.input.data(), c.input.data() + c.input.size(), &pointer_sax, json::input_format_t::json, true, true));
-        CHECK(pointer_sax.error == expected);
-
-        std::istringstream is(c.input);
-        SaxErrorRecorder stream_sax;
-        CHECK_FALSE(json::sax_parse(is, &stream_sax, json::input_format_t::json, true, true));
-        CHECK(stream_sax.error == expected);
-    }
-}
-
-// ---- tests/src/unit-stream-bulk-scan.cpp:349-380  (uses: operator<<, operator>>, to_string)
-    SECTION("many values from one stream")
-    {
-        std::string input;
-        for (int i = 0; i < 200; ++i)
-        {
-            input += R"({"id":)" + std::to_string(i) + R"(,"name":"user)" + std::to_string(i) + R"(","score":)" + std::to_string(i) + ".5}\n";
-            input += std::to_string(i * 7919) + "\n";
-        }
-
-        for (const std::size_t chunk_size : chunk_sizes())
-        {
-            CAPTURE(chunk_size)
-            chunked_streambuf buf(input, chunk_size);
-            std::istream is(&buf);
-            json j;
-            int count = 0;
-            while (!(is >> std::ws).eof())
+            REQUIRE(expected_lt.size() == j_types.size());
+            for (size_t i = 0; i < j_types.size(); ++i)
             {
-                is >> j;
-                if (count % 2 == 0)
+                REQUIRE(expected_lt[i].size() == j_types.size());
+                for (size_t j = 0; j < j_types.size(); ++j)
                 {
-                    CHECK(j["id"] == count / 2);
+                    CAPTURE(i)
+                    CAPTURE(j)
+                    // check precomputed values
+#if JSON_HAS_THREE_WAY_COMPARISON
+                    // JSON_HAS_CPP_20 (do not remove; see note at top of file)
+                    CHECK((j_types[i] < j_types[j]) == expected_lt[i][j]);
+#else
+                    CHECK(operator<(j_types[i], j_types[j]) == expected_lt[i][j]);
+#endif
+                    CHECK(f(j_types[i], j_types[j]) == expected_lt[i][j]);
                 }
-                else
-                {
-                    CHECK(j == (count / 2) * 7919);
-                }
-                ++count;
             }
-            CHECK(count == 400);
         }
-    }
 
-// ---- tests/src/unit-stream-bulk-scan.cpp:403-433  (uses: operator<<, operator>>, to_string)
-    SECTION("std::stringstream and std::ifstream")
+// ---- tests/src/unit-json_view_compare.cpp:31-43  (uses: operator!=, operator<, operator<=>, operator==)
+TEST_CASE("json_view comparison")
+{
+    SECTION("equality of the values parse() produces")
     {
-        const std::string input = R"([1, 2.5, "three", {"four": [true, null]}] 5)";
-
-        std::stringstream ss(input);
-        json j1;
-        json j2;
-        ss >> j1 >> j2;
-        CHECK(j1 == json::parse(R"([1, 2.5, "three", {"four": [true, null]}])"));
-        CHECK(j2 == 5);
-        CHECK(ss.eof());
-
-        // a file name of its own for every run: the test runs for several C++
-        // standards and configurations at the same time, in the same directory
-        std::random_device rd;
-        const std::string temp_name = "unit-stream-bulk-scan-" + std::to_string(rd()) + ".tmp";
-        const char* const filename = temp_name.c_str();
+        generator g;
+        std::vector<std::string> texts;
+        for (int i = 0; i < 600; ++i)
         {
-            std::ofstream file(filename);
-            file << input;
-        }
-        {
-            std::ifstream file(filename);
-            json k1;
-            json k2;
-            file >> k1 >> k2;
-            CHECK(k1 == j1);
-            CHECK(k2 == j2);
-        }
-        static_cast<void>(std::remove(filename));
-    }
+            std::string text;
+            g.value(text, 0);
+            texts.push_back(text);
+            // the same value written differently: sorted keys, canonical numbers
+            texts.push_back(json::parse(text).dump(1));
 
-// ---- tests/src/unit-merge_patch.cpp:330-346  (uses: merge_patch, operator())
-    SECTION("patches nested too deeply for the call stack (#5393)")
+// ---- tests/src/unit-json_view_compare_values.cpp:29-41  (uses: operator!=, operator<, operator<=>, operator==)
+TEST_CASE("json_view comparison of differing values")
+{
+    SECTION("values that differ in their first bytes, or are written differently")
     {
-        // applying a patch used to recurse once per nesting level. The result
-        // is only walked, never copied or compared, since those recurse too.
-        const std::size_t depth = 100000;
-        json target = json::parse(nested_objects(depth, 0));
-        target.merge_patch(json::parse(nested_objects(depth, 1)));
-
-        const json* p = &target;
-        for (std::size_t i = 0; i < depth; ++i)
+        const auto same = [](const char* x, const char* y)
         {
-            p = &p->at("a");
+            const json_document dx = json_document::parse(x);
+            const json_document dy = json_document::parse(y);
+            const bool equal = dx.root() == dy.root();
+            CHECK(equal == (json::parse(x) == json::parse(y)));
+            CHECK(equal == (dx.root() == json::parse(y)));
+            const nlohmann::json_editable_document ex = nlohmann::json_editable_document::parse(x);
+            CHECK(equal == (ex.root() == dy.root()));
+
+// ---- tests/src/unit-json_view_compare_values.cpp:63-82  (uses: basic_json, operator<, to_string)
+    SECTION("a basic_json whose members are not sorted")
+    {
+        // (an object type that is not an ordered map, and does not keep its members sorted either)
+        using descending_json = nlohmann::basic_json<descending_object>;
+        using descending_document = nlohmann::basic_json_document<descending_json>;
+        std::string text = "{";
+        for (char key = 'a'; key <= 'p'; ++key)
+        {
+            text += (key != 'a' ? ",\"" : "\"") + std::string(1, key) + "\":[" + std::to_string(key) + "]";
         }
-        // {"y":2} patched with {"x":1,"y":null}
-        CHECK(p->size() == 1);
-        CHECK(p->at("x") == 1);
+        text += "}";
+        const descending_json j = descending_json::parse(text);
+        const descending_document d = descending_document::parse(text);
+        CHECK(d.root() == j);
+        CHECK(j == d.root());
+        descending_json other = j;
+        other["k"] = 0;
+        CHECK(d.root() != other);
+        CHECK(other != d.root());
     }
 
-// ---- tests/src/unit-deserialization.cpp:165-172  (uses: operator<<)
-        SECTION("operator<<")
-        {
-            std::stringstream ss;
-            ss << R"(["foo",1,2,3,false,{"one":1}])";
-            json j;
-            j << ss;
-            CHECK(j == json({"foo", 1, 2, 3, false, {{"one", 1}}}));
-        }
+// ---- tests/src/unit-algorithms.cpp:126-136  (uses: operator!=, operator<, operator<=>, operator==)
+            SECTION("using user-defined comparison")
+            {
+                // compare objects only by size of its elements
+                json j_array2 = {13, 29, 3, {"Hello", "World"}, true, false, {{"one", 1}, {"two", 2}, {"three", 3}}, "foo", "baz"};
+                CHECK(!std::equal(j_array.begin(), j_array.end(), j_array2.begin()));
+                CHECK(std::equal(j_array.begin(), j_array.end(), j_array2.begin(),
+                                 [](const json & a, const json & b)
+                {
+                    return (a.size() == b.size());
+                }));
+            }
+
+// ---- tests/src/unit-algorithms.cpp:205-210  (uses: operator!=, operator<, operator<=>, operator==)
+            SECTION("with standard comparison")
+            {
+                json j = {13, 29, 3, {{"one", 1}, {"two", 2}}, true, false, {1, 2, 3}, "foo", "baz", nullptr};
+                std::sort(j.begin(), j.end());
+                CHECK(j == json({nullptr, false, true, 3, 13, 29, {{"one", 1}, {"two", 2}}, {1, 2, 3}, "baz", "foo"}));
+            }
+
+// ---- tests/src/unit-class_lexer.cpp:2185-2201  (uses: operator!=, operator<, operator<=>, operator==)
+    SECTION("compare numbers of different lengths")
+    {
+        // the number with more 32-bit limbs is the greater one
+        const float_bigint small(0xFFFFFFFFu);
+        const float_bigint large(std::uint64_t{1} << 32u);
+        CHECK(small.compare(large) == -1);
+        CHECK(large.compare(small) == 1);
+        CHECK(large.compare(large) == 0);
+
+        // a shift can add a limb
+        float_bigint shifted(1);
+        shifted.shift_left(32);
+        CHECK(shifted.compare(large) == 0);
+        shifted.shift_left(1);
+        CHECK(shifted.compare(large) == 1);
+        CHECK(large.compare(shifted) == -1);
+    }
+
+// ---- tests/src/unit-class_lexer.cpp:2203-2209  (uses: operator!=, operator<, operator<=>, operator==)
+    SECTION("compare numbers of the same length")
+    {
+        CHECK(float_bigint(2).compare(float_bigint(3)) == -1);
+        CHECK(float_bigint(3).compare(float_bigint(2)) == 1);
+        CHECK(float_bigint(3).compare(float_bigint(3)) == 0);
+        CHECK(float_bigint((std::uint64_t{3} << 32u) | 1u).compare(float_bigint((std::uint64_t{3} << 32u) | 2u)) == -1);
+    }
+
+// ---- tests/src/unit-class_parser.cpp:2198-2198  (uses: operator())
+    SECTION("with callback") \

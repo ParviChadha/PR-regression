@@ -1,0 +1,161 @@
+// Upstream tests at the PR's parent commit ca846ceab that use the changed code.
+// Names searched (test lines using each): theta (51), vanna (6)
+
+// ---- test-suite/bacheliercalculator.cpp:142-166  (uses: vanna)
+    Real gamma = calc.gamma(spot);
+    Real gammaForward = calc.gammaForward();
+    Real theta = calc.theta(spot, maturity);
+    Real vega = calc.vega(maturity);
+    Real rho = calc.rho(maturity);
+    Real elasticity = calc.elasticity(spot);
+    Real elasticityForward = calc.elasticityForward();
+    Real itmCashProb = calc.itmCashProbability();
+    Real itmAssetProb = calc.itmAssetProbability();
+    Real dividendRho = calc.dividendRho(maturity);
+    Real strikeSensitivity = calc.strikeSensitivity();
+    Real strikeGamma = calc.strikeGamma();
+    Real vanna = calc.vanna(maturity);
+    Real volga = calc.volga(maturity);
+    
+    if (std::fabs(deltaForward - refDeltaFwd) > tolerance) {
+        BOOST_ERROR("BachelierCalculator call fwd delta error");
+    }
+
+    if (std::fabs(delta - refDelta) > tolerance) {
+        BOOST_ERROR("BachelierCalculator call delta error");
+    }
+
+    if (std::fabs(gammaForward - refGammaFwd) > tolerance) {
+        BOOST_ERROR("BachelierCalculator call fwd gamma error");
+
+// ---- test-suite/bacheliercalculator.cpp:364-388  (uses: vanna)
+    Real numericalVega = (calcVolUp.value() - calcVolDown.value()) / (2.0 * bump);
+    Real vegaError = std::fabs(analyticalVega - numericalVega * std::sqrt(maturity));
+
+    if (vegaError > tolerance) {
+        BOOST_ERROR("BachelierCalculator vega finite difference test failed: "
+                   << "analytical=" << analyticalVega 
+                   << " numerical=" << numericalVega * std::sqrt(maturity)
+                   << " error=" << vegaError);
+    }
+
+    // --- Vanna and Volga tests ---
+    // Analytical values
+    Real vanna = calc.vanna(maturity);
+    Real volga = calc.volga(maturity);
+
+    // Finite difference for vanna: dVega/dForward
+    BachelierCalculator calcFwdUp(Option::Call, strike, forward + bump, stdDev, discount);
+    BachelierCalculator calcFwdDown(Option::Call, strike, forward - bump, stdDev, discount);
+    Real vegaFwdUp = calcFwdUp.vega(maturity);
+    Real vegaFwdDown = calcFwdDown.vega(maturity);
+    Real vannaFD = (vegaFwdUp - vegaFwdDown) / (2.0 * bump);
+
+    if (std::fabs(vanna - vannaFD) > tolerance) {
+        BOOST_ERROR("BachelierCalculator call vanna error: analytical="
+                    << vanna << " finite-diff=" << vannaFD << " error=" << (vanna - vannaFD));
+
+// ---- test-suite/blackcalculator.cpp:139-163  (uses: vanna)
+    Real gamma = calc.gamma(spot);
+    Real gammaForward = calc.gammaForward();
+    Real theta = calc.theta(spot, maturity);
+    Real vega = calc.vega(maturity);
+    Real rho = calc.rho(maturity);
+    Real elasticity = calc.elasticity(spot);
+    Real elasticityForward = calc.elasticityForward();
+    Real itmCashProb = calc.itmCashProbability();
+    Real itmAssetProb = calc.itmAssetProbability();
+    Real dividendRho = calc.dividendRho(maturity);
+    Real strikeSensitivity = calc.strikeSensitivity();
+    Real strikeGamma = calc.strikeGamma();
+    Real vanna = calc.vanna(spot, maturity);
+    Real volga = calc.volga(maturity);
+
+    if (std::fabs(deltaForward - refDeltaFwd) > tolerance) {
+        BOOST_ERROR("BlackCalculator call fwd delta error");
+    }
+
+    if (std::fabs(delta - refDelta) > tolerance) {
+        BOOST_ERROR("BlackCalculator call delta error");
+    }
+
+    if (std::fabs(gammaForward - refGammaFwd) > tolerance) {
+        BOOST_ERROR("BlackCalculator call fwd gamma error");
+
+// ---- test-suite/blackcalculator.cpp:320-344  (uses: vanna)
+    // Test gamma via finite differences
+    Real analyticalGamma = calc.gammaForward();
+    Real numericalGamma = (calcUp.deltaForward() - calcDown.deltaForward()) / (2.0 * bump);
+    Real gammaError = std::fabs(analyticalGamma - numericalGamma);
+
+    if (gammaError > tolerance) {
+        BOOST_ERROR("BlackCalculator gamma finite difference test failed: "
+                   << "analytical=" << analyticalGamma 
+                   << " numerical=" << numericalGamma 
+                   << " error=" << gammaError);
+    }
+
+    Real vanna = calc.vanna(forward, maturity);
+    Real volga = calc.volga(maturity);
+
+    // Finite difference for vanna: dVega/dForward
+    Real vegaFwdUp = calcUp.vega(maturity);
+    Real vegaFwdDown = calcDown.vega(maturity);
+    Real vannaFD = (vegaFwdUp - vegaFwdDown) / (2.0 * bump);
+
+    if (std::fabs(vanna - vannaFD) > tolerance) {
+        BOOST_ERROR("BlackCalculator call vanna error: analytical="
+                    << vanna << " finite-diff=" << vannaFD << " error=" << (vanna - vannaFD));
+    }
+
+
+// ---- test-suite/americanoption.cpp:142-163  (uses: theta)
+                            dc.yearFraction(maturity - 1, maturity + 1);
+        }
+
+        for (const auto& engine : engines) {
+            BOOST_TEST_CONTEXT(engine.first << " tree, " << data.type << ", strike "
+                               << data.strike << ", r " << data.r << ", q " << data.q) {
+                option.setPricingEngine(engine.second);
+                if (data.exercised) {
+                    // Immediate exercise gives an affine, time-independent payoff.
+                    QL_CHECK_SMALL(option.NPV() - 15.0, 1.0e-10);
+                    QL_CHECK_SMALL(option.delta() - Real(data.type), 1.0e-10);
+                    QL_CHECK_SMALL(option.gamma(), 1.0e-10);
+                    QL_CHECK_SMALL(option.theta(), 1.0e-8);
+                } else {
+                    BOOST_CHECK_GT(option.NPV(), (*payoff)(spot->value()));
+                    // Allow for tree discretization and the one-day time bump.
+                    QL_CHECK_SMALL(option.theta() - expectedTheta, 0.05);
+                }
+            }
+        }
+    }
+}
+
+// ---- test-suite/americanoption.cpp:1608-1632  (uses: theta)
+        .withCashDividendModel(FdBlackScholesVanillaEngine::Escrowed);
+
+    const Real strike = 90.0;
+    VanillaOption option(
+        ext::make_shared<PlainVanillaPayoff>(Option::Put, strike),
+        ext::make_shared<AmericanExercise>(today, maturityDate)
+    );
+
+    option.setPricingEngine(spotEngine);
+
+    Real spotNpv = option.NPV();
+    const Real spotDelta = option.delta();
+    BOOST_CHECK_THROW(option.theta(), QuantLib::Error);
+
+    vol->setValue(100/95.*0.3);
+
+    option.setPricingEngine(escrowedEngine);
+
+    Real escrowedNpv = option.NPV();
+    const Real escrowedDelta = option.delta();
+    BOOST_CHECK_THROW(option.theta(), QuantLib::Error);
+
+    Real diffNpv = std::abs(escrowedNpv - spotNpv);
+    const Real tol = 5e-2;
+

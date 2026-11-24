@@ -1,0 +1,127 @@
+// Upstream tests at the PR's parent commit 7a068a9cc that use the changed code.
+// Names searched (test lines using each): SwapRateHelper (0), RelativeDateBootstrapHelper (0), BMASwapRateHelper (0), setTermStructure (19), DepositRateHelper (0), FraRateHelper (0), initializeDates (0), rule_ (0), couponPricer_ (0)
+
+// ---- test-suite/basisswapratehelpers.cpp:77-101  (uses: setTermStructure)
+            // sensitivities predict as sum of dQ/dP(d) * (-t(d)) * P(d)
+            BOOST_REQUIRE(helpers[i]->isLinkedTo(*curve));
+            Real predicted = 0.0;
+            auto bucket = sensitivities.sensitivities.find(curve.get());
+            if (bucket != sensitivities.sensitivities.end())
+                for (const auto& [date, dQdP] : bucket->second)
+                    predicted += dQdP * (-curve->timeFromReference(date)) *
+                                 curve->discount(date, true);
+            auto spread = ext::make_shared<SimpleQuote>(0.0);
+            auto tilted = ext::make_shared<ZeroSpreadedTermStructure>(
+                Handle<YieldTermStructure>(curve), Handle<Quote>(spread));
+            tilted->enableExtrapolation();
+            helpers[i]->setTermStructure(tilted.get());
+            Real h = 1.0e-7;
+            spread->setValue(+h);
+            Real up = helpers[i]->impliedQuote();
+            spread->setValue(-h);
+            Real down = helpers[i]->impliedQuote();
+            spread->setValue(0.0);
+            helpers[i]->setTermStructure(curve.get());
+            Real numerical = (up - down) / (2.0 * h);
+            BOOST_CHECK_MESSAGE(
+                std::fabs(predicted - numerical) <
+                    1.0e-5 * std::max(1.0, std::fabs(numerical)),
+                helperType << " helper " << i
+
+// ---- test-suite/crosscurrencyratehelpers.cpp:511-552  (uses: setTermStructure)
+BOOST_AUTO_TEST_CASE(testConstNotionalAnalyticQuoteSensitivities) {
+    BOOST_TEST_MESSAGE(
+        "Testing analytical constant-notional cross-currency quote sensitivities...");
+
+    CommonVars vars;
+    auto bootstrappedCurve = flatRate(vars.curveSettlementDt, 0.01, vars.dayCount);
+
+    for (bool collateralInBaseCurrency : {false, true}) {
+        Handle<YieldTermStructure> collateralCurve =
+            collateralInBaseCurrency ? vars.baseCcyIdxHandle : vars.quoteCcyIdxHandle;
+        for (bool basisOnBaseCurrencyLeg : {false, true}) {
+            auto helper =
+                ext::make_shared<ConstNotionalCrossCurrencyBasisSwapRateHelper>(
+                    makeQuoteHandle(-20.0 * vars.basisPoint), 2 * Years,
+                    vars.instrumentSettlementDays, vars.calendar,
+                    vars.businessConvention, vars.endOfMonth, vars.baseCcyIdx,
+                    vars.quoteCcyIdx, collateralCurve,
+                    collateralInBaseCurrency, basisOnBaseCurrencyLeg);
+            helper->setTermStructure(bootstrappedCurve.get());
+
+            ImpliedQuoteSensitivities sensitivities =
+                helper->impliedQuoteSensitivitiesByCurve();
+            BOOST_REQUIRE(sensitivities.available);
+            BOOST_CHECK(sensitivities.incomplete.empty());
+
+            checkSensitivitiesAgainstTilt(
+                helper,
+                {{bootstrappedCurve,
+                  [&](const ext::shared_ptr<YieldTermStructure>& ts) {
+                      helper->setTermStructure(ts.get());
+                  }},
+                 {*vars.baseCcyIdxHandle,
+                  [&](const ext::shared_ptr<YieldTermStructure>& ts) {
+                      vars.baseCcyIdxHandle.linkTo(ts);
+                  }},
+                 {*vars.quoteCcyIdxHandle,
+                  [&](const ext::shared_ptr<YieldTermStructure>& ts) {
+                      vars.quoteCcyIdxHandle.linkTo(ts);
+                  }}});
+        }
+    }
+}
+
+// ---- test-suite/crosscurrencyratehelpers.cpp:843-867  (uses: setTermStructure)
+    BOOST_CHECK(sensitivities.incomplete.empty());
+
+    // hold the bootstrapped curve fixed while the other curves move, so
+    // the finite differences are partial derivatives.  The USD curve is
+    // not tilted: relinking it while the bootstrapped curve is frozen
+    // aborts inside the pricing (to be investigated separately), and
+    // unfrozen the bootstrap would absorb the tilt.
+    eurDiscount->freeze();
+    checkSensitivitiesAgainstTilt(
+        helper,
+        {{eurDiscount,
+          [&](const ext::shared_ptr<YieldTermStructure>& ts) {
+              helper->setTermStructure(ts.get());
+          }},
+         {*eurForecast,
+          [&](const ext::shared_ptr<YieldTermStructure>& ts) {
+              eurForecast.linkTo(ts);
+          }}},
+        /*requireAllCurves=*/false);
+    eurDiscount->unfreeze();
+
+    auto helperSwap = helper->swap();
+    auto standalone = ext::make_shared<MtMCrossCurrencyBasisSwap>(
+        MtMCrossCurrencyBasisSwap::PayFxBaseCurrency,
+        1.0, EURCurrency(), helperSwap->fxBaseSchedule(), eurIndex, 0.0, 1.0,
+
+// ---- test-suite/overnightindexedfundingratehelper.cpp:72-96  (uses: setTermStructure)
+            // sum of dQ/dP(d) * (-t(d)) * P(d)
+            BOOST_REQUIRE(helpers[i]->isLinkedTo(*curve));
+            Real predicted = 0.0;
+            auto bucket = sensitivities.sensitivities.find(curve.get());
+            if (bucket != sensitivities.sensitivities.end())
+                for (const auto& [date, dQdP] : bucket->second)
+                    predicted += dQdP * (-curve->timeFromReference(date)) *
+                                 curve->discount(date, true);
+            auto spread = ext::make_shared<SimpleQuote>(0.0);
+            auto tilted = ext::make_shared<ZeroSpreadedTermStructure>(
+                Handle<YieldTermStructure>(curve), Handle<Quote>(spread));
+            tilted->enableExtrapolation();
+            helpers[i]->setTermStructure(tilted.get());
+            Real h = 1.0e-7;
+            spread->setValue(+h);
+            Real up = helpers[i]->impliedQuote();
+            spread->setValue(-h);
+            Real down = helpers[i]->impliedQuote();
+            spread->setValue(0.0);
+            helpers[i]->setTermStructure(curve.get());
+            Real numerical = (up - down) / (2.0 * h);
+            BOOST_CHECK_MESSAGE(std::fabs(predicted - numerical) <
+                                    1.0e-5 * std::max(1.0, std::fabs(numerical)),
+                                "funding helper " << i << " own-curve sensitivity " << predicted
+                                                  << " does not match finite difference "

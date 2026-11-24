@@ -8,50 +8,50 @@
    "access": "private",
    "file": "include/nlohmann/detail/output/binary_writer.hpp",
    "kind": "type",
-   "lines_changed": 210,
+   "lines_changed": 58,
    "member": false,
    "name": "nlohmann::detail::binary_writer",
    "private_because": "namespace detail",
    "reached_via": [
     {
-     "member": false,
-     "name": "nlohmann::operator<<(std::ostream &, const basic_json<...> &)"
-    },
-    {
-     "member": false,
-     "name": "nlohmann::operator<<(basic_json<...> &, std::istream &)"
-    },
-    {
-     "member": false,
-     "name": "nlohmann::operator>>(std::istream &, basic_json<...> &)"
-    },
-    {
-     "member": false,
-     "name": "nlohmann::operator>>(const basic_json<...> &, std::ostream &)"
-    },
-    {
-     "member": false,
-     "name": "nlohmann::format_as(const basic_json<...> &)"
-    },
-    {
-     "member": false,
-     "name": "nlohmann::to_string(const basic_json<...> &)"
+     "member": true,
+     "name": "nlohmann::basic_json::to_bjdata(const basic_json<...> &, detail::output_adapter<char>, const bool, const bool, const bjdata_version_t, const error_handler_t)"
     },
     {
      "member": true,
-     "name": "nlohmann::basic_json::array(initializer_list_t)"
+     "name": "nlohmann::basic_json::to_bjdata(const basic_json<...> &, detail::output_adapter<std::uint8_t>, const bool, const bool, const bjdata_version_t, const error_handler_t)"
     },
     {
      "member": true,
-     "name": "nlohmann::basic_json::basic_json<...>(copy_construct_tag, const basic_json<...> &)"
+     "name": "nlohmann::basic_json::to_bon8(const basic_json<...> &, detail::output_adapter<char>)"
     },
     {
      "member": true,
-     "name": "nlohmann::basic_json::basic_json<...>(basic_json<...> &&)"
+     "name": "nlohmann::basic_json::to_bon8(const basic_json<...> &, detail::output_adapter<std::uint8_t>)"
     },
     {
      "member": true,
-     "name": "nlohmann::basic_json::basic_json<...>(const basic_json<...> &)"
+     "name": "nlohmann::basic_json::to_bson(const basic_json<...> &, detail::output_adapter<char>, const error_handler_t)"
+    },
+    {
+     "member": true,
+     "name": "nlohmann::basic_json::to_bson(const basic_json<...> &, detail::output_adapter<std::uint8_t>, const error_handler_t)"
+    },
+    {
+     "member": true,
+     "name": "nlohmann::basic_json::to_cbor(const basic_json<...> &, detail::output_adapter<char>, const error_handler_t)"
+    },
+    {
+     "member": true,
+     "name": "nlohmann::basic_json::to_cbor(const basic_json<...> &, detail::output_adapter<std::uint8_t>, const error_handler_t)"
+    },
+    {
+     "member": true,
+     "name": "nlohmann::basic_json::to_msgpack(const basic_json<...> &, detail::output_adapter<char>, const error_handler_t)"
+    },
+    {
+     "member": true,
+     "name": "nlohmann::basic_json::to_msgpack(const basic_json<...> &, detail::output_adapter<std::uint8_t>, const error_handler_t)"
     }
    ],
    "status": "modified"
@@ -60,50 +60,86 @@
    "access": "private",
    "file": "include/nlohmann/detail/output/output_adapters.hpp",
    "kind": "type",
-   "lines_changed": 23,
+   "lines_changed": 11,
    "member": false,
    "name": "nlohmann::detail::output_vector_sink",
    "private_because": "namespace detail",
    "reached_via": [
     {
-     "member": false,
-     "name": "nlohmann::operator<<(std::ostream &, const basic_json<...> &)"
-    },
-    {
-     "member": false,
-     "name": "nlohmann::operator<<(basic_json<...> &, std::istream &)"
-    },
-    {
-     "member": false,
-     "name": "nlohmann::operator>>(std::istream &, basic_json<...> &)"
-    },
-    {
-     "member": false,
-     "name": "nlohmann::operator>>(const basic_json<...> &, std::ostream &)"
-    },
-    {
-     "member": false,
-     "name": "nlohmann::format_as(const basic_json<...> &)"
-    },
-    {
-     "member": false,
-     "name": "nlohmann::to_string(const basic_json<...> &)"
+     "member": true,
+     "name": "nlohmann::basic_json::to_bjdata(const basic_json<...> &, const bool, const bool, const bjdata_version_t, const error_handler_t)"
     },
     {
      "member": true,
-     "name": "nlohmann::basic_json::array(initializer_list_t)"
+     "name": "nlohmann::basic_json::to_bon8(const basic_json<...> &)"
     },
     {
      "member": true,
-     "name": "nlohmann::basic_json::basic_json<...>(copy_construct_tag, const basic_json<...> &)"
+     "name": "nlohmann::basic_json::to_bson(const basic_json<...> &, const error_handler_t)"
     },
     {
      "member": true,
-     "name": "nlohmann::basic_json::basic_json<...>(basic_json<...> &&)"
+     "name": "nlohmann::basic_json::to_cbor(const basic_json<...> &, const error_handler_t)"
     },
     {
      "member": true,
-     "name": "nlohmann::basic_json::basic_json<...>(const basic_json<...> &)"
+     "name": "nlohmann::basic_json::to_msgpack(const basic_json<...> &, const error_handler_t)"
+    },
+    {
+     "member": true,
+     "name": "nlohmann::basic_json::to_ubjson(const basic_json<...> &, const bool, const bool, const error_handler_t)"
+    }
+   ],
+   "status": "modified"
+  },
+  {
+   "access": "private",
+   "file": "include/nlohmann/detail/output/binary_writer.hpp",
+   "kind": "function",
+   "lines_changed": 4,
+   "member": true,
+   "name": "nlohmann::detail::binary_writer::write_bson_document(const BasicJsonType &)",
+   "private_because": "namespace detail",
+   "reached_via": [
+    {
+     "member": true,
+     "name": "nlohmann::basic_json::to_bjdata(const basic_json<...> &, detail::output_adapter<char>, const bool, const bool, const bjdata_version_t, const error_handler_t)"
+    },
+    {
+     "member": true,
+     "name": "nlohmann::basic_json::to_bjdata(const basic_json<...> &, detail::output_adapter<std::uint8_t>, const bool, const bool, const bjdata_version_t, const error_handler_t)"
+    },
+    {
+     "member": true,
+     "name": "nlohmann::basic_json::to_bon8(const basic_json<...> &, detail::output_adapter<char>)"
+    },
+    {
+     "member": true,
+     "name": "nlohmann::basic_json::to_bon8(const basic_json<...> &, detail::output_adapter<std::uint8_t>)"
+    },
+    {
+     "member": true,
+     "name": "nlohmann::basic_json::to_bson(const basic_json<...> &, detail::output_adapter<char>, const error_handler_t)"
+    },
+    {
+     "member": true,
+     "name": "nlohmann::basic_json::to_bson(const basic_json<...> &, detail::output_adapter<std::uint8_t>, const error_handler_t)"
+    },
+    {
+     "member": true,
+     "name": "nlohmann::basic_json::to_cbor(const basic_json<...> &, detail::output_adapter<char>, const error_handler_t)"
+    },
+    {
+     "member": true,
+     "name": "nlohmann::basic_json::to_cbor(const basic_json<...> &, detail::output_adapter<std::uint8_t>, const error_handler_t)"
+    },
+    {
+     "member": true,
+     "name": "nlohmann::basic_json::to_msgpack(const basic_json<...> &, detail::output_adapter<char>, const error_handler_t)"
+    },
+    {
+     "member": true,
+     "name": "nlohmann::basic_json::to_msgpack(const basic_json<...> &, detail::output_adapter<std::uint8_t>, const error_handler_t)"
     }
    ],
    "status": "modified"
@@ -118,47 +154,343 @@
    "private_because": "namespace detail",
    "reached_via": [
     {
-     "member": false,
-     "name": "nlohmann::operator<<(std::ostream &, const basic_json<...> &)"
-    },
-    {
-     "member": false,
-     "name": "nlohmann::operator<<(basic_json<...> &, std::istream &)"
-    },
-    {
-     "member": false,
-     "name": "nlohmann::operator>>(std::istream &, basic_json<...> &)"
-    },
-    {
-     "member": false,
-     "name": "nlohmann::operator>>(const basic_json<...> &, std::ostream &)"
-    },
-    {
-     "member": false,
-     "name": "nlohmann::format_as(const basic_json<...> &)"
-    },
-    {
-     "member": false,
-     "name": "nlohmann::to_string(const basic_json<...> &)"
+     "member": true,
+     "name": "nlohmann::basic_json::to_bjdata(const basic_json<...> &, detail::output_adapter<char>, const bool, const bool, const bjdata_version_t, const error_handler_t)"
     },
     {
      "member": true,
-     "name": "nlohmann::basic_json::array(initializer_list_t)"
+     "name": "nlohmann::basic_json::to_bjdata(const basic_json<...> &, detail::output_adapter<std::uint8_t>, const bool, const bool, const bjdata_version_t, const error_handler_t)"
     },
     {
      "member": true,
-     "name": "nlohmann::basic_json::basic_json<...>(copy_construct_tag, const basic_json<...> &)"
+     "name": "nlohmann::basic_json::to_bon8(const basic_json<...> &, detail::output_adapter<char>)"
     },
     {
      "member": true,
-     "name": "nlohmann::basic_json::basic_json<...>(basic_json<...> &&)"
+     "name": "nlohmann::basic_json::to_bon8(const basic_json<...> &, detail::output_adapter<std::uint8_t>)"
     },
     {
      "member": true,
-     "name": "nlohmann::basic_json::basic_json<...>(const basic_json<...> &)"
+     "name": "nlohmann::basic_json::to_bson(const basic_json<...> &, detail::output_adapter<char>, const error_handler_t)"
+    },
+    {
+     "member": true,
+     "name": "nlohmann::basic_json::to_bson(const basic_json<...> &, detail::output_adapter<std::uint8_t>, const error_handler_t)"
+    },
+    {
+     "member": true,
+     "name": "nlohmann::basic_json::to_cbor(const basic_json<...> &, detail::output_adapter<char>, const error_handler_t)"
+    },
+    {
+     "member": true,
+     "name": "nlohmann::basic_json::to_cbor(const basic_json<...> &, detail::output_adapter<std::uint8_t>, const error_handler_t)"
+    },
+    {
+     "member": true,
+     "name": "nlohmann::basic_json::to_msgpack(const basic_json<...> &, detail::output_adapter<char>, const error_handler_t)"
+    },
+    {
+     "member": true,
+     "name": "nlohmann::basic_json::to_msgpack(const basic_json<...> &, detail::output_adapter<std::uint8_t>, const error_handler_t)"
     }
    ],
    "status": "modified"
+  },
+  {
+   "access": "private",
+   "file": "include/nlohmann/detail/output/binary_writer.hpp",
+   "kind": "function",
+   "lines_changed": 110,
+   "member": true,
+   "name": "nlohmann::detail::binary_writer::write_bson_document_single_pass(const BasicJsonType &)",
+   "private_because": "namespace detail",
+   "reached_via": [
+    {
+     "member": true,
+     "name": "nlohmann::basic_json::to_bjdata(const basic_json<...> &, detail::output_adapter<char>, const bool, const bool, const bjdata_version_t, const error_handler_t)"
+    },
+    {
+     "member": true,
+     "name": "nlohmann::basic_json::to_bjdata(const basic_json<...> &, detail::output_adapter<std::uint8_t>, const bool, const bool, const bjdata_version_t, const error_handler_t)"
+    },
+    {
+     "member": true,
+     "name": "nlohmann::basic_json::to_bon8(const basic_json<...> &, detail::output_adapter<char>)"
+    },
+    {
+     "member": true,
+     "name": "nlohmann::basic_json::to_bon8(const basic_json<...> &, detail::output_adapter<std::uint8_t>)"
+    },
+    {
+     "member": true,
+     "name": "nlohmann::basic_json::to_bson(const basic_json<...> &, detail::output_adapter<char>, const error_handler_t)"
+    },
+    {
+     "member": true,
+     "name": "nlohmann::basic_json::to_bson(const basic_json<...> &, detail::output_adapter<std::uint8_t>, const error_handler_t)"
+    },
+    {
+     "member": true,
+     "name": "nlohmann::basic_json::to_cbor(const basic_json<...> &, detail::output_adapter<char>, const error_handler_t)"
+    },
+    {
+     "member": true,
+     "name": "nlohmann::basic_json::to_cbor(const basic_json<...> &, detail::output_adapter<std::uint8_t>, const error_handler_t)"
+    },
+    {
+     "member": true,
+     "name": "nlohmann::basic_json::to_msgpack(const basic_json<...> &, detail::output_adapter<char>, const error_handler_t)"
+    },
+    {
+     "member": true,
+     "name": "nlohmann::basic_json::to_msgpack(const basic_json<...> &, detail::output_adapter<std::uint8_t>, const error_handler_t)"
+    }
+   ],
+   "status": "added"
+  },
+  {
+   "access": "private",
+   "file": "include/nlohmann/detail/output/binary_writer.hpp",
+   "kind": "function",
+   "lines_changed": 13,
+   "member": true,
+   "name": "nlohmann::detail::binary_writer::write_bson_document(const BasicJsonType &, std::true_type)",
+   "private_because": "namespace detail",
+   "reached_via": [
+    {
+     "member": true,
+     "name": "nlohmann::basic_json::to_bjdata(const basic_json<...> &, detail::output_adapter<char>, const bool, const bool, const bjdata_version_t, const error_handler_t)"
+    },
+    {
+     "member": true,
+     "name": "nlohmann::basic_json::to_bjdata(const basic_json<...> &, detail::output_adapter<std::uint8_t>, const bool, const bool, const bjdata_version_t, const error_handler_t)"
+    },
+    {
+     "member": true,
+     "name": "nlohmann::basic_json::to_bon8(const basic_json<...> &, detail::output_adapter<char>)"
+    },
+    {
+     "member": true,
+     "name": "nlohmann::basic_json::to_bon8(const basic_json<...> &, detail::output_adapter<std::uint8_t>)"
+    },
+    {
+     "member": true,
+     "name": "nlohmann::basic_json::to_bson(const basic_json<...> &, detail::output_adapter<char>, const error_handler_t)"
+    },
+    {
+     "member": true,
+     "name": "nlohmann::basic_json::to_bson(const basic_json<...> &, detail::output_adapter<std::uint8_t>, const error_handler_t)"
+    },
+    {
+     "member": true,
+     "name": "nlohmann::basic_json::to_cbor(const basic_json<...> &, detail::output_adapter<char>, const error_handler_t)"
+    },
+    {
+     "member": true,
+     "name": "nlohmann::basic_json::to_cbor(const basic_json<...> &, detail::output_adapter<std::uint8_t>, const error_handler_t)"
+    },
+    {
+     "member": true,
+     "name": "nlohmann::basic_json::to_msgpack(const basic_json<...> &, detail::output_adapter<char>, const error_handler_t)"
+    },
+    {
+     "member": true,
+     "name": "nlohmann::basic_json::to_msgpack(const basic_json<...> &, detail::output_adapter<std::uint8_t>, const error_handler_t)"
+    }
+   ],
+   "status": "added"
+  },
+  {
+   "access": "private",
+   "file": "include/nlohmann/detail/output/binary_writer.hpp",
+   "kind": "function",
+   "lines_changed": 12,
+   "member": true,
+   "name": "nlohmann::detail::binary_writer::close_bson_container(const std::size_t)",
+   "private_because": "namespace detail",
+   "reached_via": [
+    {
+     "member": true,
+     "name": "nlohmann::basic_json::to_bjdata(const basic_json<...> &, detail::output_adapter<char>, const bool, const bool, const bjdata_version_t, const error_handler_t)"
+    },
+    {
+     "member": true,
+     "name": "nlohmann::basic_json::to_bjdata(const basic_json<...> &, detail::output_adapter<std::uint8_t>, const bool, const bool, const bjdata_version_t, const error_handler_t)"
+    },
+    {
+     "member": true,
+     "name": "nlohmann::basic_json::to_bon8(const basic_json<...> &, detail::output_adapter<char>)"
+    },
+    {
+     "member": true,
+     "name": "nlohmann::basic_json::to_bon8(const basic_json<...> &, detail::output_adapter<std::uint8_t>)"
+    },
+    {
+     "member": true,
+     "name": "nlohmann::basic_json::to_bson(const basic_json<...> &, detail::output_adapter<char>, const error_handler_t)"
+    },
+    {
+     "member": true,
+     "name": "nlohmann::basic_json::to_bson(const basic_json<...> &, detail::output_adapter<std::uint8_t>, const error_handler_t)"
+    },
+    {
+     "member": true,
+     "name": "nlohmann::basic_json::to_cbor(const basic_json<...> &, detail::output_adapter<char>, const error_handler_t)"
+    },
+    {
+     "member": true,
+     "name": "nlohmann::basic_json::to_cbor(const basic_json<...> &, detail::output_adapter<std::uint8_t>, const error_handler_t)"
+    },
+    {
+     "member": true,
+     "name": "nlohmann::basic_json::to_msgpack(const basic_json<...> &, detail::output_adapter<char>, const error_handler_t)"
+    },
+    {
+     "member": true,
+     "name": "nlohmann::basic_json::to_msgpack(const basic_json<...> &, detail::output_adapter<std::uint8_t>, const error_handler_t)"
+    }
+   ],
+   "status": "added"
+  },
+  {
+   "access": "private",
+   "file": "include/nlohmann/detail/output/binary_writer.hpp",
+   "kind": "function",
+   "lines_changed": 8,
+   "member": true,
+   "name": "nlohmann::detail::binary_writer::write_bson_size_placeholder()",
+   "private_because": "namespace detail",
+   "reached_via": [
+    {
+     "member": true,
+     "name": "nlohmann::basic_json::to_bjdata(const basic_json<...> &, detail::output_adapter<char>, const bool, const bool, const bjdata_version_t, const error_handler_t)"
+    },
+    {
+     "member": true,
+     "name": "nlohmann::basic_json::to_bjdata(const basic_json<...> &, detail::output_adapter<std::uint8_t>, const bool, const bool, const bjdata_version_t, const error_handler_t)"
+    },
+    {
+     "member": true,
+     "name": "nlohmann::basic_json::to_bon8(const basic_json<...> &, detail::output_adapter<char>)"
+    },
+    {
+     "member": true,
+     "name": "nlohmann::basic_json::to_bon8(const basic_json<...> &, detail::output_adapter<std::uint8_t>)"
+    },
+    {
+     "member": true,
+     "name": "nlohmann::basic_json::to_bson(const basic_json<...> &, detail::output_adapter<char>, const error_handler_t)"
+    },
+    {
+     "member": true,
+     "name": "nlohmann::basic_json::to_bson(const basic_json<...> &, detail::output_adapter<std::uint8_t>, const error_handler_t)"
+    },
+    {
+     "member": true,
+     "name": "nlohmann::basic_json::to_cbor(const basic_json<...> &, detail::output_adapter<char>, const error_handler_t)"
+    },
+    {
+     "member": true,
+     "name": "nlohmann::basic_json::to_cbor(const basic_json<...> &, detail::output_adapter<std::uint8_t>, const error_handler_t)"
+    },
+    {
+     "member": true,
+     "name": "nlohmann::basic_json::to_msgpack(const basic_json<...> &, detail::output_adapter<char>, const error_handler_t)"
+    },
+    {
+     "member": true,
+     "name": "nlohmann::basic_json::to_msgpack(const basic_json<...> &, detail::output_adapter<std::uint8_t>, const error_handler_t)"
+    }
+   ],
+   "status": "added"
+  },
+  {
+   "access": "private",
+   "file": "include/nlohmann/detail/output/binary_writer.hpp",
+   "kind": "function",
+   "lines_changed": 6,
+   "member": true,
+   "name": "nlohmann::detail::binary_writer::bson_entry_fits(const std::size_t, const std::size_t, const std::size_t)",
+   "private_because": "namespace detail",
+   "reached_via": [
+    {
+     "member": true,
+     "name": "nlohmann::basic_json::to_bjdata(const basic_json<...> &, detail::output_adapter<char>, const bool, const bool, const bjdata_version_t, const error_handler_t)"
+    },
+    {
+     "member": true,
+     "name": "nlohmann::basic_json::to_bjdata(const basic_json<...> &, detail::output_adapter<std::uint8_t>, const bool, const bool, const bjdata_version_t, const error_handler_t)"
+    },
+    {
+     "member": true,
+     "name": "nlohmann::basic_json::to_bon8(const basic_json<...> &, detail::output_adapter<char>)"
+    },
+    {
+     "member": true,
+     "name": "nlohmann::basic_json::to_bon8(const basic_json<...> &, detail::output_adapter<std::uint8_t>)"
+    },
+    {
+     "member": true,
+     "name": "nlohmann::basic_json::to_bson(const basic_json<...> &, detail::output_adapter<char>, const error_handler_t)"
+    },
+    {
+     "member": true,
+     "name": "nlohmann::basic_json::to_bson(const basic_json<...> &, detail::output_adapter<std::uint8_t>, const error_handler_t)"
+    },
+    {
+     "member": true,
+     "name": "nlohmann::basic_json::to_cbor(const basic_json<...> &, detail::output_adapter<char>, const error_handler_t)"
+    },
+    {
+     "member": true,
+     "name": "nlohmann::basic_json::to_cbor(const basic_json<...> &, detail::output_adapter<std::uint8_t>, const error_handler_t)"
+    },
+    {
+     "member": true,
+     "name": "nlohmann::basic_json::to_msgpack(const basic_json<...> &, detail::output_adapter<char>, const error_handler_t)"
+    },
+    {
+     "member": true,
+     "name": "nlohmann::basic_json::to_msgpack(const basic_json<...> &, detail::output_adapter<std::uint8_t>, const error_handler_t)"
+    }
+   ],
+   "status": "added"
+  },
+  {
+   "access": "private",
+   "file": "include/nlohmann/detail/output/output_adapters.hpp",
+   "kind": "function",
+   "lines_changed": 6,
+   "member": true,
+   "name": "nlohmann::detail::output_vector_sink::overwrite(const std::size_t, const std::uint32_t)",
+   "private_because": "namespace detail",
+   "reached_via": [
+    {
+     "member": true,
+     "name": "nlohmann::basic_json::to_bjdata(const basic_json<...> &, const bool, const bool, const bjdata_version_t, const error_handler_t)"
+    },
+    {
+     "member": true,
+     "name": "nlohmann::basic_json::to_bon8(const basic_json<...> &)"
+    },
+    {
+     "member": true,
+     "name": "nlohmann::basic_json::to_bson(const basic_json<...> &, const error_handler_t)"
+    },
+    {
+     "member": true,
+     "name": "nlohmann::basic_json::to_cbor(const basic_json<...> &, const error_handler_t)"
+    },
+    {
+     "member": true,
+     "name": "nlohmann::basic_json::to_msgpack(const basic_json<...> &, const error_handler_t)"
+    },
+    {
+     "member": true,
+     "name": "nlohmann::basic_json::to_ubjson(const basic_json<...> &, const bool, const bool, const error_handler_t)"
+    }
+   ],
+   "status": "added"
   },
   {
    "access": "private",
@@ -168,7 +500,224 @@
    "member": true,
    "name": "nlohmann::detail::binary_writer::bson_integers_fit_64_bits",
    "private_because": "namespace detail",
-   "reached_via": [],
+   "reached_via": [
+    {
+     "member": true,
+     "name": "nlohmann::basic_json::to_bjdata(const basic_json<...> &, detail::output_adapter<char>, const bool, const bool, const bjdata_version_t, const error_handler_t)"
+    },
+    {
+     "member": true,
+     "name": "nlohmann::basic_json::to_bjdata(const basic_json<...> &, detail::output_adapter<std::uint8_t>, const bool, const bool, const bjdata_version_t, const error_handler_t)"
+    },
+    {
+     "member": true,
+     "name": "nlohmann::basic_json::to_bon8(const basic_json<...> &, detail::output_adapter<char>)"
+    },
+    {
+     "member": true,
+     "name": "nlohmann::basic_json::to_bon8(const basic_json<...> &, detail::output_adapter<std::uint8_t>)"
+    },
+    {
+     "member": true,
+     "name": "nlohmann::basic_json::to_bson(const basic_json<...> &, detail::output_adapter<char>, const error_handler_t)"
+    },
+    {
+     "member": true,
+     "name": "nlohmann::basic_json::to_bson(const basic_json<...> &, detail::output_adapter<std::uint8_t>, const error_handler_t)"
+    },
+    {
+     "member": true,
+     "name": "nlohmann::basic_json::to_cbor(const basic_json<...> &, detail::output_adapter<char>, const error_handler_t)"
+    },
+    {
+     "member": true,
+     "name": "nlohmann::basic_json::to_cbor(const basic_json<...> &, detail::output_adapter<std::uint8_t>, const error_handler_t)"
+    },
+    {
+     "member": true,
+     "name": "nlohmann::basic_json::to_msgpack(const basic_json<...> &, detail::output_adapter<char>, const error_handler_t)"
+    },
+    {
+     "member": true,
+     "name": "nlohmann::basic_json::to_msgpack(const basic_json<...> &, detail::output_adapter<std::uint8_t>, const error_handler_t)"
+    }
+   ],
+   "status": "added"
+  },
+  {
+   "access": "private",
+   "file": "include/nlohmann/detail/output/output_adapters.hpp",
+   "kind": "function",
+   "lines_changed": 5,
+   "member": true,
+   "name": "nlohmann::detail::output_vector_sink::rewind(const std::size_t)",
+   "private_because": "namespace detail",
+   "reached_via": [
+    {
+     "member": true,
+     "name": "nlohmann::basic_json::to_bjdata(const basic_json<...> &, const bool, const bool, const bjdata_version_t, const error_handler_t)"
+    },
+    {
+     "member": true,
+     "name": "nlohmann::basic_json::to_bon8(const basic_json<...> &)"
+    },
+    {
+     "member": true,
+     "name": "nlohmann::basic_json::to_bson(const basic_json<...> &, const error_handler_t)"
+    },
+    {
+     "member": true,
+     "name": "nlohmann::basic_json::to_cbor(const basic_json<...> &, const error_handler_t)"
+    },
+    {
+     "member": true,
+     "name": "nlohmann::basic_json::to_msgpack(const basic_json<...> &, const error_handler_t)"
+    },
+    {
+     "member": true,
+     "name": "nlohmann::basic_json::to_ubjson(const basic_json<...> &, const bool, const bool, const error_handler_t)"
+    }
+   ],
+   "status": "added"
+  },
+  {
+   "access": "private",
+   "file": "include/nlohmann/detail/output/binary_writer.hpp",
+   "kind": "function",
+   "lines_changed": 4,
+   "member": true,
+   "name": "nlohmann::detail::binary_writer::check_bson_value(const BasicJsonType &)",
+   "private_because": "namespace detail",
+   "reached_via": [
+    {
+     "member": true,
+     "name": "nlohmann::basic_json::to_bjdata(const basic_json<...> &, detail::output_adapter<char>, const bool, const bool, const bjdata_version_t, const error_handler_t)"
+    },
+    {
+     "member": true,
+     "name": "nlohmann::basic_json::to_bjdata(const basic_json<...> &, detail::output_adapter<std::uint8_t>, const bool, const bool, const bjdata_version_t, const error_handler_t)"
+    },
+    {
+     "member": true,
+     "name": "nlohmann::basic_json::to_bon8(const basic_json<...> &, detail::output_adapter<char>)"
+    },
+    {
+     "member": true,
+     "name": "nlohmann::basic_json::to_bon8(const basic_json<...> &, detail::output_adapter<std::uint8_t>)"
+    },
+    {
+     "member": true,
+     "name": "nlohmann::basic_json::to_bson(const basic_json<...> &, detail::output_adapter<char>, const error_handler_t)"
+    },
+    {
+     "member": true,
+     "name": "nlohmann::basic_json::to_bson(const basic_json<...> &, detail::output_adapter<std::uint8_t>, const error_handler_t)"
+    },
+    {
+     "member": true,
+     "name": "nlohmann::basic_json::to_cbor(const basic_json<...> &, detail::output_adapter<char>, const error_handler_t)"
+    },
+    {
+     "member": true,
+     "name": "nlohmann::basic_json::to_cbor(const basic_json<...> &, detail::output_adapter<std::uint8_t>, const error_handler_t)"
+    },
+    {
+     "member": true,
+     "name": "nlohmann::basic_json::to_msgpack(const basic_json<...> &, detail::output_adapter<char>, const error_handler_t)"
+    },
+    {
+     "member": true,
+     "name": "nlohmann::basic_json::to_msgpack(const basic_json<...> &, detail::output_adapter<std::uint8_t>, const error_handler_t)"
+    }
+   ],
+   "status": "added"
+  },
+  {
+   "access": "private",
+   "file": "include/nlohmann/detail/output/binary_writer.hpp",
+   "kind": "function",
+   "lines_changed": 4,
+   "member": true,
+   "name": "nlohmann::detail::binary_writer::write_bson_document(const BasicJsonType &, std::false_type)",
+   "private_because": "namespace detail",
+   "reached_via": [
+    {
+     "member": true,
+     "name": "nlohmann::basic_json::to_bjdata(const basic_json<...> &, detail::output_adapter<char>, const bool, const bool, const bjdata_version_t, const error_handler_t)"
+    },
+    {
+     "member": true,
+     "name": "nlohmann::basic_json::to_bjdata(const basic_json<...> &, detail::output_adapter<std::uint8_t>, const bool, const bool, const bjdata_version_t, const error_handler_t)"
+    },
+    {
+     "member": true,
+     "name": "nlohmann::basic_json::to_bon8(const basic_json<...> &, detail::output_adapter<char>)"
+    },
+    {
+     "member": true,
+     "name": "nlohmann::basic_json::to_bon8(const basic_json<...> &, detail::output_adapter<std::uint8_t>)"
+    },
+    {
+     "member": true,
+     "name": "nlohmann::basic_json::to_bson(const basic_json<...> &, detail::output_adapter<char>, const error_handler_t)"
+    },
+    {
+     "member": true,
+     "name": "nlohmann::basic_json::to_bson(const basic_json<...> &, detail::output_adapter<std::uint8_t>, const error_handler_t)"
+    },
+    {
+     "member": true,
+     "name": "nlohmann::basic_json::to_cbor(const basic_json<...> &, detail::output_adapter<char>, const error_handler_t)"
+    },
+    {
+     "member": true,
+     "name": "nlohmann::basic_json::to_cbor(const basic_json<...> &, detail::output_adapter<std::uint8_t>, const error_handler_t)"
+    },
+    {
+     "member": true,
+     "name": "nlohmann::basic_json::to_msgpack(const basic_json<...> &, detail::output_adapter<char>, const error_handler_t)"
+    },
+    {
+     "member": true,
+     "name": "nlohmann::basic_json::to_msgpack(const basic_json<...> &, detail::output_adapter<std::uint8_t>, const error_handler_t)"
+    }
+   ],
+   "status": "added"
+  },
+  {
+   "access": "private",
+   "file": "include/nlohmann/detail/output/output_adapters.hpp",
+   "kind": "function",
+   "lines_changed": 4,
+   "member": true,
+   "name": "nlohmann::detail::output_vector_sink::written()",
+   "private_because": "namespace detail",
+   "reached_via": [
+    {
+     "member": true,
+     "name": "nlohmann::basic_json::to_bjdata(const basic_json<...> &, const bool, const bool, const bjdata_version_t, const error_handler_t)"
+    },
+    {
+     "member": true,
+     "name": "nlohmann::basic_json::to_bon8(const basic_json<...> &)"
+    },
+    {
+     "member": true,
+     "name": "nlohmann::basic_json::to_bson(const basic_json<...> &, const error_handler_t)"
+    },
+    {
+     "member": true,
+     "name": "nlohmann::basic_json::to_cbor(const basic_json<...> &, const error_handler_t)"
+    },
+    {
+     "member": true,
+     "name": "nlohmann::basic_json::to_msgpack(const basic_json<...> &, const error_handler_t)"
+    },
+    {
+     "member": true,
+     "name": "nlohmann::basic_json::to_ubjson(const basic_json<...> &, const bool, const bool, const error_handler_t)"
+    }
+   ],
    "status": "added"
   },
   {
@@ -181,148 +730,44 @@
    "private_because": "namespace detail",
    "reached_via": [
     {
-     "member": false,
-     "name": "nlohmann::operator<<(std::ostream &, const basic_json<...> &)"
-    },
-    {
-     "member": false,
-     "name": "nlohmann::operator<<(basic_json<...> &, std::istream &)"
-    },
-    {
-     "member": false,
-     "name": "nlohmann::operator>>(std::istream &, basic_json<...> &)"
-    },
-    {
-     "member": false,
-     "name": "nlohmann::operator>>(const basic_json<...> &, std::ostream &)"
-    },
-    {
-     "member": false,
-     "name": "nlohmann::format_as(const basic_json<...> &)"
-    },
-    {
-     "member": false,
-     "name": "nlohmann::to_string(const basic_json<...> &)"
+     "member": true,
+     "name": "nlohmann::basic_json::to_bjdata(const basic_json<...> &, detail::output_adapter<char>, const bool, const bool, const bjdata_version_t, const error_handler_t)"
     },
     {
      "member": true,
-     "name": "nlohmann::basic_json::array(initializer_list_t)"
+     "name": "nlohmann::basic_json::to_bjdata(const basic_json<...> &, detail::output_adapter<std::uint8_t>, const bool, const bool, const bjdata_version_t, const error_handler_t)"
     },
     {
      "member": true,
-     "name": "nlohmann::basic_json::basic_json<...>(copy_construct_tag, const basic_json<...> &)"
+     "name": "nlohmann::basic_json::to_bon8(const basic_json<...> &, detail::output_adapter<char>)"
     },
     {
      "member": true,
-     "name": "nlohmann::basic_json::basic_json<...>(basic_json<...> &&)"
+     "name": "nlohmann::basic_json::to_bon8(const basic_json<...> &, detail::output_adapter<std::uint8_t>)"
     },
     {
      "member": true,
-     "name": "nlohmann::basic_json::basic_json<...>(const basic_json<...> &)"
-    }
-   ],
-   "status": "added"
-  },
-  {
-   "access": "private",
-   "file": "include/nlohmann/detail/output/binary_writer.hpp",
-   "kind": "function",
-   "lines_changed": 2,
-   "member": true,
-   "name": "nlohmann::detail::binary_writer::write_bson_document_single_pass(const BasicJsonType &)",
-   "private_because": "namespace detail",
-   "reached_via": [
-    {
-     "member": false,
-     "name": "nlohmann::operator<<(std::ostream &, const basic_json<...> &)"
-    },
-    {
-     "member": false,
-     "name": "nlohmann::operator<<(basic_json<...> &, std::istream &)"
-    },
-    {
-     "member": false,
-     "name": "nlohmann::operator>>(std::istream &, basic_json<...> &)"
-    },
-    {
-     "member": false,
-     "name": "nlohmann::operator>>(const basic_json<...> &, std::ostream &)"
-    },
-    {
-     "member": false,
-     "name": "nlohmann::format_as(const basic_json<...> &)"
-    },
-    {
-     "member": false,
-     "name": "nlohmann::to_string(const basic_json<...> &)"
+     "name": "nlohmann::basic_json::to_bson(const basic_json<...> &, detail::output_adapter<char>, const error_handler_t)"
     },
     {
      "member": true,
-     "name": "nlohmann::basic_json::array(initializer_list_t)"
+     "name": "nlohmann::basic_json::to_bson(const basic_json<...> &, detail::output_adapter<std::uint8_t>, const error_handler_t)"
     },
     {
      "member": true,
-     "name": "nlohmann::basic_json::basic_json<...>(copy_construct_tag, const basic_json<...> &)"
+     "name": "nlohmann::basic_json::to_cbor(const basic_json<...> &, detail::output_adapter<char>, const error_handler_t)"
     },
     {
      "member": true,
-     "name": "nlohmann::basic_json::basic_json<...>(basic_json<...> &&)"
+     "name": "nlohmann::basic_json::to_cbor(const basic_json<...> &, detail::output_adapter<std::uint8_t>, const error_handler_t)"
     },
     {
      "member": true,
-     "name": "nlohmann::basic_json::basic_json<...>(const basic_json<...> &)"
-    }
-   ],
-   "status": "added"
-  },
-  {
-   "access": "private",
-   "file": "include/nlohmann/detail/output/binary_writer.hpp",
-   "kind": "function",
-   "lines_changed": 1,
-   "member": true,
-   "name": "nlohmann::detail::binary_writer::bson_entry_fits(const std::size_t, const std::size_t, const std::size_t)",
-   "private_because": "namespace detail",
-   "reached_via": [
-    {
-     "member": false,
-     "name": "nlohmann::operator<<(std::ostream &, const basic_json<...> &)"
-    },
-    {
-     "member": false,
-     "name": "nlohmann::operator<<(basic_json<...> &, std::istream &)"
-    },
-    {
-     "member": false,
-     "name": "nlohmann::operator>>(std::istream &, basic_json<...> &)"
-    },
-    {
-     "member": false,
-     "name": "nlohmann::operator>>(const basic_json<...> &, std::ostream &)"
-    },
-    {
-     "member": false,
-     "name": "nlohmann::format_as(const basic_json<...> &)"
-    },
-    {
-     "member": false,
-     "name": "nlohmann::to_string(const basic_json<...> &)"
+     "name": "nlohmann::basic_json::to_msgpack(const basic_json<...> &, detail::output_adapter<char>, const error_handler_t)"
     },
     {
      "member": true,
-     "name": "nlohmann::basic_json::array(initializer_list_t)"
-    },
-    {
-     "member": true,
-     "name": "nlohmann::basic_json::basic_json<...>(copy_construct_tag, const basic_json<...> &)"
-    },
-    {
-     "member": true,
-     "name": "nlohmann::basic_json::basic_json<...>(basic_json<...> &&)"
-    },
-    {
-     "member": true,
-     "name": "nlohmann::basic_json::basic_json<...>(const basic_json<...> &)"
+     "name": "nlohmann::basic_json::to_msgpack(const basic_json<...> &, detail::output_adapter<std::uint8_t>, const error_handler_t)"
     }
    ],
    "status": "added"
@@ -335,213 +780,46 @@
    "member": true,
    "name": "nlohmann::detail::binary_writer::bson_single_pass_sink",
    "private_because": "namespace detail",
-   "reached_via": [],
-   "status": "added"
-  },
-  {
-   "access": "private",
-   "file": "include/nlohmann/detail/output/binary_writer.hpp",
-   "kind": "function",
-   "lines_changed": 1,
-   "member": true,
-   "name": "nlohmann::detail::binary_writer::check_bson_value(const BasicJsonType &)",
-   "private_because": "namespace detail",
    "reached_via": [
     {
-     "member": false,
-     "name": "nlohmann::operator<<(std::ostream &, const basic_json<...> &)"
-    },
-    {
-     "member": false,
-     "name": "nlohmann::operator<<(basic_json<...> &, std::istream &)"
-    },
-    {
-     "member": false,
-     "name": "nlohmann::operator>>(std::istream &, basic_json<...> &)"
-    },
-    {
-     "member": false,
-     "name": "nlohmann::operator>>(const basic_json<...> &, std::ostream &)"
-    },
-    {
-     "member": false,
-     "name": "nlohmann::format_as(const basic_json<...> &)"
-    },
-    {
-     "member": false,
-     "name": "nlohmann::to_string(const basic_json<...> &)"
+     "member": true,
+     "name": "nlohmann::basic_json::to_bjdata(const basic_json<...> &, detail::output_adapter<char>, const bool, const bool, const bjdata_version_t, const error_handler_t)"
     },
     {
      "member": true,
-     "name": "nlohmann::basic_json::array(initializer_list_t)"
+     "name": "nlohmann::basic_json::to_bjdata(const basic_json<...> &, detail::output_adapter<std::uint8_t>, const bool, const bool, const bjdata_version_t, const error_handler_t)"
     },
     {
      "member": true,
-     "name": "nlohmann::basic_json::basic_json<...>(copy_construct_tag, const basic_json<...> &)"
+     "name": "nlohmann::basic_json::to_bon8(const basic_json<...> &, detail::output_adapter<char>)"
     },
     {
      "member": true,
-     "name": "nlohmann::basic_json::basic_json<...>(basic_json<...> &&)"
+     "name": "nlohmann::basic_json::to_bon8(const basic_json<...> &, detail::output_adapter<std::uint8_t>)"
     },
     {
      "member": true,
-     "name": "nlohmann::basic_json::basic_json<...>(const basic_json<...> &)"
-    }
-   ],
-   "status": "added"
-  },
-  {
-   "access": "private",
-   "file": "include/nlohmann/detail/output/binary_writer.hpp",
-   "kind": "function",
-   "lines_changed": 1,
-   "member": true,
-   "name": "nlohmann::detail::binary_writer::close_bson_container(const std::size_t)",
-   "private_because": "namespace detail",
-   "reached_via": [
-    {
-     "member": false,
-     "name": "nlohmann::operator<<(std::ostream &, const basic_json<...> &)"
-    },
-    {
-     "member": false,
-     "name": "nlohmann::operator<<(basic_json<...> &, std::istream &)"
-    },
-    {
-     "member": false,
-     "name": "nlohmann::operator>>(std::istream &, basic_json<...> &)"
-    },
-    {
-     "member": false,
-     "name": "nlohmann::operator>>(const basic_json<...> &, std::ostream &)"
-    },
-    {
-     "member": false,
-     "name": "nlohmann::format_as(const basic_json<...> &)"
-    },
-    {
-     "member": false,
-     "name": "nlohmann::to_string(const basic_json<...> &)"
+     "name": "nlohmann::basic_json::to_bson(const basic_json<...> &, detail::output_adapter<char>, const error_handler_t)"
     },
     {
      "member": true,
-     "name": "nlohmann::basic_json::array(initializer_list_t)"
+     "name": "nlohmann::basic_json::to_bson(const basic_json<...> &, detail::output_adapter<std::uint8_t>, const error_handler_t)"
     },
     {
      "member": true,
-     "name": "nlohmann::basic_json::basic_json<...>(copy_construct_tag, const basic_json<...> &)"
+     "name": "nlohmann::basic_json::to_cbor(const basic_json<...> &, detail::output_adapter<char>, const error_handler_t)"
     },
     {
      "member": true,
-     "name": "nlohmann::basic_json::basic_json<...>(basic_json<...> &&)"
+     "name": "nlohmann::basic_json::to_cbor(const basic_json<...> &, detail::output_adapter<std::uint8_t>, const error_handler_t)"
     },
     {
      "member": true,
-     "name": "nlohmann::basic_json::basic_json<...>(const basic_json<...> &)"
-    }
-   ],
-   "status": "added"
-  },
-  {
-   "access": "private",
-   "file": "include/nlohmann/detail/output/binary_writer.hpp",
-   "kind": "function",
-   "lines_changed": 1,
-   "member": true,
-   "name": "nlohmann::detail::binary_writer::write_bson_document(const BasicJsonType &, std::false_type)",
-   "private_because": "namespace detail",
-   "reached_via": [
-    {
-     "member": false,
-     "name": "nlohmann::operator<<(std::ostream &, const basic_json<...> &)"
-    },
-    {
-     "member": false,
-     "name": "nlohmann::operator<<(basic_json<...> &, std::istream &)"
-    },
-    {
-     "member": false,
-     "name": "nlohmann::operator>>(std::istream &, basic_json<...> &)"
-    },
-    {
-     "member": false,
-     "name": "nlohmann::operator>>(const basic_json<...> &, std::ostream &)"
-    },
-    {
-     "member": false,
-     "name": "nlohmann::format_as(const basic_json<...> &)"
-    },
-    {
-     "member": false,
-     "name": "nlohmann::to_string(const basic_json<...> &)"
+     "name": "nlohmann::basic_json::to_msgpack(const basic_json<...> &, detail::output_adapter<char>, const error_handler_t)"
     },
     {
      "member": true,
-     "name": "nlohmann::basic_json::array(initializer_list_t)"
-    },
-    {
-     "member": true,
-     "name": "nlohmann::basic_json::basic_json<...>(copy_construct_tag, const basic_json<...> &)"
-    },
-    {
-     "member": true,
-     "name": "nlohmann::basic_json::basic_json<...>(basic_json<...> &&)"
-    },
-    {
-     "member": true,
-     "name": "nlohmann::basic_json::basic_json<...>(const basic_json<...> &)"
-    }
-   ],
-   "status": "added"
-  },
-  {
-   "access": "private",
-   "file": "include/nlohmann/detail/output/binary_writer.hpp",
-   "kind": "function",
-   "lines_changed": 1,
-   "member": true,
-   "name": "nlohmann::detail::binary_writer::write_bson_document(const BasicJsonType &, std::true_type)",
-   "private_because": "namespace detail",
-   "reached_via": [
-    {
-     "member": false,
-     "name": "nlohmann::operator<<(std::ostream &, const basic_json<...> &)"
-    },
-    {
-     "member": false,
-     "name": "nlohmann::operator<<(basic_json<...> &, std::istream &)"
-    },
-    {
-     "member": false,
-     "name": "nlohmann::operator>>(std::istream &, basic_json<...> &)"
-    },
-    {
-     "member": false,
-     "name": "nlohmann::operator>>(const basic_json<...> &, std::ostream &)"
-    },
-    {
-     "member": false,
-     "name": "nlohmann::format_as(const basic_json<...> &)"
-    },
-    {
-     "member": false,
-     "name": "nlohmann::to_string(const basic_json<...> &)"
-    },
-    {
-     "member": true,
-     "name": "nlohmann::basic_json::array(initializer_list_t)"
-    },
-    {
-     "member": true,
-     "name": "nlohmann::basic_json::basic_json<...>(copy_construct_tag, const basic_json<...> &)"
-    },
-    {
-     "member": true,
-     "name": "nlohmann::basic_json::basic_json<...>(basic_json<...> &&)"
-    },
-    {
-     "member": true,
-     "name": "nlohmann::basic_json::basic_json<...>(const basic_json<...> &)"
+     "name": "nlohmann::basic_json::to_msgpack(const basic_json<...> &, detail::output_adapter<std::uint8_t>, const error_handler_t)"
     }
    ],
    "status": "added"
@@ -556,326 +834,66 @@
    "private_because": "namespace detail",
    "reached_via": [
     {
-     "member": false,
-     "name": "nlohmann::operator<<(std::ostream &, const basic_json<...> &)"
-    },
-    {
-     "member": false,
-     "name": "nlohmann::operator<<(basic_json<...> &, std::istream &)"
-    },
-    {
-     "member": false,
-     "name": "nlohmann::operator>>(std::istream &, basic_json<...> &)"
-    },
-    {
-     "member": false,
-     "name": "nlohmann::operator>>(const basic_json<...> &, std::ostream &)"
-    },
-    {
-     "member": false,
-     "name": "nlohmann::format_as(const basic_json<...> &)"
-    },
-    {
-     "member": false,
-     "name": "nlohmann::to_string(const basic_json<...> &)"
+     "member": true,
+     "name": "nlohmann::basic_json::to_bjdata(const basic_json<...> &, detail::output_adapter<char>, const bool, const bool, const bjdata_version_t, const error_handler_t)"
     },
     {
      "member": true,
-     "name": "nlohmann::basic_json::array(initializer_list_t)"
+     "name": "nlohmann::basic_json::to_bjdata(const basic_json<...> &, detail::output_adapter<std::uint8_t>, const bool, const bool, const bjdata_version_t, const error_handler_t)"
     },
     {
      "member": true,
-     "name": "nlohmann::basic_json::basic_json<...>(copy_construct_tag, const basic_json<...> &)"
+     "name": "nlohmann::basic_json::to_bon8(const basic_json<...> &, detail::output_adapter<char>)"
     },
     {
      "member": true,
-     "name": "nlohmann::basic_json::basic_json<...>(basic_json<...> &&)"
+     "name": "nlohmann::basic_json::to_bon8(const basic_json<...> &, detail::output_adapter<std::uint8_t>)"
     },
     {
      "member": true,
-     "name": "nlohmann::basic_json::basic_json<...>(const basic_json<...> &)"
+     "name": "nlohmann::basic_json::to_bson(const basic_json<...> &, detail::output_adapter<char>, const error_handler_t)"
+    },
+    {
+     "member": true,
+     "name": "nlohmann::basic_json::to_bson(const basic_json<...> &, detail::output_adapter<std::uint8_t>, const error_handler_t)"
+    },
+    {
+     "member": true,
+     "name": "nlohmann::basic_json::to_cbor(const basic_json<...> &, detail::output_adapter<char>, const error_handler_t)"
+    },
+    {
+     "member": true,
+     "name": "nlohmann::basic_json::to_cbor(const basic_json<...> &, detail::output_adapter<std::uint8_t>, const error_handler_t)"
+    },
+    {
+     "member": true,
+     "name": "nlohmann::basic_json::to_msgpack(const basic_json<...> &, detail::output_adapter<char>, const error_handler_t)"
+    },
+    {
+     "member": true,
+     "name": "nlohmann::basic_json::to_msgpack(const basic_json<...> &, detail::output_adapter<std::uint8_t>, const error_handler_t)"
     }
    ],
    "status": "added"
-  },
-  {
-   "access": "private",
-   "file": "include/nlohmann/detail/output/binary_writer.hpp",
-   "kind": "function",
-   "lines_changed": 1,
-   "member": true,
-   "name": "nlohmann::detail::binary_writer::write_bson_size_placeholder()",
-   "private_because": "namespace detail",
-   "reached_via": [
-    {
-     "member": false,
-     "name": "nlohmann::operator<<(std::ostream &, const basic_json<...> &)"
-    },
-    {
-     "member": false,
-     "name": "nlohmann::operator<<(basic_json<...> &, std::istream &)"
-    },
-    {
-     "member": false,
-     "name": "nlohmann::operator>>(std::istream &, basic_json<...> &)"
-    },
-    {
-     "member": false,
-     "name": "nlohmann::operator>>(const basic_json<...> &, std::ostream &)"
-    },
-    {
-     "member": false,
-     "name": "nlohmann::format_as(const basic_json<...> &)"
-    },
-    {
-     "member": false,
-     "name": "nlohmann::to_string(const basic_json<...> &)"
-    },
-    {
-     "member": true,
-     "name": "nlohmann::basic_json::array(initializer_list_t)"
-    },
-    {
-     "member": true,
-     "name": "nlohmann::basic_json::basic_json<...>(copy_construct_tag, const basic_json<...> &)"
-    },
-    {
-     "member": true,
-     "name": "nlohmann::basic_json::basic_json<...>(basic_json<...> &&)"
-    },
-    {
-     "member": true,
-     "name": "nlohmann::basic_json::basic_json<...>(const basic_json<...> &)"
-    }
-   ],
-   "status": "added"
-  },
-  {
-   "access": "private",
-   "file": "include/nlohmann/detail/output/output_adapters.hpp",
-   "kind": "function",
-   "lines_changed": 1,
-   "member": true,
-   "name": "nlohmann::detail::output_vector_sink::overwrite(const std::size_t, const std::uint32_t)",
-   "private_because": "namespace detail",
-   "reached_via": [
-    {
-     "member": false,
-     "name": "nlohmann::operator<<(std::ostream &, const basic_json<...> &)"
-    },
-    {
-     "member": false,
-     "name": "nlohmann::operator<<(basic_json<...> &, std::istream &)"
-    },
-    {
-     "member": false,
-     "name": "nlohmann::operator>>(std::istream &, basic_json<...> &)"
-    },
-    {
-     "member": false,
-     "name": "nlohmann::operator>>(const basic_json<...> &, std::ostream &)"
-    },
-    {
-     "member": false,
-     "name": "nlohmann::format_as(const basic_json<...> &)"
-    },
-    {
-     "member": false,
-     "name": "nlohmann::to_string(const basic_json<...> &)"
-    },
-    {
-     "member": true,
-     "name": "nlohmann::basic_json::array(initializer_list_t)"
-    },
-    {
-     "member": true,
-     "name": "nlohmann::basic_json::basic_json<...>(copy_construct_tag, const basic_json<...> &)"
-    },
-    {
-     "member": true,
-     "name": "nlohmann::basic_json::basic_json<...>(basic_json<...> &&)"
-    },
-    {
-     "member": true,
-     "name": "nlohmann::basic_json::basic_json<...>(const basic_json<...> &)"
-    }
-   ],
-   "status": "added"
-  },
-  {
-   "access": "private",
-   "file": "include/nlohmann/detail/output/output_adapters.hpp",
-   "kind": "function",
-   "lines_changed": 1,
-   "member": true,
-   "name": "nlohmann::detail::output_vector_sink::rewind(const std::size_t)",
-   "private_because": "namespace detail",
-   "reached_via": [
-    {
-     "member": false,
-     "name": "nlohmann::operator<<(std::ostream &, const basic_json<...> &)"
-    },
-    {
-     "member": false,
-     "name": "nlohmann::operator<<(basic_json<...> &, std::istream &)"
-    },
-    {
-     "member": false,
-     "name": "nlohmann::operator>>(std::istream &, basic_json<...> &)"
-    },
-    {
-     "member": false,
-     "name": "nlohmann::operator>>(const basic_json<...> &, std::ostream &)"
-    },
-    {
-     "member": false,
-     "name": "nlohmann::format_as(const basic_json<...> &)"
-    },
-    {
-     "member": false,
-     "name": "nlohmann::to_string(const basic_json<...> &)"
-    },
-    {
-     "member": true,
-     "name": "nlohmann::basic_json::array(initializer_list_t)"
-    },
-    {
-     "member": true,
-     "name": "nlohmann::basic_json::basic_json<...>(copy_construct_tag, const basic_json<...> &)"
-    },
-    {
-     "member": true,
-     "name": "nlohmann::basic_json::basic_json<...>(basic_json<...> &&)"
-    },
-    {
-     "member": true,
-     "name": "nlohmann::basic_json::basic_json<...>(const basic_json<...> &)"
-    }
-   ],
-   "status": "added"
-  },
-  {
-   "access": "private",
-   "file": "include/nlohmann/detail/output/output_adapters.hpp",
-   "kind": "function",
-   "lines_changed": 1,
-   "member": true,
-   "name": "nlohmann::detail::output_vector_sink::written()",
-   "private_because": "namespace detail",
-   "reached_via": [
-    {
-     "member": false,
-     "name": "nlohmann::operator<<(std::ostream &, const basic_json<...> &)"
-    },
-    {
-     "member": false,
-     "name": "nlohmann::operator<<(basic_json<...> &, std::istream &)"
-    },
-    {
-     "member": false,
-     "name": "nlohmann::operator>>(std::istream &, basic_json<...> &)"
-    },
-    {
-     "member": false,
-     "name": "nlohmann::operator>>(const basic_json<...> &, std::ostream &)"
-    },
-    {
-     "member": false,
-     "name": "nlohmann::format_as(const basic_json<...> &)"
-    },
-    {
-     "member": false,
-     "name": "nlohmann::to_string(const basic_json<...> &)"
-    },
-    {
-     "member": true,
-     "name": "nlohmann::basic_json::array(initializer_list_t)"
-    },
-    {
-     "member": true,
-     "name": "nlohmann::basic_json::basic_json<...>(copy_construct_tag, const basic_json<...> &)"
-    },
-    {
-     "member": true,
-     "name": "nlohmann::basic_json::basic_json<...>(basic_json<...> &&)"
-    },
-    {
-     "member": true,
-     "name": "nlohmann::basic_json::basic_json<...>(const basic_json<...> &)"
-    }
-   ],
-   "status": "added"
-  },
-  {
-   "access": "private",
-   "file": "include/nlohmann/detail/output/binary_writer.hpp",
-   "kind": "function",
-   "lines_changed": 1,
-   "member": true,
-   "name": "nlohmann::detail::binary_writer::write_bson_document(const BasicJsonType &)",
-   "private_because": "namespace detail",
-   "reached_via": [
-    {
-     "member": false,
-     "name": "nlohmann::operator<<(std::ostream &, const basic_json<...> &)"
-    },
-    {
-     "member": false,
-     "name": "nlohmann::operator<<(basic_json<...> &, std::istream &)"
-    },
-    {
-     "member": false,
-     "name": "nlohmann::operator>>(std::istream &, basic_json<...> &)"
-    },
-    {
-     "member": false,
-     "name": "nlohmann::operator>>(const basic_json<...> &, std::ostream &)"
-    },
-    {
-     "member": false,
-     "name": "nlohmann::format_as(const basic_json<...> &)"
-    },
-    {
-     "member": false,
-     "name": "nlohmann::to_string(const basic_json<...> &)"
-    },
-    {
-     "member": true,
-     "name": "nlohmann::basic_json::array(initializer_list_t)"
-    },
-    {
-     "member": true,
-     "name": "nlohmann::basic_json::basic_json<...>(copy_construct_tag, const basic_json<...> &)"
-    },
-    {
-     "member": true,
-     "name": "nlohmann::basic_json::basic_json<...>(basic_json<...> &&)"
-    },
-    {
-     "member": true,
-     "name": "nlohmann::basic_json::basic_json<...>(const basic_json<...> &)"
-    }
-   ],
-   "status": "removed"
   }
  ],
  "parse_errors": {
   "new": {
-   "-DJSON_DIAGNOSTICS=1 -DJSON_DIAGNOSTIC_POSITIONS=1": 1,
-   "-std=c++20": 1,
-   "default": 1
+   "-DJSON_DIAGNOSTICS=1 -DJSON_DIAGNOSTIC_POSITIONS=1": 0,
+   "-std=c++20": 0,
+   "default": 0
   },
   "old": {
-   "-DJSON_DIAGNOSTICS=1 -DJSON_DIAGNOSTIC_POSITIONS=1": 1,
-   "-std=c++20": 1,
-   "default": 1
+   "-DJSON_DIAGNOSTICS=1 -DJSON_DIAGNOSTIC_POSITIONS=1": 0,
+   "-std=c++20": 0,
+   "default": 0
   }
  },
  "pr": 5979,
- "seconds": 144.6,
+ "seconds": 40.5,
  "sha_new": "9742edc294a0ae08fac79539da02ebef8f946948",
  "sha_old": "517444b504c4035e603a6500675dde4d28eaca59",
- "tool": "clang version 18.1.1 (https://github.com/llvm/llvm-project.git dba2a75e9c7ef81fe84774ba5eee5e67e01d801a)",
+ "tool": "clang version 18.1.1",
  "unmapped": [
   {
    "file": "include/nlohmann/detail/output/output_adapters.hpp",

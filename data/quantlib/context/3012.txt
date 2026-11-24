@@ -1,0 +1,48 @@
+// Upstream tests at the PR's parent commit 1b089f4c0 that use the changed code.
+// Names searched (test lines using each): modifiedBesselFunction_i (5), modifiedBesselFunction_i_exponentiallyWeighted (2), modifiedBesselFunction_k (5), modifiedBesselFunction_k_exponentiallyWeighted (2)
+
+// ---- test-suite/functions.cpp:320-336  (uses: modifiedBesselFunction_i_exponentiallyWeighted)
+BOOST_AUTO_TEST_CASE(testWeightedModifiedBesselFunctions) {
+    BOOST_TEST_MESSAGE("Testing weighted modified Bessel functions...");
+    for (Real nu = -5.0; nu <= 5.0; nu += 0.5) {
+        for (Real x = 0.1; x <= 15.0; x += 0.5) {
+            Real calculated_i = modifiedBesselFunction_i_exponentiallyWeighted(nu, x);
+            Real expected_i = modifiedBesselFunction_i(nu, x) * exp(-x);
+            Real calculated_k = modifiedBesselFunction_k_exponentiallyWeighted(nu, x);
+            // Mirror the check above for the first kind rather than
+            // inlining the old I_(-nu) - I_nu quotient: that expression is
+            // 0/0 at integer order, so using it here made the test assert
+            // the very failure it should catch.
+            Real expected_k = modifiedBesselFunction_k(nu, x) * exp(-x);
+            Real tol_i = std::max(QL_EPSILON, 1e3 * QL_EPSILON * std::fabs(expected_i) * std::max(exp(x), 1.0));
+            Real tol_k = std::max(QL_EPSILON, 1e3 * QL_EPSILON * std::fabs(expected_k) * std::max(exp(x), 1.0));
+            if (std::abs(expected_i - calculated_i) > tol_i) {
+                BOOST_ERROR("failed to verify exponentially weighted"
+                            << " modified Bessel function of first kind"
+
+// ---- test-suite/functions.cpp:349-373  (uses: modifiedBesselFunction_i_exponentiallyWeighted)
+                            << "\n calculated : " << calculated_k
+                            << "\n expected   : " << expected_k
+                            << "\n tolerance  : " << tol_k
+                            << "\n difference : " << (expected_k - calculated_k));
+            }
+        }
+    }
+    for (Real nu = -5.0; nu <= 5.0; nu += 0.5) {
+        for (Real x = -5.0; x <= 5.0; x += 0.5) {
+            for (Real y = -5.0; y <= 5.0; y += 0.5) {
+                std::complex<Real> z(x, y);
+                std::complex<Real> calculated_i =
+                    modifiedBesselFunction_i_exponentiallyWeighted(nu, z);
+                std::complex<Real> expected_i = modifiedBesselFunction_i(nu, z) * exp(-z);
+                std::complex<Real> calculated_k =
+                    modifiedBesselFunction_k_exponentiallyWeighted(nu, z);
+                // As above, check against the unweighted function rather
+                // than against the old I_(-nu) - I_nu quotient, which is
+                // 0/0 at integer order.
+                std::complex<Real> expected_k =
+                    modifiedBesselFunction_k(nu, z) * exp(-z);
+                Real tol_i = std::max(QL_EPSILON, 1e3 * QL_EPSILON * std::abs(calculated_i));
+                Real tol_k = std::max(QL_EPSILON, 1e3 * QL_EPSILON * std::abs(calculated_k));
+                if (std::abs(calculated_i - expected_i) > tol_i) {
+                    BOOST_ERROR("failed to verify exponentially weighted"

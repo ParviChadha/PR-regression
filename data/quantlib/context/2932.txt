@@ -1,0 +1,140 @@
+// Upstream tests at the PR's parent commit 0e7a09f4d that use the changed code.
+// Names searched (test lines using each): maxDate (12)
+
+// ---- test-suite/inflation.cpp:431-455  (uses: maxDate)
+        BOOST_CHECK_MESSAGE(std::fabs(nzcis.fixedLegBPS() - expected) < eps,
+                            "zero-coupon inflation swap does not have correct fixedLegBPS"
+                            << "\n    actual:   " << nzcis.fixedLegBPS()
+                            << "\n    expected: " << expected
+                            << "\n    maturity: " << nzcis.maturityDate()
+                            << "\n    rate:     " << nzcis.fixedRate());
+    }
+
+    //===========================================================================================
+    // now test the forecasting capability of the index.
+
+    from = hz->referenceDate();
+    to = hz->maxDate()-1*Months; // a bit of margin for adjustments
+    Schedule testIndex = MakeSchedule().from(from).to(to)
+                            .withTenor(1*Months)
+                            .withCalendar(UnitedKingdom())
+                            .withConvention(ModifiedFollowing);
+
+    // we are testing UKRPI which is not interpolated
+    Date bd = hz->baseDate();
+    Real bf = ii->fixing(bd);
+    for (const auto& d : testIndex) {
+        Real z = hz->zeroRate(d);
+        Real t = hz->dayCounter().yearFraction(bd, inflationPeriod(d, ii->frequency()).first);
+        Real calc = bf * std::pow(1+z, t);
+
+// ---- test-suite/piecewiseblackvariancesurface.cpp:651-686  (uses: maxDate)
+BOOST_AUTO_TEST_CASE(testAccessors) {
+    BOOST_TEST_MESSAGE(
+        "Testing dayCounter, maxDate, minStrike, maxStrike...");
+
+    Date today(15, January, 2026);
+    Settings::instance().evaluationDate() = today;
+    DayCounter dc = Actual365Fixed();
+
+    Date d1 = today + 6*Months;
+    Date d2 = today + 1*Years;
+    Volatility vol = 0.25;
+
+    std::vector<Date> dates = {d1, d2};
+    std::vector<ext::shared_ptr<SmileSection>> sections = {
+        ext::make_shared<FlatSmileSection>(d1, vol, dc, today),
+        ext::make_shared<FlatSmileSection>(d2, vol, dc, today)
+    };
+
+    PiecewiseBlackVarianceSurface surface(today, dates, sections, dc);
+
+    if (surface.dayCounter().name() != dc.name())
+        BOOST_FAIL("dayCounter mismatch"
+                   << "\n    expected: " << dc.name()
+                   << "\n    got:      " << surface.dayCounter().name());
+
+    if (surface.maxDate() != d2)
+        BOOST_FAIL("maxDate mismatch"
+                   << "\n    expected: " << d2
+                   << "\n    got:      " << surface.maxDate());
+
+    if (surface.minStrike() != QL_MIN_REAL)
+        BOOST_FAIL("minStrike not QL_MIN_REAL");
+
+    if (surface.maxStrike() != QL_MAX_REAL)
+        BOOST_FAIL("maxStrike not QL_MAX_REAL");
+}
+
+// ---- test-suite/piecewiseyieldcurve.cpp:833-876  (uses: maxDate)
+BOOST_AUTO_TEST_CASE(testObservability) {
+
+    BOOST_TEST_MESSAGE("Testing observability of piecewise yield curve...");
+
+    CommonVars vars;
+
+    vars.termStructure = ext::make_shared<PiecewiseYieldCurve<Discount,LogLinear>>(
+                                                   vars.settlementDays,
+                                                   vars.calendar,
+                                                   vars.instruments,
+                                                   Actual360());
+
+    ext::dynamic_pointer_cast<LazyObject>(vars.termStructure)->forwardFirstNotificationOnly();
+
+    Flag f;
+    f.registerWith(vars.termStructure);
+
+    for (Size i=0; i<vars.deposits+vars.swaps; i++) {
+        Time testTime =
+            Actual360().yearFraction(vars.settlement,
+                                     vars.instruments[i]->pillarDate());
+        DiscountFactor discount = vars.termStructure->discount(testTime);
+        f.lower();
+        vars.rates[i]->setValue(vars.rates[i]->value()*1.01);
+        if (!f.isUp())
+            BOOST_FAIL("Observer was not notified of underlying rate change");
+        if (vars.termStructure->discount(testTime,true) == discount)
+            BOOST_FAIL("rate change did not trigger recalculation");
+        vars.rates[i]->setValue(vars.rates[i]->value()/1.01);
+    }
+
+    vars.termStructure->maxDate();
+    f.lower();
+    Settings::instance().evaluationDate() =
+        vars.calendar.advance(vars.today,15,Days);
+    if (!f.isUp())
+        BOOST_FAIL("Observer was not notified of date change");
+
+    f.lower();
+    Settings::instance().evaluationDate() = vars.today;
+    if (f.isUp())
+        BOOST_FAIL("Observer was notified of date change"
+                   " without an intervening recalculation");
+}
+
+// ---- test-suite/piecewiseyieldcurve.cpp:1933-1957  (uses: maxDate)
+
+    // Check that the curve has shape between pillars.
+    auto prev = vars.settlement;
+    for (const auto& helper : helpers) {
+        Date pillar = helper->pillarDate();
+        Rate rate1 = curve->forwardRate(prev, pillar, dc, Continuous).rate();
+        Rate rate2 = curve->forwardRate(prev, prev + (pillar - prev) / 2, dc, Continuous).rate();
+        BOOST_CHECK_GT(std::fabs(rate1 - rate2), 1e-4);
+        prev = pillar;
+    }
+
+    // Check that extrapolation preserves constant spread.
+    Date maxDate = curve->maxDate();
+    BOOST_CHECK_EQUAL(maxDate, baseCurve->maxDate());
+    Rate rate1 = curve->forwardRate(maxDate - 1*Years, maxDate, dc, Continuous).rate();
+    Rate rate2 = curve->forwardRate(maxDate, maxDate + 1*Years, dc, Continuous).rate();
+    Rate baseRate1 = baseCurve->forwardRate(maxDate - 1*Years, maxDate, dc, Continuous).rate();
+    Rate baseRate2 = baseCurve->forwardRate(maxDate, maxDate + 1*Years, dc, Continuous).rate();
+    QL_CHECK_CLOSE(rate1 - baseRate1, rate2 - baseRate2, 1e-9);
+
+    // Check accessors.
+    BOOST_CHECK_EQUAL(curve->dates().size(), helpers.size() + 1);
+    BOOST_CHECK_EQUAL(curve->times().size(), helpers.size() + 1);
+    BOOST_CHECK_EQUAL(curve->data().size(), helpers.size() + 1);
+    const auto nodes = curve->nodes();

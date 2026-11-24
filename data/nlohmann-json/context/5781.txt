@@ -1,155 +1,137 @@
 // Upstream tests at the PR's parent commit 3c465beb6 that use the changed code.
-// Names searched (test lines using each): format_as (23), to_string (76), array (0), basic_json (0), operator<< (81), operator>> (76), binary_writer (0), binary_container_frame (0), ubjson_frame (0), write_ubjson_value_or_push (0), write_ubjson (0), write_ubjson_iterative (0), write_ubjson_start_array (0), write_ubjson_start_object (0), array_it (0), object_it (0), value (2071), is_bjdata_ndarray (0), prefix_required (0), write_cbor (0), write_cbor_iterative (0), write_cbor_value_or_push (0), write_msgpack (0), write_msgpack_array_prefix (0), write_msgpack_iterative (0), write_msgpack_object_prefix (0), write_msgpack_value_or_push (0)
+// Names searched (test lines using each): to_bjdata (0), to_bon8 (0), to_bson (0), to_cbor (0), to_msgpack (0), binary_writer (0), write_ubjson_iterative (0), write_ubjson_start_array (0), write_cbor_iterative (0), write_ubjson_value_or_push (0), write_msgpack_iterative (0), write_ubjson_start_object (0), write_cbor_value_or_push (0), write_msgpack_value_or_push (0), write_msgpack_array_prefix (0), write_msgpack_object_prefix (0), write_ubjson (0), binary_container_frame (0), ubjson_frame (0), write_msgpack (0), write_cbor (0), is_bjdata_ndarray (0), array_it (0), object_it (0), value (2071), prefix_required (0)
 
-// ---- tests/src/unit-deserialization.cpp:236-248  (uses: operator<<, operator>>)
-TEST_CASE("deserialization")
-{
-    SECTION("successful deserialization")
+// ---- tests/src/value_in_range_of_test.hpp:35-59  (uses: value)
+    using type = typename T::type;
+    constexpr bool min_in_range = T::min_in_range;
+    constexpr bool max_in_range = T::max_in_range;
+
+    type const val_min = std::numeric_limits<type>::min();
+    type const val_min2 = val_min + 1;
+    type const val_max = std::numeric_limits<type>::max();
+    type const val_max2 = val_max - 1;
+
+    REQUIRE(CHAR_BIT == 8);
+
+    std::string of_type_str;
+    if (std::is_unsigned<of_type>::value)
     {
-        SECTION("stream")
-        {
-            std::stringstream ss1;
-            std::stringstream ss2;
-            std::stringstream ss3;
-            ss1 << R"(["foo",1,2,3,false,{"one":1}])";
-            ss2 << R"(["foo",1,2,3,false,{"one":1}])";
-            ss3 << R"(["foo",1,2,3,false,{"one":1}])";
-            const json j = json::parse(ss1);
-
-// ---- tests/src/unit-deserialization.cpp:345-357  (uses: operator<<, operator>>)
-    SECTION("unsuccessful deserialization")
-    {
-        SECTION("stream")
-        {
-            std::stringstream ss1;
-            std::stringstream ss3;
-            std::stringstream ss4;
-            std::stringstream ss5;
-            ss1 << R"(["foo",1,2,3,false,{"one":1})";
-            ss3 << R"(["foo",1,2,3,false,{"one":1})";
-            ss4 << R"(["foo",1,2,3,false,{"one":1})";
-            ss5 << R"(["foo",1,2,3,false,{"one":1})";
-
-
-// ---- tests/src/unit-precise-stream-position.cpp:88-100  (uses: operator<<, operator>>)
-TEST_CASE("JSON_PRECISE_STREAM_POSITION")
-{
-    SECTION("the macro is part of the ABI tag")
-    {
-        const std::string ns = STRINGIZE(NLOHMANN_JSON_NAMESPACE);
-        // other tags may come before it, e.g. json_abi_diag_psp
-        CHECK(ns.find("_psp") != std::string::npos);
+        of_type_str += "u";
     }
+    of_type_str += "int";
+    of_type_str += std::to_string(sizeof(of_type) * 8);
 
-    SECTION("a number does not consume the character that terminates it")
+    INFO("of_type := ", of_type_str);
+
+    std::string type_str;
+    if (std::is_unsigned<type>::value)
     {
-        // a number is only terminated by the character following it; that
-        // character must be given back so the stream is positioned right
+        type_str += "u";
 
-// ---- tests/src/unit-precise-stream-position.cpp:226-236  (uses: operator<<, operator>>)
-    SECTION("a streambuf that cannot put back is not needed")
-    {
-        // the terminating character is never consumed, so no putback
-        // position is required
-        no_putback_streambuf buf("1true");
-        std::istream is(&buf);
-        json j;
-        is >> j;
-        CHECK(j == json(1));
-        CHECK(remaining(is) == "true");
-    }
+// ---- tests/src/fuzzer-parse_bjdata.cpp:10-34  (uses: value)
+This file implements a parser test suitable for fuzz testing. Given a byte
+array data, it performs the following steps:
 
-// ---- tests/src/unit-bson.cpp:1096-1130  (uses: operator<<, operator>>, value)
-TEST_CASE("BSON keys from contiguous and stream input")
-{
-    // contiguous input reads a key up to its \x00-byte in one step, a stream
-    // reads it byte by byte; both must give the same value or error for the
-    // complete document and for every truncation of it
-    const json j = {{"", true}, {"k", {1, 2, 3}}, {std::string(40, 'x'), {{"nested key", "value"}}}};
-    const std::vector<std::uint8_t> bson = json::to_bson(j);
-    CHECK(json::from_bson(bson) == j);
+- j0 = from_bjdata(data, allow_exceptions = false)
+- j1 = from_bjdata(data)
+- assert(j0 is discarded if parsing j1 fails, and j0 == j1 otherwise)
+- vec2 = to_bjdata(j1, use_size = false, use_type = false)
+- vec3 = to_bjdata(j1, use_size = true, use_type = false)
+- vec4 = to_bjdata(j1, use_size = true, use_type = true)
+- j2 = from_bjdata(vec2)
+- j3 = from_bjdata(vec3)
+- j4 = from_bjdata(vec4)
+- assert(from_bjdata(to_bjdata(j2, use_size = false, use_type = false)) is value-stable with j2)
+- assert(from_bjdata(to_bjdata(j3, use_size = true, use_type = false)) is value-stable with j3)
+- assert(from_bjdata(to_bjdata(j4, use_size = true, use_type = true)) is value-stable with j4)
 
-    for (std::size_t length = 0; length <= bson.size(); ++length)
-    {
-        CAPTURE(length)
-        const std::vector<std::uint8_t> input(bson.begin(), bson.begin() + static_cast<std::ptrdiff_t>(length));
-        std::string from_vector;
-        std::string from_stream;
-        try
-        {
-            from_vector = json::from_bson(input).dump();
-        }
-        catch (const json::parse_error& e)
-        {
-            from_vector = e.what();
-        }
-        try
-        {
-            std::istringstream stream(std::string(input.begin(), input.end()));
-            from_stream = json::from_bson(stream).dump();
-        }
-        catch (const json::parse_error& e)
-        {
-            from_stream = e.what();
-        }
-        CHECK(from_vector == from_stream);
-    }
-}
+Re-serializing j2/j3/j4 with the same use_size/use_type settings is checked
+for value-stability rather than byte-exact stability: from_bjdata(to_bjdata(j2))
+must equal j2 (and likewise for j3, j4). Byte-exact stability does not hold in
+general, because a BJData value can lose type fidelity across a round trip
+(e.g. a binary_t value serialized without the optimized "$U#" array header is
+parsed back as a plain array of numbers, see #5398 and the discussion on
+PR #5494) - the numeric value is preserved, but the writer's smallest-type
+selection for the now-plain numbers may legitimately pick a different, but
+equally valid, single-byte type marker than the dedicated binary-data writer
 
-// ---- tests/src/unit-delete_deprecated_functions.cpp:160-168  (uses: operator<<, operator>>, value)
-    SECTION("stream operators with reversed operands")
-    {
-        CHECK_FALSE(json_ltlt_istream<json>::value);
-        CHECK_FALSE(json_gtgt_ostream<json>::value);
+// ---- tests/src/fuzzer-parse_bon8.cpp:9-33  (uses: value)
+/*
+This file implements a parser test suitable for fuzz testing. Given a byte
+array data, it performs the following steps:
 
-        // the replacement
-        CHECK(istream_gtgt_json<json>::value);
-        CHECK(ostream_ltlt_json<json>::value);
-    }
+- j0 = from_bon8(data, allow_exceptions = false)
+- j1 = from_bon8(data)
+- assert(j0 is discarded if parsing j1 fails, and j0 == j1 otherwise)
+- vec = to_bon8(j1)
+- j2 = from_bon8(vec)
+- assert(to_bon8(j2) == vec)
 
-// ---- tests/src/unit-regression2.cpp:571-576  (uses: operator<<, to_string, value)
-    SECTION("issue #1708 - minimum value of int64_t can be outputted")
-    {
-        constexpr auto smallest = (std::numeric_limits<int64_t>::min)();
-        const json j = smallest;
-        CHECK(j.dump() == std::to_string(smallest));
-    }
+It also checks that reading the data from a stream, which reads strings byte by
+byte, gives the same value or error as reading it from contiguous memory, which
+copies strings in bulk.
 
-// ---- tests/src/unit-serialization.cpp:732-744  (uses: operator<<, value)
-TEST_CASE("serialization of every kind of value below the bound of the descent")
-{
-    // Values nested deeper than the bound are written without the call stack,
-    // by code of their own; each kind of value must come out the same there as
-    // it does at the top level, compact and pretty-printed.
-    std::vector<json> values =
-    {
-        json::parse(R"({"a": 1, "b": [1, 2, {"c": "x"}], "d": {}, "e": []})"),
-        json::parse(R"([1, [2, 3], {"k": null}, "s"])"),
-        json::object(),
-        json::array(),
-        json::binary({1, 2, 3}, 42),
-        json::binary({1, 2, 3}),
+The provided function `LLVMFuzzerTestOneInput` can be used in different fuzzer
+drivers.
+*/
 
-// ---- tests/src/unit-bon8.cpp:635-647  (uses: operator<<, operator>>)
-TEST_CASE("BON8 strings from contiguous and stream input")
-{
-    // contiguous input copies the valid UTF-8 of a string in bulk, a stream
-    // is read byte by byte; both must end strings and report errors alike
-    const std::string ascii(20, 'a');
-    const std::vector<bytes> inputs =
-    {
-        // the string ends at 0xFF, at a marker, and at an integer
-        concat(concat(bytes(ascii.begin(), ascii.end()), {0xC3, 0xA4}), {0xFF}),
-        concat(concat({0x82}, bytes(ascii.begin(), ascii.end())), {0x91}),
-        concat(concat({0x85}, bytes(ascii.begin(), ascii.end())), {0xFE}),
-        concat(concat({0x82}, bytes(ascii.begin(), ascii.end())), {0xC2, 0x05}),
-        concat(concat({0x87}, bytes(ascii.begin(), ascii.end())), {0xE2, 0x82, 0xAC, 0xF0, 0x05, 0x00, 0x00}),
+#include <cassert>
+#include <sstream>
+#include <nlohmann/json.hpp>
 
-// ---- tests/src/unit-bon8.cpp:765-771  (uses: operator<<, operator>>)
-            SECTION("std::ostringstream")
+// the round-trip checks below are assertions; NDEBUG would compile them away
+#ifdef NDEBUG
+
+// ---- tests/src/unit-32bit.cpp:38-49  (uses: value)
+            SECTION("optimized array: negative size")
             {
-                std::basic_ostringstream<char> ss;
-                json::to_bon8(j1, ss);
-                json j3 = json::from_bon8(ss.str());
-                CHECK(j1 == j3);
+                std::vector<uint8_t> const vM = {'[', '$', 'M', '#', '[', 'I', 0x00, 0x20, 'M', 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x20, 0xFF, ']'};
+                std::vector<uint8_t> const vMX = {'[', '$', 'U', '#', '[', 'M', 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 'U', 0x01, ']'};
+
+                json _;
+                CHECK_THROWS_WITH_AS(_ = json::from_bjdata(vM), "[json.exception.out_of_range.408] syntax error while parsing BJData size: integer value overflow", json::out_of_range&);
+                CHECK(json::from_bjdata(vM, true, false).is_discarded());
+
+                CHECK_THROWS_WITH_AS(_ = json::from_bjdata(vMX), "[json.exception.out_of_range.408] syntax error while parsing BJData size: integer value overflow", json::out_of_range&);
+                CHECK(json::from_bjdata(vMX, true, false).is_discarded());
             }
+
+// ---- tests/src/unit-32bit.cpp:51-62  (uses: value)
+            SECTION("optimized array: integer value overflow")
+            {
+                std::vector<uint8_t> const vL = {'[', '#', 'L', 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x7F};
+                std::vector<uint8_t> const vM = {'[', '$', 'M', '#', '[', 'I', 0x00, 0x20, 'M', 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x20, 0xFF, ']'};
+
+                json _;
+                CHECK_THROWS_WITH_AS(_ = json::from_bjdata(vL), "[json.exception.out_of_range.408] syntax error while parsing BJData size: integer value overflow", json::out_of_range&);
+                CHECK(json::from_bjdata(vL, true, false).is_discarded());
+
+                CHECK_THROWS_WITH_AS(_ = json::from_bjdata(vM), "[json.exception.out_of_range.408] syntax error while parsing BJData size: integer value overflow", json::out_of_range&);
+                CHECK(json::from_bjdata(vM, true, false).is_discarded());
+            }
+
+// ---- tests/src/unit-algorithms.cpp:22-32  (uses: value)
+        SECTION("std::all_of")
+        {
+            CHECK(std::all_of(j_array.begin(), j_array.end(), [](const json & value)
+            {
+                return !value.empty();
+            }));
+            CHECK(std::all_of(j_object.begin(), j_object.end(), [](const json & value)
+            {
+                return value.type() == json::value_t::number_integer;
+            }));
+        }
+
+// ---- tests/src/unit-algorithms.cpp:34-44  (uses: value)
+        SECTION("std::any_of")
+        {
+            CHECK(std::any_of(j_array.begin(), j_array.end(), [](const json & value)
+            {
+                return value.is_string() && value.get<std::string>() == "foo";
+            }));
+            CHECK(std::any_of(j_object.begin(), j_object.end(), [](const json & value)
+            {
+                return value.get<int>() > 1;
+            }));
+        }

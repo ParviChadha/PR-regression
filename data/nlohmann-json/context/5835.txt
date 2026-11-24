@@ -1,7 +1,7 @@
 // Upstream tests at the PR's parent commit 6a27b9acb that use the changed code.
-// Names searched (test lines using each): basic_json (35), begin (699), cbegin (195), cend (127), end (556), find (161), insert (257), format_as (23), to_string (97), array (0), operator<< (83), operator>> (79), iter_impl (14), json_value (11), destroy_container (0), diff_frame (0), free_container (0), destroy_bounded (0), all_children_leaves (0), destroy_walk (0), diff_object_keys (0), diff_unequal (0), diff_added (0), added (3), target_values (0), added_ops (0), common_keys (0), next_common (0)
+// Names searched (test lines using each): basic_json (35), begin (699), cbegin (195), cend (127), end (556), find (161), insert (257), diff (0), format_as (23), to_string (97), operator<< (83), operator>> (79), operator!= (54), operator< (201), diff_recursively (0), json_value (11), destroy_container (0), diff_iteratively (0), diff_frame (0), free_container (0), diff_object_keys (0), destroy_bounded (0), diff_unequal (0), all_children_leaves (0), destroy_walk (0), diff_added (0), added (3), target_values (0), added_ops (0), common_keys (0), next_common (0)
 
-// ---- tests/src/unit-json_patch.cpp:1936-1948  (uses: added)
+// ---- tests/src/unit-json_patch.cpp:1936-1948  (uses: added, operator<)
     SECTION("json: added key sorts before an existing common key")
     {
         const json source = {{"a", 1}, {"c", {{"x", 1}, {"y", 2}}}};
@@ -16,7 +16,7 @@
         CHECK(source.patch(patch) == target);
     }
 
-// ---- tests/src/unit-merge_diff.cpp:862-873  (uses: added)
+// ---- tests/src/unit-merge_diff.cpp:862-873  (uses: added, operator<)
         SECTION("added members follow target order")
         {
             auto original = ordered_json::parse(R"({"b":1})");
@@ -109,22 +109,15 @@ TEST_CASE("parse error positions are the same for contiguous and stream input")
             check_contents();
         }
 
-// ---- tests/src/unit-ordered_json.cpp:73-83  (uses: iter_impl, operator>>)
-TEST_CASE("regression test for issue #3732 - iteration_proxy_value<iter_impl<ordered_json>>")
-{
-    // Naming the proxy type in a function-parameter position forces eager
-    // instantiation of basic_json<ordered_map>; previously this hit an
-    // incomplete-type error in set_parents().
-    auto fn = [](nlohmann::detail::iteration_proxy_value<nlohmann::detail::iter_impl<nlohmann::ordered_json>> const & val)
-    {
-        return val.value();
-    };
-    static_cast<void>(fn);
-}
-
-// ---- tests/src/unit-class_iterator.cpp:392-396  (uses: iter_impl)
-            SECTION("iter_impl")
+// ---- tests/src/unit-algorithms.cpp:126-136  (uses: begin, end, operator!=, operator<)
+            SECTION("using user-defined comparison")
             {
-                using Iter = nlohmann::detail::iter_impl<json>;
-                CHECK(std::is_same < decltype(std::declval<Iter&>()++), Iter >::value);
+                // compare objects only by size of its elements
+                json j_array2 = {13, 29, 3, {"Hello", "World"}, true, false, {{"one", 1}, {"two", 2}, {"three", 3}}, "foo", "baz"};
+                CHECK(!std::equal(j_array.begin(), j_array.end(), j_array2.begin()));
+                CHECK(std::equal(j_array.begin(), j_array.end(), j_array2.begin(),
+                                 [](const json & a, const json & b)
+                {
+                    return (a.size() == b.size());
+                }));
             }

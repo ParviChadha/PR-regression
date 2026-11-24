@@ -1,82 +1,43 @@
 // Upstream tests at the PR's parent commit 0cbe95ffa that use the changed code.
-// Names searched (test lines using each): format_as (23), to_string (138), array (0), basic_json (0), operator<< (96), operator>> (91), operator<=> (133), operator== (63), binary_writer (0), compare_integer_with_float (0), serializer (5), integer_fits_min (0), integer_fits_max (0), integer_range (0), integer_fits (0), may_fall_below_min (0), integer_to_string (0), may_exceed_max (0), integers_fit_64_bits (0), throw_integer_out_of_range (0), write_cbor_array_elements (0), write_cbor_integer (0), limits (32), msgpack_integers_fit_64_bits (0)
+// Names searched (test lines using each): to_bjdata (0), to_bon8 (0), to_bson (0), to_cbor (0), to_msgpack (0), format_as (23), to_string (138), operator< (209), operator== (63), operator<< (96), operator>> (91), operator!= (58), binary_writer (0), write_msgpack_integer (0), calc_bson_value_size (0), write_bjdata_ndarray (0), write_bon8_value (0), compare_integer_with_float (0), bjdata_ndarray_value_in_range (0), write_bson_value (0), write_cbor_array (0), ubjson_integer_prefix (0), write_cbor (0), write_msgpack (0), write_msgpack_array (0), dump_integer (0), write_cbor_integer (0), integer_to_string (0), throw_integer_out_of_range (0), integer_fits_min (0), write_cbor_array_elements (0), integer_fits_max (0), integer_range (0), integer_fits (0), may_fall_below_min (0), may_exceed_max (0), integers_fit_64_bits (0), integer_limits (0), unsigned_limits (0), limits (32), msgpack_integers_fit_64_bits (0)
 
-// ---- tests/src/unit-serialization.cpp:809-850  (uses: operator<<, serializer)
-TEST_CASE("serializer buffers are flushed mid-string and mid-binary")
+// ---- tests/src/unit-comparison.cpp:74-86  (uses: operator!=, operator<, operator==)
+TEST_CASE("lexicographical comparison operators")
 {
-    SECTION("a long run of escaped characters")
-    {
-        // each character is escaped on its own, so the escape buffer fills up
-        const json newlines = std::string(600, '\n');
-        std::string expected = "\"";
-        for (int i = 0; i < 600; ++i)
+    constexpr auto f_ = false;
+    constexpr auto _t = true;
+    constexpr auto nan = std::numeric_limits<json::number_float_t>::quiet_NaN();
+#if JSON_HAS_THREE_WAY_COMPARISON
+    constexpr auto lt = std::partial_ordering::less;
+    constexpr auto gt = std::partial_ordering::greater;
+    constexpr auto eq = std::partial_ordering::equivalent;
+    constexpr auto un = std::partial_ordering::unordered;
+#endif
+
+#if JSON_HAS_THREE_WAY_COMPARISON
+
+// ---- tests/src/unit-comparison.cpp:128-148  (uses: operator!=, operator<, operator==)
+        SECTION("comparison: less")
         {
-            expected += "\\n";
+            REQUIRE(expected_lt.size() == j_types.size());
+            for (size_t i = 0; i < j_types.size(); ++i)
+            {
+                REQUIRE(expected_lt[i].size() == j_types.size());
+                for (size_t j = 0; j < j_types.size(); ++j)
+                {
+                    CAPTURE(i)
+                    CAPTURE(j)
+                    // check precomputed values
+#if JSON_HAS_THREE_WAY_COMPARISON
+                    // JSON_HAS_CPP_20 (do not remove; see note at top of file)
+                    CHECK((j_types[i] < j_types[j]) == expected_lt[i][j]);
+#else
+                    CHECK(operator<(j_types[i], j_types[j]) == expected_lt[i][j]);
+#endif
+                    CHECK(f(j_types[i], j_types[j]) == expected_lt[i][j]);
+                }
+            }
         }
-        expected += '"';
-        CHECK(newlines.dump() == expected);
-
-        // every character is \u-escaped under ensure_ascii
-        std::string umlauts;
-        std::string escaped_umlauts = "\"";
-        for (int i = 0; i < 300; ++i)
-        {
-            umlauts += "\xC3\xA4";
-            escaped_umlauts += "\\u00e4";
-        }
-        escaped_umlauts += '"';
-        CHECK(json(umlauts).dump(-1, ' ', true) == escaped_umlauts);
-    }
-
-    SECTION("a large binary value")
-    {
-        std::vector<std::uint8_t> bytes(3000);
-        std::string expected_bytes;
-        std::string expected_pretty_bytes;
-        for (std::size_t i = 0; i < bytes.size(); ++i)
-        {
-            bytes[i] = static_cast<std::uint8_t>(i % 256);
-            expected_bytes += (i == 0 ? "" : ",") + std::to_string(i % 256);
-            expected_pretty_bytes += (i == 0 ? "" : ", ") + std::to_string(i % 256);
-        }
-        const json j = json::binary(bytes);
-        CHECK(j.dump() == "{\"bytes\":[" + expected_bytes + "],\"subtype\":null}");
-        CHECK(j.dump(2) == "{\n  \"bytes\": [" + expected_pretty_bytes + "],\n  \"subtype\": null\n}");
-    }
-}
-
-// ---- tests/src/unit-udt.cpp:685-701  (uses: operator<<, serializer)
-TEST_CASE("custom serializer for pods" * doctest::test_suite("udt"))
-{
-    using custom_json =
-        nlohmann::json::with_json_serializer_t<pod_serializer>;
-
-    auto p = udt::small_pod{42, '/', 42};
-    custom_json const j = p;
-
-    auto p2 = j.get<udt::small_pod>();
-
-    CHECK(p == p2);
-
-    auto np = udt::non_pod{{"non-pod"}};
-    custom_json const j2 = np;
-    auto np2 = j2.get<udt::non_pod>();
-    CHECK(np == np2);
-}
-
-// ---- tests/src/unit-udt.cpp:724-735  (uses: operator<<, serializer)
-TEST_CASE("custom serializer that does adl by default" * doctest::test_suite("udt"))
-{
-    auto me = udt::person{{23}, {"theo"}, udt::country::france};
-
-    json const j = me;
-    custom_json const cj = me;
-
-    CHECK(j.dump() == cj.dump());
-
-    CHECK(me == j.get<udt::person>());
-    CHECK(me == cj.get<udt::person>());
-}
 
 // ---- tests/src/unit-deserialization.cpp:1271-1316  (uses: operator<<, operator>>, to_string)
 TEST_CASE("parse error positions are the same for contiguous and stream input")
@@ -126,12 +87,41 @@ TEST_CASE("parse error positions are the same for contiguous and stream input")
     }
 }
 
-// ---- tests/src/unit-same-number-types.cpp:71-78  (uses: limits, operator<<, to_string)
-    SECTION("serialization of the extremes")
+// ---- tests/src/unit-stream-bulk-scan.cpp:290-321  (uses: operator<<, operator>>, to_string)
+    SECTION("many values from one stream")
     {
-        CHECK(Json(limits::max()).dump() == std::to_string(limits::max()));
-        // the absolute value of the minimum does not fit into number_unsigned_t
-        CHECK(Json(limits::min()).dump() == std::to_string(limits::min()));
-        CHECK(Json::parse(std::to_string(limits::min())) == Json(limits::min()));
-        CHECK(Json(0).dump() == "0");
+        std::string input;
+        for (int i = 0; i < 200; ++i)
+        {
+            input += R"({"id":)" + std::to_string(i) + R"(,"name":"user)" + std::to_string(i) + R"(","score":)" + std::to_string(i) + ".5}\n";
+            input += std::to_string(i * 7919) + "\n";
+        }
+
+        for (const std::size_t chunk_size : chunk_sizes())
+        {
+            CAPTURE(chunk_size)
+            chunked_streambuf buf(input, chunk_size);
+            std::istream is(&buf);
+            json j;
+            int count = 0;
+            while (!(is >> std::ws).eof())
+            {
+                is >> j;
+                if (count % 2 == 0)
+                {
+                    CHECK(j["id"] == count / 2);
+                }
+                else
+                {
+                    CHECK(j == (count / 2) * 7919);
+                }
+                ++count;
+            }
+            CHECK(count == 400);
+        }
     }
+
+// ---- tests/src/unit-regression1.cpp:1034-1036  (uses: operator!=, operator<, operator==)
+    SECTION("issue #414 - compare with literal 0)")
+    {
+#define CHECK_TYPE(v) \

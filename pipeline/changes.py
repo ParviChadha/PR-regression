@@ -30,8 +30,9 @@ Writes data/<t>/changes/<pr>.json, which generate.py reads:
 
 Needs the libclang Python package (`pip install libclang`) and clang's builtin headers (stddef.h etc.), which that
 package does not ship. They are found, in order, from: $PRH_CLANG_RESOURCE_DIR, `analysis_resource_dir` in
-target.toml, `clang -print-resource-dir` of a clang on PATH. On Windows: `winget install LLVM.LLVM`; on macOS the
-Xcode command line tools' clang works.
+target.toml, `clang -print-resource-dir` of a clang on PATH. Run it on Linux (apt install clang) or macOS (Xcode
+command line tools): on Windows clang also needs Visual Studio's C++ standard library headers, and without them every
+parse stops at a fatal error (changes.py refuses to write results then).
 """
 import argparse
 import ctypes
@@ -241,6 +242,12 @@ class Analyzer:
             args[1] = "c++-header"
         opts = self.ci.TranslationUnit.PARSE_DETAILED_PROCESSING_RECORD
         tu = self.index.parse(path, args=args, unsaved_files=unsaved, options=opts)
+        fatal = [d for d in tu.diagnostics if d.severity >= 4]
+        if fatal:
+            # a fatal error (usually a header not found) stops the parse early, and everything after it is missing:
+            # the results would look normal but be partial. Seen on Windows without a C++ standard library for clang.
+            raise RuntimeError(f"fatal parse error in {path}: {fatal[0]} (install the C++ standard library headers "
+                               f"clang needs, or run on Linux/macOS; see NOTES.md)")
         self.errors += sum(1 for d in tu.diagnostics if d.severity >= 3)
         self.tus[key] = tu
         return tu
@@ -328,11 +335,27 @@ class Analyzer:
 
     # ----- reverse references (who uses an entity)
 
-    def users_graph(self):
-        """{usr: {user usr}} over the entry TU, restricted to declarations in the exported library sources."""
-        if hasattr(self, "_graph"):
-            return self._graph, self._info
-        tu = self.entry_tu()
+    def users_graph(self, relpath=None):
+        """{usr: {user usr}} over the entry TU, plus the TU of `relpath` when that file is parsed on its own (a .cpp
+        of a compiled library: its private helpers are used only by functions in that same file), restricted to
+        declarations in the exported library sources."""
+        if not hasattr(self, "_graphs"):
+            self._graphs = {}
+        base = self._graph_of("__entry__", self.entry_tu())
+        tu = self.tu_for(relpath) if relpath else None
+        if tu is None or tu is self.tus.get("__entry__"):
+            return base
+        if relpath not in self._graphs:
+            g2, i2 = self._graph_of("__file__" + relpath, tu)
+            graph = defaultdict(set, {k: set(v) for k, v in base[0].items()})
+            for k, v in g2.items():
+                graph[k] |= v
+            self._graphs[relpath] = (graph, {**i2, **base[1]})
+        return self._graphs[relpath]
+
+    def _graph_of(self, key, tu):
+        if key in self._graphs:
+            return self._graphs[key]
         root = _norm(self.root)
         graph, info = defaultdict(set), {}
 
@@ -357,21 +380,25 @@ class Analyzer:
                     targets = _overloads(self.ci, c)
                 elif c.referenced is not None:
                     targets = [c.referenced]
+                ou = owner.get_usr()
                 for r in targets:
-                    ru, ou = r.get_usr(), owner.get_usr()
-                    if ru and ou and ru != ou:
-                        graph[ru].add(ou)
+                    # a call with explicit template arguments (f<Real, X>(...)) references the instantiation,
+                    # whose USR differs from the template the PR changed: count it for the template too
+                    tmpl = _template_of(self.ci, r) if r.kind.name in FUNCTION_KINDS else None
+                    for ru in {r.get_usr(), tmpl.get_usr() if tmpl is not None else None}:
+                        if ru and ou and ru != ou:
+                            graph[ru].add(ou)
             for ch in c.get_children():
                 visit(ch, owner)
 
         visit(tu.cursor, None)
-        self._graph, self._info = graph, info
+        self._graphs[key] = (graph, info)
         return graph, info
 
-    def reached_via(self, usr):
+    def reached_via(self, usr, relpath=None):
         """Public functions within MAX_REACH_DEPTH reverse-reference hops of `usr`, nearest first, as
         {"name", "member"} (member: a class member, so tests call it as obj.name(...))."""
-        graph, info = self.users_graph()
+        graph, info = self.users_graph(relpath)
         seen, frontier, found = {usr}, [usr], []
         for _ in range(MAX_REACH_DEPTH):
             nxt = []
@@ -459,13 +486,20 @@ def _overridden(ci, c):
     return out
 
 
-def _primary_template(ci, c):
-    """The class template that `c` specializes, or None."""
+def _template_of(ci, c):
+    """The template that `c` is a specialization or instantiation of (class or function), or None."""
     f = ci.conf.lib.clang_getSpecializedCursorTemplate
     f.argtypes, f.restype = [ci.Cursor], ci.Cursor
     f.errcheck = ci.Cursor.from_result
     r = f(c)
-    return r if r is not None and r.kind.name in ("CLASS_TEMPLATE", "CLASS_TEMPLATE_PARTIAL_SPECIALIZATION") else None
+    return r if r is not None and r.kind.name in ("CLASS_TEMPLATE", "CLASS_TEMPLATE_PARTIAL_SPECIALIZATION",
+                                                  "FUNCTION_TEMPLATE") else None
+
+
+def _primary_template(ci, c):
+    """The class template that `c` specializes, or None."""
+    r = _template_of(ci, c)
+    return r if r is not None and r.kind.name != "FUNCTION_TEMPLATE" else None
 
 
 def _access(c):
@@ -529,7 +563,8 @@ def analyze_pr(t, rec, resdir):
             for key in found_here:
                 h = hits[key]
                 if h["access"] == "private" and h["kind"] != "macro":
-                    h["reached_via"] = an.reached_via(key)
+                    src = h["file"] if side == "new" else lines[h["file"]]["old_path"]
+                    h["reached_via"] = an.reached_via(key, src)
             errors[side][" ".join(flags) or "default"] = an.errors
         sides[side] = hits
         leftover[side] = todo

@@ -1,0 +1,165 @@
+// Upstream tests at the PR's parent commit be3716bc3 that use the changed code.
+// Names searched (test lines using each): rate (145)
+
+// ---- test-suite/basisswapratehelpers.cpp:1059-1096  (uses: rate)
+BOOST_AUTO_TEST_CASE(testOvernightOvernightTelescopicValueDatesWithSimpleAveraging) {
+    BOOST_TEST_MESSAGE("Testing telescopic value dates with simple overnight averaging...");
+
+    auto calendar = UnitedStates(UnitedStates::GovernmentBond);
+    Handle<YieldTermStructure> forecastCurve(flatRate(0.01, Actual365Fixed()));
+    auto baseIndex = ext::make_shared<FedFunds>(forecastCurve);
+    auto otherIndex = ext::make_shared<Sofr>();
+
+    auto makeHelper = [&](bool telescopicValueDates) {
+        return ext::make_shared<OvernightOvernightBasisSwapRateHelper>(
+            Handle<Quote>(ext::make_shared<SimpleQuote>(0.0010)), 1 * Years, 2,
+            calendar, Following, false, baseIndex, otherIndex,
+            Handle<YieldTermStructure>(), false, 0, Annual, RateAveraging::Simple,
+            RateAveraging::Compound, telescopicValueDates);
+    };
+
+    auto fullScheduleHelper = makeHelper(false);
+    auto telescopicHelper = makeHelper(true);
+
+    auto fullSimpleCoupon = ext::dynamic_pointer_cast<OvernightIndexedCoupon>(
+        fullScheduleHelper->swap()->leg(0).front());
+    auto telescopicSimpleCoupon = ext::dynamic_pointer_cast<OvernightIndexedCoupon>(
+        telescopicHelper->swap()->leg(0).front());
+    auto fullCompoundedCoupon = ext::dynamic_pointer_cast<OvernightIndexedCoupon>(
+        fullScheduleHelper->swap()->leg(1).front());
+    auto telescopicCompoundedCoupon = ext::dynamic_pointer_cast<OvernightIndexedCoupon>(
+        telescopicHelper->swap()->leg(1).front());
+
+    BOOST_REQUIRE(fullSimpleCoupon);
+    BOOST_REQUIRE(telescopicSimpleCoupon);
+    BOOST_REQUIRE(fullCompoundedCoupon);
+    BOOST_REQUIRE(telescopicCompoundedCoupon);
+    BOOST_CHECK_EQUAL(telescopicSimpleCoupon->valueDates().size(),
+                      fullSimpleCoupon->valueDates().size());
+    BOOST_CHECK_LT(telescopicCompoundedCoupon->valueDates().size(),
+                   fullCompoundedCoupon->valueDates().size());
+    QL_CHECK_SMALL(telescopicSimpleCoupon->rate() - fullSimpleCoupon->rate(), 1.0e-14);
+}
+
+// ---- test-suite/exchangerate.cpp:35-65  (uses: rate)
+BOOST_AUTO_TEST_CASE(testDirect) {
+
+    BOOST_TEST_MESSAGE("Testing direct exchange rates...");
+
+    Currency EUR = EURCurrency(), USD = USDCurrency();
+
+    ExchangeRate eur_usd = ExchangeRate(EUR, USD, 1.2042);
+
+    Money m1 = 50000.0 * EUR;
+    Money m2 = 100000.0 * USD;
+
+    Money::Settings::instance().conversionType() = Money::NoConversion;
+
+    Money calculated = eur_usd.exchange(m1);
+    Money expected(m1.value()*eur_usd.rate(), USD);
+
+    if (!close(calculated,expected)) {
+        BOOST_FAIL("Wrong result: \n"
+                   << "    expected:   " << expected << "\n"
+                   << "    calculated: " << calculated);
+    }
+
+    calculated = eur_usd.exchange(m2);
+    expected = Money(m2.value()/eur_usd.rate(), EUR);
+
+    if (!close(calculated,expected)) {
+        BOOST_FAIL("Wrong result: \n"
+                   << "    expected:   " << expected << "\n"
+                   << "    calculated: " << calculated);
+    }
+}
+
+// ---- test-suite/exchangerate.cpp:67-100  (uses: rate)
+BOOST_AUTO_TEST_CASE(testDerived) {
+
+    BOOST_TEST_MESSAGE("Testing derived exchange rates...");
+
+    Currency EUR = EURCurrency(), USD = USDCurrency(), GBP = GBPCurrency();
+
+    ExchangeRate eur_usd = ExchangeRate(EUR, USD, 1.2042);
+    ExchangeRate eur_gbp = ExchangeRate(EUR, GBP, 0.6612);
+
+    ExchangeRate derived = ExchangeRate::chain(eur_usd, eur_gbp);
+
+    Money m1 = 50000.0 * GBP;
+    Money m2 = 100000.0 * USD;
+
+    Money::Settings::instance().conversionType() = Money::NoConversion;
+
+    Money calculated = derived.exchange(m1);
+    Money expected(m1.value()*eur_usd.rate()/eur_gbp.rate(), USD);
+
+    if (!close(calculated,expected)) {
+        BOOST_FAIL("Wrong result: \n"
+                   << "    expected:   " << expected << "\n"
+                   << "    calculated: " << calculated);
+    }
+
+    calculated = derived.exchange(m2);
+    expected = Money(m2.value()*eur_gbp.rate()/eur_usd.rate(), GBP);
+
+    if (!close(calculated,expected)) {
+        BOOST_FAIL("Wrong result: \n"
+                   << "    expected:   " << expected << "\n"
+                   << "    calculated: " << calculated);
+    }
+}
+
+// ---- test-suite/interestrates.cpp:121-145  (uses: rate)
+            BOOST_FAIL("\n  " << ir
+                       << std::setprecision(16)
+                       << "\n  1.0/compound_factor: " << 1.0/compoundf
+                       << "\n  discount_factor:     " << disc
+                       << "\n  error:               " << error);
+
+        // check that the equivalent InterestRate with *same* daycounter,
+        // compounding, and frequency is the *same* InterestRate
+        ir2 = ir.equivalentRate(ir.dayCounter(),
+                                ir.compounding(),
+                                ir.frequency(),
+                                d1, d2);
+        error = std::fabs(ir.rate()-ir2.rate());
+        if (error>1e-15)
+            BOOST_FAIL(std::setprecision(12)
+                       << "\n    original interest rate: " << ir
+                       << "\n  equivalent interest rate: " << ir2
+                       << "\n                rate error: " << error);
+        if (ir.dayCounter()!=ir2.dayCounter())
+            BOOST_FAIL("\n day counter error"
+                       << "\n original interest rate:   " << ir
+                       << "\n equivalent interest rate: " << ir2);
+        if (ir.compounding()!=ir2.compounding())
+            BOOST_FAIL("\n compounding error"
+                       << "\n original interest rate:   " << ir
+
+// ---- test-suite/bonds.cpp:1128-1152  (uses: rate)
+        Leg coupons = FixedRateLeg(schedule)
+            .withNotionals(faceAmount)
+            .withCouponRates(couponRates)
+            .withPaymentAdjustment(Following);
+
+        Bond bond(settlementDays,
+                  schedule.calendar(),
+                  issueDate,
+                  coupons);
+
+        Real cachedPrice = prices[bondIndex];
+        Real price = faceAmount *
+            (BondFunctions::cleanPrice(bond, yield.rate(), yield.dayCounter(),
+                                 yield.compounding(), yield.frequency(),
+                                 today) + bond.accruedAmount(today)) / 100.0;
+
+        if (std::fabs(price-cachedPrice) > tolerance) {
+            BOOST_ERROR("failed to reproduce Andima cached price:\n"
+                        << std::fixed
+                        << "    calculated: " << price << "\n"
+                        << "    expected:   " << cachedPrice << "\n"
+                        << "    error:      " << price-cachedPrice  << "\n"
+                        );
+        }
+    }

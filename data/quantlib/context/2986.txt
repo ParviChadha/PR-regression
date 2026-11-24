@@ -1,0 +1,110 @@
+// Upstream tests at the PR's parent commit e0247baf5 that use the changed code.
+// Names searched (test lines using each): EquityTotalReturnSwap (5), equityPaymentFrequency (0), type (7), paymentDelay (0), equityPaymentFrequency_ (0), paymentDelay_ (0)
+
+// ---- test-suite/equitytotalreturnswap.cpp:87-111  (uses: EquityTotalReturnSwap)
+        usdLibor->addFixing(Date(3, January, 2023), 0.035);
+
+        interestHandle.linkTo(flatRate(0.0375, dayCount));
+        dividendHandle.linkTo(flatRate(0.005, dayCount));
+
+        discountEngine =
+            ext::shared_ptr<PricingEngine>(new DiscountingSwapEngine(interestHandle));
+
+        spot = ext::make_shared<SimpleQuote>(8700.0);
+        spotHandle.linkTo(spot);
+    }
+
+    ext::shared_ptr<EquityTotalReturnSwap> createTRS(Swap::Type type,
+                                                     const Schedule& schedule,
+                                                     bool useOvernightIndex,
+                                                     Rate margin = 0.0,
+                                                     Real nominal = 1.0e7,
+                                                     Real gearing = 1.0,
+                                                     Natural paymentDelay = 0) {
+        ext::shared_ptr<EquityTotalReturnSwap> swap;
+        if (useOvernightIndex) {
+            swap = ext::make_shared<EquityTotalReturnSwap>(
+                    type, nominal, schedule, equityIndex, sofr, dayCount, margin, gearing,
+                    schedule.calendar(), Following, paymentDelay);
+        } else {
+
+// ---- test-suite/gsr.cpp:216-240  (uses: type)
+            // its actual payment date, consistently with the GSR engine. This
+            // deliberately excludes post-exercise payment-delay convexity.
+            const Real amount =
+                coupon->nominal() * coupon->accrualPeriod() *
+                (coupon->gearing() * rate + coupon->spread());
+            floatingLegNpv += amount * hullWhiteDiscountBond(
+                discountCurve, expiryTime, coupon->date(), x, reversion,
+                volatility);
+        }
+
+        const Real payerNpv = floatingLegNpv - fixedLegNpv;
+        const Real exerciseValue =
+            swap->type() == Swap::Payer ? payerNpv : -payerNpv;
+        return pathDiscount * std::max(exerciseValue, 0.0);
+    }
+
+    Real hullWhiteMonteCarloEuropeanSwaption(
+        const Handle<YieldTermStructure>& curve,
+        Real reversion,
+        Real volatility,
+        const ext::shared_ptr<FixedVsFloatingSwap>& swap,
+        const Date& expiry,
+        Size samplePairs = 65536) {
+
+        const Time expiryTime = curve->timeFromReference(expiry);
+
+// ---- test-suite/swaption.cpp:504-528  (uses: type)
+                        // check only relevant vega
+                        if (numericalVegaPerPoint/swaptionNPV>1.0e-7) {
+                            Real analyticalVegaPerPoint =
+                                swaption->result<Real>("vega")/100.0;
+                            Real discrepancy = std::fabs(analyticalVegaPerPoint
+                                - numericalVegaPerPoint);
+                            discrepancy /= numericalVegaPerPoint;
+                            Real tolerance = 0.015;
+                            if (discrepancy > tolerance)
+                                BOOST_FAIL("failed to compute swaption vega:"
+                                           << "\n  option tenor:    " << exercise
+                                           << "\n  volatility:      " << io::rate(vol)
+                                           << "\n  option type:     " << swaption->type()
+                                           << "\n  swap tenor:      " << length
+                                           << "\n  strike:          " << io::rate(strike)
+                                           << "\n  settlement:      " << types[h]
+                                           << "\n  nominal:         "
+                                           << swaption->underlying()->nominal()
+                                           << "\n  npv:             " << swaptionNPV
+                                           << "\n  calculated vega: " << analyticalVegaPerPoint
+                                           << "\n  expected vega:   " << numericalVegaPerPoint
+                                           << "\n  discrepancy:     " << io::rate(discrepancy)
+                                           << "\n  tolerance:       " << io::rate(tolerance));
+                        }
+                    }
+
+// ---- test-suite/swaption.cpp:617-641  (uses: type)
+                    new FlatForward(vars.settlement,swap_u365->fairRate(),
+                                    Actual365Fixed(),Compounded,
+                                    vars.fixedFrequency)));
+            Handle<YieldTermStructure> termStructure_a365(
+                ext::shared_ptr<YieldTermStructure>(
+                    new FlatForward(vars.settlement,swap_a365->fairRate(),
+                                    Actual365Fixed(),Compounded,
+                                    vars.fixedFrequency)));
+
+            // Annuity calculated by swap method fixedLegBPS().
+            // Fixed leg conventions: Unadjusted, 30/360
+            Real annuity_u360 = swap_u360->fixedLegBPS() / 0.0001;
+            annuity_u360 = swap_u360->type()==Swap::Payer ?
+                -annuity_u360 : annuity_u360;
+            // Fixed leg conventions: ModifiedFollowing, act/365
+            Real annuity_a365 = swap_a365->fixedLegBPS() / 0.0001;
+            annuity_a365 = swap_a365->type()==Swap::Payer ?
+                -annuity_a365 : annuity_a365;
+            // Fixed leg conventions: ModifiedFollowing, 30/360
+            Real annuity_a360 = swap_a360->fixedLegBPS() / 0.0001;
+            annuity_a360 = swap_a360->type()==Swap::Payer ?
+                -annuity_a360 : annuity_a360;
+            // Fixed leg conventions: Unadjusted, act/365
+            Real annuity_u365 = swap_u365->fixedLegBPS() / 0.0001;
+            annuity_u365 = swap_u365->type()==Swap::Payer ?
