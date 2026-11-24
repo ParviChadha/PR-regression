@@ -2,17 +2,24 @@
   "target": "nlohmann-json",
   "pr": 5459,
   "model": "gemini-3.5-flash-lite",
-  "prompt_sha256": "5efa55f3cff22efb5e06a195b96dca4e68c88c6046c47881b11edfadde789c00",
+  "prompt_sha256": "09aeebe2d1c176ad7e2863060efac4fd4bd1eb4926eec71bb65baa1ee8e40913",
   "n_requested": 20,
   "dropped": 0,
   "usage": {
-    "promptTokenCount": 4861,
-    "candidatesTokenCount": 4395,
-    "totalTokenCount": 9256,
+    "promptTokenCount": 7057,
+    "candidatesTokenCount": 4978,
+    "totalTokenCount": 12035,
+    "cachedContentTokenCount": 3940,
     "promptTokensDetails": [
       {
         "modality": "TEXT",
-        "tokenCount": 4861
+        "tokenCount": 7057
+      }
+    ],
+    "cacheTokensDetails": [
+      {
+        "modality": "TEXT",
+        "tokenCount": 3940
       }
     ],
     "serviceTier": "standard"
@@ -20,123 +27,153 @@
   "tests": [
     {
       "file": "gen_01.cpp",
-      "name": "compare_int_float_near_power_two",
-      "intent": "Verify exact mixed comparison for integers near 2^63 boundary avoiding lossy casting.",
+      "name": "test_int64_float_equality_near_max",
+      "intent": "Probes equality between large signed integers and floats near 2^63 where widening was previously lossy.",
       "round": 0
     },
     {
       "file": "gen_02.cpp",
-      "name": "compare_unsigned_float_boundary",
-      "intent": "Verify exact comparison between large unsigned integers and floats near exact representation limits.",
+      "name": "test_int64_float_ordering_transitivity",
+      "intent": "Probes transitivity of strict weak ordering relations between large signed integers and floating-point numbers.",
       "round": 0
     },
     {
       "file": "gen_03.cpp",
-      "name": "compare_float_nan_operand",
-      "intent": "Verify that NaN float operands produce false/unordered results in mixed integer-float comparisons.",
+      "name": "test_unsigned_int_float_boundary",
+      "intent": "Probes comparisons between large unsigned integers and floats near 2^63 and 2^64 boundaries.",
       "round": 0
     },
     {
       "file": "gen_04.cpp",
-      "name": "compare_fractional_float_parts",
-      "intent": "Verify that fractional parts correctly determine mixed int/float ordering when integer parts match.",
+      "name": "test_nan_mixed_comparison",
+      "intent": "Probes behavior of NaN operands when compared against signed and unsigned integers.",
       "round": 0
     },
     {
       "file": "gen_05.cpp",
-      "name": "compare_negative_integer_float",
-      "intent": "Verify exact comparison for negative integers and negative floating point numbers.",
+      "name": "test_exact_integer_representation",
+      "intent": "Probes standard exact comparisons for small integers and their float equivalents.",
       "round": 0
     },
     {
       "file": "gen_06.cpp",
-      "name": "compare_spaceship_operator_mixed",
-      "intent": "Verify three-way spaceship operator behavior between integers and floats.",
+      "name": "test_fractional_float_comparison",
+      "intent": "Probes comparisons involving integers and floats with fractional components within valid ranges.",
       "round": 0
     },
     {
       "file": "gen_07.cpp",
-      "name": "compare_zero_and_floats",
-      "intent": "Verify exact comparison of zero integer with positive, negative, and fractional floats.",
+      "name": "test_spaceship_operator_mixed",
+      "intent": "Probes C++20 three-way comparison operator between integers and floats.",
       "round": 0
     },
     {
       "file": "gen_08.cpp",
-      "name": "compare_large_unsigned_zero",
-      "intent": "Verify unsigned zero compared against float values.",
+      "name": "test_extreme_float_magnitudes",
+      "intent": "Probes mixed comparisons when float magnitudes are vastly larger or smaller than the integer bounds.",
       "round": 0
     },
     {
       "file": "gen_09.cpp",
-      "name": "compare_float_inf_operands",
-      "intent": "Verify infinity float operands correctly compare against integers.",
+      "name": "test_negative_integers_float",
+      "intent": "Probes comparisons between negative integers and negative floats near mantissa thresholds.",
       "round": 0
     },
     {
       "file": "gen_10.cpp",
-      "name": "compare_unsigned_exceeding_bound",
-      "intent": "Verify unsigned integer compared with float far above range bounds.",
+      "name": "test_unsorted_container_sorting",
+      "intent": "Probes sorting a vector of json values containing mixed integers and floats that trigger boundary issues.",
       "round": 0
     },
     {
       "file": "gen_11.cpp",
-      "name": "compare_signed_below_lower_bound",
-      "intent": "Verify signed integer compared with float far below lower bound.",
+      "name": "test_zero_comparisons",
+      "intent": "Probes zero integer compared against various float representations of zero (positive and negative).",
       "round": 0
     },
     {
       "file": "gen_12.cpp",
-      "name": "compare_inequality_operators_consistency",
-      "intent": "Verify consistency of != and <= operators between mixed numbers.",
+      "name": "test_float_inf_comparisons",
+      "intent": "Probes comparisons between integer values and infinity float values.",
       "round": 0
     },
     {
       "file": "gen_13.cpp",
-      "name": "compare_unsigned_spaceship",
-      "intent": "Verify spaceship operator behavior between unsigned integers and floats.",
+      "name": "test_subnormal_float_comparisons",
+      "intent": "Probes comparisons between integers and subnormal or near-zero floating-point numbers.",
       "round": 0
     },
     {
       "file": "gen_14.cpp",
-      "name": "compare_float_nan_spaceship",
-      "intent": "Verify spaceship comparison with NaN yields unordered result.",
+      "name": "test_strict_weak_ordering_checks",
+      "intent": "Probes equivalence relation properties (equiv(x,y) and equiv(y,z) implying equiv(x,z)) using negation of comparisons.",
       "round": 0
     },
     {
       "file": "gen_15.cpp",
-      "name": "compare_float_integer_reversed_operands",
-      "intent": "Verify float on lhs and integer on rhs comparisons.",
+      "name": "test_mixed_type_std_map_keys",
+      "intent": "Probes using mixed types as keys in std::map where strict weak ordering is required.",
       "round": 0
     },
     {
       "file": "gen_16.cpp",
-      "name": "compare_float_unsigned_reversed_operands",
-      "intent": "Verify float on lhs and unsigned integer on rhs comparisons.",
+      "name": "test_different_integer_width_boundaries",
+      "intent": "Probes floating point comparisons with standard 32-bit integers versus 64-bit integers.",
       "round": 0
     },
     {
       "file": "gen_17.cpp",
-      "name": "compare_exact_small_integers",
-      "intent": "Verify small integers and floats compare correctly across range boundaries.",
+      "name": "test_swapped_operand_order",
+      "intent": "Probes symmetry of operators when float is on the left-hand side and integer on the right-hand side.",
       "round": 0
     },
     {
       "file": "gen_18.cpp",
-      "name": "compare_container_sorting_stability",
-      "intent": "Verify sorting mixed integer and float values in containers respects strict weak ordering without UB.",
+      "name": "test_float_precision_small_fraction",
+      "intent": "Probes integers compared against floats differing by a tiny fraction within mantissa precision limits.",
       "round": 0
     },
     {
       "file": "gen_19.cpp",
-      "name": "compare_multiple_fractional_steps",
-      "intent": "Verify multiple incremental float fractions against an integer operand.",
+      "name": "test_unsigned_zero_comparisons",
+      "intent": "Probes unsigned zero against positive and negative floating-point numbers.",
       "round": 0
     },
     {
       "file": "gen_20.cpp",
-      "name": "compare_unsigned_max_boundary",
-      "intent": "Verify unsigned comparison near maximum limits.",
+      "name": "test_multiple_comparison_operators_consistency",
+      "intent": "Probes consistency across all relational operators (<, <=, >, >=, ==, !=) for mixed integer/float boundaries.",
       "round": 0
+    },
+    {
+      "file": "gen_21.cpp",
+      "name": "gen_21",
+      "intent": "Exercise compare_integer_with_float when fraction < 0 by comparing a float that is slightly below an integer value within the safe integer range.",
+      "round": 1
+    },
+    {
+      "file": "gen_22.cpp",
+      "name": "gen_22",
+      "intent": "Exercise number_integer vs number_float macro arm via operator== and operator!= where integer is left-hand side.",
+      "round": 1
+    },
+    {
+      "file": "gen_23.cpp",
+      "name": "gen_23",
+      "intent": "Exercise number_float vs number_integer macro arm via operator< and operator<= where float is left-hand side.",
+      "round": 1
+    },
+    {
+      "file": "gen_24.cpp",
+      "name": "gen_24",
+      "intent": "Exercise number_unsigned vs number_float macro arm via operator> and operator>= where unsigned integer is left-hand side.",
+      "round": 1
+    },
+    {
+      "file": "gen_25.cpp",
+      "name": "gen_25",
+      "intent": "Exercise number_float vs number_unsigned macro arm via operator< and operator== where float is left-hand side and unsigned integer is right-hand side.",
+      "round": 1
     }
   ]
 }

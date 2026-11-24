@@ -1,0 +1,257 @@
+{
+  "target": "nlohmann-json",
+  "pr": 6077,
+  "model": "gemini-3.5-flash-lite",
+  "prompt_sha256": "d5447174ad1a6d438104316fd3355377bbc66fef42a0e0f0d0f2917d5dd74777",
+  "n_requested": 20,
+  "dropped": 0,
+  "usage": {
+    "promptTokenCount": 5463,
+    "candidatesTokenCount": 6023,
+    "totalTokenCount": 11486,
+    "promptTokensDetails": [
+      {
+        "modality": "TEXT",
+        "tokenCount": 5463
+      }
+    ],
+    "serviceTier": "standard"
+  },
+  "tests": [
+    {
+      "file": "gen_01.cpp",
+      "name": "patch_deep_shared_prefix_many_steps",
+      "intent": "Verify patch performance and correctness when applying multiple operations with long shared prefixes exceeding the 16-step threshold.",
+      "round": 0
+    },
+    {
+      "file": "gen_02.cpp",
+      "name": "patch_short_prefix_below_threshold",
+      "intent": "Verify that patching operations with fewer than 16 cached steps execute successfully using the standard path cache resolution branch.",
+      "round": 0
+    },
+    {
+      "file": "gen_03.cpp",
+      "name": "patch_boundary_token_difference",
+      "intent": "Verify that path prefix matching handles cases where paths diverge exactly at token boundaries correctly.",
+      "round": 0
+    },
+    {
+      "file": "gen_04.cpp",
+      "name": "patch_removal_vanishing_cached_path",
+      "intent": "Verify patch operations when an intermediate object containing a cached path is removed.",
+      "round": 0,
+      "superseded_by": "gen_26.cpp"
+    },
+    {
+      "file": "gen_05.cpp",
+      "name": "ordered_json_patch_deep_prefix",
+      "intent": "Verify ordered_json patch application with deeply nested paths sharing long prefixes.",
+      "round": 0
+    },
+    {
+      "file": "gen_06.cpp",
+      "name": "patch_exact_sixteen_steps",
+      "intent": "Test path prefix resolution at exactly the 16-step threshold boundary where transition from linear to calculated common prefix occurs.",
+      "round": 0
+    },
+    {
+      "file": "gen_07.cpp",
+      "name": "patch_seventeen_steps",
+      "intent": "Test path prefix resolution at 17 steps, activating the deepest_shared_step optimization path.",
+      "round": 0
+    },
+    {
+      "file": "gen_08.cpp",
+      "name": "patch_insert_above_cached_path",
+      "intent": "Verify that inserting an element above a cached path correctly invalidates or adjusts the matching steps.",
+      "round": 0
+    },
+    {
+      "file": "gen_09.cpp",
+      "name": "patch_path_is_prefix_of_another",
+      "intent": "Verify patching where one path is a complete prefix of the subsequently requested path.",
+      "round": 0,
+      "superseded_by": "gen_27.cpp"
+    },
+    {
+      "file": "gen_10.cpp",
+      "name": "json_pointer_comparison_and_streaming",
+      "intent": "Exercise json_pointer comparison operators and ostream insertion to verify interaction with public json_pointer interfaces.",
+      "round": 0
+    },
+    {
+      "file": "gen_11.cpp",
+      "name": "json_pointer_concatenation_operators",
+      "intent": "Exercise json_pointer division/concatenation operators with strings and indices.",
+      "round": 0
+    },
+    {
+      "file": "gen_12.cpp",
+      "name": "patch_empty_and_root_pointers",
+      "intent": "Verify patching operations targeting empty or root-level JSON pointers alongside deeply nested ones.",
+      "round": 0,
+      "superseded_by": "gen_28.cpp"
+    },
+    {
+      "file": "gen_13.cpp",
+      "name": "patch_array_indices_deep",
+      "intent": "Verify patch operations involving array indices within deeply nested structures.",
+      "round": 0,
+      "superseded_by": "gen_29.cpp"
+    },
+    {
+      "file": "gen_14.cpp",
+      "name": "patch_error_handling_invalid_pointer",
+      "intent": "Verify exception propagation when a patch operation references an invalid or non-existent JSON pointer.",
+      "round": 0,
+      "superseded_by": "gen_30.cpp"
+    },
+    {
+      "file": "gen_15.cpp",
+      "name": "patch_multiple_branches_interleaved",
+      "intent": "Verify patch performance and correctness with alternating and interleaved deep paths.",
+      "round": 0,
+      "superseded_by": "gen_31.cpp"
+    },
+    {
+      "file": "gen_16.cpp",
+      "name": "patch_string_escape_tokens",
+      "intent": "Verify correct handling of JSON pointers containing escaped characters (~0 and ~1) during patch resolution.",
+      "round": 0,
+      "superseded_by": "gen_32.cpp"
+    },
+    {
+      "file": "gen_17.cpp",
+      "name": "patch_non_inplace_returns_new_json",
+      "intent": "Verify that standard patch() returns a new patched document without altering the original document.",
+      "round": 0,
+      "superseded_by": "gen_33.cpp"
+    },
+    {
+      "file": "gen_18.cpp",
+      "name": "json_pointer_string_comparisons",
+      "intent": "Verify comparisons between json_pointer objects and string literals (lhs and rhs).",
+      "round": 0
+    },
+    {
+      "file": "gen_19.cpp",
+      "name": "patch_add_operation_creating_objects",
+      "intent": "Verify add patch operations that dynamically create intermediate nested objects and properties.",
+      "round": 0,
+      "superseded_by": "gen_34.cpp"
+    },
+    {
+      "file": "gen_20.cpp",
+      "name": "patch_multiple_identical_sequential_paths",
+      "intent": "Verify consecutive patch operations targeting the exact same deep path repeatedly.",
+      "round": 0
+    },
+    {
+      "file": "gen_21.cpp",
+      "name": "gen_21",
+      "intent": "Verify deepest_shared_step and path cache resolution with a deeply nested path of 18 steps sharing a prefix that diverges at the end, exercising the > 16 threshold.",
+      "round": 1
+    },
+    {
+      "file": "gen_22.cpp",
+      "name": "gen_22",
+      "intent": "Exercise deepest_shared_step where paths share a large number of common segments (20 steps) but diverge cleanly at a token boundary.",
+      "round": 1
+    },
+    {
+      "file": "gen_23.cpp",
+      "name": "gen_23",
+      "intent": "Verify deepest_shared_step when consecutive patch operations share an extremely long prefix across 22 nested array indices and map keys.",
+      "round": 1
+    },
+    {
+      "file": "gen_24.cpp",
+      "name": "gen_24",
+      "intent": "Trigger deepest_shared_step with multiple 20-step deep paths where the common prefix spans precisely up to the 19th nested level before diverging.",
+      "round": 1
+    },
+    {
+      "file": "gen_25.cpp",
+      "name": "gen_25",
+      "intent": "Test resolve_plain with > 16 cached steps where the path search hits an early termination inside deepest_shared_step due to prefix length boundaries.",
+      "round": 1
+    },
+    {
+      "file": "gen_26.cpp",
+      "name": "patch_removal_vanishing_cached_path_fixed",
+      "intent": "Verify patch operations when an intermediate object containing a cached path is removed.",
+      "round": 2,
+      "fixes": "gen_04.cpp",
+      "kind": "compile"
+    },
+    {
+      "file": "gen_27.cpp",
+      "name": "patch_path_is_prefix_of_another_fixed",
+      "intent": "Verify patching where one path is a complete prefix of the subsequently requested path.",
+      "round": 2,
+      "fixes": "gen_09.cpp",
+      "kind": "compile"
+    },
+    {
+      "file": "gen_28.cpp",
+      "name": "patch_empty_and_root_pointers_fixed",
+      "intent": "Verify patching operations targeting empty or root-level JSON pointers alongside deeply nested ones.",
+      "round": 2,
+      "fixes": "gen_12.cpp",
+      "kind": "compile"
+    },
+    {
+      "file": "gen_29.cpp",
+      "name": "patch_array_indices_deep_fixed",
+      "intent": "Verify patch operations involving array indices within deeply nested structures.",
+      "round": 2,
+      "fixes": "gen_13.cpp",
+      "kind": "compile"
+    },
+    {
+      "file": "gen_30.cpp",
+      "name": "patch_error_handling_invalid_pointer_fixed",
+      "intent": "Verify exception propagation when a patch operation references an invalid or non-existent JSON pointer.",
+      "round": 2,
+      "fixes": "gen_14.cpp",
+      "kind": "compile"
+    },
+    {
+      "file": "gen_31.cpp",
+      "name": "patch_multiple_branches_interleaved_fixed",
+      "intent": "Verify patch performance and correctness with alternating and interleaved deep paths.",
+      "round": 2,
+      "fixes": "gen_15.cpp",
+      "kind": "compile"
+    },
+    {
+      "file": "gen_32.cpp",
+      "name": "patch_string_escape_tokens_fixed",
+      "intent": "Verify correct handling of JSON pointers containing escaped characters (~0 and ~1) during patch resolution.",
+      "round": 2,
+      "fixes": "gen_16.cpp",
+      "kind": "compile"
+    },
+    {
+      "file": "gen_33.cpp",
+      "name": "patch_non_inplace_returns_new_json_fixed",
+      "intent": "Verify that standard patch() returns a new patched document without altering the original document.",
+      "round": 2,
+      "fixes": "gen_17.cpp",
+      "kind": "compile"
+    },
+    {
+      "file": "gen_34.cpp",
+      "name": "patch_add_operation_creating_objects_fixed",
+      "intent": "Verify add patch operations that dynamically create intermediate nested objects and properties.",
+      "round": 2,
+      "fixes": "gen_19.cpp",
+      "kind": "compile"
+    }
+  ],
+  "fix": {
+    "rounds_max": 2,
+    "model": "gemini-3.5-flash-lite"
+  }
+}

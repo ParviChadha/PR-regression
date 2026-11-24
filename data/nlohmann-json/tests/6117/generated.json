@@ -1,0 +1,185 @@
+{
+  "target": "nlohmann-json",
+  "pr": 6117,
+  "model": "gemini-3.5-flash-lite",
+  "prompt_sha256": "461e58ffaf65034ec09efff3564a613780a781dbbd8b3cd5d1f4766822f3ac6c",
+  "n_requested": 20,
+  "dropped": 0,
+  "usage": {
+    "promptTokenCount": 8207,
+    "candidatesTokenCount": 5098,
+    "totalTokenCount": 13305,
+    "promptTokensDetails": [
+      {
+        "modality": "TEXT",
+        "tokenCount": 8207
+      }
+    ],
+    "serviceTier": "standard"
+  },
+  "tests": [
+    {
+      "file": "gen_01.cpp",
+      "name": "serializer_inlining_deep_dump_array",
+      "intent": "Probes serialization dump of a deeply nested array structure, exercising the recursive serializer helper path affected by inline conditions.",
+      "round": 0
+    },
+    {
+      "file": "gen_02.cpp",
+      "name": "serializer_inlining_deep_dump_object",
+      "intent": "Probes serialization dump of deeply nested objects, testing stack frame usage and serializer helpers like put_literal_indent.",
+      "round": 0
+    },
+    {
+      "file": "gen_03.cpp",
+      "name": "serializer_inlining_empty_containers",
+      "intent": "Probes serialization of empty nested arrays and objects to ensure helper functions handle boundary nesting correctly.",
+      "round": 0
+    },
+    {
+      "file": "gen_04.cpp",
+      "name": "serializer_inlining_string_buffering",
+      "intent": "Probes strings with numerous escape sequences within deep structures to exercise reserve_string_buffer and emit_pending helpers.",
+      "round": 0
+    },
+    {
+      "file": "gen_05.cpp",
+      "name": "serializer_inlining_mixed_types_walk",
+      "intent": "Probes dumping objects and arrays containing mixed data types (booleans, floats, null, strings) at varying depths.",
+      "round": 0
+    },
+    {
+      "file": "gen_06.cpp",
+      "name": "serializer_inlining_stream_output",
+      "intent": "Probes writing a deeply nested json object into an std::ostream, exercising serialization helpers via stream operators.",
+      "round": 0
+    },
+    {
+      "file": "gen_07.cpp",
+      "name": "serializer_inlining_to_string_api",
+      "intent": "Probes nlohmann::to_string with deeply nested JSON values to ensure internal serializer helpers execute properly.",
+      "round": 0
+    },
+    {
+      "file": "gen_08.cpp",
+      "name": "serializer_inlining_format_as_api",
+      "intent": "Probes nlohmann::format_as ADL helper with basic_json objects to ensure correct interaction with serializers.",
+      "round": 0
+    },
+    {
+      "file": "gen_09.cpp",
+      "name": "serializer_inlining_indentation_widths",
+      "intent": "Probes serialization with various indent widths (0, 1, 4, -1) on a moderately nested structure to test put_indent and put_literal_indent.",
+      "round": 0
+    },
+    {
+      "file": "gen_10.cpp",
+      "name": "serializer_inlining_comparison_operators",
+      "intent": "Probes comparison operators (operator!=, operator<) which are tied via public API pathways to serializer helpers.",
+      "round": 0
+    },
+    {
+      "file": "gen_11.cpp",
+      "name": "serializer_inlining_max_depth_limit",
+      "intent": "Probes behavior right at and beyond the recursion depth limit to verify correct exception throwing vs successful serialization.",
+      "round": 0
+    },
+    {
+      "file": "gen_12.cpp",
+      "name": "serializer_inlining_wide_containers",
+      "intent": "Probes wide arrays and objects containing many elements at multiple levels to test buffer reservation and element dumping.",
+      "round": 0
+    },
+    {
+      "file": "gen_13.cpp",
+      "name": "serializer_inlining_utf8_characters",
+      "intent": "Probes serialization of complex unicode strings within nested structures to ensure character escaping and buffer management work smoothly.",
+      "round": 0
+    },
+    {
+      "file": "gen_14.cpp",
+      "name": "serializer_inlining_binary_types",
+      "intent": "Probes serialization of binary/byte container types nested inside arrays and objects.",
+      "round": 0
+    },
+    {
+      "file": "gen_15.cpp",
+      "name": "serializer_inlining_ordered_json",
+      "intent": "Probes ordered_json serialization to ensure serializer helpers apply identically to specialized basic_json subclasses.",
+      "round": 0
+    },
+    {
+      "file": "gen_16.cpp",
+      "name": "serializer_inlining_patch_apply",
+      "intent": "Probes json patch application and subsequent dumping, exercising full roundtrip serialization pathways.",
+      "round": 0
+    },
+    {
+      "file": "gen_17.cpp",
+      "name": "serializer_inlining_merge_patch",
+      "intent": "Probes json merge patch application and output serialization.",
+      "round": 0
+    },
+    {
+      "file": "gen_18.cpp",
+      "name": "serializer_inlining_json_pointer",
+      "intent": "Probes json_pointer evaluation and subsequent value serialization.",
+      "round": 0
+    },
+    {
+      "file": "gen_19.cpp",
+      "name": "serializer_inlining_sax_dump_integration",
+      "intent": "Probes serialization combined with custom SAX parsing and generation to verify event handler consistency.",
+      "round": 0,
+      "superseded_by": "gen_26.cpp"
+    },
+    {
+      "file": "gen_20.cpp",
+      "name": "serializer_inlining_huge_number_serialization",
+      "intent": "Probes serialization of extreme numeric values (very large floats and integers) inside nested arrays.",
+      "round": 0
+    },
+    {
+      "file": "gen_21.cpp",
+      "name": "gen_21",
+      "intent": "Exercises reserve_string_buffer and emit_pending by serializing a deeply nested object containing strings with numerous unicode escape sequences requiring 13+ bytes buffer space per write.",
+      "round": 1
+    },
+    {
+      "file": "gen_22.cpp",
+      "name": "gen_22",
+      "intent": "Exercises reserve_string_buffer with extremely long strings containing consecutive unicode escapes within arrays, triggering the buffer capacity check inside serializer helpers.",
+      "round": 1
+    },
+    {
+      "file": "gen_23.cpp",
+      "name": "gen_23",
+      "intent": "Exercises emit_pending and reserve_string_buffer under high-volume string serialization within nested containers with pretty-printing enabled.",
+      "round": 1
+    },
+    {
+      "file": "gen_24.cpp",
+      "name": "gen_24",
+      "intent": "Exercises reserve_string_buffer and emit_pending with control characters requiring hex representation in strings deeply embedded in json arrays.",
+      "round": 1
+    },
+    {
+      "file": "gen_25.cpp",
+      "name": "gen_25",
+      "intent": "Exercises serializer string buffer management by serializing highly nested objects whose keys and string values both contain characters needing unicode escaping.",
+      "round": 1
+    },
+    {
+      "file": "gen_26.cpp",
+      "name": "serializer_inlining_sax_dump_integration_fixed",
+      "intent": "Probes serialization combined with custom SAX parsing and generation to verify event handler consistency.",
+      "round": 2,
+      "fixes": "gen_19.cpp",
+      "kind": "compile"
+    }
+  ],
+  "fix": {
+    "rounds_max": 2,
+    "model": "gemini-3.5-flash-lite"
+  }
+}

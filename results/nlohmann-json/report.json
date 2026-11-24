@@ -1,58 +1,59 @@
 {
   "target": "nlohmann-json",
   "summary": {
-    "prs_checked": 5,
-    "generated": 115,
+    "prs_checked": 14,
+    "generated": 330,
     "compile_success": {
-      "raw_new": 95.7,
-      "raw_both": 80.9,
-      "final_new": 95.7,
-      "final_both": 90.4
+      "raw_new": 68.5,
+      "raw_both": 62.7,
+      "final_new": 77.6,
+      "final_both": 74.8
     },
-    "in_use": 115,
-    "repairs": 17,
+    "in_use": 330,
+    "repairs": 103,
     "deterministic": {
-      "programs": 104,
-      "of_compiled_both": 104,
-      "pct": 100.0
+      "programs": 246,
+      "of_compiled_both": 247,
+      "pct": 99.6
     },
     "prs_with_difference": {
-      "count": 4,
-      "pct": 80.0
+      "count": 7,
+      "pct": 50.0
     },
     "verdicts": {
       "clusters": {
-        "intended": 13,
-        "unintended": 3
+        "unintended": 5,
+        "intended": 23
       },
       "programs": {
-        "intended": 24,
-        "unintended": 5
+        "unintended": 15,
+        "intended": 35
       },
-      "prs_classified": 5
+      "prs_classified": 14
     },
     "regression_candidates": [
       4958,
+      6029,
       6121
     ],
     "coverage_measured": {
-      "prs": 5,
-      "of": 5,
-      "at_least_80": 3
+      "prs": 14,
+      "of": 14,
+      "at_least_80": 7
     },
     "inconclusive_prs": [
-      6078
+      6077
     ],
     "coverage": {
-      "prs": 4,
-      "first_mean": 86.0,
-      "last_mean": 88.1
+      "prs": 7,
+      "first_mean": 81.0,
+      "last_mean": 82.1
     },
     "llm_calls": {
-      "total_est": 18,
-      "per_pr_mean": 3.6
+      "total_est": 53,
+      "per_pr_mean": 3.8
     },
-    "wall_seconds_total": 98.1,
+    "wall_seconds_total": 210.8,
     "seeded": {
       "rows": [
         {
@@ -79,77 +80,89 @@
     {
       "pr": 4958,
       "model": "gemini-3.5-flash-lite",
-      "generated": 20,
-      "raw_compile_new": 18,
-      "raw_compile_both": 4,
-      "in_use": 20,
-      "final_compile_new": 18,
-      "final_compile_both": 12,
-      "deterministic": 12,
-      "compiled_both_in_use": 12,
+      "generated": 25,
+      "raw_compile_new": 16,
+      "raw_compile_both": 9,
+      "in_use": 25,
+      "final_compile_new": 17,
+      "final_compile_both": 17,
+      "deterministic": 17,
+      "compiled_both_in_use": 17,
       "status": {
         "compile_diff": 8,
-        "output_diff": 10,
-        "same": 2
+        "output_diff": 11,
+        "same": 6
       },
-      "differing": 18,
-      "repairs": 9,
-      "llm_calls_est": 4,
-      "wall_seconds": 36.0,
+      "differing": 19,
+      "repairs": 8,
+      "llm_calls_est": 5,
+      "wall_seconds": 36.6,
       "classification": {
         "clusters": [
           {
             "id": "C1",
-            "status": "output_diff",
-            "failed_on": null,
-            "programs": [
-              "gen_21.cpp",
-              "gen_22.cpp",
-              "gen_23.cpp",
-              "gen_24.cpp",
-              "gen_26.cpp",
-              "gen_27.cpp",
-              "gen_28.cpp"
-            ],
-            "verdict": "intended",
-            "confidence": "high",
-            "reason": "The PR updates is_usable_as_basic_json_key_type to allow types convertible to std::string_view as keys, enabling custom string-viewable types to be used in operator[].",
-            "old": "output: supported: 0",
-            "new": "output: supported: 1 | 42"
-          },
-          {
-            "id": "C2",
-            "status": "compile_diff",
-            "failed_on": "old",
-            "programs": [
-              "gen_11.cpp",
-              "gen_16.cpp",
-              "gen_17.cpp",
-              "gen_18.cpp",
-              "gen_19.cpp",
-              "gen_20.cpp"
-            ],
-            "verdict": "intended",
-            "confidence": "high",
-            "reason": "Fixes compilation failures when passing classes with conversion to std::string_view into operator[], which is the main goal of issue #3912 and this PR.",
-            "old": "compile error: no match for \u2018operator[]\u2019 (operand types are \u2018nlohmann::json_abi_v3_12_0::json\u2019 {aka \u2018nlohmann::json_abi_v3_12_0::basic_json<>\u2019} and \u2018Derive",
-            "new": "output: 500"
-          },
-          {
-            "id": "C3",
             "status": "compile_diff",
             "failed_on": "both",
             "programs": [
-              "gen_03.cpp"
+              "gen_02.cpp",
+              "gen_03.cpp",
+              "gen_04.cpp",
+              "gen_05.cpp",
+              "gen_06.cpp",
+              "gen_15.cpp"
             ],
             "verdict": "unintended",
-            "confidence": "medium",
-            "reason": "The test fails to compile on the new version due to an internal comparator type mismatch error when using a const json object with a custom string_view key.",
-            "old": "compile error: no match for \u2018operator[]\u2019 (operand types are \u2018const nlohmann::json_abi_v3_12_0::json\u2019 {aka \u2018const nlohmann::json_abi_v3_12_0::basic_json<>\u2019}",
-            "new": "compile error: no match for call to \u2018(const std::less<void>) (const ViewHolder&, const std::__cxx11::basic_string<char>&)\u2019"
+            "confidence": "high",
+            "reason": "These test programs fail to compile on the new version with std::less/comparator errors because standard map types do not support transparent heterogeneous lookup with types implicitly convertible to string_view without a transparent comparator.",
+            "old": "compile error: no matching function for call to \u2018nlohmann::json_abi_v3_12_0::basic_json<>::contains(MyKeyType)\u2019",
+            "new": "compile error: no match for call to \u2018(const std::less<void>) (const MyKeyType&, const std::__cxx11::basic_string<char>&)\u2019"
+          },
+          {
+            "id": "C2",
+            "status": "output_diff",
+            "failed_on": null,
+            "programs": [
+              "gen_26.cpp",
+              "gen_27.cpp",
+              "gen_28.cpp",
+              "gen_29.cpp"
+            ],
+            "verdict": "intended",
+            "confidence": "high",
+            "reason": "The PR's goal is to enable types convertible to std::string_view to be usable as basic_json keys in operator[] and related methods, which these programs now successfully support.",
+            "old": "output: supported: false",
+            "new": "output: supported: true | 42"
+          },
+          {
+            "id": "C3",
+            "status": "output_diff",
+            "failed_on": null,
+            "programs": [
+              "gen_31.cpp",
+              "gen_32.cpp",
+              "gen_33.cpp"
+            ],
+            "verdict": "intended",
+            "confidence": "high",
+            "reason": "Allowing types convertible to std::string_view to be used with operator[] enables writing and reading values via such keys, matching the PR's objectives.",
+            "old": "output: supported: 0",
+            "new": "output: supported: 1 | {\"new_field\":9999}"
           },
           {
             "id": "C4",
+            "status": "compile_diff",
+            "failed_on": "both",
+            "programs": [
+              "gen_07.cpp"
+            ],
+            "verdict": "unintended",
+            "confidence": "high",
+            "reason": "Like C1, this program fails to compile on the new version due to lack of a transparent comparator supporting implicit conversions for const json instances.",
+            "old": "compile error: no match for \u2018operator[]\u2019 (operand types are \u2018const nlohmann::json_abi_v3_12_0::json\u2019 {aka \u2018const nlohmann::json_abi_v3_12_0::basic_json<>\u2019}",
+            "new": "compile error: no match for call to \u2018(const std::less<void>) (const ConstKeyType&, const std::__cxx11::basic_string<char>&)\u2019"
+          },
+          {
+            "id": "C5",
             "status": "output_diff",
             "failed_on": null,
             "programs": [
@@ -157,34 +170,21 @@
             ],
             "verdict": "intended",
             "confidence": "high",
-            "reason": "Directly tests the new type trait check std::is_convertible<KeyType, std::string_view>::value added in the PR, which evaluates to true for convertible types.",
+            "reason": "The trait is_usable_as_basic_json_key_type is updated in the PR to return true for types convertible to std::string_view under C++17.",
             "old": "output: false",
             "new": "output: true"
           },
           {
-            "id": "C5",
-            "status": "output_diff",
-            "failed_on": null,
-            "programs": [
-              "gen_12.cpp"
-            ],
-            "verdict": "intended",
-            "confidence": "high",
-            "reason": "Enables successful map lookups using keys that convert to std::string_view instead of failing or picking an unintended conversion.",
-            "old": "exit -6, no output",
-            "new": "output: 123"
-          },
-          {
             "id": "C6",
             "status": "compile_diff",
-            "failed_on": "new",
+            "failed_on": "both",
             "programs": [
-              "gen_25.cpp"
+              "gen_13.cpp"
             ],
             "verdict": "unintended",
             "confidence": "high",
-            "reason": "Breaks usage of ordered_json with transparent comparators when using keys that convert to std::string_view, leading to a substitution failure inside ordered_map.",
-            "old": "output: supported: 0",
+            "reason": "This program fails to compile with ordered_json due to underlying container requirements with custom types convertible to string_view.",
+            "old": "compile error: no match for \u2018operator[]\u2019 (operand types are \u2018nlohmann::json_abi_v3_12_0::ordered_json\u2019 {aka \u2018nlohmann::json_abi_v3_12_0::basic_json<nlohman",
             "new": "compile error: no matching function for call to \u2018nlohmann::json_abi_v3_12_0::ordered_map<std::__cxx11::basic_string<char>, nlohmann::json_abi_v3_12_0::basi"
           },
           {
@@ -192,25 +192,52 @@
             "status": "output_diff",
             "failed_on": null,
             "programs": [
-              "gen_29.cpp"
+              "gen_22.cpp"
             ],
             "verdict": "intended",
             "confidence": "high",
-            "reason": "Validates that multiple distinct custom keys supporting std::string_view conversion are now correctly recognized and usable in operator[].",
-            "old": "output: supported1: 0, supported2: 0",
-            "new": "output: supported1: 1, supported2: 1 | 1 2"
+            "reason": "Reflects the updated trait is_usable_as_basic_json_key_type recognizing string_view convertible types when non-transparent.",
+            "old": "output: is_usable_as_basic_json_key_type non-transparent: false\\n",
+            "new": "output: is_usable_as_basic_json_key_type non-transparent: true\\n"
+          },
+          {
+            "id": "C8",
+            "status": "output_diff",
+            "failed_on": null,
+            "programs": [
+              "gen_23.cpp"
+            ],
+            "verdict": "intended",
+            "confidence": "high",
+            "reason": "Reflects the updated trait checking cv-ref qualified types that are convertible to std::string_view.",
+            "old": "output: is_usable_as_basic_json_key_type cv-ref: false\\n",
+            "new": "output: is_usable_as_basic_json_key_type cv-ref: true\\n"
+          },
+          {
+            "id": "C9",
+            "status": "output_diff",
+            "failed_on": null,
+            "programs": [
+              "gen_24.cpp"
+            ],
+            "verdict": "intended",
+            "confidence": "high",
+            "reason": "Reflects the updated trait correctly identifying types convertible to std::string_view when used with ordered_json.",
+            "old": "output: is_usable_as_basic_json_key_type ordered_json: false\\n",
+            "new": "output: is_usable_as_basic_json_key_type ordered_json: true\\n"
           }
         ],
         "regression_candidate": true,
         "unintended_clusters": [
-          "C3",
+          "C1",
+          "C4",
           "C6"
         ]
       },
       "coverage": {
         "first": null,
         "last": null,
-        "rounds": 1,
+        "rounds": 2,
         "changed": 6,
         "measurable": 0
       }
@@ -218,22 +245,22 @@
     {
       "pr": 5459,
       "model": "gemini-3.5-flash-lite",
-      "generated": 20,
-      "raw_compile_new": 20,
-      "raw_compile_both": 20,
-      "in_use": 20,
-      "final_compile_new": 20,
-      "final_compile_both": 20,
-      "deterministic": 20,
-      "compiled_both_in_use": 20,
+      "generated": 25,
+      "raw_compile_new": 25,
+      "raw_compile_both": 25,
+      "in_use": 25,
+      "final_compile_new": 25,
+      "final_compile_both": 25,
+      "deterministic": 25,
+      "compiled_both_in_use": 25,
       "status": {
-        "output_diff": 2,
-        "same": 18
+        "output_diff": 8,
+        "same": 17
       },
-      "differing": 2,
+      "differing": 8,
       "repairs": 0,
-      "llm_calls_est": 2,
-      "wall_seconds": 5.0,
+      "llm_calls_est": 3,
+      "wall_seconds": 7.4,
       "classification": {
         "clusters": [
           {
@@ -245,9 +272,9 @@
             ],
             "verdict": "intended",
             "confidence": "high",
-            "reason": "The PR fixes intransitive mixed integer/float comparisons near 2^63 where values like 2^63-2 and 2^63-1 previously incorrectly compared equal to 2^63.",
-            "old": "output: x == y: 1 | y == z: 1 | x == z: 0 | x < z: 1",
-            "new": "output: x == y: 0 | y == z: 0 | x == z: 0 | x < z: 1"
+            "reason": "The PR fixes lossy integer-to-float conversions near boundaries like 2^63 that caused distinct integers to compare equal to the same float.",
+            "old": "output: x==y: 1 | y==z: 1 | x==z: 0",
+            "new": "output: x==y: 0 | y==z: 0 | x==z: 0"
           },
           {
             "id": "C2",
@@ -258,20 +285,278 @@
             ],
             "verdict": "intended",
             "confidence": "high",
-            "reason": "The PR ensures exact comparison between large integers and floats instead of lossy widening, so 2^63-1 correctly compares less than 2^63 instead of being rounded up and treated as equal.",
-            "old": "output: u < f: 0 | f > u: 0 | u == f: 1",
-            "new": "output: u < f: 1 | f > u: 1 | u == f: 0"
+            "reason": "The PR corrects strict weak ordering for mixed number comparisons so that nearby integers are properly ordered rather than colliding with the float.",
+            "old": "output: x<y: 0 | y<z: 0 | x<z: 1",
+            "new": "output: x<y: 1 | y<z: 0 | x<z: 1"
+          },
+          {
+            "id": "C3",
+            "status": "output_diff",
+            "failed_on": null,
+            "programs": [
+              "gen_03.cpp"
+            ],
+            "verdict": "intended",
+            "confidence": "high",
+            "reason": "Unsigned integers near the upper float bounds are now compared exactly instead of rounding up and falsely equating to the float.",
+            "old": "output: u < f: 0 | u == f: 1 | f > u: 0",
+            "new": "output: u < f: 1 | u == f: 0 | f > u: 1"
+          },
+          {
+            "id": "C4",
+            "status": "output_diff",
+            "failed_on": null,
+            "programs": [
+              "gen_09.cpp"
+            ],
+            "verdict": "intended",
+            "confidence": "high",
+            "reason": "Negative integer and float comparisons near boundaries are handled with exact precision rather than lossy widening.",
+            "old": "output: neg x < y: 0 | neg y < z: 0 | neg x < z: 0",
+            "new": "output: neg x < y: 0 | neg y < z: 1 | neg x < z: 0"
+          },
+          {
+            "id": "C5",
+            "status": "output_diff",
+            "failed_on": null,
+            "programs": [
+              "gen_14.cpp"
+            ],
+            "verdict": "intended",
+            "confidence": "high",
+            "reason": "The PR explicitly resolves the issue where equivalence was intransitive; the new behavior correctly maintains strict weak ordering.",
+            "old": "output: equiv(x,y): 1 | equiv(y,z): 1 | equiv(x,z): 0",
+            "new": "output: equiv(x,y): 0 | equiv(y,z): 0 | equiv(x,z): 0"
+          },
+          {
+            "id": "C6",
+            "status": "output_diff",
+            "failed_on": null,
+            "programs": [
+              "gen_15.cpp"
+            ],
+            "verdict": "intended",
+            "confidence": "high",
+            "reason": "Using distinct numbers that previously collapsed due to precision loss as map keys now correctly distinguishes them, increasing the map size.",
+            "old": "output: map size: 2",
+            "new": "output: map size: 3"
+          },
+          {
+            "id": "C7",
+            "status": "output_diff",
+            "failed_on": null,
+            "programs": [
+              "gen_17.cpp"
+            ],
+            "verdict": "intended",
+            "confidence": "high",
+            "reason": "Symmetric comparison operators with float on the left-hand side now correctly reflect exact comparisons instead of false equalities.",
+            "old": "output: y == x: 1 | y == z: 1 | y > x: 0",
+            "new": "output: y == x: 0 | y == z: 0 | y > x: 1"
+          },
+          {
+            "id": "C8",
+            "status": "output_diff",
+            "failed_on": null,
+            "programs": [
+              "gen_20.cpp"
+            ],
+            "verdict": "intended",
+            "confidence": "high",
+            "reason": "Relational operators between large integers and floats are updated to use exact comparison, changing old false equalities into correct less-than relations.",
+            "old": "output: <: 0 | <=: 1 | >: 0 | >=: 1 | ==: 1 | !=: 0",
+            "new": "output: <: 1 | <=: 1 | >: 0 | >=: 0 | ==: 0 | !=: 1"
           }
         ],
         "regression_candidate": false,
         "unintended_clusters": []
       },
       "coverage": {
-        "first": 1.0,
-        "last": 1.0,
-        "rounds": 1,
+        "first": 0.95,
+        "last": 0.95,
+        "rounds": 2,
         "changed": 69,
         "measurable": 20
+      }
+    },
+    {
+      "pr": 6029,
+      "model": "gemini-3.5-flash-lite",
+      "generated": 25,
+      "raw_compile_new": 21,
+      "raw_compile_both": 20,
+      "in_use": 25,
+      "final_compile_new": 21,
+      "final_compile_both": 20,
+      "deterministic": 20,
+      "compiled_both_in_use": 20,
+      "status": {
+        "same": 20,
+        "compile_diff": 5
+      },
+      "differing": 5,
+      "repairs": 2,
+      "llm_calls_est": 5,
+      "wall_seconds": 13.2,
+      "classification": {
+        "clusters": [
+          {
+            "id": "C1",
+            "status": "compile_diff",
+            "failed_on": "both",
+            "programs": [
+              "gen_21.cpp",
+              "gen_22.cpp",
+              "gen_23.cpp",
+              "gen_24.cpp"
+            ],
+            "verdict": "unintended",
+            "confidence": "high",
+            "reason": "The test program uses the unexported type alias `json` without qualifying it as `nlohmann::json`, causing a compilation error on the new version.",
+            "old": "compile error: \u2018is_byte_char_type\u2019 is not a member of \u2018nlohmann::json_abi_v3_12_0::detail\u2019",
+            "new": "compile error: \u2018json\u2019 was not declared in this scope; did you mean \u2018nlohmann::json_abi_v3_12_0::json\u2019?"
+          },
+          {
+            "id": "C2",
+            "status": "compile_diff",
+            "failed_on": "old",
+            "programs": [
+              "gen_27.cpp"
+            ],
+            "verdict": "intended",
+            "confidence": "high",
+            "reason": "The PR introduces internal helpers like `is_std_contiguous_byte_iterator` and `is_byte_char_type`, allowing this test to compile successfully on the new version where it failed previously.",
+            "old": "compile error: \u2018is_std_contiguous_byte_iterator\u2019 in namespace \u2018nlohmann::json_abi_v3_12_0::detail\u2019 does not name a template type; did you mean \u2018is_contiguo",
+            "new": "output: is_std_contiguous_byte_iterator: unsupported | is_std_contiguous_byte_iterator: 0 | is_std_contiguous_byte_iterator: 0 | is_byte_char_type: "
+          }
+        ],
+        "regression_candidate": true,
+        "unintended_clusters": [
+          "C1"
+        ]
+      },
+      "coverage": {
+        "first": 1.0,
+        "last": 1.0,
+        "rounds": 2,
+        "changed": 58,
+        "measurable": 5
+      }
+    },
+    {
+      "pr": 6049,
+      "model": "gemini-3.5-flash-lite",
+      "generated": 25,
+      "raw_compile_new": 0,
+      "raw_compile_both": 0,
+      "in_use": 25,
+      "final_compile_new": 15,
+      "final_compile_both": 15,
+      "deterministic": 15,
+      "compiled_both_in_use": 15,
+      "status": {
+        "invalid": 10,
+        "same": 15
+      },
+      "differing": 0,
+      "repairs": 17,
+      "llm_calls_est": 4,
+      "wall_seconds": 10.7,
+      "classification": {
+        "clusters": [],
+        "regression_candidate": false,
+        "unintended_clusters": []
+      },
+      "coverage": {
+        "first": null,
+        "last": null,
+        "rounds": 2,
+        "changed": 6,
+        "measurable": 0
+      }
+    },
+    {
+      "pr": 6073,
+      "model": "gemini-3.5-flash-lite",
+      "generated": 25,
+      "raw_compile_new": 20,
+      "raw_compile_both": 12,
+      "in_use": 25,
+      "final_compile_new": 25,
+      "final_compile_both": 17,
+      "deterministic": 17,
+      "compiled_both_in_use": 17,
+      "status": {
+        "same": 17,
+        "compile_diff": 8
+      },
+      "differing": 8,
+      "repairs": 13,
+      "llm_calls_est": 5,
+      "wall_seconds": 11.3,
+      "classification": {
+        "clusters": [
+          {
+            "id": "C1",
+            "status": "compile_diff",
+            "failed_on": "old",
+            "programs": [
+              "gen_26.cpp",
+              "gen_27.cpp",
+              "gen_28.cpp",
+              "gen_29.cpp",
+              "gen_35.cpp",
+              "gen_36.cpp",
+              "gen_37.cpp",
+              "gen_38.cpp"
+            ],
+            "verdict": "intended",
+            "confidence": "high",
+            "reason": "The PR specifically aims to restore compilation of json::parse(container, function) when passing plain functions or function pointers as callbacks, which failed on develop due to iterator/sentinel overload selection.",
+            "old": "compile error: no type named \u2018value_type\u2019 in \u2018struct std::iterator_traits<std::__cxx11::basic_string<char> >\u2019",
+            "new": "output: supported: 1 | [1,2]"
+          }
+        ],
+        "regression_candidate": false,
+        "unintended_clusters": []
+      },
+      "coverage": {
+        "first": null,
+        "last": null,
+        "rounds": 2,
+        "changed": 14,
+        "measurable": 0
+      }
+    },
+    {
+      "pr": 6075,
+      "model": "gemini-3.5-flash-lite",
+      "generated": 25,
+      "raw_compile_new": 25,
+      "raw_compile_both": 25,
+      "in_use": 25,
+      "final_compile_new": 25,
+      "final_compile_both": 25,
+      "deterministic": 25,
+      "compiled_both_in_use": 25,
+      "status": {
+        "same": 25
+      },
+      "differing": 0,
+      "repairs": 0,
+      "llm_calls_est": 2,
+      "wall_seconds": 8.2,
+      "classification": {
+        "clusters": [],
+        "regression_candidate": false,
+        "unintended_clusters": []
+      },
+      "coverage": {
+        "first": null,
+        "last": null,
+        "rounds": 2,
+        "changed": 38,
+        "measurable": 0
       }
     },
     {
@@ -373,11 +658,11 @@
       }
     },
     {
-      "pr": 6078,
+      "pr": 6077,
       "model": "gemini-3.5-flash-lite",
       "generated": 25,
-      "raw_compile_new": 23,
-      "raw_compile_both": 23,
+      "raw_compile_new": 16,
+      "raw_compile_both": 16,
       "in_use": 25,
       "final_compile_new": 25,
       "final_compile_both": 25,
@@ -387,20 +672,191 @@
         "same": 25
       },
       "differing": 0,
-      "repairs": 2,
+      "repairs": 9,
       "llm_calls_est": 3,
-      "wall_seconds": 15.9,
+      "wall_seconds": 14.5,
       "classification": {
         "clusters": [],
         "regression_candidate": false,
         "unintended_clusters": []
       },
       "coverage": {
-        "first": 0.545,
-        "last": 0.545,
+        "first": 0.1,
+        "last": 0.1,
+        "rounds": 2,
+        "changed": 33,
+        "measurable": 10
+      }
+    },
+    {
+      "pr": 6078,
+      "model": "gemini-3.5-flash-lite",
+      "generated": 25,
+      "raw_compile_new": 25,
+      "raw_compile_both": 25,
+      "in_use": 25,
+      "final_compile_new": 25,
+      "final_compile_both": 25,
+      "deterministic": 25,
+      "compiled_both_in_use": 25,
+      "status": {
+        "same": 24,
+        "output_diff": 1
+      },
+      "differing": 1,
+      "repairs": 0,
+      "llm_calls_est": 3,
+      "wall_seconds": 15.1,
+      "classification": {
+        "clusters": [
+          {
+            "id": "C1",
+            "status": "output_diff",
+            "failed_on": null,
+            "programs": [
+              "gen_06.cpp"
+            ],
+            "verdict": "intended",
+            "confidence": "high",
+            "reason": "The PR explicitly states that a no-op array is empty and the reader now announces 0 elements for it instead of passing the declared count through to the SAX parser.",
+            "old": "output: start_array: 10 | end_array | RES: true",
+            "new": "output: start_array: 0 | end_array | RES: true"
+          }
+        ],
+        "regression_candidate": false,
+        "unintended_clusters": []
+      },
+      "coverage": {
+        "first": 0.864,
+        "last": 0.864,
         "rounds": 2,
         "changed": 111,
         "measurable": 22
+      }
+    },
+    {
+      "pr": 6081,
+      "model": "gemini-3.5-flash-lite",
+      "generated": 6,
+      "raw_compile_new": 5,
+      "raw_compile_both": 5,
+      "in_use": 6,
+      "final_compile_new": 6,
+      "final_compile_both": 6,
+      "deterministic": 6,
+      "compiled_both_in_use": 6,
+      "status": {
+        "same": 6
+      },
+      "differing": 0,
+      "repairs": 1,
+      "llm_calls_est": 3,
+      "wall_seconds": 3.1,
+      "classification": {
+        "clusters": [],
+        "regression_candidate": false,
+        "unintended_clusters": []
+      },
+      "coverage": {
+        "first": null,
+        "last": 1.0,
+        "rounds": 2,
+        "changed": 106,
+        "measurable": 4
+      }
+    },
+    {
+      "pr": 6084,
+      "model": "gemini-3.5-flash-lite",
+      "generated": 24,
+      "raw_compile_new": 0,
+      "raw_compile_both": 0,
+      "in_use": 24,
+      "final_compile_new": 0,
+      "final_compile_both": 0,
+      "deterministic": 0,
+      "compiled_both_in_use": 0,
+      "status": {
+        "invalid": 24
+      },
+      "differing": 0,
+      "repairs": 30,
+      "llm_calls_est": 4,
+      "wall_seconds": 9.5,
+      "classification": {
+        "clusters": [],
+        "regression_candidate": false,
+        "unintended_clusters": []
+      },
+      "coverage": {
+        "first": null,
+        "last": null,
+        "rounds": 2,
+        "changed": 24,
+        "measurable": 0
+      }
+    },
+    {
+      "pr": 6085,
+      "model": "gemini-3.5-flash-lite",
+      "generated": 25,
+      "raw_compile_new": 0,
+      "raw_compile_both": 0,
+      "in_use": 25,
+      "final_compile_new": 0,
+      "final_compile_both": 0,
+      "deterministic": 0,
+      "compiled_both_in_use": 0,
+      "status": {
+        "invalid": 25
+      },
+      "differing": 0,
+      "repairs": 16,
+      "llm_calls_est": 4,
+      "wall_seconds": 7.5,
+      "classification": {
+        "clusters": [],
+        "regression_candidate": false,
+        "unintended_clusters": []
+      },
+      "coverage": {
+        "first": null,
+        "last": null,
+        "rounds": 2,
+        "changed": 23,
+        "measurable": 0
+      }
+    },
+    {
+      "pr": 6117,
+      "model": "gemini-3.5-flash-lite",
+      "generated": 25,
+      "raw_compile_new": 24,
+      "raw_compile_both": 24,
+      "in_use": 25,
+      "final_compile_new": 25,
+      "final_compile_both": 25,
+      "deterministic": 24,
+      "compiled_both_in_use": 25,
+      "status": {
+        "same": 24,
+        "invalid": 1
+      },
+      "differing": 0,
+      "repairs": 1,
+      "llm_calls_est": 3,
+      "wall_seconds": 32.5,
+      "classification": {
+        "clusters": [],
+        "regression_candidate": false,
+        "unintended_clusters": []
+      },
+      "coverage": {
+        "first": 0.857,
+        "last": 0.857,
+        "rounds": 2,
+        "changed": 18,
+        "measurable": 7
       }
     },
     {

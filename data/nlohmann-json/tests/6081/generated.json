@@ -1,0 +1,78 @@
+{
+  "target": "nlohmann-json",
+  "pr": 6081,
+  "model": "gemini-3.5-flash-lite",
+  "prompt_sha256": "c59931065606c54b10aadb6d90a20f58c7ee9efc90c1f0836295bb841a4fb124",
+  "n_requested": 20,
+  "dropped": 0,
+  "usage": {
+    "promptTokenCount": 11617,
+    "candidatesTokenCount": 132,
+    "totalTokenCount": 11749,
+    "cachedContentTokenCount": 8000,
+    "promptTokensDetails": [
+      {
+        "modality": "TEXT",
+        "tokenCount": 11617
+      }
+    ],
+    "cacheTokensDetails": [
+      {
+        "modality": "TEXT",
+        "tokenCount": 8000
+      }
+    ],
+    "serviceTier": "standard"
+  },
+  "tests": [
+    {
+      "file": "gen_01.cpp",
+      "name": "recursion_depth_limit_basic",
+      "intent": "Probes basic JSON operations and copying on a moderately nested structure under the default depth limit.",
+      "round": 0,
+      "superseded_by": "gen_07.cpp"
+    },
+    {
+      "file": "gen_02.cpp",
+      "name": "gen_02",
+      "intent": "Test nesting_depth_guard with an invalid or disabled check (where m_okay is false, exercising the conditional path in nesting_depth_guard constructor/destructor).",
+      "round": 1
+    },
+    {
+      "file": "gen_03.cpp",
+      "name": "gen_03",
+      "intent": "Exercise basic_json::update with merge_objects set to true at shallow depth to hit update_members with depth >= recursion_depth_limit path.",
+      "round": 1
+    },
+    {
+      "file": "gen_04.cpp",
+      "name": "gen_04",
+      "intent": "Exercise basic_json::update with merge_objects set to false to verify the depth check short-circuit behavior in update_members.",
+      "round": 1
+    },
+    {
+      "file": "gen_05.cpp",
+      "name": "gen_05",
+      "intent": "Trigger detail::recursion_depth_limit() function call via operations like merge_patch or diff which invoke the depth-checked walks.",
+      "round": 1
+    },
+    {
+      "file": "gen_06.cpp",
+      "name": "gen_06",
+      "intent": "Exercise deep comparison operators and serialization where nesting_depth_guard wraps recursive descent.",
+      "round": 1
+    },
+    {
+      "file": "gen_07.cpp",
+      "name": "recursion_depth_limit_basic_fixed",
+      "intent": "Probes basic JSON operations and copying on a moderately nested structure under the default depth limit.",
+      "round": 2,
+      "fixes": "gen_01.cpp",
+      "kind": "compile"
+    }
+  ],
+  "fix": {
+    "rounds_max": 2,
+    "model": "gemini-3.5-flash-lite"
+  }
+}

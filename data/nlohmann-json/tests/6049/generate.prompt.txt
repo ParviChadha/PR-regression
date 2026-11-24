@@ -1,0 +1,304 @@
+[system]
+You write test programs that probe a C++ library for behavioral changes made by one pull request.
+Each program is compiled and run twice, once against the library before the change and once after, and the two
+outputs are compared. Your job is to produce programs whose output reveals whether the change altered behavior,
+including side effects the author did not intend.
+
+Rules for every program:
+- It is standalone: one file with its own int main(), compiled as C++17, printing results to stdout.
+- Use only the library's documented public API. Never include internal headers or use detail/impl namespaces,
+  private members or undocumented macros.
+- Do not judge results (no assert, no expected-value comparisons): just print what the library returns. Print
+  enough to make differences visible, one fact per line.
+- Output must be deterministic. Never print pointers or addresses, uninitialized data, the order of
+  hash-based containers, timings, thread ids, random values, file paths or environment data. Print floating point
+  values with an explicit precision. No input, files, network, threads, clocks or randomness.
+- Wrap calls that may throw in try/catch and print the exception's type and message, so an exception is an
+  observable result. Do not crash on purpose.
+- Aim at the code the diff changes. Prefer calls that compile against both the old and the new library; one or two
+  programs may use an API the PR adds. Cover ordinary inputs and edge cases (empty, minimum and maximum values,
+  boundaries, special values, nesting, unusual types) and also neighbouring behavior the change could disturb.
+- When the diff changes which types or inputs an API accepts or rejects (constraints, overloads, traits,
+  conversions), test it with the detection idiom (std::void_t or requires) and `if constexpr`, so the program
+  compiles against both versions, prints whether the expression is well-formed, and exercises it when it is.
+  Accepting an input is not enough: also use it through every entry point that should follow (const and
+  non-const, read, write, insert, erase, lookup, nested use), because a change that admits new inputs can leave
+  later code unable to handle them.
+- If the changed code is internal (a detail, impl or internal namespace, a trait, a helper), do not name it in the
+  program. Reach it through the public API that depends on it, using detection (as above) where needed.
+- Use the exact types and values the diff is about (the new trait's argument types, the new overload's
+  parameters), not stand-ins.
+- Spread the programs over distinct public entry points and overloads, one main idea per program. Do not write
+  several programs that only rename a type or change a literal.
+- Make the programs differ from each other: different inputs, different entry points, different features.
+
+Rules specific to this library:
+- Include the library with #include <nlohmann/json.hpp>. The public API is nlohmann::json (nlohmann::basic_json), nlohmann::ordered_json, json_pointer, json patch/merge_patch and the documented SAX and conversion interfaces. Never use the detail namespace.
+- It is a header-only library: nothing to link. Programs are compiled as C++17.
+- Print JSON values with dump() (compact) or dump(2). Keys of nlohmann::json objects print in sorted order, so output is deterministic; do not depend on insertion order except with ordered_json.
+
+[user]
+# Pull request #6049: json_view: keep tokens without an integer digit out of the float batch
+
+## Description
+## Problem
+
+OSS-Fuzz issue 583898810 (`json_view_image_fuzzer`, regressed with #5908): an image loaded with `image_check::bounds` makes `dump()` fail the assertion `digits != 0 && digits < 100000000000000000u` in `write_decimal()`.
+
+The image's float node records no digit before the point and 17 after it, which no JSON number has. `convert_ahead()` only required at least 8 fraction digits, so it batched the token with q = -17. `locate_token()` then read `fives[17]` past the 17 entries of its table. What it read depends on the binary's memory layout: in the fuzzer's x86-64 build, the digits came out as 10^17 + 64 (18 digits), and `write_shortest()` passed 18 digits on to `write_decimal()`.
+
+## Change
+
+- The batch takes tokens with 8 to 16 fraction digits (`frac_digits - 8u <= 8u` instead of `frac_digits >= 8`). Every valid token of 16 or 17 digits has at least one digit before the point, so the batch handles the same tokens of valid documents as before; the comparison costs the same.
+- `locate_token()`'s documentation states its range as -16 <= q <= -1, matching its table.
+- A section in `unit-json_view_image.cpp` with a crafted token of this layout and the OSS-Fuzz input itself. Without the fix, it fails on arm64 with a bounds-checked libc++ (`_LIBCPP_HARDENING_MODE_DEBUG`) and on x86-64 with the `write_decimal()` assertion. No CI job checks container bounds, so the crafted case alone would not fail there.
+
+Random damage to the testcase and to near-10^17 tokens (about 58M images, x86-64) found no other crash with the fix.
+
+## Tests run locally
+
+- the OSS-Fuzz testcase through `fuzzer-json_view_image.cpp` on x86-64: assertion before, passes after
+- all 22 json_view test targets (CMake Debug, arm64): pass
+- not run: the rest of the test suite and a benchmark (no measurable change expected)
+
+## Breaking changes
+
+No breaking changes: the public API is untouched.
+
+🤖 Generated with [Claude Code](https://claude.com/claude-code)
+
+## Commit message
+dump() batches float tokens of 16 or 17 digits with at least 8 fraction
+digits. A damaged image loaded with image_check::bounds can record a
+token with no digit before the point and 17 after it, which no JSON
+number has. Its q = -17 is outside the range of locate_token(), which
+then read fives[17] past its 17 entries; on x86-64 the resulting digits
+had 18 digits and failed the assertion of write_decimal() (OSS-Fuzz
+issue 583898810, json_view_image_fuzzer).
+
+The batch now takes 8 to 16 fraction digits, which every valid token of
+16 or 17 digits has, so it batches the same tokens of valid documents.
+
+Signed-off-by: Niels Lohmann <mail@nlohmann.me>
+
+## Discussion before merge
+- github-advanced-security[bot]: ## Flawfinder / Does not check for buffer overflows when copying to destination (CWE-120).
+
+buffer/memcpy:Does not check for buffer overflows when copying to destination (CWE-120).
+
+[Show more details](https://github.com/nlohmann/json/security/code-scanning/1166)
+
+## Changed functions (from changes.py)
+- nlohmann::detail::view::view_serializer::convert_ahead(const node *, float_batch &) (private); reached from the public API through: nlohmann::basic_json_view::dump(const int, const char, const bool, const number_format)
+
+## Diff of the library source (before -> after)
+```diff
+diff --git a/include/nlohmann/detail/view/serializer.hpp b/include/nlohmann/detail/view/serializer.hpp
+index deccec8e4..1c965f78f 100644
+--- a/include/nlohmann/detail/view/serializer.hpp
++++ b/include/nlohmann/detail/view/serializer.hpp
+@@ -393,7 +393,7 @@ struct depth_counter<false>
+ 
+ /*!
+ @brief where the double x nearest to a token w * 10^q lies, for 10^15 <= w <
+-10^17 and -17 <= q <= -1 (Eisel-Lemire, then a fixed-point position)
++10^17 and -16 <= q <= -1 (Eisel-Lemire, then a fixed-point position)
+ 
+ dump() writes the shortest decimal in the rounding interval of x (the closest
+ one if there are several, see zmij::to_shortest()). Its digits are those of a
+@@ -1258,13 +1258,15 @@ class view_serializer
+         }
+         for (; p != stop && batch.count != float_batch::capacity(); ++p)
+         {
+-            // a token of the source: 16 or 17 digits, at least 8 after the
+-            // point, no exponent, 32 bytes to read
++            // a token of the source: 16 or 17 digits, 8 to 16 after the
++            // point, no exponent, 32 bytes to read (17 after the point, with
++            // no digit before it, only in a damaged image loaded with
++            // image_check::bounds: beyond the range of locate_token())
+             const unsigned frac_digits = p->extra >> 8u;
+             const unsigned int_digits = p->extra & 0xFFu;
+             const unsigned count = int_digits + frac_digits;
+             if (p->kind == node_kind::number_float && (p->flags & node_flags::storage) == 0
+-                    && count - 16u <= 1u && frac_digits >= 8 && src_end - (src + p->off) >= 33)
++                    && count - 16u <= 1u && frac_digits - 8u <= 8u && src_end - (src + p->off) >= 33)
+             {
+                 const auto* const token = reinterpret_cast<const unsigned char*>(src + p->off); // NOLINT(cppcoreguidelines-pro-type-reinterpret-cast)
+                 const unsigned sign = token[0] == '-' ? 1 : 0;
+```
+
+## Existing upstream tests that call the changed code (for style and API usage)
+// Upstream tests at the PR's parent commit eac1b4343 that use the changed code.
+// Names searched (test lines using each): dump (790), convert_ahead (0)
+
+// ---- tests/src/unit-json_view_dump.cpp:44-77  (uses: dump)
+    SECTION("the output of ordered_json::dump()")
+    {
+        generator g;
+        for (int i = 0; i < 2000; ++i)
+        {
+            std::string text;
+            g.value(text, 0);
+            const ordered_json_document d = ordered_json_document::parse(text);
+            if (has_duplicate_keys(d.root()))
+            {
+                continue;
+            }
+            CAPTURE(text)
+            const ordered_json j = ordered_json::parse(text);
+            for (const int indent :
+                    {
+                        -1, 0, 2
+                    })
+            {
+                for (const bool ensure_ascii :
+                        {
+                            false, true
+                        })
+                {
+                    CHECK(d.root().dump(indent, i % 2 == 0 ? ' ' : '\t', ensure_ascii) == j.dump(indent, i % 2 == 0 ? ' ' : '\t', ensure_ascii));
+                }
+            }
+            // also of each element
+            for (const ordered_json_view e : d.root())
+            {
+                CHECK(e.dump() == e.materialize().dump());
+            }
+        }
+    }
+
+// ---- tests/src/unit-json_view_dump.cpp:79-91  (uses: dump)
+    SECTION("strings")
+    {
+        const std::string text = R"(["plain", "\u0000\u0001\u001f\u007f\u0080é€￿😀", "\"\\\/\b\f\n\r\t", "aéあ😀b", "long text beyond the eight bytes of a word \n with an escape in the middle"])";
+        const ordered_json_document d = ordered_json_document::parse(text);
+        const ordered_json j = ordered_json::parse(text);
+        CHECK(d.root().dump() == j.dump());
+        CHECK(d.root().dump(-1, ' ', true) == j.dump(-1, ' ', true));
+        CHECK(d.root().dump(4, ' ', true) == j.dump(4, ' ', true));
+        const std::string key_text = R"({"é\n": {"\"": [], "": {}}})";
+        const ordered_json_document keys = ordered_json_document::parse(key_text);
+        const ordered_json key_json = ordered_json::parse(key_text);
+        CHECK(keys.root().dump(2, ' ', true) == key_json.dump(2, ' ', true));
+    }
+
+// ---- tests/src/unit-json_view_dump_escape.cpp:40-47  (uses: dump)
+    SECTION("members in document order, all of them")
+    {
+        const json_document d = json_document::parse(R"({"b": 1, "a": 2, "b": 3})");
+        CHECK(d.root().dump() == R"({"b":1,"a":2,"b":3})");
+        CHECK(d.root().dump(1) == "{\n \"b\": 1,\n \"a\": 2,\n \"b\": 3\n}");
+        // dump() writes all members, though the lookup finds the first
+        CHECK(d.root()["b"].dump() == "1");
+    }
+
+// ---- tests/src/unit-json_view_dump_escape.cpp:49-54  (uses: dump)
+    SECTION("deep nesting")
+    {
+        const std::string deep = std::string(100000, '[') + std::string(100000, ']');
+        const json_document deep_document = json_document::parse(deep);
+        CHECK(deep_document.root().dump() == deep);
+    }
+
+// ---- tests/src/bjdata_round_trip.hpp:71-95  (uses: dump)
+        for (const auto& initial : all_options)
+        {
+            if (initial.version != initial_version)
+            {
+                continue;
+            }
+
+            const json j1 = json::from_bjdata(json::to_bjdata(j0, initial.use_size, initial.use_type, initial.version));
+            const bool has_binary = utils::round_trip_corpus::contains_binary(j1);
+
+            for (const auto& o : all_options)
+            {
+                INFO("j1 = " << j1.dump() << ", use_size = " << o.use_size << ", use_type = " << o.use_type
+                     << ", draft3 = " << (o.version == json::bjdata_version_t::draft3));
+
+                const std::vector<std::uint8_t> vec = json::to_bjdata(j1, o.use_size, o.use_type, o.version);
+                json j2;
+                // anything the library writes must be parsable by the library
+                REQUIRE_NOTHROW(j2 = json::from_bjdata(vec));
+                const std::vector<std::uint8_t> vec2 = json::to_bjdata(j2, o.use_size, o.use_type, o.version);
+                CHECK(json::from_bjdata(vec2).dump() == j2.dump());
+
+                if (!has_binary)
+                {
+                    CHECK(j2.dump() == j1.dump());
+
+// ---- tests/src/fuzzer-json_view_image.cpp:50-74  (uses: dump)
+        try
+        {
+            d = json_document::load(data, size, check);
+        }
+        catch (const json::parse_error& e)
+        {
+            assert(e.id == 116);
+            continue;
+        }
+        std::string dumped;
+        try
+        {
+            dumped = d.root().dump();
+        }
+        catch (const json::type_error& e)
+        {
+            // invalid UTF-8 can only pass the bounds check
+            assert(check == image_check::bounds && e.id == 316);
+            continue;
+        }
+        const json j = d.root().materialize();
+        if (check == image_check::full)
+        {
+            assert(json::parse(dumped) == j);
+            // an image of the loaded document is the input
+
+// ---- tests/src/fuzzer-json_view_image.cpp:79-95  (uses: dump)
+    // the input as a JSON text
+    const std::string text(reinterpret_cast<const char*>(data), size); // NOLINT(cppcoreguidelines-pro-type-reinterpret-cast)
+    const json_document parsed = json_document::parse(text, false);
+    if (!parsed.is_discarded())
+    {
+        const std::vector<std::uint8_t> image = parsed.save();
+        for (const image_check check :
+                {
+                    image_check::full, image_check::bounds, image_check::none
+                })
+        {
+            const json_document loaded = json_document::load(image, check);
+            assert(loaded.root().dump() == parsed.root().dump());
+        }
+    }
+    return 0;
+}
+
+// ---- tests/src/fuzzer-parse_bjdata.cpp:66-90  (uses: dump)
+    template<typename... Args>
+    json operator()(Args&& ... args) const
+    {
+        return json::from_bjdata(std::forward<Args>(args)...);
+    }
+};
+} // namespace
+
+// value-stable comparison for the round-trip checks below; see the note
+// above on why this compares dump()s rather than the json values directly
+static bool is_value_stable(const json& lhs, const json& rhs)
+{
+    return lhs.dump() == rhs.dump();
+}
+
+// see http://llvm.org/docs/LibFuzzer.html
+extern "C" int LLVMFuzzerTestOneInput(const uint8_t* data, size_t size)
+{
+    std::vector<uint8_t> const vec1(data, data + size);
+
+    // step 0: parse input without exceptions
+    bool noexcept_threw = false;
+    json const j_noexcept = parse_without_exceptions([&] { return json::from_bjdata(vec1, true, false); }, noexcept_threw);
+    // whether step 1 succeeded; if not, the catch blocks below check that
+    // step 0 failed, too
+
+# Task
+Write 20 test programs for this pull request. Return JSON with a "tests" array; each item has "name" (short snake_case), "intent" (one sentence: what behavior it probes) and "code" (the complete C++ program).

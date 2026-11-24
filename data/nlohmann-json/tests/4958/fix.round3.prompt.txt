@@ -1,0 +1,478 @@
+[system]
+You write test programs that probe a C++ library for behavioral changes made by one pull request.
+Each program is compiled and run twice, once against the library before the change and once after, and the two
+outputs are compared. Your job is to produce programs whose output reveals whether the change altered behavior,
+including side effects the author did not intend.
+
+Rules for every program:
+- It is standalone: one file with its own int main(), compiled as C++17, printing results to stdout.
+- Use only the library's documented public API. Never include internal headers or use detail/impl namespaces,
+  private members or undocumented macros.
+- Do not judge results (no assert, no expected-value comparisons): just print what the library returns. Print
+  enough to make differences visible, one fact per line.
+- Output must be deterministic. Never print pointers or addresses, uninitialized data, the order of
+  hash-based containers, timings, thread ids, random values, file paths or environment data. Print floating point
+  values with an explicit precision. No input, files, network, threads, clocks or randomness.
+- Wrap calls that may throw in try/catch and print the exception's type and message, so an exception is an
+  observable result. Do not crash on purpose.
+- Aim at the code the diff changes. Prefer calls that compile against both the old and the new library; one or two
+  programs may use an API the PR adds. Cover ordinary inputs and edge cases (empty, minimum and maximum values,
+  boundaries, special values, nesting, unusual types) and also neighbouring behavior the change could disturb.
+- When the diff changes which types or inputs an API accepts or rejects (constraints, overloads, traits,
+  conversions), test it with the detection idiom (std::void_t or requires) and `if constexpr`, so the program
+  compiles against both versions, prints whether the expression is well-formed, and exercises it when it is.
+  Accepting an input is not enough: also use it through every entry point that should follow (const and
+  non-const, read, write, insert, erase, lookup, nested use), because a change that admits new inputs can leave
+  later code unable to handle them.
+- If the changed code is internal (a detail, impl or internal namespace, a trait, a helper), do not name it in the
+  program. Reach it through the public API that depends on it, using detection (as above) where needed.
+- Use the exact types and values the diff is about (the new trait's argument types, the new overload's
+  parameters), not stand-ins.
+- Spread the programs over distinct public entry points and overloads, one main idea per program. Do not write
+  several programs that only rename a type or change a literal.
+- Make the programs differ from each other: different inputs, different entry points, different features.
+
+Rules specific to this library:
+- Include the library with #include <nlohmann/json.hpp>. The public API is nlohmann::json (nlohmann::basic_json), nlohmann::ordered_json, json_pointer, json patch/merge_patch and the documented SAX and conversion interfaces. Never use the detail namespace.
+- It is a header-only library: nothing to link. Programs are compiled as C++17.
+- Print JSON values with dump() (compact) or dump(2). Keys of nlohmann::json objects print in sorted order, so output is deterministic; do not depend on insertion order except with ordered_json.
+
+[user]
+# Pull request #4958: Enable string_view keys in operator[] by updating is_usable_as_basic_json_key_type (#3912)
+
+## Description
+This pull request adds std::string_view support for operator[] to improve usability with modern C++ (C++17 and later). The behavior now matches the existing std::string overloads. Additionally, the exception messages were updated for consistency when operator[] is used with non-object types and a string_view key.
+
+This change addresses and fixes issue #3912.
+
+- [x] The changes are described in detail, both the what and why.
+- [x] An existing issue is referenced (Fixes #3912).
+- [x] The Code coverage remains at 100%.. A test case for every new line of code.
+- [ ] If applicable, the [documentation](https://json.nlohmann.me) is updated.
+- [x] The source code is amalgamated by running `make amalgamate`.
+
+Read the [Contribution Guidelines](https://github.com/nlohmann/json/blob/develop/.github/CONTRIBUTING.md) for detailed information.
+
+## Commit message
+Signed-off-by: khloodelhossiny <khloood.elhossiny@gmail.com>
+Co-authored-by: khloodelhossiny <khloood.elhossiny@gmail.com>
+
+## Linked issue #3912: inconsistency with string/string_view lookups
+### Description
+
+`operator string_view()` isn't used, whereas `operator string()` _is_.
+
+### Reproduction steps
+
+https://godbolt.org/z/MYEYG3Gao
+
+### Expected vs. actual results
+
+compiles
+
+### Minimal code example
+
+```c++
+#include <iostream>
+#include <string>
+#include "nlohmann/json.hpp"
+
+using json = nlohmann::json;
+
+struct Foo {
+	operator std::string() const { return "foo"; }
+};
+
+struct Bar {
+	operator std::string_view() const { return "bar"; }
+};
+
+int main() {
+
+	json js {
+		{ "foo", "string" },
+		{ "bar", "string_view" },
+	};
+
+	std::cout << js[std::string{"foo"}] << "\n";
+	std::cout << js[Foo{}] << "\n";
+
+	std::cout << js[std::string_view{"bar"}] << "\n";
+	std::cout << js[Bar{}] << "\n";
+}
+```
+
+
+### Error messages
+
+```Shell
+<source>: In function 'int main()':
+<source>:26:24: error: no match for 'operator[]' (operand types are 'json' {aka 'nlohmann::json_abi_v3_11_2::basic_json<>'} and 'Bar')
+   26 |         std::cout << js[Bar{}] << "\n";
+      |                        ^
+```
+```
+
+
+### Compiler and operating system
+
+linux gcc 12.2
+
+### Library version
+
+trunk
+
+### Validation
+
+- [x] The bug also occurs if the latest version from the [`develop`](https://github.com/nlohmann/json/tree/develop) branch is used.
+- [ ] I can successfully [compile and run the unit tests](https://github.com/nlohmann/json#execute-unit-tests).
+
+## Discussion before merge
+- gregmarr: `string_view` support already exists through this function:
+
+```
+    /// @brief access specified object element
+    /// @sa https://json.nlohmann.me/api/basic_json/operator%5B%5D/
+    template<class KeyType, detail::enable_if_t<
+                 detail::is_usable_as_basic_json_key_type<basic_json_t, KeyType>::value, int > = 0 >
+    reference operator[](KeyType && key)
+```
+https://github.com/nlohmann/json/pull/3423
+
+As you can see from the godbolt link in the original issue, the issue isn't that `string_view` doesn't work, it's that the compiler doesn't pick up that the `operator string_view()` from the type should allow it to work.
+
+The thing that should really be updated is `is_usable_as_basic_json_key_type`, and then all of the existing functions will work.  I think it currently asks "can this type be used as a key" when this scenario needs it to ask "can this type be converted to a type that can be used as a key".
+
+You can update the test code like this to see the missing piece.
+```
+	std::cout << js[static_cast<std::string_view>(Bar{})] << "\n";  // Okay
+	std::cout << js[Bar{}] << "\n"; // Not okay
+```
+- khloodelhossiny: @gregmarr 
+Yes, I understand that `string_view` is supported through the existing template function, and the issue arises with js[Bar{}] due to ambiguity between the two overloads, causing the compiler to fail. 
+
+My idea is to add specific `string_view` overloads for operator[] to guide the compiler in choosing the correct one, resolving the ambiguity.
+- github-actions[bot]: ## 🔴 Amalgamation check failed! 🔴
+The source code has not been amalgamated. @khloodelhossiny
+ Please read and follow the [Contribution Guidelines](https://github.com/nlohmann/json/blob/develop/.github/CONTRIBUTING.md#files-to-change).
+- gregmarr: >My idea is to add specific string_view overloads for operator[] to guide the compiler in choosing the correct one, resolving the ambiguity.
+
+Okay, that's not what your PR description says, so it wasn't clear that you knew that.  
+
+I'd be worried about the compiler potentially having a problem selecting between `operator[](KeyType && key)` and `operator[](std::string_view key)` and there also being unnecessary duplication.  I still think that making  `is_usable_as_basic_json_key_type` work with it is a better route here, but @nlohmann may be okay with the new functions.
+- nlohmann: I think a cleaner approach would be indeed to fix `is_usable_as_basic_json_key_type` to also work with string views.
+- khloodelhossiny: > > My idea is to add specific string_view overloads for operator[] to guide the compiler in choosing the correct one, resolving the ambiguity.
+> 
+> Okay, that's not what your PR description says, so it wasn't clear that you knew that.
+> 
+> I'd be worried about the compiler potentially having a problem selecting between `operator[](KeyType && key)` and `operator[](std::string_view key)` and there also being unnecessary duplication. I still think that making `is_usable_as_basic_json_key_type` work with it is a better route here, but @nlohmann may be okay with the new functions.
+
+Thanks a lot for the explanation. I see your point, and I’ll update the code to follow that approach.
+
+## Changed functions (from changes.py)
+- nlohmann::detail::is_usable_as_basic_json_key_type (private); reached from the public API through: nlohmann::basic_json::at(KeyType &&), nlohmann::basic_json::contains(KeyType &&), nlohmann::basic_json::count(KeyType &&), nlohmann::basic_json::erase(KeyType &&), nlohmann::basic_json::find(KeyType &&), nlohmann::basic_json::operator[](KeyType &&)
+
+## Diff of the library source (before -> after)
+```diff
+diff --git a/include/nlohmann/detail/meta/type_traits.hpp b/include/nlohmann/detail/meta/type_traits.hpp
+index 4a1f346f9..3299549fb 100644
+--- a/include/nlohmann/detail/meta/type_traits.hpp
++++ b/include/nlohmann/detail/meta/type_traits.hpp
+@@ -636,11 +636,14 @@ using is_usable_as_key_type = typename std::conditional <
+ template<typename BasicJsonType, typename KeyTypeCVRef, bool RequireTransparentComparator = true,
+          bool ExcludeObjectKeyType = RequireTransparentComparator, typename KeyType = uncvref_t<KeyTypeCVRef>>
+ using is_usable_as_basic_json_key_type = typename std::conditional <
+-    is_usable_as_key_type<typename BasicJsonType::object_comparator_t,
+-    typename BasicJsonType::object_t::key_type, KeyTypeCVRef,
+-    RequireTransparentComparator, ExcludeObjectKeyType>::value
+-    && !is_json_iterator_of<BasicJsonType, KeyType>::value,
+-    std::true_type,
++    (is_usable_as_key_type<typename BasicJsonType::object_comparator_t,
++     typename BasicJsonType::object_t::key_type, KeyTypeCVRef,
++     RequireTransparentComparator, ExcludeObjectKeyType>::value
++     && !is_json_iterator_of<BasicJsonType, KeyType>::value)
++#ifdef JSON_HAS_CPP_17
++    || std::is_convertible<KeyType, std::string_view>::value
++#endif
++    , std::true_type,
+     std::false_type >::type;
+ 
+ template<typename ObjectType, typename KeyType>
+```
+
+## Existing upstream tests that call the changed code (for style and API usage)
+// Upstream tests at the PR's parent commit 515d994ac that use the changed code.
+// Names searched (test lines using each): at (223), contains (91), count (50), erase (189), find (111), operator[] (15), is_usable_as_basic_json_key_type (0)
+
+// ---- tests/src/unit-json_pointer.cpp:371-396  (uses: at, contains)
+        SECTION("const access")
+        {
+            const json j = {1, 2, 3};
+
+            // check reading access
+            CHECK(j["/0"_json_pointer] == j[0]);
+            CHECK(j["/1"_json_pointer] == j[1]);
+            CHECK(j["/2"_json_pointer] == j[2]);
+
+            // assign to nonexisting index
+            CHECK_THROWS_WITH_AS(j.at("/3"_json_pointer),
+                                 "[json.exception.out_of_range.401] array index 3 is out of range", json::out_of_range&);
+            CHECK(!j.contains("/3"_json_pointer));
+
+            // assign to nonexisting index (with gap)
+            CHECK_THROWS_WITH_AS(j.at("/5"_json_pointer),
+                                 "[json.exception.out_of_range.401] array index 5 is out of range", json::out_of_range&);
+            CHECK(!j.contains("/5"_json_pointer));
+
+            // assign to "-"
+            CHECK_THROWS_WITH_AS(j["/-"_json_pointer],
+                                 "[json.exception.out_of_range.402] array index '-' (3) is out of range", json::out_of_range&);
+            CHECK_THROWS_WITH_AS(j.at("/-"_json_pointer),
+                                 "[json.exception.out_of_range.402] array index '-' (3) is out of range", json::out_of_range&);
+            CHECK(!j.contains("/-"_json_pointer));
+        }
+
+// ---- tests/src/unit-element_access2.cpp:740-781  (uses: erase, find)
+            SECTION("remove element by key")
+            {
+                CHECK(j.find("integer") != j.end());
+                CHECK(j.erase("integer") == 1);
+                CHECK(j.find("integer") == j.end());
+                CHECK(j.erase("integer") == 0);
+
+                CHECK(j.find("unsigned") != j.end());
+                CHECK(j.erase("unsigned") == 1);
+                CHECK(j.find("unsigned") == j.end());
+                CHECK(j.erase("unsigned") == 0);
+
+                CHECK(j.find("boolean") != j.end());
+                CHECK(j.erase("boolean") == 1);
+                CHECK(j.find("boolean") == j.end());
+                CHECK(j.erase("boolean") == 0);
+
+                CHECK(j.find("null") != j.end());
+                CHECK(j.erase("null") == 1);
+                CHECK(j.find("null") == j.end());
+                CHECK(j.erase("null") == 0);
+
+                CHECK(j.find("string") != j.end());
+                CHECK(j.erase("string") == 1);
+                CHECK(j.find("string") == j.end());
+                CHECK(j.erase("string") == 0);
+
+                CHECK(j.find("floating") != j.end());
+                CHECK(j.erase("floating") == 1);
+                CHECK(j.find("floating") == j.end());
+                CHECK(j.erase("floating") == 0);
+
+                CHECK(j.find("object") != j.end());
+                CHECK(j.erase("object") == 1);
+                CHECK(j.find("object") == j.end());
+                CHECK(j.erase("object") == 0);
+
+                CHECK(j.find("array") != j.end());
+                CHECK(j.erase("array") == 1);
+                CHECK(j.find("array") == j.end());
+                CHECK(j.erase("array") == 0);
+            }
+
+// ---- tests/src/unit-element_access2.cpp:784-825  (uses: erase, find)
+            SECTION("remove element by key (string_view)")
+            {
+                CHECK(j.find(std::string_view("integer")) != j.end());
+                CHECK(j.erase(std::string_view("integer")) == 1);
+                CHECK(j.find(std::string_view("integer")) == j.end());
+                CHECK(j.erase(std::string_view("integer")) == 0);
+
+                CHECK(j.find(std::string_view("unsigned")) != j.end());
+                CHECK(j.erase(std::string_view("unsigned")) == 1);
+                CHECK(j.find(std::string_view("unsigned")) == j.end());
+                CHECK(j.erase(std::string_view("unsigned")) == 0);
+
+                CHECK(j.find(std::string_view("boolean")) != j.end());
+                CHECK(j.erase(std::string_view("boolean")) == 1);
+                CHECK(j.find(std::string_view("boolean")) == j.end());
+                CHECK(j.erase(std::string_view("boolean")) == 0);
+
+                CHECK(j.find(std::string_view("null")) != j.end());
+                CHECK(j.erase(std::string_view("null")) == 1);
+                CHECK(j.find(std::string_view("null")) == j.end());
+                CHECK(j.erase(std::string_view("null")) == 0);
+
+                CHECK(j.find(std::string_view("string")) != j.end());
+                CHECK(j.erase(std::string_view("string")) == 1);
+                CHECK(j.find(std::string_view("string")) == j.end());
+                CHECK(j.erase(std::string_view("string")) == 0);
+
+                CHECK(j.find(std::string_view("floating")) != j.end());
+                CHECK(j.erase(std::string_view("floating")) == 1);
+                CHECK(j.find(std::string_view("floating")) == j.end());
+                CHECK(j.erase(std::string_view("floating")) == 0);
+
+                CHECK(j.find(std::string_view("object")) != j.end());
+                CHECK(j.erase(std::string_view("object")) == 1);
+                CHECK(j.find(std::string_view("object")) == j.end());
+                CHECK(j.erase(std::string_view("object")) == 0);
+
+                CHECK(j.find(std::string_view("array")) != j.end());
+                CHECK(j.erase(std::string_view("array")) == 1);
+                CHECK(j.find(std::string_view("array")) == j.end());
+                CHECK(j.erase(std::string_view("array")) == 0);
+            }
+
+// ---- tests/src/unit-meta.cpp:16-35  (uses: at, find)
+    SECTION("meta()")
+    {
+        json j = json::meta();
+
+        CHECK(j["name"] == "JSON for Modern C++");
+        CHECK(j["copyright"] == "(C) 2013-2026 Niels Lohmann");
+        CHECK(j["url"] == "https://github.com/nlohmann/json");
+        CHECK(j["version"] == json(
+        {
+            {"string", "3.12.0"},
+            {"major", 3},
+            {"minor", 12},
+            {"patch", 0}
+        }));
+
+        CHECK(j.find("platform") != j.end());
+        CHECK(j.at("compiler").find("family") != j.at("compiler").end());
+        CHECK(j.at("compiler").find("version") != j.at("compiler").end());
+        CHECK(j.at("compiler").find("c++") != j.at("compiler").end());
+    }
+
+// ---- tests/src/unit-cbor.cpp:1281-1291  (uses: operator[])
+            SECTION("[[[[]]]]")
+            {
+                const json j = json::parse("[[[[]]]]");
+                const std::vector<uint8_t> expected = {0x81, 0x81, 0x81, 0x80};
+                const auto result = json::to_cbor(j);
+                CHECK(result == expected);
+
+                // roundtrip
+                CHECK(json::from_cbor(result) == j);
+                CHECK(json::from_cbor(result, true, false) == j);
+            }
+
+# Programs to repair
+
+## gen_17.cpp (detect)
+Intent: Probes writing or inserting values using operator[] with a type convertible to std::string_view.
+DETECTION REWRITE. The program fails to compile against the OLD library because the API or type it uses is not accepted there; it compiles against the NEW one. Rewrite it so it compiles against both. Check whether the expression is well-formed with the detection idiom (std::void_t or requires), print that result, and use the expression ONLY inside a function template that depends on the types involved, guarded by `if constexpr`. This matters: `if constexpr` in a plain function such as main() does NOT discard the other branch, so the old library would still fail to compile. Call that function template from main. When the expression is supported, exercise it fully (print every result, wrap throwing calls in try/catch). Keep the same types and inputs. Skeleton:
+```cpp
+template <class J, class K, class = void> struct can_use : std::false_type {};
+template <class J, class K>
+struct can_use<J, K, std::void_t<decltype(std::declval<J&>()[std::declval<K>()])>> : std::true_type {};
+template <class J, class K> void probe(J& j, K&& k) {
+    std::cout << "supported: " << can_use<J, K>::value << "\n";
+    if constexpr (can_use<J, K>::value) { /* use j[k] here, print results */ }
+}
+```
+(Replace the decltype expression with the one under test.)
+Compiler errors:
+```
+gen_17.cpp:13:6: error: no match for ‘operator[]’ (operand types are ‘nlohmann::json_abi_v3_12_0::json’ {aka ‘nlohmann::json_abi_v3_12_0::basic_json<>’} and ‘WriteKey’)
+json.hpp:2199:98: error: no type named ‘type’ in ‘struct std::enable_if<false, int>’
+json.hpp:2223:98: error: no type named ‘type’ in ‘struct std::enable_if<false, int>’
+```
+Source:
+```cpp
+#include <nlohmann/json.hpp>
+#include <iostream>
+#include <string_view>
+
+struct WriteKey {
+    operator std::string_view() const { return "new_field"; }
+};
+
+int main() {
+    nlohmann::json j;
+    j[WriteKey{}] = 9999;
+    std::cout << j.dump() << std::endl;
+}
+```
+
+## gen_18.cpp (detect)
+Intent: Probes conversion operator returning std::string_view by non-const reference or similar edge forms.
+DETECTION REWRITE. The program fails to compile against the OLD library because the API or type it uses is not accepted there; it compiles against the NEW one. Rewrite it so it compiles against both. Check whether the expression is well-formed with the detection idiom (std::void_t or requires), print that result, and use the expression ONLY inside a function template that depends on the types involved, guarded by `if constexpr`. This matters: `if constexpr` in a plain function such as main() does NOT discard the other branch, so the old library would still fail to compile. Call that function template from main. When the expression is supported, exercise it fully (print every result, wrap throwing calls in try/catch). Keep the same types and inputs. Skeleton:
+```cpp
+template <class J, class K, class = void> struct can_use : std::false_type {};
+template <class J, class K>
+struct can_use<J, K, std::void_t<decltype(std::declval<J&>()[std::declval<K>()])>> : std::true_type {};
+template <class J, class K> void probe(J& j, K&& k) {
+    std::cout << "supported: " << can_use<J, K>::value << "\n";
+    if constexpr (can_use<J, K>::value) { /* use j[k] here, print results */ }
+}
+```
+(Replace the decltype expression with the one under test.)
+Compiler errors:
+```
+gen_18.cpp:16:23: error: no match for ‘operator[]’ (operand types are ‘nlohmann::json_abi_v3_12_0::json’ {aka ‘nlohmann::json_abi_v3_12_0::basic_json<>’} and ‘RefKey’)
+json.hpp:2199:98: error: no type named ‘type’ in ‘struct std::enable_if<false, int>’
+json.hpp:2223:98: error: no type named ‘type’ in ‘struct std::enable_if<false, int>’
+```
+Source:
+```cpp
+#include <nlohmann/json.hpp>
+#include <iostream>
+#include <string_view>
+
+struct RefKey {
+    std::string_view sv = "ref_val";
+    operator std::string_view() const & { return sv; }
+};
+
+int main() {
+    nlohmann::json j = {{"ref_val", 333}};
+    try {
+        RefKey r;
+        std::cout << j[r] << std::endl;
+    } catch (const std::exception& e) {
+        std::cout << "Exception: " << e.what() << std::endl;
+    }
+}
+```
+
+## gen_20.cpp (detect)
+Intent: Probes overload resolution between json_pointer and a custom type convertible to std::string_view.
+DETECTION REWRITE. The program fails to compile against the OLD library because the API or type it uses is not accepted there; it compiles against the NEW one. Rewrite it so it compiles against both. Check whether the expression is well-formed with the detection idiom (std::void_t or requires), print that result, and use the expression ONLY inside a function template that depends on the types involved, guarded by `if constexpr`. This matters: `if constexpr` in a plain function such as main() does NOT discard the other branch, so the old library would still fail to compile. Call that function template from main. When the expression is supported, exercise it fully (print every result, wrap throwing calls in try/catch). Keep the same types and inputs. Skeleton:
+```cpp
+template <class J, class K, class = void> struct can_use : std::false_type {};
+template <class J, class K>
+struct can_use<J, K, std::void_t<decltype(std::declval<J&>()[std::declval<K>()])>> : std::true_type {};
+template <class J, class K> void probe(J& j, K&& k) {
+    std::cout << "supported: " << can_use<J, K>::value << "\n";
+    if constexpr (can_use<J, K>::value) { /* use j[k] here, print results */ }
+}
+```
+(Replace the decltype expression with the one under test.)
+Compiler errors:
+```
+gen_20.cpp:15:23: error: no match for ‘operator[]’ (operand types are ‘nlohmann::json_abi_v3_12_0::json’ {aka ‘nlohmann::json_abi_v3_12_0::basic_json<>’} and ‘PointerLikeKey’)
+json.hpp:2199:98: error: no type named ‘type’ in ‘struct std::enable_if<false, int>’
+json.hpp:2223:98: error: no type named ‘type’ in ‘struct std::enable_if<false, int>’
+```
+Source:
+```cpp
+#include <nlohmann/json.hpp>
+#include <iostream>
+#include <string_view>
+
+struct PointerLikeKey {
+    operator std::string_view() const { return "/abc"; }
+};
+
+int main() {
+    nlohmann::json j = {{"abc", 10}};
+    try {
+        // Should treat PointerLikeKey as a string key via string_view conversion
+        std::cout << j[PointerLikeKey{}] << std::endl;
+    } catch (const std::exception& e) {
+        std::cout << "Exception: " << e.what() << std::endl;
+    }
+}
+```
+
+# Task
+Return JSON with a "fixes" array: one item per program above, with "file" (exactly as given) and "code" (the complete repaired program, standalone, with its own int main). Do not return programs you cannot repair.
