@@ -2,17 +2,17 @@
   "target": "nlohmann-json",
   "pr": 4958,
   "model": "gemini-3.5-flash-lite",
-  "prompt_sha256": "495d49bf6d152113057b2a697c77d367e16892c9e35c3d6996fcef47118c9e46",
+  "prompt_sha256": "84b1bf3d6f0df26d43aadb0818ae17605825e9b099d0e667b7a7b01d3b3f5d75",
   "n_requested": 20,
   "dropped": 0,
   "usage": {
-    "promptTokenCount": 2977,
-    "candidatesTokenCount": 3606,
-    "totalTokenCount": 6583,
+    "promptTokenCount": 5213,
+    "candidatesTokenCount": 3823,
+    "totalTokenCount": 9036,
     "promptTokensDetails": [
       {
         "modality": "TEXT",
-        "tokenCount": 2977
+        "tokenCount": 5213
       }
     ],
     "serviceTier": "standard"
@@ -20,204 +20,229 @@
   "tests": [
     {
       "file": "gen_01.cpp",
-      "name": "string_view_conversion_operator",
-      "intent": "Probes whether a custom type with an explicit conversion operator to std::string_view can be used directly as a key in operator[] lookup.",
-      "round": 0,
-      "superseded_by": "gen_21.cpp"
-    },
-    {
-      "file": "gen_02.cpp",
-      "name": "string_view_implicit_convertible",
-      "intent": "Tests if a class implicitly convertible to std::string_view works with basic_json operator[] for object element access.",
-      "round": 0,
-      "superseded_by": "gen_22.cpp"
-    },
-    {
-      "file": "gen_03.cpp",
-      "name": "string_view_const_reference_access",
-      "intent": "Ensures that const reference operator[] works correctly with types convertible to std::string_view.",
-      "round": 0
-    },
-    {
-      "file": "gen_04.cpp",
-      "name": "string_view_non_object_exception",
-      "intent": "Checks the exception message behavior when operator[] with a string_view convertible custom type is called on a non-object json value.",
-      "round": 0,
-      "superseded_by": "gen_23.cpp"
-    },
-    {
-      "file": "gen_05.cpp",
-      "name": "string_view_key_mutation",
-      "intent": "Probes whether write access via operator[] works correctly using a custom type convertible to std::string_view on an existing key.",
-      "round": 0,
-      "superseded_by": "gen_24.cpp"
-    },
-    {
-      "file": "gen_06.cpp",
-      "name": "string_view_key_insertion",
-      "intent": "Probes whether insertion of a new element via operator[] works correctly using a custom type convertible to std::string_view.",
+      "name": "operator_bracket_with_implicit_string_view",
+      "intent": "Probes operator[] lookup using a custom type convertible to std::string_view.",
       "round": 0,
       "superseded_by": "gen_26.cpp"
     },
     {
+      "file": "gen_02.cpp",
+      "name": "contains_with_implicit_string_view",
+      "intent": "Probes contains() using a custom type convertible to std::string_view.",
+      "round": 0
+    },
+    {
+      "file": "gen_03.cpp",
+      "name": "at_with_implicit_string_view",
+      "intent": "Probes at() method using a custom type convertible to std::string_view.",
+      "round": 0
+    },
+    {
+      "file": "gen_04.cpp",
+      "name": "find_with_implicit_string_view",
+      "intent": "Probes find() method using a custom type convertible to std::string_view.",
+      "round": 0
+    },
+    {
+      "file": "gen_05.cpp",
+      "name": "count_with_implicit_string_view",
+      "intent": "Probes count() method using a custom type convertible to std::string_view.",
+      "round": 0
+    },
+    {
+      "file": "gen_06.cpp",
+      "name": "erase_with_implicit_string_view",
+      "intent": "Probes erase() method using a custom type convertible to std::string_view.",
+      "round": 0
+    },
+    {
       "file": "gen_07.cpp",
-      "name": "string_view_at_method_comparison",
-      "intent": "Checks if the at() member function and operator[] behave consistently for types convertible to std::string_view.",
-      "round": 0,
-      "superseded_by": "gen_27.cpp"
+      "name": "operator_bracket_const_implicit_string_view",
+      "intent": "Probes const operator[] lookup with a type implicitly convertible to std::string_view.",
+      "round": 0
     },
     {
       "file": "gen_08.cpp",
-      "name": "is_usable_as_basic_json_key_trait",
-      "intent": "Directly probes the type trait is_usable_as_basic_json_key_type with a user-defined type convertible to std::string_view.",
+      "name": "is_usable_as_basic_json_key_trait_check",
+      "intent": "Probes whether is_usable_as_basic_json_key_type evaluates to true for a type convertible to std::string_view.",
       "round": 0
     },
     {
       "file": "gen_09.cpp",
-      "name": "string_view_subscript_rvalue",
-      "intent": "Examines rvalue usage of a custom type convertible to std::string_view in nested operator[] expressions.",
-      "round": 0,
-      "superseded_by": "gen_28.cpp"
+      "name": "explicit_conversion_operator_string_view",
+      "intent": "Probes operator[] with a type having an explicit conversion operator to std::string_view.",
+      "round": 0
     },
     {
       "file": "gen_10.cpp",
-      "name": "multiple_string_view_conversions",
-      "intent": "Verifies overloading resolution and unambiguous behavior when multiple distinct user-defined types convertible to std::string_view are used.",
-      "round": 0,
-      "superseded_by": "gen_29.cpp"
+      "name": "multiple_conversion_operators_ambiguity",
+      "intent": "Probes behavior when a type provides multiple string-related conversion operators.",
+      "round": 0
     },
     {
       "file": "gen_11.cpp",
-      "name": "string_view_inherited_conversion",
-      "intent": "Tests a class hierarchy where the base class provides the operator std::string_view used for JSON key lookup.",
+      "name": "subclass_of_string_view_key",
+      "intent": "Probes operator[] lookup using a subclass of std::string_view.",
       "round": 0
     },
     {
       "file": "gen_12.cpp",
-      "name": "string_view_explicit_bool_conversion",
-      "intent": "Ensures that types having both bool conversion and string_view conversion do not break operator[] disambiguation.",
-      "round": 0
+      "name": "temporary_string_view_conversion_lifetime",
+      "intent": "Probes operator[] using a temporary object returning a string_view via conversion.",
+      "round": 0,
+      "superseded_by": "gen_27.cpp"
     },
     {
       "file": "gen_13.cpp",
-      "name": "string_view_key_find",
-      "intent": "Tests whether find() works consistently with operator[] for a user type convertible to std::string_view.",
+      "name": "ordered_json_implicit_string_view",
+      "intent": "Probes nlohmann::ordered_json operator[] lookup with a type convertible to std::string_view.",
       "round": 0
     },
     {
       "file": "gen_14.cpp",
-      "name": "string_view_key_contains",
-      "intent": "Examines contains() behavior with std::string_view conversion types.",
-      "round": 0
+      "name": "non_object_json_operator_bracket_string_view",
+      "intent": "Probes exception consistency when using operator[] with a string_view-convertible key on a non-object json value.",
+      "round": 0,
+      "superseded_by": "gen_28.cpp"
     },
     {
       "file": "gen_15.cpp",
-      "name": "string_view_ordered_json",
-      "intent": "Ensures that nlohmann::ordered_json also correctly handles custom types convertible to std::string_view in operator[].",
-      "round": 0,
-      "superseded_by": "gen_25.cpp"
+      "name": "non_object_json_at_string_view",
+      "intent": "Probes exception consistency when using at() with a string_view-convertible key on a non-object json value.",
+      "round": 0
     },
     {
       "file": "gen_16.cpp",
-      "name": "string_view_temporary_lifetime",
-      "intent": "Probes temporary lifetime handling when constructing a custom viewable key inline within operator[].",
-      "round": 0
+      "name": "nested_object_lookup_implicit_string_view",
+      "intent": "Probes chained operator[] lookups using types convertible to std::string_view.",
+      "round": 0,
+      "superseded_by": "gen_29.cpp"
     },
     {
       "file": "gen_17.cpp",
-      "name": "string_view_empty_key",
-      "intent": "Tests operator[] lookup using a custom type convertible to an empty std::string_view.",
-      "round": 0
+      "name": "assign_via_implicit_string_view_key",
+      "intent": "Probes writing or inserting values using operator[] with a type convertible to std::string_view.",
+      "round": 0,
+      "superseded_by": "gen_31.cpp"
     },
     {
       "file": "gen_18.cpp",
-      "name": "string_view_special_characters",
-      "intent": "Checks operator[] with a custom viewable key containing special characters and escapes.",
-      "round": 0
+      "name": "non_const_reference_to_string_view_operator",
+      "intent": "Probes conversion operator returning std::string_view by non-const reference or similar edge forms.",
+      "round": 0,
+      "superseded_by": "gen_32.cpp"
     },
     {
       "file": "gen_19.cpp",
-      "name": "string_view_conversion_noexcept",
-      "intent": "Tests a noexcept conversion operator to std::string_view used inside basic_json operator[].",
+      "name": "pointer_to_string_view_type_trait",
+      "intent": "Probes whether is_usable_as_basic_json_key_type handles pointer types or pointer-to-string_view gracefully.",
       "round": 0
     },
     {
       "file": "gen_20.cpp",
-      "name": "string_view_pointer_conversion_fallback",
-      "intent": "Probes behavior when a class provides both a pointer conversion and a string_view conversion.",
-      "round": 0
+      "name": "json_pointer_vs_string_view_ambiguity_check",
+      "intent": "Probes overload resolution between json_pointer and a custom type convertible to std::string_view.",
+      "round": 0,
+      "superseded_by": "gen_33.cpp"
     },
     {
       "file": "gen_21.cpp",
-      "name": "string_view_conversion_operator_fixed",
-      "intent": "Probes whether a custom type with an explicit conversion operator to std::string_view can be used directly as a key in operator[] lookup.",
+      "name": "gen_21",
+      "intent": "Test the condition where both is_usable_as_key_type and std::is_convertible to std::string_view are evaluated together for a key type that is an iterator of basic_json, exercising the logical conjunction and disjunction in is_usable_as_basic_json_key_type.",
       "round": 1,
+      "superseded_by": "gen_30.cpp"
+    },
+    {
+      "file": "gen_22.cpp",
+      "name": "gen_22",
+      "intent": "Test is_usable_as_basic_json_key_type directly with RequireTransparentComparator set to false and a type convertible to std::string_view to cover the template parameter variations in is_usable_as_basic_json_key_type.",
+      "round": 1
+    },
+    {
+      "file": "gen_23.cpp",
+      "name": "gen_23",
+      "intent": "Test is_usable_as_basic_json_key_type with a cv-qualified reference type convertible to std::string_view to verify uncvref_t handling and type traits evaluation.",
+      "round": 1
+    },
+    {
+      "file": "gen_24.cpp",
+      "name": "gen_24",
+      "intent": "Test is_usable_as_basic_json_key_type with ordered_json and a type convertible to std::string_view to check integration with different comparator types.",
+      "round": 1
+    },
+    {
+      "file": "gen_25.cpp",
+      "name": "gen_25",
+      "intent": "Test is_usable_as_basic_json_key_type with an array type decaying to pointer where std::is_convertible to std::string_view holds true, ensuring the disjunction path is fully exercised.",
+      "round": 1
+    },
+    {
+      "file": "gen_26.cpp",
+      "name": "operator_bracket_with_implicit_string_view_fixed",
+      "intent": "Probes operator[] lookup using a custom type convertible to std::string_view.",
+      "round": 2,
       "fixes": "gen_01.cpp",
       "kind": "detect"
     },
     {
-      "file": "gen_22.cpp",
-      "name": "string_view_implicit_convertible_fixed",
-      "intent": "Tests if a class implicitly convertible to std::string_view works with basic_json operator[] for object element access.",
-      "round": 1,
-      "fixes": "gen_02.cpp",
-      "kind": "detect"
-    },
-    {
-      "file": "gen_23.cpp",
-      "name": "string_view_non_object_exception_fixed",
-      "intent": "Checks the exception message behavior when operator[] with a string_view convertible custom type is called on a non-object json value.",
-      "round": 1,
-      "fixes": "gen_04.cpp",
-      "kind": "detect"
-    },
-    {
-      "file": "gen_24.cpp",
-      "name": "string_view_key_mutation_fixed",
-      "intent": "Probes whether write access via operator[] works correctly using a custom type convertible to std::string_view on an existing key.",
-      "round": 1,
-      "fixes": "gen_05.cpp",
-      "kind": "detect"
-    },
-    {
-      "file": "gen_25.cpp",
-      "name": "string_view_ordered_json_fixed",
-      "intent": "Ensures that nlohmann::ordered_json also correctly handles custom types convertible to std::string_view in operator[].",
-      "round": 1,
-      "fixes": "gen_15.cpp",
-      "kind": "compile"
-    },
-    {
-      "file": "gen_26.cpp",
-      "name": "string_view_key_insertion_fixed",
-      "intent": "Probes whether insertion of a new element via operator[] works correctly using a custom type convertible to std::string_view.",
-      "round": 2,
-      "fixes": "gen_06.cpp",
-      "kind": "detect"
-    },
-    {
       "file": "gen_27.cpp",
-      "name": "string_view_at_method_comparison_fixed",
-      "intent": "Checks if the at() member function and operator[] behave consistently for types convertible to std::string_view.",
+      "name": "temporary_string_view_conversion_lifetime_fixed",
+      "intent": "Probes operator[] using a temporary object returning a string_view via conversion.",
       "round": 2,
-      "fixes": "gen_07.cpp",
+      "fixes": "gen_12.cpp",
       "kind": "detect"
     },
     {
       "file": "gen_28.cpp",
-      "name": "string_view_subscript_rvalue_fixed",
-      "intent": "Examines rvalue usage of a custom type convertible to std::string_view in nested operator[] expressions.",
+      "name": "non_object_json_operator_bracket_string_view_fixed",
+      "intent": "Probes exception consistency when using operator[] with a string_view-convertible key on a non-object json value.",
       "round": 2,
-      "fixes": "gen_09.cpp",
+      "fixes": "gen_14.cpp",
       "kind": "detect"
     },
     {
       "file": "gen_29.cpp",
-      "name": "multiple_string_view_conversions_fixed",
-      "intent": "Verifies overloading resolution and unambiguous behavior when multiple distinct user-defined types convertible to std::string_view are used.",
+      "name": "nested_object_lookup_implicit_string_view_fixed",
+      "intent": "Probes chained operator[] lookups using types convertible to std::string_view.",
       "round": 2,
-      "fixes": "gen_10.cpp",
+      "fixes": "gen_16.cpp",
+      "kind": "detect"
+    },
+    {
+      "file": "gen_30.cpp",
+      "name": "gen_21_fixed",
+      "intent": "Test the condition where both is_usable_as_key_type and std::is_convertible to std::string_view are evaluated together for a key type that is an iterator of basic_json, exercising the logical conjunction and disjunction in is_usable_as_basic_json_key_type.",
+      "round": 2,
+      "fixes": "gen_21.cpp",
+      "kind": "compile"
+    },
+    {
+      "file": "gen_31.cpp",
+      "name": "assign_via_implicit_string_view_key_fixed",
+      "intent": "Probes writing or inserting values using operator[] with a type convertible to std::string_view.",
+      "round": 3,
+      "fixes": "gen_17.cpp",
+      "kind": "detect"
+    },
+    {
+      "file": "gen_32.cpp",
+      "name": "non_const_reference_to_string_view_operator_fixed",
+      "intent": "Probes conversion operator returning std::string_view by non-const reference or similar edge forms.",
+      "round": 3,
+      "fixes": "gen_18.cpp",
+      "kind": "detect"
+    },
+    {
+      "file": "gen_33.cpp",
+      "name": "json_pointer_vs_string_view_ambiguity_check_fixed",
+      "intent": "Probes overload resolution between json_pointer and a custom type convertible to std::string_view.",
+      "round": 3,
+      "fixes": "gen_20.cpp",
       "kind": "detect"
     }
-  ]
+  ],
+  "fix": {
+    "rounds_max": 2,
+    "model": "gemini-3.5-flash-lite"
+  }
 }

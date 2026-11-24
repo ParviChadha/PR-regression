@@ -120,11 +120,18 @@ tmpfile/tmpfile:Function tmpfile() has a security flaw on some systems (e.g., ol
 
 [Show more details](https://github.com/nlohmann/json/security/code-scanning/1167)
 
-## Changed functions (from git hunk headers (rough hint))
-- any container met in practice. @ref binary_writer falls back to the
-- JSON_INLINE_VARIABLE constexpr std::size_t max_valueless_container_size = 1 << 2
-- class binary_reader
-- class binary_writer
+## Changed functions (from changes.py)
+- nlohmann::detail::binary_writer::write_ubjson_start_container(const BasicJsonType &, const bool, const bool, const bool, const bool, bool &) (private); reached from the public API through: nlohmann::basic_json::to_bjdata(const basic_json<...> &, detail::output_adapter<char>, const bool, const bool, const bjdata_version_t, const error_handler_t), nlohmann::basic_json::to_bjdata(const basic_json<...> &, detail::output_adapter<std::uint8_t>, const bool, const bool, const bjdata_version_t, const error_handler_t), nlohmann::basic_json::to_bon8(const basic_json<...> &, detail::output_adapter<char>), nlohmann::basic_json::to_bon8(const basic_json<...> &, detail::output_adapter<std::uint8_t>), nlohmann::basic_json::to_bson(const basic_json<...> &, detail::output_adapter<char>, const error_handler_t), nlohmann::basic_json::to_bson(const basic_json<...> &, detail::output_adapter<std::uint8_t>, const error_handler_t), nlohmann::basic_json::to_cbor(const basic_json<...> &, detail::output_adapter<char>, const error_handler_t), nlohmann::basic_json::to_cbor(const basic_json<...> &, detail::output_adapter<std::uint8_t>, const error_handler_t), nlohmann::basic_json::to_msgpack(const basic_json<...> &, detail::output_adapter<char>, const error_handler_t), nlohmann::basic_json::to_msgpack(const basic_json<...> &, detail::output_adapter<std::uint8_t>, const error_handler_t)
+- nlohmann::detail::binary_reader::get_ubjson_array() (private); reached from the public API through: nlohmann::basic_json::sax_parse(detail::span_input_adapter &&, SAX *, input_format_t, const bool, const bool, const bool, const cbor_tag_handler_t), nlohmann::basic_json::sax_parse(InputType &&, SAX *, input_format_t, const bool, const bool, const bool, const cbor_tag_handler_t), nlohmann::basic_json::sax_parse(IteratorType, SentinelType, SAX *, input_format_t, const bool, const bool, const bool, const cbor_tag_handler_t), nlohmann::basic_json::from_bson(detail::span_input_adapter &&, const bool, const bool), nlohmann::basic_json::from_cbor(detail::span_input_adapter &&, const bool, const bool, const cbor_tag_handler_t), nlohmann::basic_json::from_msgpack(detail::span_input_adapter &&, const bool, const bool), nlohmann::basic_json::from_ubjson(detail::span_input_adapter &&, const bool, const bool), nlohmann::basic_json::from_bjdata(InputType &&, const bool, const bool, const error_handler_t), nlohmann::basic_json::from_bon8(InputType &&, const bool, const bool), nlohmann::basic_json::from_bson(InputType &&, const bool, const bool, const error_handler_t)
+- nlohmann::detail::binary_reader (private); reached from the public API through: nlohmann::basic_json::sax_parse(detail::span_input_adapter &&, SAX *, input_format_t, const bool, const bool, const bool, const cbor_tag_handler_t), nlohmann::basic_json::sax_parse(InputType &&, SAX *, input_format_t, const bool, const bool, const bool, const cbor_tag_handler_t), nlohmann::basic_json::sax_parse(IteratorType, SentinelType, SAX *, input_format_t, const bool, const bool, const bool, const cbor_tag_handler_t), nlohmann::basic_json::from_bson(detail::span_input_adapter &&, const bool, const bool), nlohmann::basic_json::from_cbor(detail::span_input_adapter &&, const bool, const bool, const cbor_tag_handler_t), nlohmann::basic_json::from_msgpack(detail::span_input_adapter &&, const bool, const bool), nlohmann::basic_json::from_ubjson(detail::span_input_adapter &&, const bool, const bool), nlohmann::basic_json::from_bjdata(InputType &&, const bool, const bool, const error_handler_t), nlohmann::basic_json::from_bon8(InputType &&, const bool, const bool), nlohmann::basic_json::from_bson(InputType &&, const bool, const bool, const error_handler_t)
+- nlohmann::detail::binary_writer (private); reached from the public API through: nlohmann::basic_json::to_bjdata(const basic_json<...> &, detail::output_adapter<char>, const bool, const bool, const bjdata_version_t, const error_handler_t), nlohmann::basic_json::to_bjdata(const basic_json<...> &, detail::output_adapter<std::uint8_t>, const bool, const bool, const bjdata_version_t, const error_handler_t), nlohmann::basic_json::to_bon8(const basic_json<...> &, detail::output_adapter<char>), nlohmann::basic_json::to_bon8(const basic_json<...> &, detail::output_adapter<std::uint8_t>), nlohmann::basic_json::to_bson(const basic_json<...> &, detail::output_adapter<char>, const error_handler_t), nlohmann::basic_json::to_bson(const basic_json<...> &, detail::output_adapter<std::uint8_t>, const error_handler_t), nlohmann::basic_json::to_cbor(const basic_json<...> &, detail::output_adapter<char>, const error_handler_t), nlohmann::basic_json::to_cbor(const basic_json<...> &, detail::output_adapter<std::uint8_t>, const error_handler_t), nlohmann::basic_json::to_msgpack(const basic_json<...> &, detail::output_adapter<char>, const error_handler_t), nlohmann::basic_json::to_msgpack(const basic_json<...> &, detail::output_adapter<std::uint8_t>, const error_handler_t)
+- nlohmann::detail::binary_reader::charge_valueless_elements(const std::size_t) (private); reached from the public API through: nlohmann::basic_json::sax_parse(detail::span_input_adapter &&, SAX *, input_format_t, const bool, const bool, const bool, const cbor_tag_handler_t), nlohmann::basic_json::sax_parse(InputType &&, SAX *, input_format_t, const bool, const bool, const bool, const cbor_tag_handler_t), nlohmann::basic_json::sax_parse(IteratorType, SentinelType, SAX *, input_format_t, const bool, const bool, const bool, const cbor_tag_handler_t), nlohmann::basic_json::from_bson(detail::span_input_adapter &&, const bool, const bool), nlohmann::basic_json::from_cbor(detail::span_input_adapter &&, const bool, const bool, const cbor_tag_handler_t), nlohmann::basic_json::from_msgpack(detail::span_input_adapter &&, const bool, const bool), nlohmann::basic_json::from_ubjson(detail::span_input_adapter &&, const bool, const bool), nlohmann::basic_json::from_bjdata(InputType &&, const bool, const bool, const error_handler_t), nlohmann::basic_json::from_bon8(InputType &&, const bool, const bool), nlohmann::basic_json::from_bson(InputType &&, const bool, const bool, const error_handler_t)
+- nlohmann::detail::binary_writer::valueless_array_fits(const bool, const std::size_t, const std::size_t) (private); reached from the public API through: nlohmann::basic_json::to_bjdata(const basic_json<...> &, detail::output_adapter<char>, const bool, const bool, const bjdata_version_t, const error_handler_t), nlohmann::basic_json::to_bjdata(const basic_json<...> &, detail::output_adapter<std::uint8_t>, const bool, const bool, const bjdata_version_t, const error_handler_t), nlohmann::basic_json::to_bon8(const basic_json<...> &, detail::output_adapter<char>), nlohmann::basic_json::to_bon8(const basic_json<...> &, detail::output_adapter<std::uint8_t>), nlohmann::basic_json::to_bson(const basic_json<...> &, detail::output_adapter<char>, const error_handler_t), nlohmann::basic_json::to_bson(const basic_json<...> &, detail::output_adapter<std::uint8_t>, const error_handler_t), nlohmann::basic_json::to_cbor(const basic_json<...> &, detail::output_adapter<char>, const error_handler_t), nlohmann::basic_json::to_cbor(const basic_json<...> &, detail::output_adapter<std::uint8_t>, const error_handler_t), nlohmann::basic_json::to_msgpack(const basic_json<...> &, detail::output_adapter<char>, const error_handler_t), nlohmann::basic_json::to_msgpack(const basic_json<...> &, detail::output_adapter<std::uint8_t>, const error_handler_t)
+- nlohmann::detail::binary_reader::valueless_elements (private); reached from the public API through: nlohmann::basic_json::sax_parse(detail::span_input_adapter &&, SAX *, input_format_t, const bool, const bool, const bool, const cbor_tag_handler_t), nlohmann::basic_json::sax_parse(InputType &&, SAX *, input_format_t, const bool, const bool, const bool, const cbor_tag_handler_t), nlohmann::basic_json::sax_parse(IteratorType, SentinelType, SAX *, input_format_t, const bool, const bool, const bool, const cbor_tag_handler_t), nlohmann::basic_json::from_bson(detail::span_input_adapter &&, const bool, const bool), nlohmann::basic_json::from_cbor(detail::span_input_adapter &&, const bool, const bool, const cbor_tag_handler_t), nlohmann::basic_json::from_msgpack(detail::span_input_adapter &&, const bool, const bool), nlohmann::basic_json::from_ubjson(detail::span_input_adapter &&, const bool, const bool), nlohmann::basic_json::from_bjdata(InputType &&, const bool, const bool, const error_handler_t), nlohmann::basic_json::from_bon8(InputType &&, const bool, const bool), nlohmann::basic_json::from_bson(InputType &&, const bool, const bool, const error_handler_t)
+- nlohmann::detail::binary_writer::valueless_elements_written (private); reached from the public API through: nlohmann::basic_json::to_bjdata(const basic_json<...> &, detail::output_adapter<char>, const bool, const bool, const bjdata_version_t, const error_handler_t), nlohmann::basic_json::to_bjdata(const basic_json<...> &, detail::output_adapter<std::uint8_t>, const bool, const bool, const bjdata_version_t, const error_handler_t), nlohmann::basic_json::to_bon8(const basic_json<...> &, detail::output_adapter<char>), nlohmann::basic_json::to_bon8(const basic_json<...> &, detail::output_adapter<std::uint8_t>), nlohmann::basic_json::to_bson(const basic_json<...> &, detail::output_adapter<char>, const error_handler_t), nlohmann::basic_json::to_bson(const basic_json<...> &, detail::output_adapter<std::uint8_t>, const error_handler_t), nlohmann::basic_json::to_cbor(const basic_json<...> &, detail::output_adapter<char>, const error_handler_t), nlohmann::basic_json::to_cbor(const basic_json<...> &, detail::output_adapter<std::uint8_t>, const error_handler_t), nlohmann::basic_json::to_msgpack(const basic_json<...> &, detail::output_adapter<char>, const error_handler_t), nlohmann::basic_json::to_msgpack(const basic_json<...> &, detail::output_adapter<std::uint8_t>, const error_handler_t)
+- nlohmann::detail::valueless_elements_base (private); reached from the public API through: nlohmann::basic_json::to_bjdata(const basic_json<...> &, detail::output_adapter<char>, const bool, const bool, const bjdata_version_t, const error_handler_t), nlohmann::basic_json::to_bjdata(const basic_json<...> &, detail::output_adapter<std::uint8_t>, const bool, const bool, const bjdata_version_t, const error_handler_t), nlohmann::basic_json::to_bon8(const basic_json<...> &, detail::output_adapter<char>), nlohmann::basic_json::to_bon8(const basic_json<...> &, detail::output_adapter<std::uint8_t>), nlohmann::basic_json::to_bson(const basic_json<...> &, detail::output_adapter<char>, const error_handler_t), nlohmann::basic_json::to_bson(const basic_json<...> &, detail::output_adapter<std::uint8_t>, const error_handler_t), nlohmann::basic_json::to_cbor(const basic_json<...> &, detail::output_adapter<char>, const error_handler_t), nlohmann::basic_json::to_cbor(const basic_json<...> &, detail::output_adapter<std::uint8_t>, const error_handler_t), nlohmann::basic_json::to_msgpack(const basic_json<...> &, detail::output_adapter<char>, const error_handler_t), nlohmann::basic_json::to_msgpack(const basic_json<...> &, detail::output_adapter<std::uint8_t>, const error_handler_t)
+- nlohmann::detail::valueless_elements_per_byte (private); reached from the public API through: nlohmann::basic_json::sax_parse(detail::span_input_adapter &&, SAX *, input_format_t, const bool, const bool, const bool, const cbor_tag_handler_t), nlohmann::basic_json::sax_parse(InputType &&, SAX *, input_format_t, const bool, const bool, const bool, const cbor_tag_handler_t), nlohmann::basic_json::sax_parse(IteratorType, SentinelType, SAX *, input_format_t, const bool, const bool, const bool, const cbor_tag_handler_t), nlohmann::basic_json::from_bson(detail::span_input_adapter &&, const bool, const bool), nlohmann::basic_json::from_cbor(detail::span_input_adapter &&, const bool, const bool, const cbor_tag_handler_t), nlohmann::basic_json::from_msgpack(detail::span_input_adapter &&, const bool, const bool), nlohmann::basic_json::from_ubjson(detail::span_input_adapter &&, const bool, const bool), nlohmann::basic_json::from_bjdata(InputType &&, const bool, const bool, const error_handler_t), nlohmann::basic_json::from_bon8(InputType &&, const bool, const bool), nlohmann::basic_json::from_bson(InputType &&, const bool, const bool, const error_handler_t)
+- nlohmann::detail::binary_writer::error_handler (private); reached from the public API through: nlohmann::basic_json::to_bjdata(const basic_json<...> &, detail::output_adapter<char>, const bool, const bool, const bjdata_version_t, const error_handler_t), nlohmann::basic_json::to_bjdata(const basic_json<...> &, detail::output_adapter<std::uint8_t>, const bool, const bool, const bjdata_version_t, const error_handler_t), nlohmann::basic_json::to_bon8(const basic_json<...> &, detail::output_adapter<char>), nlohmann::basic_json::to_bon8(const basic_json<...> &, detail::output_adapter<std::uint8_t>), nlohmann::basic_json::to_bson(const basic_json<...> &, detail::output_adapter<char>, const error_handler_t), nlohmann::basic_json::to_bson(const basic_json<...> &, detail::output_adapter<std::uint8_t>, const error_handler_t), nlohmann::basic_json::to_cbor(const basic_json<...> &, detail::output_adapter<char>, const error_handler_t), nlohmann::basic_json::to_cbor(const basic_json<...> &, detail::output_adapter<std::uint8_t>, const error_handler_t), nlohmann::basic_json::to_msgpack(const basic_json<...> &, detail::output_adapter<char>, const error_handler_t), nlohmann::basic_json::to_msgpack(const basic_json<...> &, detail::output_adapter<std::uint8_t>, const error_handler_t)
 
 ## Diff of the library source (before -> after)
 ```diff
@@ -340,6 +347,129 @@ index dda9c3758..c579eb705 100644
  
  }  // namespace detail
 ```
+
+## Existing upstream tests that call the changed code (for style and API usage)
+// Upstream tests at the PR's parent commit 79f6513ce that use the changed code.
+// Names searched (test lines using each): to_bjdata (0), to_bon8 (0), to_bson (0), to_cbor (0), to_msgpack (0), sax_parse (0), from_bson (0), from_cbor (0), from_msgpack (0), from_ubjson (0), from_bjdata (0), from_bon8 (0), write_ubjson_start_container (0), get_ubjson_array (0), binary_reader (2), binary_writer (0), charge_valueless_elements (0), valueless_array_fits (0), valueless_elements (0), valueless_elements_written (0), valueless_elements_base (0), valueless_elements_per_byte (0), error_handler (23)
+
+// ---- tests/src/unit-bjdata.cpp:79-116  (uses: binary_reader)
+    SECTION("binary_reader BJData lookup tables")
+    {
+        // bjd_type_name() is static; is_valid_optimized_type() needs a BJData reader
+        std::vector<std::uint8_t> const data;
+        using reader_t = nlohmann::detail::binary_reader<json, decltype(nlohmann::detail::input_adapter(data))>;
+
+        // the markers BJData excludes as optimized types must match
+        // binary_writer's is_bjdata_excluded_type_marker(), which encodes the
+        // same 8 markers
+        const reader_t reader(nlohmann::detail::input_adapter(data), json::input_format_t::bjdata);
+        for (const char marker :
+                {'[', '{', 'S', 'H', 'T', 'F', 'N', 'Z', 'x'
+                })
+        {
+            CHECK(!reader.is_valid_optimized_type(static_cast<unsigned char>(marker)));
+        }
+        for (const char marker :
+                {'U', 'i', 'u', 'I', 'm', 'l', 'M', 'L', 'd', 'D', 'C', 'B', 'h'
+                })
+        {
+            CHECK(reader.is_valid_optimized_type(static_cast<unsigned char>(marker)));
+        }
+
+        // every dtype marker must round-trip to its ND-array type name
+        const std::vector<std::pair<char, std::string>> types
+        {
+            {'B', "byte"}, {'C', "char"}, {'D', "double"}, {'I', "int16"},
+            {'L', "int64"}, {'M', "uint64"}, {'U', "uint8"}, {'d', "single"},
+            {'i', "int8"}, {'l', "int32"}, {'m', "uint32"}, {'u', "uint16"}
+        };
+        for (const auto& type : types)
+        {
+            const char* name = reader_t::bjd_type_name(static_cast<unsigned char>(type.first));
+            REQUIRE(name != nullptr);
+            CHECK(std::string(name) == type.second);
+        }
+        CHECK(reader_t::bjd_type_name(static_cast<unsigned char>('x')) == nullptr);
+    }
+
+// ---- tests/src/unit-binary_utf8_error_handler.cpp:45-69  (uses: error_handler)
+{
+    return "\xC3\xA9"; // U+00E9, "é"
+}
+
+using eh = json::error_handler_t;
+std::vector<eh> all_handlers()
+{
+    return {eh::strict, eh::replace, eh::ignore, eh::keep};
+}
+
+// what dump()+parse() produces for a sanitizing error_handler; this is the
+// ground truth every binary writer/reader is checked against
+std::string dump_and_parse(const std::string& raw, eh error_handler)
+{
+    return json::parse(json(raw).dump(-1, ' ', false, error_handler)).get<std::string>();
+}
+
+// an object key type that is not string_t, but converts implicitly to it;
+// data() is only used when JSON_DIAGNOSTICS is enabled
+DOCTEST_CLANG_SUPPRESS_WARNING_PUSH
+DOCTEST_CLANG_SUPPRESS_WARNING("-Wunused-member-function")
+class converting_key
+{
+  public:
+    converting_key(const char* s) : m_value(s) {} // NOLINT(google-explicit-constructor,hicpp-explicit-conversions)
+
+// ---- tests/src/unit-binary_utf8_error_handler.cpp:111-123  (uses: error_handler)
+TEST_CASE("UTF-8 error_handler for the binary readers and writers")
+{
+    SECTION("writers: string value")
+    {
+        for (const auto& c : ill_formed_cases())
+        {
+            CAPTURE(c.name)
+            const json jval = c.bytes;
+
+            CHECK_THROWS_AS(json::to_cbor(jval, eh::strict), json::type_error&);
+            CHECK_THROWS_AS(json::to_msgpack(jval, eh::strict), json::type_error&);
+            CHECK_THROWS_AS(json::to_ubjson(jval, false, false, eh::strict), json::type_error&);
+            CHECK_THROWS_AS(json::to_bjdata(jval, false, false, json::bjdata_version_t::draft2, eh::strict), json::type_error&);
+
+// ---- tests/src/unit-binary_utf8_strict.cpp:127-135  (uses: error_handler)
+    SECTION("an explicit error_handler overrides the default")
+    {
+        // the macro only changes the default of the error_handler parameter
+        CHECK(json::to_cbor(json("\xFF"), json::error_handler_t::keep) == std::vector<std::uint8_t>({0x61, 0xff}));
+        CHECK(json::to_ubjson(json("\xFF"), false, false, json::error_handler_t::keep) == std::vector<std::uint8_t>({'S', 'i', 1, 0xff}));
+        CHECK(json::to_bjdata(json("\xFF"), false, false, json::bjdata_version_t::draft2, json::error_handler_t::keep) == std::vector<std::uint8_t>({'S', 'i', 1, 0xff}));
+        CHECK(json::from_bson(json::to_bson(json{{"s", "\xFF"}}, json::error_handler_t::keep)) == json{{"s", "\xFF"}});
+        CHECK(json::to_cbor(json("\xFF"), json::error_handler_t::replace) == std::vector<std::uint8_t>({0x63, 0xef, 0xbf, 0xbd}));
+    }
+
+// ---- tests/src/unit-cbor.cpp:1898-1921  (uses: error_handler)
+                CHECK_THROWS_AS(_ = json::from_cbor(std::vector<std::uint8_t>({0xA1, 0xDB, 0x00, 0x00}), true, true, store), json::parse_error&);
+                CHECK_THROWS_AS(_ = json::from_cbor(std::vector<std::uint8_t>({0xBF, 0xC0}), true, true, store), json::parse_error&);
+            }
+
+            // SAX: the key event is reported without the tag (start_object,
+            // key, number_unsigned, end_object are four events)
+            {
+                const std::vector<std::uint8_t> input = {0xA1, 0xC0, 0x61, 0x61, 0x0A};
+                SaxCountdown four(4);
+                CHECK(json::sax_parse(input, &four, json::input_format_t::cbor, true, false, false, ignore));
+                SaxCountdown three(3);
+                CHECK(!json::sax_parse(input, &three, json::input_format_t::cbor, true, false, false, ignore));
+                SaxCountdown error_handler(4);
+                CHECK(!json::sax_parse(input, &error_handler, json::input_format_t::cbor));
+            }
+
+            // a long chain of tags needs no recursion
+            {
+                std::vector<std::uint8_t> input = {0xA1};
+                input.insert(input.end(), 100000, 0xC0);
+                input.insert(input.end(), {0x61, 0x61, 0x0A});
+                CHECK(json::from_cbor(input, true, true, ignore) == expected);
+            }
+        }
 
 # Task
 Write 20 test programs for this pull request. Return JSON with a "tests" array; each item has "name" (short snake_case), "intent" (one sentence: what behavior it probes) and "code" (the complete C++ program).

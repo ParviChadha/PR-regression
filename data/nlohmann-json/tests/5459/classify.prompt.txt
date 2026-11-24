@@ -140,9 +140,9 @@ value_t.hpp:171:65: error: conditional operator is used as sub-expression of par
 - gregmarr: /__w/json/json/include/nlohmann/json.hpp:3714:120: error: macro argument should be enclosed in parentheses [bugprone-macro-parentheses,-warnings-as-errors]
  3714 |         return detail::compare_integer_with_float(lhs.m_data.m_value.number_unsigned, rhs.m_data.m_value.number_float) op static_cast<number_float_t>(0); \
 
-## Changed functions (from git hunk headers (rough hint))
-- inline bool operator<(const value_t lhs, const value_t rhs) noexcept
-- class basic_json // NOLINT(cppcoreguidelines-special-member-functions,hicpp-spec
+## Changed functions (from changes.py)
+- nlohmann::detail::compare_integer_with_float(const IntegerType, const FloatType) (private); reached from the public API through: nlohmann::operator<(const_reference, const_reference), nlohmann::operator==(const_reference, const_reference)
+- JSON_IMPLEMENT_OPERATOR
 
 ## Diff of the library source (before -> after)
 ```diff
@@ -261,71 +261,417 @@ index 4e057068c..969942183 100644
      {                                                                                                    \
 ```
 
+## Existing upstream tests that call the changed code (for style and API usage)
+// Upstream tests at the PR's parent commit 19386dd14 that use the changed code.
+// Names searched (test lines using each): JSON_IMPLEMENT_OPERATOR (0), operator< (123), operator== (39), compare_integer_with_float (0)
+
+// ---- tests/src/unit-comparison.cpp:66-78  (uses: operator<, operator==)
+TEST_CASE("lexicographical comparison operators")
+{
+    constexpr auto f_ = false;
+    constexpr auto _t = true;
+    constexpr auto nan = std::numeric_limits<json::number_float_t>::quiet_NaN();
+#if JSON_HAS_THREE_WAY_COMPARISON
+    constexpr auto lt = std::partial_ordering::less;
+    constexpr auto gt = std::partial_ordering::greater;
+    constexpr auto eq = std::partial_ordering::equivalent;
+    constexpr auto un = std::partial_ordering::unordered;
+#endif
+
+#if JSON_HAS_THREE_WAY_COMPARISON
+
+// ---- tests/src/unit-comparison.cpp:120-140  (uses: operator<, operator==)
+        SECTION("comparison: less")
+        {
+            REQUIRE(expected_lt.size() == j_types.size());
+            for (size_t i = 0; i < j_types.size(); ++i)
+            {
+                REQUIRE(expected_lt[i].size() == j_types.size());
+                for (size_t j = 0; j < j_types.size(); ++j)
+                {
+                    CAPTURE(i)
+                    CAPTURE(j)
+                    // check precomputed values
+#if JSON_HAS_THREE_WAY_COMPARISON
+                    // JSON_HAS_CPP_20 (do not remove; see note at top of file)
+                    CHECK((j_types[i] < j_types[j]) == expected_lt[i][j]);
+#else
+                    CHECK(operator<(j_types[i], j_types[j]) == expected_lt[i][j]);
+#endif
+                    CHECK(f(j_types[i], j_types[j]) == expected_lt[i][j]);
+                }
+            }
+        }
+
+// ---- tests/src/unit-algorithms.cpp:125-135  (uses: operator<, operator==)
+            SECTION("using user-defined comparison")
+            {
+                // compare objects only by size of its elements
+                json j_array2 = {13, 29, 3, {"Hello", "World"}, true, false, {{"one", 1}, {"two", 2}, {"three", 3}}, "foo", "baz"};
+                CHECK(!std::equal(j_array.begin(), j_array.end(), j_array2.begin()));
+                CHECK(std::equal(j_array.begin(), j_array.end(), j_array2.begin(),
+                                 [](const json & a, const json & b)
+                {
+                    return (a.size() == b.size());
+                }));
+            }
+
+// ---- tests/src/unit-algorithms.cpp:204-209  (uses: operator<, operator==)
+            SECTION("with standard comparison")
+            {
+                json j = {13, 29, 3, {{"one", 1}, {"two", 2}}, true, false, {1, 2, 3}, "foo", "baz", nullptr};
+                std::sort(j.begin(), j.end());
+                CHECK(j == json({nullptr, false, true, 3, 13, 29, {{"one", 1}, {"two", 2}}, {1, 2, 3}, "baz", "foo"}));
+            }
+
+// ---- tests/src/unit-byte_container_with_subtype.cpp:45-75  (uses: operator<, operator==)
+    SECTION("comparisons")
+    {
+        std::vector<std::uint8_t> const bytes = {{0xCA, 0xFE, 0xBA, 0xBE}};
+        nlohmann::byte_container_with_subtype<std::vector<std::uint8_t>> container1;
+        nlohmann::byte_container_with_subtype<std::vector<std::uint8_t>> container2({}, 42);
+        nlohmann::byte_container_with_subtype<std::vector<std::uint8_t>> container3(bytes);
+        nlohmann::byte_container_with_subtype<std::vector<std::uint8_t>> container4(bytes, 42);
+
+        CHECK(container1 == container1);
+        CHECK(container1 != container2);
+        CHECK(container1 != container3);
+        CHECK(container1 != container4);
+        CHECK(container2 != container1);
+        CHECK(container2 == container2);
+        CHECK(container2 != container3);
+        CHECK(container2 != container4);
+        CHECK(container3 != container1);
+        CHECK(container3 != container2);
+        CHECK(container3 == container3);
+        CHECK(container3 != container4);
+        CHECK(container4 != container1);
+        CHECK(container4 != container2);
+        CHECK(container4 != container3);
+        CHECK(container4 == container4);
+
+        container3.clear();
+        container4.clear();
+
+        CHECK(container1 == container3);
+        CHECK(container2 == container4);
+    }
+
+// ---- tests/src/unit-iterators2.cpp:28-40  (uses: operator<, operator==)
+    SECTION("iterator comparisons")
+    {
+        json j_values = {nullptr, true, 42, 42u, 23.23, {{"one", 1}, {"two", 2}}, {1, 2, 3, 4, 5}, "Hello, world"};
+
+        for (json& j : j_values)
+        {
+            auto it1 = j.begin();
+            auto it2 = j.begin();
+            auto it3 = j.begin();
+            ++it2;
+            ++it3;
+            ++it3;
+            auto it1_c = j.cbegin();
+
+// ---- tests/src/unit-iterators2.cpp:452-464  (uses: operator<, operator==)
+    SECTION("reverse iterator comparisons")
+    {
+        json j_values = {nullptr, true, 42, 42u, 23.23, {{"one", 1}, {"two", 2}}, {1, 2, 3, 4, 5}, "Hello, world"};
+
+        for (json& j : j_values)
+        {
+            auto it1 = j.rbegin();
+            auto it2 = j.rbegin();
+            auto it3 = j.rbegin();
+            ++it2;
+            ++it3;
+            ++it3;
+            auto it1_c = j.crbegin();
+
+// ---- tests/src/unit-json_patch.cpp:469-495  (uses: operator<, operator==)
+        SECTION("A.15. Comparing Strings and Numbers")
+        {
+            // An example target JSON document:
+            json const doc = R"(
+                    {
+                        "/": 9,
+                        "~1": 10
+                    } 
+                )"_json;
+
+            // A JSON Patch document that will result in an error condition:
+            json patch = R"(
+                    [
+                        {"op": "test", "path": "/~01", "value": "10"}
+                    ]
+                )"_json;
+
+            // check that evaluation throws
+            CHECK_THROWS_AS(doc.patch(patch), json::other_error&);
+#if JSON_DIAGNOSTICS
+            CHECK_THROWS_WITH_STD_STR(doc.patch(patch), "[json.exception.other_error.501] (/0) unsuccessful: " + patch[0].dump());
+#elif JSON_DIAGNOSTIC_POSITIONS
+            CHECK_THROWS_WITH_STD_STR(doc.patch(patch), "[json.exception.other_error.501] (bytes 47-92) unsuccessful: " + patch[0].dump());
+#else
+            CHECK_THROWS_WITH_STD_STR(doc.patch(patch), "[json.exception.other_error.501] unsuccessful: " + patch[0].dump());
+#endif
+        }
+
+// ---- tests/src/unit-json_pointer.cpp:721-735  (uses: operator<, operator==)
+    SECTION("less-than comparison")
+    {
+        auto ptr1 = json::json_pointer("/foo/a");
+        auto ptr2 = json::json_pointer("/foo/b");
+
+        CHECK(ptr1 < ptr2);
+        CHECK_FALSE(ptr2 < ptr1);
+
+        // build with C++20
+        // JSON_HAS_CPP_20
+#if JSON_HAS_THREE_WAY_COMPARISON
+        CHECK((ptr1 <=> ptr2) == std::strong_ordering::less); // *NOPAD*
+        CHECK(ptr2 > ptr1);
+#endif
+    }
+
 # Differential test results
-20 programs were compiled and run on both versions. 18 behaved identically, 0 were unusable (fail the same way on both), 0 were nondeterministic. 2 differ, in 2 clusters:
+25 programs were compiled and run on both versions. 17 behaved identically, 0 were unusable (fail the same way on both), 0 were nondeterministic. 8 differ, in 8 clusters:
 
 ## C1: output_diff, 1 program: gen_01.cpp
-First difference (old -> new): `x == y: 1` -> `x == y: 0`
+First difference (old -> new): `x==y: 1` -> `x==y: 0`
 
 ### gen_01.cpp
 ```cpp
 #include <nlohmann/json.hpp>
 #include <iostream>
-
 int main() {
     nlohmann::json x = 9223372036854775806LL;
     nlohmann::json y = 9223372036854775808.0;
     nlohmann::json z = 9223372036854775807LL;
-    std::cout << "x == y: " << (x == y) << "\n";
-    std::cout << "y == z: " << (y == z) << "\n";
-    std::cout << "x == z: " << (x == z) << "\n";
-    std::cout << "x < z: " << (x < z) << "\n";
-    return 0;
+    std::cout << "x==y: " << (x == y) << '\n';
+    std::cout << "y==z: " << (y == z) << '\n';
+    std::cout << "x==z: " << (x == z) << '\n';
 }
 ```
 Output on old (exit 0):
 ```
-x == y: 1
-y == z: 1
-x == z: 0
-x < z: 1
+x==y: 1
+y==z: 1
+x==z: 0
 ```
 Output on new (exit 0):
 ```
-x == y: 0
-y == z: 0
-x == z: 0
-x < z: 1
+x==y: 0
+y==z: 0
+x==z: 0
 ```
 
 ## C2: output_diff, 1 program: gen_02.cpp
-First difference (old -> new): `u < f: 0` -> `u < f: 1`
+First difference (old -> new): `x<y: 0` -> `x<y: 1`
 
 ### gen_02.cpp
 ```cpp
 #include <nlohmann/json.hpp>
 #include <iostream>
-
 int main() {
-    nlohmann::json u = 9223372036854775807ULL;
-    nlohmann::json f = 9223372036854775808.0;
-    std::cout << "u < f: " << (u < f) << "\n";
-    std::cout << "f > u: " << (f > u) << "\n";
-    std::cout << "u == f: " << (u == f) << "\n";
-    return 0;
+    nlohmann::json x = 9223372036854775806LL;
+    nlohmann::json y = 9223372036854775808.0;
+    nlohmann::json z = 9223372036854775807LL;
+    std::cout << "x<y: " << (x < y) << '\n';
+    std::cout << "y<z: " << (y < z) << '\n';
+    std::cout << "x<z: " << (x < z) << '\n';
+}
+```
+Output on old (exit 0):
+```
+x<y: 0
+y<z: 0
+x<z: 1
+```
+Output on new (exit 0):
+```
+x<y: 1
+y<z: 0
+x<z: 1
+```
+
+## C3: output_diff, 1 program: gen_03.cpp
+First difference (old -> new): `u < f: 0` -> `u < f: 1`
+
+### gen_03.cpp
+```cpp
+#include <nlohmann/json.hpp>
+#include <iostream>
+int main() {
+    nlohmann::json u = 18446744073709551615ULL;
+    nlohmann::json f = 18446744073709551616.0;
+    std::cout << "u < f: " << (u < f) << '\n';
+    std::cout << "u == f: " << (u == f) << '\n';
+    std::cout << "f > u: " << (f > u) << '\n';
 }
 ```
 Output on old (exit 0):
 ```
 u < f: 0
-f > u: 0
 u == f: 1
+f > u: 0
 ```
 Output on new (exit 0):
 ```
 u < f: 1
-f > u: 1
 u == f: 0
+f > u: 1
+```
+
+## C4: output_diff, 1 program: gen_09.cpp
+First difference (old -> new): `neg y < z: 0` -> `neg y < z: 1`
+
+### gen_09.cpp
+```cpp
+#include <nlohmann/json.hpp>
+#include <iostream>
+int main() {
+    nlohmann::json x = -9223372036854775806LL;
+    nlohmann::json y = -9223372036854775808.0;
+    nlohmann::json z = -9223372036854775807LL;
+    std::cout << "neg x < y: " << (x < y) << '\n';
+    std::cout << "neg y < z: " << (y < z) << '\n';
+    std::cout << "neg x < z: " << (x < z) << '\n';
+}
+```
+Output on old (exit 0):
+```
+neg x < y: 0
+neg y < z: 0
+neg x < z: 0
+```
+Output on new (exit 0):
+```
+neg x < y: 0
+neg y < z: 1
+neg x < z: 0
+```
+
+## C5: output_diff, 1 program: gen_14.cpp
+First difference (old -> new): `equiv(x,y): 1` -> `equiv(x,y): 0`
+
+### gen_14.cpp
+```cpp
+#include <nlohmann/json.hpp>
+#include <iostream>
+int main() {
+    nlohmann::json x = 9223372036854775806LL;
+    nlohmann::json y = 9223372036854775808.0;
+    nlohmann::json z = 9223372036854775807LL;
+    auto equiv = [](const nlohmann::json& a, const nlohmann::json& b) {
+        return !(a < b) && !(b < a);
+    };
+    std::cout << "equiv(x,y): " << equiv(x, y) << '\n';
+    std::cout << "equiv(y,z): " << equiv(y, z) << '\n';
+    std::cout << "equiv(x,z): " << equiv(x, z) << '\n';
+}
+```
+Output on old (exit 0):
+```
+equiv(x,y): 1
+equiv(y,z): 1
+equiv(x,z): 0
+```
+Output on new (exit 0):
+```
+equiv(x,y): 0
+equiv(y,z): 0
+equiv(x,z): 0
+```
+
+## C6: output_diff, 1 program: gen_15.cpp
+First difference (old -> new): `map size: 2` -> `map size: 3`
+
+### gen_15.cpp
+```cpp
+#include <nlohmann/json.hpp>
+#include <iostream>
+#include <map>
+int main() {
+    std::map<nlohmann::json, std::string> my_map;
+    my_map[9223372036854775806LL] = "x";
+    my_map[9223372036854775808.0] = "y";
+    my_map[9223372036854775807LL] = "z";
+    std::cout << "map size: " << my_map.size() << '\n';
+}
+```
+Output on old (exit 0):
+```
+map size: 2
+```
+Output on new (exit 0):
+```
+map size: 3
+```
+
+## C7: output_diff, 1 program: gen_17.cpp
+First difference (old -> new): `y == x: 1` -> `y == x: 0`
+
+### gen_17.cpp
+```cpp
+#include <nlohmann/json.hpp>
+#include <iostream>
+int main() {
+    nlohmann::json j_float = 9223372036854775808.0;
+    nlohmann::json j_int1 = 9223372036854775806LL;
+    nlohmann::json j_int2 = 9223372036854775807LL;
+    std::cout << "y == x: " << (j_float == j_int1) << '\n';
+    std::cout << "y == z: " << (j_float == j_int2) << '\n';
+    std::cout << "y > x: " << (j_float > j_int1) << '\n';
+}
+```
+Output on old (exit 0):
+```
+y == x: 1
+y == z: 1
+y > x: 0
+```
+Output on new (exit 0):
+```
+y == x: 0
+y == z: 0
+y > x: 1
+```
+
+## C8: output_diff, 1 program: gen_20.cpp
+First difference (old -> new): `<: 0` -> `<: 1`
+
+### gen_20.cpp
+```cpp
+#include <nlohmann/json.hpp>
+#include <iostream>
+int main() {
+    nlohmann::json a = 9223372036854775806LL;
+    nlohmann::json b = 9223372036854775808.0;
+    std::cout << "<: " << (a < b) << '\n';
+    std::cout << "<=: " << (a <= b) << '\n';
+    std::cout << ">: " << (a > b) << '\n';
+    std::cout << ">=: " << (a >= b) << '\n';
+    std::cout << "==: " << (a == b) << '\n';
+    std::cout << "!=: " << (a != b) << '\n';
+}
+```
+Output on old (exit 0):
+```
+<: 0
+<=: 1
+>: 0
+>=: 1
+==: 1
+!=: 0
+```
+Output on new (exit 0):
+```
+<: 1
+<=: 1
+>: 0
+>=: 0
+==: 0
+!=: 1
 ```
 
 # Task

@@ -153,8 +153,8 @@ I'd be worried about the compiler potentially having a problem selecting between
 
 Thanks a lot for the explanation. I see your point, and I’ll update the code to follow that approach.
 
-## Changed functions (from git hunk headers (rough hint))
-- using is_usable_as_basic_json_key_type = typename std::conditional <
+## Changed functions (from changes.py)
+- nlohmann::detail::is_usable_as_basic_json_key_type (private); reached from the public API through: nlohmann::basic_json::at(KeyType &&), nlohmann::basic_json::contains(KeyType &&), nlohmann::basic_json::count(KeyType &&), nlohmann::basic_json::erase(KeyType &&), nlohmann::basic_json::find(KeyType &&), nlohmann::basic_json::operator[](KeyType &&)
 
 ## Diff of the library source (before -> after)
 ```diff
@@ -184,213 +184,460 @@ index 4a1f346f9..3299549fb 100644
  template<typename ObjectType, typename KeyType>
 ```
 
+## Existing upstream tests that call the changed code (for style and API usage)
+// Upstream tests at the PR's parent commit 515d994ac that use the changed code.
+// Names searched (test lines using each): at (223), contains (91), count (50), erase (189), find (111), operator[] (15), is_usable_as_basic_json_key_type (0)
+
+// ---- tests/src/unit-json_pointer.cpp:371-396  (uses: at, contains)
+        SECTION("const access")
+        {
+            const json j = {1, 2, 3};
+
+            // check reading access
+            CHECK(j["/0"_json_pointer] == j[0]);
+            CHECK(j["/1"_json_pointer] == j[1]);
+            CHECK(j["/2"_json_pointer] == j[2]);
+
+            // assign to nonexisting index
+            CHECK_THROWS_WITH_AS(j.at("/3"_json_pointer),
+                                 "[json.exception.out_of_range.401] array index 3 is out of range", json::out_of_range&);
+            CHECK(!j.contains("/3"_json_pointer));
+
+            // assign to nonexisting index (with gap)
+            CHECK_THROWS_WITH_AS(j.at("/5"_json_pointer),
+                                 "[json.exception.out_of_range.401] array index 5 is out of range", json::out_of_range&);
+            CHECK(!j.contains("/5"_json_pointer));
+
+            // assign to "-"
+            CHECK_THROWS_WITH_AS(j["/-"_json_pointer],
+                                 "[json.exception.out_of_range.402] array index '-' (3) is out of range", json::out_of_range&);
+            CHECK_THROWS_WITH_AS(j.at("/-"_json_pointer),
+                                 "[json.exception.out_of_range.402] array index '-' (3) is out of range", json::out_of_range&);
+            CHECK(!j.contains("/-"_json_pointer));
+        }
+
+// ---- tests/src/unit-element_access2.cpp:740-781  (uses: erase, find)
+            SECTION("remove element by key")
+            {
+                CHECK(j.find("integer") != j.end());
+                CHECK(j.erase("integer") == 1);
+                CHECK(j.find("integer") == j.end());
+                CHECK(j.erase("integer") == 0);
+
+                CHECK(j.find("unsigned") != j.end());
+                CHECK(j.erase("unsigned") == 1);
+                CHECK(j.find("unsigned") == j.end());
+                CHECK(j.erase("unsigned") == 0);
+
+                CHECK(j.find("boolean") != j.end());
+                CHECK(j.erase("boolean") == 1);
+                CHECK(j.find("boolean") == j.end());
+                CHECK(j.erase("boolean") == 0);
+
+                CHECK(j.find("null") != j.end());
+                CHECK(j.erase("null") == 1);
+                CHECK(j.find("null") == j.end());
+                CHECK(j.erase("null") == 0);
+
+                CHECK(j.find("string") != j.end());
+                CHECK(j.erase("string") == 1);
+                CHECK(j.find("string") == j.end());
+                CHECK(j.erase("string") == 0);
+
+                CHECK(j.find("floating") != j.end());
+                CHECK(j.erase("floating") == 1);
+                CHECK(j.find("floating") == j.end());
+                CHECK(j.erase("floating") == 0);
+
+                CHECK(j.find("object") != j.end());
+                CHECK(j.erase("object") == 1);
+                CHECK(j.find("object") == j.end());
+                CHECK(j.erase("object") == 0);
+
+                CHECK(j.find("array") != j.end());
+                CHECK(j.erase("array") == 1);
+                CHECK(j.find("array") == j.end());
+                CHECK(j.erase("array") == 0);
+            }
+
+// ---- tests/src/unit-element_access2.cpp:784-825  (uses: erase, find)
+            SECTION("remove element by key (string_view)")
+            {
+                CHECK(j.find(std::string_view("integer")) != j.end());
+                CHECK(j.erase(std::string_view("integer")) == 1);
+                CHECK(j.find(std::string_view("integer")) == j.end());
+                CHECK(j.erase(std::string_view("integer")) == 0);
+
+                CHECK(j.find(std::string_view("unsigned")) != j.end());
+                CHECK(j.erase(std::string_view("unsigned")) == 1);
+                CHECK(j.find(std::string_view("unsigned")) == j.end());
+                CHECK(j.erase(std::string_view("unsigned")) == 0);
+
+                CHECK(j.find(std::string_view("boolean")) != j.end());
+                CHECK(j.erase(std::string_view("boolean")) == 1);
+                CHECK(j.find(std::string_view("boolean")) == j.end());
+                CHECK(j.erase(std::string_view("boolean")) == 0);
+
+                CHECK(j.find(std::string_view("null")) != j.end());
+                CHECK(j.erase(std::string_view("null")) == 1);
+                CHECK(j.find(std::string_view("null")) == j.end());
+                CHECK(j.erase(std::string_view("null")) == 0);
+
+                CHECK(j.find(std::string_view("string")) != j.end());
+                CHECK(j.erase(std::string_view("string")) == 1);
+                CHECK(j.find(std::string_view("string")) == j.end());
+                CHECK(j.erase(std::string_view("string")) == 0);
+
+                CHECK(j.find(std::string_view("floating")) != j.end());
+                CHECK(j.erase(std::string_view("floating")) == 1);
+                CHECK(j.find(std::string_view("floating")) == j.end());
+                CHECK(j.erase(std::string_view("floating")) == 0);
+
+                CHECK(j.find(std::string_view("object")) != j.end());
+                CHECK(j.erase(std::string_view("object")) == 1);
+                CHECK(j.find(std::string_view("object")) == j.end());
+                CHECK(j.erase(std::string_view("object")) == 0);
+
+                CHECK(j.find(std::string_view("array")) != j.end());
+                CHECK(j.erase(std::string_view("array")) == 1);
+                CHECK(j.find(std::string_view("array")) == j.end());
+                CHECK(j.erase(std::string_view("array")) == 0);
+            }
+
+// ---- tests/src/unit-meta.cpp:16-35  (uses: at, find)
+    SECTION("meta()")
+    {
+        json j = json::meta();
+
+        CHECK(j["name"] == "JSON for Modern C++");
+        CHECK(j["copyright"] == "(C) 2013-2026 Niels Lohmann");
+        CHECK(j["url"] == "https://github.com/nlohmann/json");
+        CHECK(j["version"] == json(
+        {
+            {"string", "3.12.0"},
+            {"major", 3},
+            {"minor", 12},
+            {"patch", 0}
+        }));
+
+        CHECK(j.find("platform") != j.end());
+        CHECK(j.at("compiler").find("family") != j.at("compiler").end());
+        CHECK(j.at("compiler").find("version") != j.at("compiler").end());
+        CHECK(j.at("compiler").find("c++") != j.at("compiler").end());
+    }
+
+// ---- tests/src/unit-cbor.cpp:1281-1291  (uses: operator[])
+            SECTION("[[[[]]]]")
+            {
+                const json j = json::parse("[[[[]]]]");
+                const std::vector<uint8_t> expected = {0x81, 0x81, 0x81, 0x80};
+                const auto result = json::to_cbor(j);
+                CHECK(result == expected);
+
+                // roundtrip
+                CHECK(json::from_cbor(result) == j);
+                CHECK(json::from_cbor(result, true, false) == j);
+            }
+
 # Differential test results
-20 programs were compiled and run on both versions. 2 behaved identically, 0 were unusable (fail the same way on both), 0 were nondeterministic. 18 differ, in 7 clusters:
+25 programs were compiled and run on both versions. 6 behaved identically, 0 were unusable (fail the same way on both), 0 were nondeterministic. 19 differ, in 9 clusters:
 
-## C1: output_diff, 7 programs: gen_21.cpp, gen_22.cpp, gen_23.cpp, gen_24.cpp, gen_26.cpp, gen_27.cpp, gen_28.cpp
-First difference (old -> new): `supported: 0` -> `supported: 1`
+## C1: compile_diff (fails to compile on both), 6 programs: gen_02.cpp, gen_03.cpp, gen_04.cpp, gen_05.cpp, gen_06.cpp, gen_15.cpp
 
-### gen_21.cpp
+### gen_02.cpp
 ```cpp
+#include <nlohmann/json.hpp>
 #include <iostream>
 #include <string_view>
-#include <type_traits>
-#include <nlohmann/json.hpp>
 
-struct CustomStringViewable {
-    std::string_view sv;
-    operator std::string_view() const { return sv; }
+struct MyKeyType {
+    operator std::string_view() const { return "hello"; }
 };
 
-template <class J, class K, class = void> struct can_use : std::false_type {};
-template <class J, class K>
-struct can_use<J, K, std::void_t<decltype(std::declval<J&>()[std::declval<K>()])>> : std::true_type {};
-
-template <class J, class K> void probe(J& j, K&& k) {
-    std::cout << "supported: " << can_use<J, K>::value << "\n";
-    if constexpr (can_use<J, K>::value) {
-        try {
-            std::cout << j[k] << "\n";
-        } catch (const std::exception& e) {
-            std::cout << e.what() << "\n";
-        }
-    }
-}
-
 int main() {
-    nlohmann::json j = {{"key_str", 42}};
-    CustomStringViewable cv{"key_str"};
-    probe(j, cv);
-}
-```
-Output on old (exit 0):
-```
-supported: 0
-```
-Output on new (exit 0):
-```
-supported: 1
-42
-```
-
-### gen_22.cpp
-```cpp
-#include <iostream>
-#include <string_view>
-#include <type_traits>
-#include <nlohmann/json.hpp>
-
-class ImplicitView {
-    const char* s;
-public:
-    ImplicitView(const char* str) : s(str) {}
-    operator std::string_view() const { return std::string_view(s); }
-};
-
-template <class J, class K, class = void> struct can_use : std::false_type {};
-template <class J, class K>
-struct can_use<J, K, std::void_t<decltype(std::declval<J&>()[std::declval<K>()])>> : std::true_type {};
-
-template <class J, class K> void probe(J& j, K&& k) {
-    std::cout << "supported: " << can_use<J, K>::value << "\n";
-    if constexpr (can_use<J, K>::value) {
-        try {
-            std::cout << j[k] << "\n";
-        } catch (const std::exception& e) {
-            std::cout << e.what() << "\n";
-        }
-    }
-}
-
-int main() {
-    nlohmann::json j = {{"test", 100}};
-    ImplicitView iv("test");
-    probe(j, iv);
-}
-```
-Output on old (exit 0):
-```
-supported: 0
-```
-Output on new (exit 0):
-```
-supported: 1
-100
-```
-
-## C2: compile_diff (fails to compile on old), 6 programs: gen_11.cpp, gen_16.cpp, gen_17.cpp, gen_18.cpp, gen_19.cpp, gen_20.cpp
-
-### gen_11.cpp
-```cpp
-#include <iostream>
-#include <string_view>
-#include <nlohmann/json.hpp>
-
-struct BaseKey {
-    operator std::string_view() const { return "inherited"; }
-};
-
-struct DerivedKey : public BaseKey {};
-
-int main() {
-    nlohmann::json j = {{"inherited", 500}};
-    DerivedKey dk;
-    std::cout << j[dk] << "\n";
+    nlohmann::json j = {{"hello", 100}};
+    std::cout << std::boolalpha << j.contains(MyKeyType{}) << std::endl;
 }
 ```
 Compiler errors on old:
 ```
-gen_11.cpp:16:19: error: no match for ‘operator[]’ (operand types are ‘nlohmann::json_abi_v3_12_0::json’ {aka ‘nlohmann::json_abi_v3_12_0::basic_json<>’} and ‘DerivedKey’)
-json.hpp:2199:98: error: no type named ‘type’ in ‘struct std::enable_if<false, int>’
-json.hpp:2223:98: error: no type named ‘type’ in ‘struct std::enable_if<false, int>’
+gen_02.cpp:13:46: error: no matching function for call to ‘nlohmann::json_abi_v3_12_0::basic_json<>::contains(MyKeyType)’
+json.hpp:2767:97: error: no type named ‘type’ in ‘struct std::enable_if<false, int>’
 ```
-Output on new (exit 0):
+Compiler errors on new:
 ```
-500
+stl_tree.h:1303:53: error: no match for call to ‘(const std::less<void>) (const MyKeyType&, const std::__cxx11::basic_string<char>&)’
+stl_function.h:588:44: error: no match for ‘operator<’ (operand types are ‘const MyKeyType’ and ‘const std::__cxx11::basic_string<char>’)
+system_error:507:3: note: candidate: ‘bool std::operator<(const error_condition&, const error_condition&)’
+507 |   operator<(const error_condition& __lhs,
+system_error:507:36: note:   no known conversion for argument 1 from ‘const MyKeyType’ to ‘const std::error_condition&’
+507 |   operator<(const error_condition& __lhs,
 ```
-
-### gen_16.cpp
-```cpp
-#include <iostream>
-#include <string_view>
-#include <nlohmann/json.hpp>
-
-struct TempKey {
-    const char* data;
-    operator std::string_view() const { return data; }
-};
-
-int main() {
-    nlohmann::json j = {{"temp", 777}};
-    std::cout << j[TempKey{"temp"}] << "\n";
-}
-```
-Compiler errors on old:
-```
-gen_16.cpp:14:19: error: no match for ‘operator[]’ (operand types are ‘nlohmann::json_abi_v3_12_0::json’ {aka ‘nlohmann::json_abi_v3_12_0::basic_json<>’} and ‘TempKey’)
-json.hpp:2199:98: error: no type named ‘type’ in ‘struct std::enable_if<false, int>’
-json.hpp:2223:98: error: no type named ‘type’ in ‘struct std::enable_if<false, int>’
-```
-Output on new (exit 0):
-```
-777
-```
-
-## C3: compile_diff (fails to compile on both), 1 program: gen_03.cpp
 
 ### gen_03.cpp
 ```cpp
+#include <nlohmann/json.hpp>
 #include <iostream>
 #include <string_view>
-#include <nlohmann/json.hpp>
 
-struct ViewHolder {
-    std::string val;
-    operator std::string_view() const { return val; }
+struct AtKeyType {
+    operator std::string_view() const { return "target"; }
 };
 
 int main() {
-    const nlohmann::json j = {{"hello", "world"}};
-    ViewHolder v{"hello"};
+    nlohmann::json j = {{"target", 999}};
     try {
-        std::cout << j[v].dump() << "\n";
+        std::cout << j.at(AtKeyType{}) << std::endl;
     } catch (const std::exception& e) {
-        std::cout << e.what() << "\n";
+        std::cout << "Exception: " << e.what() << std::endl;
     }
 }
 ```
 Compiler errors on old:
 ```
-gen_03.cpp:16:23: error: no match for ‘operator[]’ (operand types are ‘const nlohmann::json_abi_v3_12_0::json’ {aka ‘const nlohmann::json_abi_v3_12_0::basic_json<>’} and ‘ViewHolder’)
+gen_03.cpp:14:26: error: no matching function for call to ‘nlohmann::json_abi_v3_12_0::basic_json<>::at(AtKeyType)’
+json.hpp:2031:97: error: no type named ‘type’ in ‘struct std::enable_if<false, int>’
+json.hpp:2069:97: error: no type named ‘type’ in ‘struct std::enable_if<false, int>’
+```
+Compiler errors on new:
+```
+stl_tree.h:1303:53: error: no match for call to ‘(const std::less<void>) (const AtKeyType&, const std::__cxx11::basic_string<char>&)’
+stl_function.h:588:44: error: no match for ‘operator<’ (operand types are ‘const AtKeyType’ and ‘const std::__cxx11::basic_string<char>’)
+system_error:507:3: note: candidate: ‘bool std::operator<(const error_condition&, const error_condition&)’
+507 |   operator<(const error_condition& __lhs,
+system_error:507:36: note:   no known conversion for argument 1 from ‘const AtKeyType’ to ‘const std::error_condition&’
+507 |   operator<(const error_condition& __lhs,
+```
+
+## C2: output_diff, 4 programs: gen_26.cpp, gen_27.cpp, gen_28.cpp, gen_29.cpp
+First difference (old -> new): `supported: false` -> `supported: true`
+
+### gen_26.cpp
+```cpp
+#include <nlohmann/json.hpp>
+#include <iostream>
+#include <string_view>
+
+struct ConvertibleToStringView {
+    operator std::string_view() const { return "key_val"; }
+};
+
+template <class J, class K, class = void> struct can_use : std::false_type {};
+template <class J, class K>
+struct can_use<J, K, std::void_t<decltype(std::declval<J&>()[std::declval<K>()])>> : std::true_type {};
+
+template <class J, class K> void probe(J& j, K&& k) {
+    std::cout << "supported: " << (can_use<J, K>::value ? "true" : "false") << "\n";
+    if constexpr (can_use<J, K>::value) {
+        try {
+            std::cout << j[k] << std::endl;
+        } catch (const std::exception& e) {
+            std::cout << "Exception: " << e.what() << std::endl;
+        }
+    }
+}
+
+int main() {
+    nlohmann::json j = {{"key_val", 42}};
+    ConvertibleToStringView key;
+    probe(j, key);
+}
+```
+Output on old (exit 0):
+```
+supported: false
+```
+Output on new (exit 0):
+```
+supported: true
+42
+```
+
+### gen_27.cpp
+```cpp
+#include <nlohmann/json.hpp>
+#include <iostream>
+#include <string>
+#include <string_view>
+
+struct TempProvider {
+    std::string s;
+    operator std::string_view() const { return s; }
+};
+
+template <class J, class K, class = void> struct can_use : std::false_type {};
+template <class J, class K>
+struct can_use<J, K, std::void_t<decltype(std::declval<J&>()[std::declval<K>()])>> : std::true_type {};
+
+template <class J, class K> void probe(J& j, K&& k) {
+    std::cout << "supported: " << (can_use<J, K>::value ? "true" : "false") << "\n";
+    if constexpr (can_use<J, K>::value) {
+        try {
+            std::cout << j[k] << std::endl;
+        } catch (const std::exception& e) {
+            std::cout << "Exception: " << e.what() << std::endl;
+        }
+    }
+}
+
+int main() {
+    nlohmann::json j = {{"temp_key", 12345}};
+    TempProvider key{"temp_key"};
+    probe(j, key);
+}
+```
+Output on old (exit 0):
+```
+supported: false
+```
+Output on new (exit 0):
+```
+supported: true
+12345
+```
+
+## C3: output_diff, 3 programs: gen_31.cpp, gen_32.cpp, gen_33.cpp
+First difference (old -> new): `supported: 0` -> `supported: 1`
+
+### gen_31.cpp
+```cpp
+#include <nlohmann/json.hpp>
+#include <iostream>
+#include <string_view>
+
+struct WriteKey {
+    operator std::string_view() const { return "new_field"; }
+};
+
+template <class J, class K, class = void> struct can_use_17 : std::false_type {};
+template <class J, class K>
+struct can_use_17<J, K, std::void_t<decltype(std::declval<J&>()[std::declval<K>()])>> : std::true_type {};
+
+template <class J, class K>
+void probe(J& j, K&& k) {
+    std::cout << "supported: " << can_use_17<J, K>::value << "\n";
+    if constexpr (can_use_17<J, K>::value) {
+        try {
+            j[k] = 9999;
+            std::cout << j.dump() << std::endl;
+        } catch (const std::exception& e) {
+            std::cout << "Exception: " << e.what() << std::endl;
+        }
+    }
+}
+
+int main() {
+    nlohmann::json j;
+    WriteKey wk;
+    probe(j, wk);
+}
+```
+Output on old (exit 0):
+```
+supported: 0
+```
+Output on new (exit 0):
+```
+supported: 1
+{"new_field":9999}
+```
+
+### gen_32.cpp
+```cpp
+#include <nlohmann/json.hpp>
+#include <iostream>
+#include <string_view>
+
+struct RefKey {
+    std::string_view sv = "ref_val";
+    operator std::string_view() const & { return sv; }
+};
+
+template <class J, class K, class = void> struct can_use_18 : std::false_type {};
+template <class J, class K>
+struct can_use_18<J, K, std::void_t<decltype(std::declval<J&>()[std::declval<K>()])>> : std::true_type {};
+
+template <class J, class K>
+void probe(J& j, K&& k) {
+    std::cout << "supported: " << can_use_18<J, K>::value << "\n";
+    if constexpr (can_use_18<J, K>::value) {
+        try {
+            std::cout << j[k] << std::endl;
+        } catch (const std::exception& e) {
+            std::cout << "Exception: " << e.what() << std::endl;
+        }
+    }
+}
+
+int main() {
+    nlohmann::json j = {{"ref_val", 333}};
+    RefKey r;
+    probe(j, r);
+}
+```
+Output on old (exit 0):
+```
+supported: 0
+```
+Output on new (exit 0):
+```
+supported: 1
+333
+```
+
+## C4: compile_diff (fails to compile on both), 1 program: gen_07.cpp
+
+### gen_07.cpp
+```cpp
+#include <nlohmann/json.hpp>
+#include <iostream>
+#include <string_view>
+
+struct ConstKeyType {
+    operator std::string_view() const { return "cval"; }
+};
+
+int main() {
+    const nlohmann::json j = {{"cval", 77}};
+    try {
+        std::cout << j[ConstKeyType{}] << std::endl;
+    } catch (const std::exception& e) {
+        std::cout << "Exception: " << e.what() << std::endl;
+    }
+}
+```
+Compiler errors on old:
+```
+gen_07.cpp:14:23: error: no match for ‘operator[]’ (operand types are ‘const nlohmann::json_abi_v3_12_0::json’ {aka ‘const nlohmann::json_abi_v3_12_0::basic_json<>’} and ‘ConstKeyType’)
 json.hpp:2199:98: error: no type named ‘type’ in ‘struct std::enable_if<false, int>’
 json.hpp:2223:98: error: no type named ‘type’ in ‘struct std::enable_if<false, int>’
 ```
 Compiler errors on new:
 ```
-stl_tree.h:1303:53: error: no match for call to ‘(const std::less<void>) (const ViewHolder&, const std::__cxx11::basic_string<char>&)’
-stl_function.h:588:44: error: no match for ‘operator<’ (operand types are ‘const ViewHolder’ and ‘const std::__cxx11::basic_string<char>’)
+stl_tree.h:1303:53: error: no match for call to ‘(const std::less<void>) (const ConstKeyType&, const std::__cxx11::basic_string<char>&)’
+stl_function.h:588:44: error: no match for ‘operator<’ (operand types are ‘const ConstKeyType’ and ‘const std::__cxx11::basic_string<char>’)
 system_error:507:3: note: candidate: ‘bool std::operator<(const error_condition&, const error_condition&)’
 507 |   operator<(const error_condition& __lhs,
-system_error:507:36: note:   no known conversion for argument 1 from ‘const ViewHolder’ to ‘const std::error_condition&’
+system_error:507:36: note:   no known conversion for argument 1 from ‘const ConstKeyType’ to ‘const std::error_condition&’
 507 |   operator<(const error_condition& __lhs,
 ```
 
-## C4: output_diff, 1 program: gen_08.cpp
+## C5: output_diff, 1 program: gen_08.cpp
 First difference (old -> new): `false` -> `true`
 
 ### gen_08.cpp
 ```cpp
+#include <nlohmann/json.hpp>
 #include <iostream>
 #include <string_view>
-#include <nlohmann/json.hpp>
 
-struct ConvType {
-    operator std::string_view() const { return "test"; }
+struct TraitTestType {
+    operator std::string_view() const { return "trait_check"; }
 };
 
 int main() {
-    constexpr bool usable = nlohmann::detail::is_usable_as_basic_json_key_type<nlohmann::json, ConvType>::value;
-    std::cout << (usable ? "true" : "false") << "\n";
+    constexpr bool val = nlohmann::detail::is_usable_as_basic_json_key_type<nlohmann::json, TraitTestType>::value;
+    std::cout << std::boolalpha << val << std::endl;
 }
 ```
 Output on old (exit 0):
@@ -402,72 +649,32 @@ Output on new (exit 0):
 true
 ```
 
-## C5: output_diff, 1 program: gen_12.cpp
-First difference (old -> new): `` -> `123`
+## C6: compile_diff (fails to compile on both), 1 program: gen_13.cpp
 
-### gen_12.cpp
+### gen_13.cpp
 ```cpp
+#include <nlohmann/json.hpp>
 #include <iostream>
 #include <string_view>
-#include <nlohmann/json.hpp>
 
-struct ComplexKey {
-    operator bool() const { return true; }
-    operator std::string_view() const { return "key"; }
+struct OrderedKey {
+    operator std::string_view() const { return "first"; }
 };
 
 int main() {
-    nlohmann::json j = {{"key", 123}};
-    ComplexKey ck;
-    std::cout << j[ck] << "\n";
-}
-```
-Output on old (exit -6):
-```
-
-```
-Output on new (exit 0):
-```
-123
-```
-
-## C6: compile_diff (fails to compile on new), 1 program: gen_25.cpp
-
-### gen_25.cpp
-```cpp
-#include <iostream>
-#include <string_view>
-#include <type_traits>
-#include <nlohmann/json.hpp>
-
-struct OrdKey {
-    operator std::string_view() const { return "ord"; }
-};
-
-template <class J, class K, class = void> struct can_use : std::false_type {};
-template <class J, class K>
-struct can_use<J, K, std::void_t<decltype(std::declval<J&>()[std::declval<K>()])>> : std::true_type {};
-
-template <class J, class K> void probe(J& j, K&& k) {
-    std::cout << "supported: " << can_use<J, K>::value << "\n";
-    if constexpr (can_use<J, K>::value) {
-        try {
-            std::cout << j[k] << "\n";
-        } catch (const std::exception& e) {
-            std::cout << e.what() << "\n";
-        }
+    nlohmann::ordered_json j = {{"first", 1}};
+    try {
+        std::cout << j[OrderedKey{}] << std::endl;
+    } catch (const std::exception& e) {
+        std::cout << "Exception: " << e.what() << std::endl;
     }
 }
-
-int main() {
-    nlohmann::ordered_json j = {{"ord", 3.14}};
-    OrdKey ok;
-    probe(j, ok);
-}
 ```
-Output on old (exit 0):
+Compiler errors on old:
 ```
-supported: 0
+gen_13.cpp:14:23: error: no match for ‘operator[]’ (operand types are ‘nlohmann::json_abi_v3_12_0::ordered_json’ {aka ‘nlohmann::json_abi_v3_12_0::basic_json<nlohmann::json_abi_v3_12_0::ordered_map>’} and ‘OrderedKey’)
+json.hpp:2199:98: error: no type named ‘type’ in ‘struct std::enable_if<false, int>’
+json.hpp:2223:98: error: no type named ‘type’ in ‘struct std::enable_if<false, int>’
 ```
 Compiler errors on new:
 ```
@@ -475,55 +682,77 @@ json.hpp:2213:57: error: no matching function for call to ‘nlohmann::json_abi_
 ordered_map.hpp:68:95: error: no type named ‘type’ in ‘struct std::enable_if<false, int>’
 ```
 
-## C7: output_diff, 1 program: gen_29.cpp
-First difference (old -> new): `supported1: 0, supported2: 0` -> `supported1: 1, supported2: 1`
+## C7: output_diff, 1 program: gen_22.cpp
+First difference (old -> new): `is_usable_as_basic_json_key_type non-transparent: false\n` -> `is_usable_as_basic_json_key_type non-transparent: true\n`
 
-### gen_29.cpp
+### gen_22.cpp
 ```cpp
-#include <iostream>
-#include <string_view>
-#include <type_traits>
-#include <utility>
 #include <nlohmann/json.hpp>
-
-struct AlphaKey {
-    operator std::string_view() const { return "alpha"; }
+#include <iostream>
+struct CustomViewConvertible {
+    operator std::string_view() const { return "key"; }
 };
-
-struct BetaKey {
-    operator std::string_view() const { return "beta"; }
-};
-
-template <class J, class K, class = void> struct can_use : std::false_type {};
-template <class J, class K>
-struct can_use<J, K, std::void_t<decltype(std::declval<J&>()[std::declval<K>()])>> : std::true_type {};
-
-template <class J, class K1, class K2> void probe(J& j, K1&& k1, K2&& k2) {
-    std::cout << "supported1: " << can_use<J, K1>::value << ", supported2: " << can_use<J, K2>::value << "\n";
-    if constexpr (can_use<J, K1>::value && can_use<J, K2>::value) {
-        try {
-            std::cout << j[k1].dump() << " " << j[k2].dump() << "\n";
-        } catch (const std::exception& e) {
-            std::cout << e.what() << "\n";
-        }
-    }
-}
-
 int main() {
-    nlohmann::json j = {{"alpha", 1}, {"beta", 2}};
-    AlphaKey ak;
-    BetaKey bk;
-    probe(j, ak, bk);
+    constexpr bool val = nlohmann::detail::is_usable_as_basic_json_key_type<nlohmann::json, CustomViewConvertible, false, false>::value;
+    std::cout << "is_usable_as_basic_json_key_type non-transparent: " << (val ? "true" : "false") << "\\n";
 }
 ```
 Output on old (exit 0):
 ```
-supported1: 0, supported2: 0
+is_usable_as_basic_json_key_type non-transparent: false\n
 ```
 Output on new (exit 0):
 ```
-supported1: 1, supported2: 1
-1 2
+is_usable_as_basic_json_key_type non-transparent: true\n
+```
+
+## C8: output_diff, 1 program: gen_23.cpp
+First difference (old -> new): `is_usable_as_basic_json_key_type cv-ref: false\n` -> `is_usable_as_basic_json_key_type cv-ref: true\n`
+
+### gen_23.cpp
+```cpp
+#include <nlohmann/json.hpp>
+#include <iostream>
+struct ViewHolder {
+    operator std::string_view() const { return "abc"; }
+};
+int main() {
+    using ref_type = const ViewHolder&;
+    constexpr bool val = nlohmann::detail::is_usable_as_basic_json_key_type<nlohmann::json, ref_type>::value;
+    std::cout << "is_usable_as_basic_json_key_type cv-ref: " << (val ? "true" : "false") << "\\n";
+}
+```
+Output on old (exit 0):
+```
+is_usable_as_basic_json_key_type cv-ref: false\n
+```
+Output on new (exit 0):
+```
+is_usable_as_basic_json_key_type cv-ref: true\n
+```
+
+## C9: output_diff, 1 program: gen_24.cpp
+First difference (old -> new): `is_usable_as_basic_json_key_type ordered_json: false\n` -> `is_usable_as_basic_json_key_type ordered_json: true\n`
+
+### gen_24.cpp
+```cpp
+#include <nlohmann/json.hpp>
+#include <iostream>
+struct AnotherView {
+    operator std::string_view() const { return "ordered"; }
+};
+int main() {
+    constexpr bool val = nlohmann::detail::is_usable_as_basic_json_key_type<nlohmann::ordered_json, AnotherView>::value;
+    std::cout << "is_usable_as_basic_json_key_type ordered_json: " << (val ? "true" : "false") << "\\n";
+}
+```
+Output on old (exit 0):
+```
+is_usable_as_basic_json_key_type ordered_json: false\n
+```
+Output on new (exit 0):
+```
+is_usable_as_basic_json_key_type ordered_json: true\n
 ```
 
 # Task

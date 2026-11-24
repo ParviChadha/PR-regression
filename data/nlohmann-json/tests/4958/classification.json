@@ -2,54 +2,65 @@
   "target": "nlohmann-json",
   "pr": 4958,
   "model": "gemini-3.5-flash-lite",
-  "prompt_sha256": "5e58b9681cafec055627b5ef8c8ea78e88dc2b55e03e0690cf88670c5ca832ae",
+  "prompt_sha256": "61b09f211c1a2aba8fdf9bb0193fc9a1ba10299e0bc0f278d23ce6ea2b062dac",
+  "results_sha256": "67d254285fe1bc6d7e3d6a3003cddc1efc15d93cca368b46f75ab7fcbf50b3de",
   "clusters": [
     {
       "id": "C1",
-      "status": "output_diff",
-      "failed_on": null,
-      "programs": [
-        "gen_21.cpp",
-        "gen_22.cpp",
-        "gen_23.cpp",
-        "gen_24.cpp",
-        "gen_26.cpp",
-        "gen_27.cpp",
-        "gen_28.cpp"
-      ],
-      "verdict": "intended",
-      "confidence": "high",
-      "reason": "The PR updates is_usable_as_basic_json_key_type to allow types convertible to std::string_view as keys, enabling custom string-viewable types to be used in operator[]."
-    },
-    {
-      "id": "C2",
-      "status": "compile_diff",
-      "failed_on": "old",
-      "programs": [
-        "gen_11.cpp",
-        "gen_16.cpp",
-        "gen_17.cpp",
-        "gen_18.cpp",
-        "gen_19.cpp",
-        "gen_20.cpp"
-      ],
-      "verdict": "intended",
-      "confidence": "high",
-      "reason": "Fixes compilation failures when passing classes with conversion to std::string_view into operator[], which is the main goal of issue #3912 and this PR."
-    },
-    {
-      "id": "C3",
       "status": "compile_diff",
       "failed_on": "both",
       "programs": [
-        "gen_03.cpp"
+        "gen_02.cpp",
+        "gen_03.cpp",
+        "gen_04.cpp",
+        "gen_05.cpp",
+        "gen_06.cpp",
+        "gen_15.cpp"
       ],
       "verdict": "unintended",
-      "confidence": "medium",
-      "reason": "The test fails to compile on the new version due to an internal comparator type mismatch error when using a const json object with a custom string_view key."
+      "confidence": "high",
+      "reason": "These test programs fail to compile on the new version with std::less/comparator errors because standard map types do not support transparent heterogeneous lookup with types implicitly convertible to string_view without a transparent comparator."
+    },
+    {
+      "id": "C2",
+      "status": "output_diff",
+      "failed_on": null,
+      "programs": [
+        "gen_26.cpp",
+        "gen_27.cpp",
+        "gen_28.cpp",
+        "gen_29.cpp"
+      ],
+      "verdict": "intended",
+      "confidence": "high",
+      "reason": "The PR's goal is to enable types convertible to std::string_view to be usable as basic_json keys in operator[] and related methods, which these programs now successfully support."
+    },
+    {
+      "id": "C3",
+      "status": "output_diff",
+      "failed_on": null,
+      "programs": [
+        "gen_31.cpp",
+        "gen_32.cpp",
+        "gen_33.cpp"
+      ],
+      "verdict": "intended",
+      "confidence": "high",
+      "reason": "Allowing types convertible to std::string_view to be used with operator[] enables writing and reading values via such keys, matching the PR's objectives."
     },
     {
       "id": "C4",
+      "status": "compile_diff",
+      "failed_on": "both",
+      "programs": [
+        "gen_07.cpp"
+      ],
+      "verdict": "unintended",
+      "confidence": "high",
+      "reason": "Like C1, this program fails to compile on the new version due to lack of a transparent comparator supporting implicit conversions for const json instances."
+    },
+    {
+      "id": "C5",
       "status": "output_diff",
       "failed_on": null,
       "programs": [
@@ -57,65 +68,77 @@
       ],
       "verdict": "intended",
       "confidence": "high",
-      "reason": "Directly tests the new type trait check std::is_convertible<KeyType, std::string_view>::value added in the PR, which evaluates to true for convertible types."
-    },
-    {
-      "id": "C5",
-      "status": "output_diff",
-      "failed_on": null,
-      "programs": [
-        "gen_12.cpp"
-      ],
-      "verdict": "intended",
-      "confidence": "high",
-      "reason": "Enables successful map lookups using keys that convert to std::string_view instead of failing or picking an unintended conversion."
+      "reason": "The trait is_usable_as_basic_json_key_type is updated in the PR to return true for types convertible to std::string_view under C++17."
     },
     {
       "id": "C6",
       "status": "compile_diff",
-      "failed_on": "new",
+      "failed_on": "both",
       "programs": [
-        "gen_25.cpp"
+        "gen_13.cpp"
       ],
       "verdict": "unintended",
       "confidence": "high",
-      "reason": "Breaks usage of ordered_json with transparent comparators when using keys that convert to std::string_view, leading to a substitution failure inside ordered_map."
+      "reason": "This program fails to compile with ordered_json due to underlying container requirements with custom types convertible to string_view."
     },
     {
       "id": "C7",
       "status": "output_diff",
       "failed_on": null,
       "programs": [
-        "gen_29.cpp"
+        "gen_22.cpp"
       ],
       "verdict": "intended",
       "confidence": "high",
-      "reason": "Validates that multiple distinct custom keys supporting std::string_view conversion are now correctly recognized and usable in operator[]."
+      "reason": "Reflects the updated trait is_usable_as_basic_json_key_type recognizing string_view convertible types when non-transparent."
+    },
+    {
+      "id": "C8",
+      "status": "output_diff",
+      "failed_on": null,
+      "programs": [
+        "gen_23.cpp"
+      ],
+      "verdict": "intended",
+      "confidence": "high",
+      "reason": "Reflects the updated trait checking cv-ref qualified types that are convertible to std::string_view."
+    },
+    {
+      "id": "C9",
+      "status": "output_diff",
+      "failed_on": null,
+      "programs": [
+        "gen_24.cpp"
+      ],
+      "verdict": "intended",
+      "confidence": "high",
+      "reason": "Reflects the updated trait correctly identifying types convertible to std::string_view when used with ordered_json."
     }
   ],
   "clusters_not_shown": 0,
   "counts": {
-    "same": 2,
+    "same": 6,
     "invalid": 0,
     "flaky": 0,
-    "superseded": 9,
+    "superseded": 8,
     "missing": 0
   },
   "pr_verdict": {
     "regression_candidate": true,
     "unintended_clusters": [
-      "C3",
+      "C1",
+      "C4",
       "C6"
     ]
   },
   "usage": {
-    "promptTokenCount": 5998,
-    "candidatesTokenCount": 508,
-    "totalTokenCount": 6506,
+    "promptTokenCount": 9510,
+    "candidatesTokenCount": 631,
+    "totalTokenCount": 10141,
     "promptTokensDetails": [
       {
         "modality": "TEXT",
-        "tokenCount": 5998
+        "tokenCount": 9510
       }
     ],
     "serviceTier": "standard"
