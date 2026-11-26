@@ -33,6 +33,12 @@ sample_checked = 120                    # walk newest PRs until this many pass t
 collect_head = "abbc29963a3fa7652127a57a9e2a4494ec5b8a6e"   # develop, 2026-11-15: history sampled from here (reproducible)
 seed_prs = [4958, 5459]                 # known answers, always collected (see NOTES.md)
 
+# Used by pipeline/generate.py: PRs that change a file whose path contains one of `when` also get this header in the prompt.
+# json_view (json_document, json_view, image_check, ...) is declared only in nlohmann/json_view.hpp, which json.hpp does not include.
+extra_headers = [
+  { header = "nlohmann/json_view.hpp", when = ["detail/view/", "json_view"], note = "The json_view feature (json_document, json_view and their image loading and editing API) is declared only in this header; nlohmann/json.hpp does not include it, so without this line those names do not exist. Use only names you can see in the diff or the context below." },
+]
+
 # Used by pipeline/env.py. header-only: old/new environments are source exports of include_dirs only
 # (no library build); tests compile directly against them. Other modes (e.g. "cmake") come with QuantLib/duckdb.
 build_mode = "header-only"

@@ -2,7 +2,7 @@
   "target": "nlohmann-json",
   "pr": 6076,
   "model": "gemini-3.5-flash-lite",
-  "prompt_sha256": "cfa24391c7f55904423ff9654d34617e55b8190ed69527b32551dea37d62f4fb",
+  "prompt_sha256": "c17a1fc281b12831259e98046f489e5f07e03f47a0e7e51bedc7ca98a1ba37fd",
   "results_sha256": "58ea2c7f88229e32479cd7d41e9ce9877d576d7dc3711716670681fc18bae046",
   "clusters": [
     {
@@ -14,7 +14,7 @@
       ],
       "verdict": "intended",
       "confidence": "high",
-      "reason": "Linked issue #6105 explicitly describes this bug in ordered_json where overlapping keys overwrite values instead of throwing type_error.313, and the PR diff adds the check to throw type_error.313 when non-null values conflict."
+      "reason": "The linked issue #6105 explicitly describes that ordered_json::unflatten() previously failed to reject overlapping keys and instead silently overwrote nested values, and the PR fixes this by throwing type_error.313."
     },
     {
       "id": "C2",
@@ -25,7 +25,7 @@
       ],
       "verdict": "intended",
       "confidence": "high",
-      "reason": "The PR diff explicitly states that if the conflicting later assignment is a null value, it leaves the existing structure as is (as when the shorter key comes first), which is demonstrated here."
+      "reason": "As discussed in linked issue #6105, assigning null to a prefix that is overridden by a longer key is explicitly handled to leave the nested structure intact rather than overwriting it."
     },
     {
       "id": "C3",
@@ -36,7 +36,7 @@
       ],
       "verdict": "intended",
       "confidence": "high",
-      "reason": "This is another case of overlapping keys (root vs /x) in ordered_json addressed by linked issue #6105, now correctly throwing type_error.313 instead of silently overwriting."
+      "reason": "This is part of fixing overlapping keys for ordered_json as described in linked issue #6105, throwing type_error.313 when a prefix key conflicts with an existing value."
     },
     {
       "id": "C4",
@@ -47,7 +47,7 @@
       ],
       "verdict": "intended",
       "confidence": "high",
-      "reason": "This is an array-element overlapping key case covered by linked issue #6105, which now correctly rejects overlapping JSON pointers with type_error.313."
+      "reason": "This fixes the overlapping key bug for arrays in ordered_json as detailed in issue #6105, throwing type_error.313 instead of silently ignoring the conflict."
     },
     {
       "id": "C5",
@@ -58,7 +58,7 @@
       ],
       "verdict": "intended",
       "confidence": "high",
-      "reason": "Subsequent null assignments to parent paths allow the existing nested structure to remain intact as per the new check logic added in the PR."
+      "reason": "Assigning null to parent prefixes that are followed by more deeply nested keys is handled correctly by preserving the nested structure per the fix in issue #6105."
     }
   ],
   "clusters_not_shown": 0,
@@ -74,13 +74,13 @@
     "unintended_clusters": []
   },
   "usage": {
-    "promptTokenCount": 9774,
+    "promptTokenCount": 21550,
     "candidatesTokenCount": 397,
-    "totalTokenCount": 10171,
+    "totalTokenCount": 21947,
     "promptTokensDetails": [
       {
         "modality": "TEXT",
-        "tokenCount": 9774
+        "tokenCount": 21550
       }
     ],
     "serviceTier": "standard"

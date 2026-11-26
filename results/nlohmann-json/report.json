@@ -2,15 +2,15 @@
   "target": "nlohmann-json",
   "summary": {
     "prs_checked": 14,
-    "generated": 330,
+    "generated": 316,
     "compile_success": {
-      "raw_new": 68.5,
-      "raw_both": 62.7,
-      "final_new": 77.6,
-      "final_both": 74.8
+      "raw_new": 71.5,
+      "raw_both": 65.5,
+      "final_new": 81.0,
+      "final_both": 78.2
     },
-    "in_use": 330,
-    "repairs": 103,
+    "in_use": 316,
+    "repairs": 130,
     "deterministic": {
       "programs": 246,
       "of_compiled_both": 247,
@@ -22,19 +22,19 @@
     },
     "verdicts": {
       "clusters": {
-        "unintended": 5,
-        "intended": 23
+        "unintended": 3,
+        "intended": 23,
+        "unclear": 2
       },
       "programs": {
-        "unintended": 15,
-        "intended": 35
+        "unintended": 8,
+        "intended": 35,
+        "unclear": 7
       },
       "prs_classified": 14
     },
     "regression_candidates": [
-      4958,
-      6029,
-      6121
+      4958
     ],
     "coverage_measured": {
       "prs": 14,
@@ -50,8 +50,8 @@
       "last_mean": 82.1
     },
     "llm_calls": {
-      "total_est": 53,
-      "per_pr_mean": 3.8
+      "total_est": 50,
+      "per_pr_mean": 3.6
     },
     "wall_seconds_total": 210.8,
     "seeded": {
@@ -113,7 +113,7 @@
             ],
             "verdict": "unintended",
             "confidence": "high",
-            "reason": "These test programs fail to compile on the new version with std::less/comparator errors because standard map types do not support transparent heterogeneous lookup with types implicitly convertible to string_view without a transparent comparator.",
+            "reason": "These test programs fail to compile on the new version because the custom key type lacks an operator< to compare against std::string when used in underlying container lookups.",
             "old": "compile error: no matching function for call to \u2018nlohmann::json_abi_v3_12_0::basic_json<>::contains(MyKeyType)\u2019",
             "new": "compile error: no match for call to \u2018(const std::less<void>) (const MyKeyType&, const std::__cxx11::basic_string<char>&)\u2019"
           },
@@ -129,7 +129,7 @@
             ],
             "verdict": "intended",
             "confidence": "high",
-            "reason": "The PR's goal is to enable types convertible to std::string_view to be usable as basic_json keys in operator[] and related methods, which these programs now successfully support.",
+            "reason": "The PR intended to enable std::string_view-convertible types as valid keys for operator[] and other lookup functions, which these programs now successfully support.",
             "old": "output: supported: false",
             "new": "output: supported: true | 42"
           },
@@ -144,7 +144,7 @@
             ],
             "verdict": "intended",
             "confidence": "high",
-            "reason": "Allowing types convertible to std::string_view to be used with operator[] enables writing and reading values via such keys, matching the PR's objectives.",
+            "reason": "Enabling std::string_view-convertible types as keys allows writing and accessing values using such keys, as demonstrated here.",
             "old": "output: supported: 0",
             "new": "output: supported: 1 | {\"new_field\":9999}"
           },
@@ -157,7 +157,7 @@
             ],
             "verdict": "unintended",
             "confidence": "high",
-            "reason": "Like C1, this program fails to compile on the new version due to lack of a transparent comparator supporting implicit conversions for const json instances.",
+            "reason": "This test case fails to compile on the new version due to the missing operator< between the custom key type and std::string in the underlying map.",
             "old": "compile error: no match for \u2018operator[]\u2019 (operand types are \u2018const nlohmann::json_abi_v3_12_0::json\u2019 {aka \u2018const nlohmann::json_abi_v3_12_0::basic_json<>\u2019}",
             "new": "compile error: no match for call to \u2018(const std::less<void>) (const ConstKeyType&, const std::__cxx11::basic_string<char>&)\u2019"
           },
@@ -170,7 +170,7 @@
             ],
             "verdict": "intended",
             "confidence": "high",
-            "reason": "The trait is_usable_as_basic_json_key_type is updated in the PR to return true for types convertible to std::string_view under C++17.",
+            "reason": "The trait is_usable_as_basic_json_key_type was explicitly updated to return true for types convertible to std::string_view.",
             "old": "output: false",
             "new": "output: true"
           },
@@ -183,7 +183,7 @@
             ],
             "verdict": "unintended",
             "confidence": "high",
-            "reason": "This program fails to compile with ordered_json due to underlying container requirements with custom types convertible to string_view.",
+            "reason": "Compilation fails on ordered_json because the custom type does not satisfy the comparator requirements of ordered_map.",
             "old": "compile error: no match for \u2018operator[]\u2019 (operand types are \u2018nlohmann::json_abi_v3_12_0::ordered_json\u2019 {aka \u2018nlohmann::json_abi_v3_12_0::basic_json<nlohman",
             "new": "compile error: no matching function for call to \u2018nlohmann::json_abi_v3_12_0::ordered_map<std::__cxx11::basic_string<char>, nlohmann::json_abi_v3_12_0::basi"
           },
@@ -196,7 +196,7 @@
             ],
             "verdict": "intended",
             "confidence": "high",
-            "reason": "Reflects the updated trait is_usable_as_basic_json_key_type recognizing string_view convertible types when non-transparent.",
+            "reason": "The trait correctly evaluates to true for non-transparent usage when the key type is convertible to std::string_view.",
             "old": "output: is_usable_as_basic_json_key_type non-transparent: false\\n",
             "new": "output: is_usable_as_basic_json_key_type non-transparent: true\\n"
           },
@@ -209,7 +209,7 @@
             ],
             "verdict": "intended",
             "confidence": "high",
-            "reason": "Reflects the updated trait checking cv-ref qualified types that are convertible to std::string_view.",
+            "reason": "The trait correctly recognizes cv-ref types of std::string_view convertible objects as usable keys.",
             "old": "output: is_usable_as_basic_json_key_type cv-ref: false\\n",
             "new": "output: is_usable_as_basic_json_key_type cv-ref: true\\n"
           },
@@ -222,7 +222,7 @@
             ],
             "verdict": "intended",
             "confidence": "high",
-            "reason": "Reflects the updated trait correctly identifying types convertible to std::string_view when used with ordered_json.",
+            "reason": "The trait correctly evaluates to true for ordered_json with types convertible to std::string_view.",
             "old": "output: is_usable_as_basic_json_key_type ordered_json: false\\n",
             "new": "output: is_usable_as_basic_json_key_type ordered_json: true\\n"
           }
@@ -272,7 +272,7 @@
             ],
             "verdict": "intended",
             "confidence": "high",
-            "reason": "The PR fixes lossy integer-to-float conversions near boundaries like 2^63 that caused distinct integers to compare equal to the same float.",
+            "reason": "The PR aims to fix intransitive equality near 2^63 by comparing integers and floats exactly rather than widening them, so 2^63-2 and 2^63 no longer compare equal.",
             "old": "output: x==y: 1 | y==z: 1 | x==z: 0",
             "new": "output: x==y: 0 | y==z: 0 | x==z: 0"
           },
@@ -285,7 +285,7 @@
             ],
             "verdict": "intended",
             "confidence": "high",
-            "reason": "The PR corrects strict weak ordering for mixed number comparisons so that nearby integers are properly ordered rather than colliding with the float.",
+            "reason": "The PR fixes strict weak ordering violations for mixed integer/float comparisons near 2^63, changing `<` results to reflect exact comparison.",
             "old": "output: x<y: 0 | y<z: 0 | x<z: 1",
             "new": "output: x<y: 1 | y<z: 0 | x<z: 1"
           },
@@ -298,7 +298,7 @@
             ],
             "verdict": "intended",
             "confidence": "high",
-            "reason": "Unsigned integers near the upper float bounds are now compared exactly instead of rounding up and falsely equating to the float.",
+            "reason": "The PR extends exact comparison to large unsigned integers and floats, preventing lossy widening conversions.",
             "old": "output: u < f: 0 | u == f: 1 | f > u: 0",
             "new": "output: u < f: 1 | u == f: 0 | f > u: 1"
           },
@@ -311,7 +311,7 @@
             ],
             "verdict": "intended",
             "confidence": "high",
-            "reason": "Negative integer and float comparisons near boundaries are handled with exact precision rather than lossy widening.",
+            "reason": "The PR updates mixed negative integer and float comparisons to be exact.",
             "old": "output: neg x < y: 0 | neg y < z: 0 | neg x < z: 0",
             "new": "output: neg x < y: 0 | neg y < z: 1 | neg x < z: 0"
           },
@@ -324,7 +324,7 @@
             ],
             "verdict": "intended",
             "confidence": "high",
-            "reason": "The PR explicitly resolves the issue where equivalence was intransitive; the new behavior correctly maintains strict weak ordering.",
+            "reason": "Fixing transitivity of incomparability (equivalence) near 2^63 is explicitly stated in the pull request description and issue #5401.",
             "old": "output: equiv(x,y): 1 | equiv(y,z): 1 | equiv(x,z): 0",
             "new": "output: equiv(x,y): 0 | equiv(y,z): 0 | equiv(x,z): 0"
           },
@@ -337,7 +337,7 @@
             ],
             "verdict": "intended",
             "confidence": "high",
-            "reason": "Using distinct numbers that previously collapsed due to precision loss as map keys now correctly distinguishes them, increasing the map size.",
+            "reason": "Using these numbers as keys in associative containers like std::map requires a valid strict weak ordering, which this PR restores by preventing lossy collisions.",
             "old": "output: map size: 2",
             "new": "output: map size: 3"
           },
@@ -350,7 +350,7 @@
             ],
             "verdict": "intended",
             "confidence": "high",
-            "reason": "Symmetric comparison operators with float on the left-hand side now correctly reflect exact comparisons instead of false equalities.",
+            "reason": "Symmetric comparison operators (float vs integer) are updated alongside integer vs float to maintain consistent and exact comparisons.",
             "old": "output: y == x: 1 | y == z: 1 | y > x: 0",
             "new": "output: y == x: 0 | y == z: 0 | y > x: 1"
           },
@@ -363,7 +363,7 @@
             ],
             "verdict": "intended",
             "confidence": "high",
-            "reason": "Relational operators between large integers and floats are updated to use exact comparison, changing old false equalities into correct less-than relations.",
+            "reason": "Relational operator outcomes are corrected from lossy approximations to exact comparisons as requested by the PR.",
             "old": "output: <: 0 | <=: 1 | >: 0 | >=: 1 | ==: 1 | !=: 0",
             "new": "output: <: 1 | <=: 1 | >: 0 | >=: 0 | ==: 0 | !=: 1"
           }
@@ -410,9 +410,9 @@
               "gen_23.cpp",
               "gen_24.cpp"
             ],
-            "verdict": "unintended",
+            "verdict": "unclear",
             "confidence": "high",
-            "reason": "The test program uses the unexported type alias `json` without qualifying it as `nlohmann::json`, causing a compilation error on the new version.",
+            "reason": "These test programs probe private internal detail structures not part of the public API, and fail to compile on the new version for unrelated reasons (using 'json' without 'using nlohmann::json').",
             "old": "compile error: \u2018is_byte_char_type\u2019 is not a member of \u2018nlohmann::json_abi_v3_12_0::detail\u2019",
             "new": "compile error: \u2018json\u2019 was not declared in this scope; did you mean \u2018nlohmann::json_abi_v3_12_0::json\u2019?"
           },
@@ -425,15 +425,13 @@
             ],
             "verdict": "intended",
             "confidence": "high",
-            "reason": "The PR introduces internal helpers like `is_std_contiguous_byte_iterator` and `is_byte_char_type`, allowing this test to compile successfully on the new version where it failed previously.",
+            "reason": "The PR introduces the new internal traits 'is_std_contiguous_byte_iterator' and 'is_byte_char_type' to support reading iterator pairs of std::string and std::vector as pointer ranges, making detection of these internal byte iterators available as intended.",
             "old": "compile error: \u2018is_std_contiguous_byte_iterator\u2019 in namespace \u2018nlohmann::json_abi_v3_12_0::detail\u2019 does not name a template type; did you mean \u2018is_contiguo",
             "new": "output: is_std_contiguous_byte_iterator: unsupported | is_std_contiguous_byte_iterator: 0 | is_std_contiguous_byte_iterator: 0 | is_byte_char_type: "
           }
         ],
-        "regression_candidate": true,
-        "unintended_clusters": [
-          "C1"
-        ]
+        "regression_candidate": false,
+        "unintended_clusters": []
       },
       "coverage": {
         "first": 1.0,
@@ -446,21 +444,21 @@
     {
       "pr": 6049,
       "model": "gemini-3.5-flash-lite",
-      "generated": 25,
+      "generated": 20,
       "raw_compile_new": 0,
       "raw_compile_both": 0,
-      "in_use": 25,
-      "final_compile_new": 15,
-      "final_compile_both": 15,
-      "deterministic": 15,
-      "compiled_both_in_use": 15,
+      "in_use": 20,
+      "final_compile_new": 13,
+      "final_compile_both": 13,
+      "deterministic": 13,
+      "compiled_both_in_use": 13,
       "status": {
-        "invalid": 10,
-        "same": 15
+        "invalid": 7,
+        "same": 13
       },
       "differing": 0,
-      "repairs": 17,
-      "llm_calls_est": 4,
+      "repairs": 30,
+      "llm_calls_est": 3,
       "wall_seconds": 10.7,
       "classification": {
         "clusters": [],
@@ -512,7 +510,7 @@
             ],
             "verdict": "intended",
             "confidence": "high",
-            "reason": "The PR specifically aims to restore compilation of json::parse(container, function) when passing plain functions or function pointers as callbacks, which failed on develop due to iterator/sentinel overload selection.",
+            "reason": "The PR fixes a bug where passing a plain function or function pointer as a parser callback with a container (e.g. json::parse(string, cb)) failed to compile due to incorrect overload resolution via can_compare_ne.",
             "old": "compile error: no type named \u2018value_type\u2019 in \u2018struct std::iterator_traits<std::__cxx11::basic_string<char> >\u2019",
             "new": "output: supported: 1 | [1,2]"
           }
@@ -589,7 +587,7 @@
             ],
             "verdict": "intended",
             "confidence": "high",
-            "reason": "Linked issue #6105 explicitly describes this bug in ordered_json where overlapping keys overwrite values instead of throwing type_error.313, and the PR diff adds the check to throw type_error.313 when non-null values conflict.",
+            "reason": "The linked issue #6105 explicitly describes that ordered_json::unflatten() previously failed to reject overlapping keys and instead silently overwrote nested values, and the PR fixes this by throwing type_error.313.",
             "old": "output: {\"a\":1}",
             "new": "output: [json.exception.type_error.313] invalid value to unflatten"
           },
@@ -602,7 +600,7 @@
             ],
             "verdict": "intended",
             "confidence": "high",
-            "reason": "The PR diff explicitly states that if the conflicting later assignment is a null value, it leaves the existing structure as is (as when the shorter key comes first), which is demonstrated here.",
+            "reason": "As discussed in linked issue #6105, assigning null to a prefix that is overridden by a longer key is explicitly handled to leave the nested structure intact rather than overwriting it.",
             "old": "output: {\"a\":null}",
             "new": "output: {\"a\":{\"b\":2}}"
           },
@@ -615,7 +613,7 @@
             ],
             "verdict": "intended",
             "confidence": "high",
-            "reason": "This is another case of overlapping keys (root vs /x) in ordered_json addressed by linked issue #6105, now correctly throwing type_error.313 instead of silently overwriting.",
+            "reason": "This is part of fixing overlapping keys for ordered_json as described in linked issue #6105, throwing type_error.313 when a prefix key conflicts with an existing value.",
             "old": "output: 2",
             "new": "output: [json.exception.type_error.313] invalid value to unflatten"
           },
@@ -628,7 +626,7 @@
             ],
             "verdict": "intended",
             "confidence": "high",
-            "reason": "This is an array-element overlapping key case covered by linked issue #6105, which now correctly rejects overlapping JSON pointers with type_error.313.",
+            "reason": "This fixes the overlapping key bug for arrays in ordered_json as detailed in issue #6105, throwing type_error.313 instead of silently ignoring the conflict.",
             "old": "output: {\"a\":[2]}",
             "new": "output: [json.exception.type_error.313] invalid value to unflatten"
           },
@@ -641,7 +639,7 @@
             ],
             "verdict": "intended",
             "confidence": "high",
-            "reason": "Subsequent null assignments to parent paths allow the existing nested structure to remain intact as per the new check logic added in the PR.",
+            "reason": "Assigning null to parent prefixes that are followed by more deeply nested keys is handled correctly by preserving the nested structure per the fix in issue #6105.",
             "old": "output: {\"a\":null}",
             "new": "output: {\"a\":{\"b\":{\"c\":10}}}"
           }
@@ -718,7 +716,7 @@
             ],
             "verdict": "intended",
             "confidence": "high",
-            "reason": "The PR explicitly states that a no-op array is empty and the reader now announces 0 elements for it instead of passing the declared count through to the SAX parser.",
+            "reason": "The PR explicitly states that no-op arrays are empty and 'sax_parse reports start_array(0) for [$N#n (before: n)', which matches the difference observed in gen_06.cpp.",
             "old": "output: start_array: 10 | end_array | RES: true",
             "new": "output: start_array: 0 | end_array | RES: true"
           }
@@ -768,20 +766,20 @@
     {
       "pr": 6084,
       "model": "gemini-3.5-flash-lite",
-      "generated": 24,
+      "generated": 20,
       "raw_compile_new": 0,
       "raw_compile_both": 0,
-      "in_use": 24,
+      "in_use": 20,
       "final_compile_new": 0,
       "final_compile_both": 0,
       "deterministic": 0,
       "compiled_both_in_use": 0,
       "status": {
-        "invalid": 24
+        "invalid": 20
       },
       "differing": 0,
       "repairs": 30,
-      "llm_calls_est": 4,
+      "llm_calls_est": 3,
       "wall_seconds": 9.5,
       "classification": {
         "clusters": [],
@@ -799,20 +797,21 @@
     {
       "pr": 6085,
       "model": "gemini-3.5-flash-lite",
-      "generated": 25,
+      "generated": 20,
       "raw_compile_new": 0,
       "raw_compile_both": 0,
-      "in_use": 25,
-      "final_compile_new": 0,
-      "final_compile_both": 0,
-      "deterministic": 0,
-      "compiled_both_in_use": 0,
+      "in_use": 20,
+      "final_compile_new": 2,
+      "final_compile_both": 2,
+      "deterministic": 2,
+      "compiled_both_in_use": 2,
       "status": {
-        "invalid": 25
+        "same": 2,
+        "invalid": 18
       },
       "differing": 0,
-      "repairs": 16,
-      "llm_calls_est": 4,
+      "repairs": 30,
+      "llm_calls_est": 3,
       "wall_seconds": 7.5,
       "classification": {
         "clusters": [],
@@ -890,9 +889,9 @@
               "gen_30.cpp",
               "gen_31.cpp"
             ],
-            "verdict": "unintended",
+            "verdict": "unclear",
             "confidence": "high",
-            "reason": "The test uses invalid SFINAE probes (accessing `::head` rather than checking member existence via type traits properly) which fail to compile on the new version.",
+            "reason": "The test program probes private library implementation details (`nlohmann::detail::token_text_buffer`) that are not part of the public API.",
             "old": "compile error: \u2018token_text_buffer\u2019 in namespace \u2018nlohmann::json_abi_v3_12_0::detail\u2019 does not name a template type; did you mean \u2018token_carry_buffer\u2019?",
             "new": "compile error: \u2018head\u2019 in \u2018class nlohmann::json_abi_v3_12_0::detail::token_text_buffer<wchar_t>\u2019 does not name a type"
           },
@@ -905,15 +904,13 @@
             ],
             "verdict": "intended",
             "confidence": "high",
-            "reason": "The PR explicitly truncates long tokens in error messages and inserts '...' when they exceed 8192 characters.",
+            "reason": "The PR explicitly changes the error message behavior for long tokens to truncate them with `...` instead of keeping the full text, as described in the PR description and fix for issue #6120.",
             "old": "output: full",
             "new": "output: truncated"
           }
         ],
-        "regression_candidate": true,
-        "unintended_clusters": [
-          "C1"
-        ]
+        "regression_candidate": false,
+        "unintended_clusters": []
       },
       "coverage": {
         "first": 0.938,

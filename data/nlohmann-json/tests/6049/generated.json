@@ -2,17 +2,17 @@
   "target": "nlohmann-json",
   "pr": 6049,
   "model": "gemini-3.5-flash-lite",
-  "prompt_sha256": "eb6a4fa84f2dd8622490b743fcd3c9a345736ee233c3a19e506d5475c80c26f1",
+  "prompt_sha256": "b16888f86a58d62495a78e12ebfe352c1f8a3a2104df3e68cb4265a2dc47a355",
   "n_requested": 20,
   "dropped": 0,
   "usage": {
-    "promptTokenCount": 4616,
-    "candidatesTokenCount": 4313,
-    "totalTokenCount": 8929,
+    "promptTokenCount": 4704,
+    "candidatesTokenCount": 4038,
+    "totalTokenCount": 8742,
     "promptTokensDetails": [
       {
         "modality": "TEXT",
-        "tokenCount": 4616
+        "tokenCount": 4704
       }
     ],
     "serviceTier": "standard"
@@ -20,305 +20,392 @@
   "tests": [
     {
       "file": "gen_01.cpp",
-      "name": "json_view_image_bounds_dump",
-      "intent": "Test that dumping a loaded document with bounds checking on floats and specific digit counts handles serialization safely.",
+      "name": "json_view_float_batch_normal",
+      "intent": "Verify that normal floating point numbers are correctly batched and dumped by json_view.",
+      "round": 0,
+      "superseded_by": "gen_21.cpp"
+    },
+    {
+      "file": "gen_02.cpp",
+      "name": "json_view_float_16_digits",
+      "intent": "Check dumping of float numbers with 16 total digits and valid fraction digits.",
+      "round": 0,
+      "superseded_by": "gen_22.cpp"
+    },
+    {
+      "file": "gen_03.cpp",
+      "name": "json_view_float_17_digits",
+      "intent": "Check dumping of float numbers with 17 total digits and valid fraction digits.",
+      "round": 0,
+      "superseded_by": "gen_23.cpp"
+    },
+    {
+      "file": "gen_04.cpp",
+      "name": "json_view_image_roundtrip",
+      "intent": "Save and load a JSON document as a binary image with bounds check, verifying stability.",
+      "round": 0,
+      "superseded_by": "gen_24.cpp"
+    },
+    {
+      "file": "gen_05.cpp",
+      "name": "json_view_fraction_digits_boundary",
+      "intent": "Test tokens with exactly 8 fraction digits.",
+      "round": 0,
+      "superseded_by": "gen_25.cpp"
+    },
+    {
+      "file": "gen_06.cpp",
+      "name": "json_view_fraction_digits_max_boundary",
+      "intent": "Test tokens with exactly 16 fraction digits.",
       "round": 0,
       "superseded_by": "gen_26.cpp"
     },
     {
-      "file": "gen_02.cpp",
-      "name": "json_view_float_batch_boundary",
-      "intent": "Verify serialization output of various float fraction digit lengths around the 8 to 16 boundary.",
-      "round": 0,
-      "superseded_by": "gen_28.cpp"
-    },
-    {
-      "file": "gen_03.cpp",
-      "name": "json_view_integer_digit_constraints",
-      "intent": "Verify float token processing when total digits are 16 or 17 with varying integer and fraction parts.",
-      "round": 0,
-      "superseded_by": "gen_29.cpp"
-    },
-    {
-      "file": "gen_04.cpp",
-      "name": "json_view_empty_integer_part",
-      "intent": "Test serialization behavior for floating point numbers with zero integer digits and 8 to 16 fraction digits.",
-      "round": 0,
-      "superseded_by": "gen_30.cpp"
-    },
-    {
-      "file": "gen_05.cpp",
-      "name": "json_view_load_full_check",
-      "intent": "Ensure json_document loads and dumps correctly with full check constraints enabled.",
-      "round": 0,
-      "superseded_by": "gen_31.cpp"
-    },
-    {
-      "file": "gen_06.cpp",
-      "name": "json_view_load_none_check",
-      "intent": "Verify basic json document load and dump using none image check.",
-      "round": 0,
-      "superseded_by": "gen_32.cpp"
-    },
-    {
       "file": "gen_07.cpp",
-      "name": "json_view_ordered_dump",
-      "intent": "Check ordered json view document dumping preserves exact structure and values.",
-      "round": 0,
-      "superseded_by": "gen_33.cpp"
-    },
-    {
-      "file": "gen_08.cpp",
-      "name": "json_view_materialize_comparison",
-      "intent": "Compare dump output of view root against materialized json object for floats.",
-      "round": 0,
-      "superseded_by": "gen_34.cpp"
-    },
-    {
-      "file": "gen_09.cpp",
-      "name": "json_view_nested_array_floats",
-      "intent": "Dump deeply nested arrays containing floating point numbers with various precision profiles.",
-      "round": 0,
-      "superseded_by": "gen_35.cpp"
-    },
-    {
-      "file": "gen_10.cpp",
-      "name": "json_view_object_keys_and_floats",
-      "intent": "Inspect serialization of objects mapping keys to high-precision float values.",
-      "round": 0,
-      "superseded_by": "gen_36.cpp"
-    },
-    {
-      "file": "gen_11.cpp",
-      "name": "json_view_indentation_formatting",
-      "intent": "Test indented dump output on float-heavy json view documents.",
-      "round": 0,
-      "superseded_by": "gen_37.cpp"
-    },
-    {
-      "file": "gen_12.cpp",
-      "name": "json_view_ensure_ascii_flag",
-      "intent": "Verify dump with ensure_ascii flag set on documents containing floats and strings.",
-      "round": 0,
-      "superseded_by": "gen_38.cpp"
-    },
-    {
-      "file": "gen_13.cpp",
-      "name": "json_view_subelement_dump",
-      "intent": "Access and dump a specific subelement float node inside a json document view.",
-      "round": 0,
-      "superseded_by": "gen_39.cpp"
-    },
-    {
-      "file": "gen_14.cpp",
-      "name": "json_view_invalid_utf8_bounds_check",
-      "intent": "Exercise error handling when dumping image under bounds check with invalid patterns.",
+      "name": "json_view_integer_nodes",
+      "intent": "Verify that integer nodes do not trigger the float batch path.",
       "round": 0,
       "superseded_by": "gen_27.cpp"
     },
     {
+      "file": "gen_08.cpp",
+      "name": "json_view_scientific_notation",
+      "intent": "Check handling of floats with scientific notation in json_view.",
+      "round": 0,
+      "superseded_by": "gen_28.cpp"
+    },
+    {
+      "file": "gen_09.cpp",
+      "name": "json_view_multiple_floats",
+      "intent": "Dump multiple float tokens in an array to test batch continuation.",
+      "round": 0,
+      "superseded_by": "gen_29.cpp"
+    },
+    {
+      "file": "gen_10.cpp",
+      "name": "json_view_ordered_dump",
+      "intent": "Verify ordered_json_document dump behavior with floats.",
+      "round": 0,
+      "superseded_by": "gen_30.cpp"
+    },
+    {
+      "file": "gen_11.cpp",
+      "name": "json_view_negative_floats",
+      "intent": "Ensure negative floating point numbers are correctly processed.",
+      "round": 0,
+      "superseded_by": "gen_31.cpp"
+    },
+    {
+      "file": "gen_12.cpp",
+      "name": "json_view_small_fraction",
+      "intent": "Test floats with very few fraction digits.",
+      "round": 0,
+      "superseded_by": "gen_32.cpp"
+    },
+    {
+      "file": "gen_13.cpp",
+      "name": "json_view_large_integer_part",
+      "intent": "Test floats with large integer parts and few fraction digits.",
+      "round": 0,
+      "superseded_by": "gen_33.cpp"
+    },
+    {
+      "file": "gen_14.cpp",
+      "name": "json_view_materialize",
+      "intent": "Materialize a json_view containing float numbers into standard basic_json.",
+      "round": 0,
+      "superseded_by": "gen_34.cpp"
+    },
+    {
       "file": "gen_15.cpp",
-      "name": "json_view_large_exponent_float",
-      "intent": "Test json document dump containing floats with explicit exponents.",
+      "name": "json_view_image_check_none",
+      "intent": "Load image with image_check::none and dump.",
+      "round": 0,
+      "superseded_by": "gen_35.cpp"
+    },
+    {
+      "file": "gen_16.cpp",
+      "name": "json_view_image_check_full",
+      "intent": "Load image with image_check::full and dump.",
+      "round": 0,
+      "superseded_by": "gen_36.cpp"
+    },
+    {
+      "file": "gen_17.cpp",
+      "name": "json_view_nested_objects",
+      "intent": "Dump complex nested structures containing floats via json_view.",
+      "round": 0,
+      "superseded_by": "gen_37.cpp"
+    },
+    {
+      "file": "gen_18.cpp",
+      "name": "json_view_mixed_array",
+      "intent": "Process arrays with mixed types including floats and integers.",
+      "round": 0,
+      "superseded_by": "gen_38.cpp"
+    },
+    {
+      "file": "gen_19.cpp",
+      "name": "json_view_indent_dump",
+      "intent": "Test indented dump output on json_view with floats.",
+      "round": 0,
+      "superseded_by": "gen_39.cpp"
+    },
+    {
+      "file": "gen_20.cpp",
+      "name": "json_view_empty_containers",
+      "intent": "Verify dumping empty objects and arrays via json_view.",
       "round": 0,
       "superseded_by": "gen_40.cpp"
     },
     {
-      "file": "gen_16.cpp",
-      "name": "json_view_mixed_numeric_types",
-      "intent": "Check arrays mixing integers, standard floats, and high-precision floats.",
-      "round": 0,
+      "file": "gen_21.cpp",
+      "name": "json_view_float_batch_normal_fixed",
+      "intent": "Verify that normal floating point numbers are correctly batched and dumped by json_view.",
+      "round": 1,
+      "fixes": "gen_01.cpp",
+      "kind": "compile",
       "superseded_by": "gen_41.cpp"
     },
     {
-      "file": "gen_17.cpp",
-      "name": "json_view_negative_floats",
-      "intent": "Test serialization of negative floating point values with extensive fraction lengths.",
-      "round": 0,
+      "file": "gen_22.cpp",
+      "name": "json_view_float_16_digits_fixed",
+      "intent": "Check dumping of float numbers with 16 total digits and valid fraction digits.",
+      "round": 1,
+      "fixes": "gen_02.cpp",
+      "kind": "compile",
       "superseded_by": "gen_42.cpp"
     },
     {
-      "file": "gen_18.cpp",
-      "name": "json_view_parse_error_handling",
-      "intent": "Verify parse exception handling when input string is malformed.",
-      "round": 0
-    },
-    {
-      "file": "gen_19.cpp",
-      "name": "json_view_empty_containers",
-      "intent": "Test dump output on empty arrays and objects within json document view.",
-      "round": 0
-    },
-    {
-      "file": "gen_20.cpp",
-      "name": "json_view_roundtrip_save_load",
-      "intent": "Perform a save and load roundtrip on a complex document containing floats and verify dump equivalence.",
-      "round": 0
-    },
-    {
-      "file": "gen_21.cpp",
-      "name": "gen_21",
-      "intent": "Test json_document loading and dumping of a float token having exactly 16 total digits and 8 fraction digits.",
-      "round": 1
-    },
-    {
-      "file": "gen_22.cpp",
-      "name": "gen_22",
-      "intent": "Test json_document loading and dumping of a float token having exactly 17 total digits and 16 fraction digits.",
-      "round": 1
-    },
-    {
       "file": "gen_23.cpp",
-      "name": "gen_23",
-      "intent": "Test dumping a float token with 16 total digits and 12 fraction digits loaded via bounds check image format.",
-      "round": 1
+      "name": "json_view_float_17_digits_fixed",
+      "intent": "Check dumping of float numbers with 17 total digits and valid fraction digits.",
+      "round": 1,
+      "fixes": "gen_03.cpp",
+      "kind": "compile",
+      "superseded_by": "gen_43.cpp"
     },
     {
       "file": "gen_24.cpp",
-      "name": "gen_24",
-      "intent": "Test dumping a negative float token with 17 total digits and 10 fraction digits using image bounds check.",
-      "round": 1
+      "name": "json_view_image_roundtrip_fixed",
+      "intent": "Save and load a JSON document as a binary image with bounds check, verifying stability.",
+      "round": 1,
+      "fixes": "gen_04.cpp",
+      "kind": "compile",
+      "superseded_by": "gen_44.cpp"
     },
     {
       "file": "gen_25.cpp",
-      "name": "gen_25",
-      "intent": "Test dumping a float token with 16 total digits and 15 fraction digits via json_document bounds check load.",
-      "round": 1
+      "name": "json_view_fraction_digits_boundary_fixed",
+      "intent": "Test tokens with exactly 8 fraction digits.",
+      "round": 1,
+      "fixes": "gen_05.cpp",
+      "kind": "compile",
+      "superseded_by": "gen_45.cpp"
     },
     {
       "file": "gen_26.cpp",
-      "name": "json_view_image_bounds_dump_fixed",
-      "intent": "Test that dumping a loaded document with bounds checking on floats and specific digit counts handles serialization safely.",
-      "round": 2,
-      "fixes": "gen_01.cpp",
-      "kind": "compile"
+      "name": "json_view_fraction_digits_max_boundary_fixed",
+      "intent": "Test tokens with exactly 16 fraction digits.",
+      "round": 1,
+      "fixes": "gen_06.cpp",
+      "kind": "compile",
+      "superseded_by": "gen_46.cpp"
     },
     {
       "file": "gen_27.cpp",
-      "name": "json_view_invalid_utf8_bounds_check_fixed",
-      "intent": "Exercise error handling when dumping image under bounds check with invalid patterns.",
-      "round": 2,
-      "fixes": "gen_14.cpp",
-      "kind": "compile"
+      "name": "json_view_integer_nodes_fixed",
+      "intent": "Verify that integer nodes do not trigger the float batch path.",
+      "round": 1,
+      "fixes": "gen_07.cpp",
+      "kind": "compile",
+      "superseded_by": "gen_47.cpp"
     },
     {
       "file": "gen_28.cpp",
-      "name": "json_view_float_batch_boundary_fixed",
-      "intent": "Verify serialization output of various float fraction digit lengths around the 8 to 16 boundary.",
-      "round": 3,
-      "fixes": "gen_02.cpp",
-      "kind": "compile"
+      "name": "json_view_scientific_notation_fixed",
+      "intent": "Check handling of floats with scientific notation in json_view.",
+      "round": 1,
+      "fixes": "gen_08.cpp",
+      "kind": "compile",
+      "superseded_by": "gen_48.cpp"
     },
     {
       "file": "gen_29.cpp",
-      "name": "json_view_integer_digit_constraints_fixed",
-      "intent": "Verify float token processing when total digits are 16 or 17 with varying integer and fraction parts.",
-      "round": 3,
-      "fixes": "gen_03.cpp",
-      "kind": "compile"
+      "name": "json_view_multiple_floats_fixed",
+      "intent": "Dump multiple float tokens in an array to test batch continuation.",
+      "round": 1,
+      "fixes": "gen_09.cpp",
+      "kind": "compile",
+      "superseded_by": "gen_49.cpp"
     },
     {
       "file": "gen_30.cpp",
-      "name": "json_view_empty_integer_part_fixed",
-      "intent": "Test serialization behavior for floating point numbers with zero integer digits and 8 to 16 fraction digits.",
-      "round": 3,
-      "fixes": "gen_04.cpp",
-      "kind": "compile"
+      "name": "json_view_ordered_dump_fixed",
+      "intent": "Verify ordered_json_document dump behavior with floats.",
+      "round": 1,
+      "fixes": "gen_10.cpp",
+      "kind": "compile",
+      "superseded_by": "gen_50.cpp"
     },
     {
       "file": "gen_31.cpp",
-      "name": "json_view_load_full_check_fixed",
-      "intent": "Ensure json_document loads and dumps correctly with full check constraints enabled.",
-      "round": 3,
-      "fixes": "gen_05.cpp",
-      "kind": "compile"
-    },
-    {
-      "file": "gen_32.cpp",
-      "name": "json_view_load_none_check_fixed",
-      "intent": "Verify basic json document load and dump using none image check.",
-      "round": 3,
-      "fixes": "gen_06.cpp",
-      "kind": "compile"
-    },
-    {
-      "file": "gen_33.cpp",
-      "name": "json_view_ordered_dump_fixed",
-      "intent": "Check ordered json view document dumping preserves exact structure and values.",
-      "round": 3,
-      "fixes": "gen_07.cpp",
-      "kind": "compile"
-    },
-    {
-      "file": "gen_34.cpp",
-      "name": "json_view_materialize_comparison_fixed",
-      "intent": "Compare dump output of view root against materialized json object for floats.",
-      "round": 3,
-      "fixes": "gen_08.cpp",
-      "kind": "compile"
-    },
-    {
-      "file": "gen_35.cpp",
-      "name": "json_view_nested_array_floats_fixed",
-      "intent": "Dump deeply nested arrays containing floating point numbers with various precision profiles.",
-      "round": 3,
-      "fixes": "gen_09.cpp",
-      "kind": "compile"
-    },
-    {
-      "file": "gen_36.cpp",
-      "name": "json_view_object_keys_and_floats_fixed",
-      "intent": "Inspect serialization of objects mapping keys to high-precision float values.",
-      "round": 3,
-      "fixes": "gen_10.cpp",
-      "kind": "compile"
-    },
-    {
-      "file": "gen_37.cpp",
-      "name": "json_view_indentation_formatting_fixed",
-      "intent": "Test indented dump output on float-heavy json view documents.",
-      "round": 3,
+      "name": "json_view_negative_floats_fixed",
+      "intent": "Ensure negative floating point numbers are correctly processed.",
+      "round": 1,
       "fixes": "gen_11.cpp",
       "kind": "compile"
     },
     {
-      "file": "gen_38.cpp",
-      "name": "json_view_ensure_ascii_flag_fixed",
-      "intent": "Verify dump with ensure_ascii flag set on documents containing floats and strings.",
-      "round": 3,
+      "file": "gen_32.cpp",
+      "name": "json_view_small_fraction_fixed",
+      "intent": "Test floats with very few fraction digits.",
+      "round": 1,
       "fixes": "gen_12.cpp",
       "kind": "compile"
     },
     {
-      "file": "gen_39.cpp",
-      "name": "json_view_subelement_dump_fixed",
-      "intent": "Access and dump a specific subelement float node inside a json document view.",
-      "round": 3,
+      "file": "gen_33.cpp",
+      "name": "json_view_large_integer_part_fixed",
+      "intent": "Test floats with large integer parts and few fraction digits.",
+      "round": 1,
       "fixes": "gen_13.cpp",
       "kind": "compile"
     },
     {
-      "file": "gen_40.cpp",
-      "name": "json_view_large_exponent_float_fixed",
-      "intent": "Test json document dump containing floats with explicit exponents.",
-      "round": 3,
+      "file": "gen_34.cpp",
+      "name": "json_view_materialize_fixed",
+      "intent": "Materialize a json_view containing float numbers into standard basic_json.",
+      "round": 1,
+      "fixes": "gen_14.cpp",
+      "kind": "compile"
+    },
+    {
+      "file": "gen_35.cpp",
+      "name": "json_view_image_check_none_fixed",
+      "intent": "Load image with image_check::none and dump.",
+      "round": 1,
       "fixes": "gen_15.cpp",
       "kind": "compile"
     },
     {
-      "file": "gen_41.cpp",
-      "name": "json_view_mixed_numeric_types_fixed",
-      "intent": "Check arrays mixing integers, standard floats, and high-precision floats.",
-      "round": 3,
+      "file": "gen_36.cpp",
+      "name": "json_view_image_check_full_fixed",
+      "intent": "Load image with image_check::full and dump.",
+      "round": 2,
       "fixes": "gen_16.cpp",
       "kind": "compile"
     },
     {
-      "file": "gen_42.cpp",
-      "name": "json_view_negative_floats_fixed",
-      "intent": "Test serialization of negative floating point values with extensive fraction lengths.",
-      "round": 3,
+      "file": "gen_37.cpp",
+      "name": "json_view_nested_objects_fixed",
+      "intent": "Dump complex nested structures containing floats via json_view.",
+      "round": 2,
       "fixes": "gen_17.cpp",
+      "kind": "compile"
+    },
+    {
+      "file": "gen_38.cpp",
+      "name": "json_view_mixed_array_fixed",
+      "intent": "Process arrays with mixed types including floats and integers.",
+      "round": 2,
+      "fixes": "gen_18.cpp",
+      "kind": "compile"
+    },
+    {
+      "file": "gen_39.cpp",
+      "name": "json_view_indent_dump_fixed",
+      "intent": "Test indented dump output on json_view with floats.",
+      "round": 2,
+      "fixes": "gen_19.cpp",
+      "kind": "compile"
+    },
+    {
+      "file": "gen_40.cpp",
+      "name": "json_view_empty_containers_fixed",
+      "intent": "Verify dumping empty objects and arrays via json_view.",
+      "round": 2,
+      "fixes": "gen_20.cpp",
+      "kind": "compile"
+    },
+    {
+      "file": "gen_41.cpp",
+      "name": "json_view_float_batch_normal_fixed_fixed",
+      "intent": "Verify that normal floating point numbers are correctly batched and dumped by json_view.",
+      "round": 2,
+      "fixes": "gen_21.cpp",
+      "kind": "compile"
+    },
+    {
+      "file": "gen_42.cpp",
+      "name": "json_view_float_16_digits_fixed_fixed",
+      "intent": "Check dumping of float numbers with 16 total digits and valid fraction digits.",
+      "round": 2,
+      "fixes": "gen_22.cpp",
+      "kind": "compile"
+    },
+    {
+      "file": "gen_43.cpp",
+      "name": "json_view_float_17_digits_fixed_fixed",
+      "intent": "Check dumping of float numbers with 17 total digits and valid fraction digits.",
+      "round": 2,
+      "fixes": "gen_23.cpp",
+      "kind": "compile"
+    },
+    {
+      "file": "gen_44.cpp",
+      "name": "json_view_image_roundtrip_fixed_fixed",
+      "intent": "Save and load a JSON document as a binary image with bounds check, verifying stability.",
+      "round": 2,
+      "fixes": "gen_24.cpp",
+      "kind": "compile"
+    },
+    {
+      "file": "gen_45.cpp",
+      "name": "json_view_fraction_digits_boundary_fixed_fixed",
+      "intent": "Test tokens with exactly 8 fraction digits.",
+      "round": 2,
+      "fixes": "gen_25.cpp",
+      "kind": "compile"
+    },
+    {
+      "file": "gen_46.cpp",
+      "name": "json_view_fraction_digits_max_boundary_fixed_fixed",
+      "intent": "Test tokens with exactly 16 fraction digits.",
+      "round": 2,
+      "fixes": "gen_26.cpp",
+      "kind": "compile"
+    },
+    {
+      "file": "gen_47.cpp",
+      "name": "json_view_integer_nodes_fixed_fixed",
+      "intent": "Verify that integer nodes do not trigger the float batch path.",
+      "round": 2,
+      "fixes": "gen_27.cpp",
+      "kind": "compile"
+    },
+    {
+      "file": "gen_48.cpp",
+      "name": "json_view_scientific_notation_fixed_fixed",
+      "intent": "Check handling of floats with scientific notation in json_view.",
+      "round": 2,
+      "fixes": "gen_28.cpp",
+      "kind": "compile"
+    },
+    {
+      "file": "gen_49.cpp",
+      "name": "json_view_multiple_floats_fixed_fixed",
+      "intent": "Dump multiple float tokens in an array to test batch continuation.",
+      "round": 2,
+      "fixes": "gen_29.cpp",
+      "kind": "compile"
+    },
+    {
+      "file": "gen_50.cpp",
+      "name": "json_view_ordered_dump_fixed_fixed",
+      "intent": "Verify ordered_json_document dump behavior with floats.",
+      "round": 2,
+      "fixes": "gen_30.cpp",
       "kind": "compile"
     }
   ],

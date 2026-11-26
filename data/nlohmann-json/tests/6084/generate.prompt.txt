@@ -80,6 +80,9 @@ int64_t when negative).
 
 Signed-off-by: Niels Lohmann <mail@nlohmann.me>
 
+## Headers the programs must include
+- Also write #include <nlohmann/json_view.hpp>. The json_view feature (json_document, json_view and their image loading and editing API) is declared only in this header; nlohmann/json.hpp does not include it, so without this line those names do not exist. Use only names you can see in the diff or the context below.
+
 ## Changed functions (from changes.py)
 - nlohmann::detail::view::check_float_ranges(std::vector<float_range> &, const unsigned char *) (private); reached from the public API through: nlohmann::basic_json_document::load(std::vector<std::uint8_t> &&, const image_check), nlohmann::basic_json_document::load(const std::uint8_t *, std::size_t, const image_check)
 - nlohmann::detail::view::integer_token_fits(const number_token &) (private); reached from the public API through: nlohmann::basic_json_document::load(std::vector<std::uint8_t> &&, const image_check), nlohmann::basic_json_document::load(const std::uint8_t *, std::size_t, const image_check)

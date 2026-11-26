@@ -71,6 +71,36 @@ class CollectTests(unittest.TestCase):
         self.assertNotIn("gen_08.cpp", all_in)
         self.assertEqual((counts["same"], counts["invalid"], counts["flaky"], counts["superseded"]), (1, 1, 1, 1))
 
+    def test_system_prompt_separates_invalid_programs_from_regressions(self):
+        flat = " ".join(classify.SYSTEM.split())  # the prompt wraps lines
+        for phrase in ("not the program's own mistake", "without its namespace", "detection probe written incorrectly",
+                       "valid code that uses the documented public API", "fails deep inside library code",
+                       "even though the program fails to compile on both versions"):
+            self.assertIn(phrase, flat)
+        self.assertIn("verdict is unclear", flat)
+
+    def test_error_site_tells_program_mistakes_from_library_failures(self):
+        progs = {"gen_02.cpp": 1}
+        own = "/w/tests/4958/gen_02.cpp:11:5: error: 'json' was not declared in this scope\n"
+        std = "In file included from x.cpp\n/usr/include/c++/14/bits/stl_tree.h:780:5: error: no match for call to 'std::less<void>'\n"
+        lib = "/w/cache/worktrees/x/include/nlohmann/json.hpp:100:3: error: static assertion failed\n"
+        self.assertEqual(classify.error_site(own, progs), "the program's own code")
+        self.assertEqual(classify.error_site(std, progs), "the standard library headers")
+        self.assertEqual(classify.error_site(lib, progs), "the library headers")
+        self.assertIsNone(classify.error_site("no diagnostics here", progs))
+        self.assertIsNone(classify.error_site("", progs))
+
+    def test_describe_states_where_the_first_error_is_reported(self):
+        side = lambda err: {"compile_ok": False, "compile_stderr": err, "runs": []}
+        err_old = "/w/t/gen_01.cpp:3:1: error: 'x' was not declared in this scope\n"
+        err_new = "/usr/include/c++/14/bits/stl_tree.h:1:1: error: no match for call\n"
+        results = {"gen_01.cpp": {"status": "compile_diff", "compile_failed_on": "both", "old": side(err_old), "new": side(err_new)}}
+        with tempfile.TemporaryDirectory() as d:
+            (Path(d) / "gen_01.cpp").write_text("#include <nlohmann/json.hpp>\nint main() {}\n")
+            text = classify.describe({"id": "C1", "status": "compile_diff", "failed_on": "both", "programs": ["gen_01.cpp"]}, results, d)
+        self.assertIn("Compiler errors on old (the first error is reported in the program's own code)", text)
+        self.assertIn("Compiler errors on new (the first error is reported in the standard library headers)", text)
+
     def test_first_diff_variants(self):
         self.assertEqual(classify.first_diff(ok("a\nb\n"), ok("a\nc\n")), ("b", "c"))
         self.assertEqual(classify.first_diff(ok("a\n"), ok("a\nextra\n")), ("", "extra"))

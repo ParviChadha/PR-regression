@@ -2,7 +2,7 @@
   "target": "nlohmann-json",
   "pr": 4958,
   "model": "gemini-3.5-flash-lite",
-  "prompt_sha256": "61b09f211c1a2aba8fdf9bb0193fc9a1ba10299e0bc0f278d23ce6ea2b062dac",
+  "prompt_sha256": "6872d2bfa006b6bd85a445b43bb80d147a5f890cfeed79336326eace28a13830",
   "results_sha256": "67d254285fe1bc6d7e3d6a3003cddc1efc15d93cca368b46f75ab7fcbf50b3de",
   "clusters": [
     {
@@ -19,7 +19,7 @@
       ],
       "verdict": "unintended",
       "confidence": "high",
-      "reason": "These test programs fail to compile on the new version with std::less/comparator errors because standard map types do not support transparent heterogeneous lookup with types implicitly convertible to string_view without a transparent comparator."
+      "reason": "These test programs fail to compile on the new version because the custom key type lacks an operator< to compare against std::string when used in underlying container lookups."
     },
     {
       "id": "C2",
@@ -33,7 +33,7 @@
       ],
       "verdict": "intended",
       "confidence": "high",
-      "reason": "The PR's goal is to enable types convertible to std::string_view to be usable as basic_json keys in operator[] and related methods, which these programs now successfully support."
+      "reason": "The PR intended to enable std::string_view-convertible types as valid keys for operator[] and other lookup functions, which these programs now successfully support."
     },
     {
       "id": "C3",
@@ -46,7 +46,7 @@
       ],
       "verdict": "intended",
       "confidence": "high",
-      "reason": "Allowing types convertible to std::string_view to be used with operator[] enables writing and reading values via such keys, matching the PR's objectives."
+      "reason": "Enabling std::string_view-convertible types as keys allows writing and accessing values using such keys, as demonstrated here."
     },
     {
       "id": "C4",
@@ -57,7 +57,7 @@
       ],
       "verdict": "unintended",
       "confidence": "high",
-      "reason": "Like C1, this program fails to compile on the new version due to lack of a transparent comparator supporting implicit conversions for const json instances."
+      "reason": "This test case fails to compile on the new version due to the missing operator< between the custom key type and std::string in the underlying map."
     },
     {
       "id": "C5",
@@ -68,7 +68,7 @@
       ],
       "verdict": "intended",
       "confidence": "high",
-      "reason": "The trait is_usable_as_basic_json_key_type is updated in the PR to return true for types convertible to std::string_view under C++17."
+      "reason": "The trait is_usable_as_basic_json_key_type was explicitly updated to return true for types convertible to std::string_view."
     },
     {
       "id": "C6",
@@ -79,7 +79,7 @@
       ],
       "verdict": "unintended",
       "confidence": "high",
-      "reason": "This program fails to compile with ordered_json due to underlying container requirements with custom types convertible to string_view."
+      "reason": "Compilation fails on ordered_json because the custom type does not satisfy the comparator requirements of ordered_map."
     },
     {
       "id": "C7",
@@ -90,7 +90,7 @@
       ],
       "verdict": "intended",
       "confidence": "high",
-      "reason": "Reflects the updated trait is_usable_as_basic_json_key_type recognizing string_view convertible types when non-transparent."
+      "reason": "The trait correctly evaluates to true for non-transparent usage when the key type is convertible to std::string_view."
     },
     {
       "id": "C8",
@@ -101,7 +101,7 @@
       ],
       "verdict": "intended",
       "confidence": "high",
-      "reason": "Reflects the updated trait checking cv-ref qualified types that are convertible to std::string_view."
+      "reason": "The trait correctly recognizes cv-ref types of std::string_view convertible objects as usable keys."
     },
     {
       "id": "C9",
@@ -112,7 +112,7 @@
       ],
       "verdict": "intended",
       "confidence": "high",
-      "reason": "Reflects the updated trait correctly identifying types convertible to std::string_view when used with ordered_json."
+      "reason": "The trait correctly evaluates to true for ordered_json with types convertible to std::string_view."
     }
   ],
   "clusters_not_shown": 0,
@@ -132,13 +132,13 @@
     ]
   },
   "usage": {
-    "promptTokenCount": 9510,
-    "candidatesTokenCount": 631,
-    "totalTokenCount": 10141,
+    "promptTokenCount": 9875,
+    "candidatesTokenCount": 594,
+    "totalTokenCount": 10469,
     "promptTokensDetails": [
       {
         "modality": "TEXT",
-        "tokenCount": 9510
+        "tokenCount": 9875
       }
     ],
     "serviceTier": "standard"

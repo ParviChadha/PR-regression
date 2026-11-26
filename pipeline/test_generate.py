@@ -249,6 +249,16 @@ class GenerateTests(unittest.TestCase):
         self.assertGreaterEqual(stats["comments_dropped_after_merge"], 0)
         self.assertIn("nlohmann/json.hpp", generate.system_prompt(self.t))
 
+    def test_extra_header_only_for_prs_that_touch_matching_files(self):
+        rec, gh = generate.load_pr(self.t, 6084)
+        _, prompt, _ = generate.build_generate_prompt(self.t, rec, gh, 5)
+        self.assertIn("## Headers the programs must include", prompt)
+        self.assertIn("#include <nlohmann/json_view.hpp>", prompt)
+        rec, gh = generate.load_pr(self.t, 4958)
+        _, prompt, _ = generate.build_generate_prompt(self.t, rec, gh, 5)
+        self.assertNotIn("json_view.hpp>", prompt)
+        self.assertNotIn("Headers the programs must include", prompt)
+
     def test_generate_writes_files_manifest_and_removes_stale(self):
         (self.dir / "gen_09.cpp").write_text("stale")
         with mock.patch.object(llm, "call", return_value=canned(PROG, PROG.replace("1", "2"), "no main here")):

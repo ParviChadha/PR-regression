@@ -2,7 +2,7 @@
   "target": "nlohmann-json",
   "pr": 6121,
   "model": "gemini-3.5-flash-lite",
-  "prompt_sha256": "fc83cd2e549175414a58f13cee7637006b8c2285f70f8fcc87ff111fe945f868",
+  "prompt_sha256": "51f91a3f2dee809d4264d9b2a8d4495ced87a832383fd24478dfb6ea3b0f61a8",
   "results_sha256": "93cb92730308c686f7366aae0b37ad6f53017b35bd3feba38493ac6fa8117075",
   "clusters": [
     {
@@ -14,9 +14,9 @@
         "gen_30.cpp",
         "gen_31.cpp"
       ],
-      "verdict": "unintended",
+      "verdict": "unclear",
       "confidence": "high",
-      "reason": "The test uses invalid SFINAE probes (accessing `::head` rather than checking member existence via type traits properly) which fail to compile on the new version."
+      "reason": "The test program probes private library implementation details (`nlohmann::detail::token_text_buffer`) that are not part of the public API."
     },
     {
       "id": "C2",
@@ -27,7 +27,7 @@
       ],
       "verdict": "intended",
       "confidence": "high",
-      "reason": "The PR explicitly truncates long tokens in error messages and inserts '...' when they exceed 8192 characters."
+      "reason": "The PR explicitly changes the error message behavior for long tokens to truncate them with `...` instead of keeping the full text, as described in the PR description and fix for issue #6120."
     }
   ],
   "clusters_not_shown": 0,
@@ -39,19 +39,17 @@
     "missing": 0
   },
   "pr_verdict": {
-    "regression_candidate": true,
-    "unintended_clusters": [
-      "C1"
-    ]
+    "regression_candidate": false,
+    "unintended_clusters": []
   },
   "usage": {
-    "promptTokenCount": 8900,
-    "candidatesTokenCount": 147,
-    "totalTokenCount": 9047,
+    "promptTokenCount": 25143,
+    "candidatesTokenCount": 160,
+    "totalTokenCount": 25303,
     "promptTokensDetails": [
       {
         "modality": "TEXT",
-        "tokenCount": 8900
+        "tokenCount": 25143
       }
     ],
     "serviceTier": "standard"
