@@ -2,7 +2,7 @@
   "target": "nlohmann-json",
   "pr": 6029,
   "model": "gemini-3.5-flash-lite",
-  "prompt_sha256": "1440fb24f9259de777c5d18c1d863e23a190cbbc0e4d520f86c10a9d45c55dc0",
+  "prompt_sha256": "dab6cc1e602fe1b9e8fa17755779c449f746d84df2a667baec543a4f1ef50479",
   "results_sha256": "d8179fe3242e36e262a2c53a6abbbd04aa05a089fcc2658d926d42962fb211c2",
   "clusters": [
     {
@@ -15,9 +15,9 @@
         "gen_23.cpp",
         "gen_24.cpp"
       ],
-      "verdict": "unintended",
+      "verdict": "unclear",
       "confidence": "high",
-      "reason": "The test program uses the unexported type alias `json` without qualifying it as `nlohmann::json`, causing a compilation error on the new version."
+      "reason": "These test programs probe private internal detail structures not part of the public API, and fail to compile on the new version for unrelated reasons (using 'json' without 'using nlohmann::json')."
     },
     {
       "id": "C2",
@@ -28,7 +28,7 @@
       ],
       "verdict": "intended",
       "confidence": "high",
-      "reason": "The PR introduces internal helpers like `is_std_contiguous_byte_iterator` and `is_byte_char_type`, allowing this test to compile successfully on the new version where it failed previously."
+      "reason": "The PR introduces the new internal traits 'is_std_contiguous_byte_iterator' and 'is_byte_char_type' to support reading iterator pairs of std::string and std::vector as pointer ranges, making detection of these internal byte iterators available as intended."
     }
   ],
   "clusters_not_shown": 0,
@@ -40,19 +40,17 @@
     "missing": 0
   },
   "pr_verdict": {
-    "regression_candidate": true,
-    "unintended_clusters": [
-      "C1"
-    ]
+    "regression_candidate": false,
+    "unintended_clusters": []
   },
   "usage": {
-    "promptTokenCount": 11042,
-    "candidatesTokenCount": 163,
-    "totalTokenCount": 11205,
+    "promptTokenCount": 11377,
+    "candidatesTokenCount": 187,
+    "totalTokenCount": 11564,
     "promptTokensDetails": [
       {
         "modality": "TEXT",
-        "tokenCount": 11042
+        "tokenCount": 11377
       }
     ],
     "serviceTier": "standard"

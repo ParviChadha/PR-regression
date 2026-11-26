@@ -88,6 +88,9 @@ buffer/memcpy:Does not check for buffer overflows when copying to destination (C
 
 [Show more details](https://github.com/nlohmann/json/security/code-scanning/1166)
 
+## Headers the programs must include
+- Also write #include <nlohmann/json_view.hpp>. The json_view feature (json_document, json_view and their image loading and editing API) is declared only in this header; nlohmann/json.hpp does not include it, so without this line those names do not exist. Use only names you can see in the diff or the context below.
+
 ## Changed functions (from changes.py)
 - nlohmann::detail::view::view_serializer::convert_ahead(const node *, float_batch &) (private); reached from the public API through: nlohmann::basic_json_view::dump(const int, const char, const bool, const number_format)
 
@@ -302,380 +305,382 @@ extern "C" int LLVMFuzzerTestOneInput(const uint8_t* data, size_t size)
 
 # Programs to repair
 
-## gen_01.cpp (compile)
-Intent: Test that dumping a loaded document with bounds checking on floats and specific digit counts handles serialization safely.
+## gen_16.cpp (compile)
+Intent: Load image with image_check::full and dump.
 COMPILE ERROR. The program fails to compile, the same way against the old and the new library. Fix the error (wrong or missing include, typo, misuse of the public API) and keep the intent: the call under test must stay. Include only headers that exist; if you are unsure a header exists, use the library's main header.
 Compiler errors:
 ```
-gen_01.cpp:11:30: error: ‘nlohmann::json_document’ has not been declared
-gen_01.cpp:11:66: error: ‘nlohmann::json_image_check’ has not been declared
+gen_16.cpp:9:30: error: ‘nlohmann::json_document’ has not been declared
 ```
 Source:
 ```cpp
 #include <nlohmann/json.hpp>
+#include <nlohmann/json_view.hpp>
 #include <iostream>
-#include <vector>
 
 int main() {
     try {
-        std::vector<std::uint8_t> data = {'[', '.', '1', '2', '3', '4', '5', '6', '7', '8', '9', '0', '1', '2', '3', '4', '5', '6', ']',
-                                          0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0};
-        auto doc = nlohmann::json_document::load(data, nlohmann::json_image_check::bounds);
+        nlohmann::json j = {{"y", 777.666}};
+        std::vector<std::uint8_t> img = nlohmann::json_document::parse(j.dump()).save();
+        auto doc = nlohmann::json_document::load(img, nlohmann::image_check::full);
         std::cout << doc.root().dump() << std::endl;
     } catch (const std::exception& e) {
-        std::cout << "EXCEPTION: " << e.what() << std::endl;
+        std::cout << "Exception: " << e.what() << std::endl;
     }
     return 0;
 }
 ```
 
-## gen_02.cpp (compile)
-Intent: Verify serialization output of various float fraction digit lengths around the 8 to 16 boundary.
+## gen_17.cpp (compile)
+Intent: Dump complex nested structures containing floats via json_view.
 COMPILE ERROR. The program fails to compile, the same way against the old and the new library. Fix the error (wrong or missing include, typo, misuse of the public API) and keep the intent: the call under test must stay. Include only headers that exist; if you are unsure a header exists, use the library's main header.
 Compiler errors:
 ```
-gen_02.cpp:9:30: error: ‘nlohmann::json_document’ has not been declared
+gen_17.cpp:9:30: error: ‘nlohmann::json_document’ has not been declared
 ```
 Source:
 ```cpp
 #include <nlohmann/json.hpp>
+#include <nlohmann/json_view.hpp>
 #include <iostream>
 
 int main() {
     try {
-        std::string json_str = "[0.1234567, 0.12345678, 0.123456789, 0.1234567890123456, 0.12345678901234567]";
-        auto doc = nlohmann::json_document::parse(json_str);
-        std::cout << doc.root().dump() << std::endl;
-    } catch (const std::exception& e) {
-        std::cout << "EXCEPTION: " << e.what() << std::endl;
-    }
-    return 0;
-}
-```
-
-## gen_03.cpp (compile)
-Intent: Verify float token processing when total digits are 16 or 17 with varying integer and fraction parts.
-COMPILE ERROR. The program fails to compile, the same way against the old and the new library. Fix the error (wrong or missing include, typo, misuse of the public API) and keep the intent: the call under test must stay. Include only headers that exist; if you are unsure a header exists, use the library's main header.
-Compiler errors:
-```
-gen_03.cpp:9:30: error: ‘nlohmann::json_document’ has not been declared
-```
-Source:
-```cpp
-#include <nlohmann/json.hpp>
-#include <iostream>
-
-int main() {
-    try {
-        std::string json_str = "[1.123456789012345, 12.12345678901234, 123.1234567890123]";
+        std::string json_str = "{\"outer\": {\"inner\": 3.14159265}}";
         auto doc = nlohmann::json_document::parse(json_str);
         std::cout << doc.root().dump() << std::endl;
     } catch (const std::exception& e) {
-        std::cout << "EXCEPTION: " << e.what() << std::endl;
+        std::cout << "Exception: " << e.what() << std::endl;
     }
     return 0;
 }
 ```
 
-## gen_04.cpp (compile)
-Intent: Test serialization behavior for floating point numbers with zero integer digits and 8 to 16 fraction digits.
+## gen_18.cpp (compile)
+Intent: Process arrays with mixed types including floats and integers.
 COMPILE ERROR. The program fails to compile, the same way against the old and the new library. Fix the error (wrong or missing include, typo, misuse of the public API) and keep the intent: the call under test must stay. Include only headers that exist; if you are unsure a header exists, use the library's main header.
 Compiler errors:
 ```
-gen_04.cpp:9:30: error: ‘nlohmann::json_document’ has not been declared
+gen_18.cpp:9:30: error: ‘nlohmann::json_document’ has not been declared
 ```
 Source:
 ```cpp
 #include <nlohmann/json.hpp>
+#include <nlohmann/json_view.hpp>
 #include <iostream>
 
 int main() {
     try {
-        std::string json_str = "[0.12345678, 0.1234567890123456]";
+        std::string json_str = "[1, 2.5, \"string\", true, null]";
         auto doc = nlohmann::json_document::parse(json_str);
         std::cout << doc.root().dump() << std::endl;
     } catch (const std::exception& e) {
-        std::cout << "EXCEPTION: " << e.what() << std::endl;
+        std::cout << "Exception: " << e.what() << std::endl;
     }
     return 0;
 }
 ```
 
-## gen_05.cpp (compile)
-Intent: Ensure json_document loads and dumps correctly with full check constraints enabled.
+## gen_19.cpp (compile)
+Intent: Test indented dump output on json_view with floats.
 COMPILE ERROR. The program fails to compile, the same way against the old and the new library. Fix the error (wrong or missing include, typo, misuse of the public API) and keep the intent: the call under test must stay. Include only headers that exist; if you are unsure a header exists, use the library's main header.
 Compiler errors:
 ```
-gen_05.cpp:9:30: error: ‘nlohmann::json_document’ has not been declared
-gen_05.cpp:11:33: error: ‘nlohmann::json_document’ has not been declared
-gen_05.cpp:11:70: error: ‘nlohmann::json_image_check’ has not been declared
+gen_19.cpp:9:30: error: ‘nlohmann::json_document’ has not been declared
 ```
 Source:
 ```cpp
 #include <nlohmann/json.hpp>
+#include <nlohmann/json_view.hpp>
 #include <iostream>
 
 int main() {
     try {
-        std::string json_str = "{\"a\": 3.1415926535, \"b\": true}";
-        auto doc = nlohmann::json_document::parse(json_str);
-        auto image = doc.save();
-        auto loaded = nlohmann::json_document::load(image, nlohmann::json_image_check::full);
-        std::cout << loaded.root().dump() << std::endl;
-    } catch (const std::exception& e) {
-        std::cout << "EXCEPTION: " << e.what() << std::endl;
-    }
-    return 0;
-}
-```
-
-## gen_06.cpp (compile)
-Intent: Verify basic json document load and dump using none image check.
-COMPILE ERROR. The program fails to compile, the same way against the old and the new library. Fix the error (wrong or missing include, typo, misuse of the public API) and keep the intent: the call under test must stay. Include only headers that exist; if you are unsure a header exists, use the library's main header.
-Compiler errors:
-```
-gen_06.cpp:9:30: error: ‘nlohmann::json_document’ has not been declared
-gen_06.cpp:11:33: error: ‘nlohmann::json_document’ has not been declared
-gen_06.cpp:11:70: error: ‘nlohmann::json_image_check’ has not been declared
-```
-Source:
-```cpp
-#include <nlohmann/json.hpp>
-#include <iostream>
-
-int main() {
-    try {
-        std::string json_str = "[100.5, 200.75]";
-        auto doc = nlohmann::json_document::parse(json_str);
-        auto image = doc.save();
-        auto loaded = nlohmann::json_document::load(image, nlohmann::json_image_check::none);
-        std::cout << loaded.root().dump() << std::endl;
-    } catch (const std::exception& e) {
-        std::cout << "EXCEPTION: " << e.what() << std::endl;
-    }
-    return 0;
-}
-```
-
-## gen_07.cpp (compile)
-Intent: Check ordered json view document dumping preserves exact structure and values.
-COMPILE ERROR. The program fails to compile, the same way against the old and the new library. Fix the error (wrong or missing include, typo, misuse of the public API) and keep the intent: the call under test must stay. Include only headers that exist; if you are unsure a header exists, use the library's main header.
-Compiler errors:
-```
-gen_07.cpp:9:30: error: ‘nlohmann::ordered_json_document’ has not been declared
-```
-Source:
-```cpp
-#include <nlohmann/json.hpp>
-#include <iostream>
-
-int main() {
-    try {
-        std::string json_str = "{\"z\": 1.12345678, \"a\": 2.87654321}";
-        auto doc = nlohmann::ordered_json_document::parse(json_str);
-        std::cout << doc.root().dump() << std::endl;
-    } catch (const std::exception& e) {
-        std::cout << "EXCEPTION: " << e.what() << std::endl;
-    }
-    return 0;
-}
-```
-
-## gen_08.cpp (compile)
-Intent: Compare dump output of view root against materialized json object for floats.
-COMPILE ERROR. The program fails to compile, the same way against the old and the new library. Fix the error (wrong or missing include, typo, misuse of the public API) and keep the intent: the call under test must stay. Include only headers that exist; if you are unsure a header exists, use the library's main header.
-Compiler errors:
-```
-gen_08.cpp:9:30: error: ‘nlohmann::json_document’ has not been declared
-```
-Source:
-```cpp
-#include <nlohmann/json.hpp>
-#include <iostream>
-
-int main() {
-    try {
-        std::string json_str = "[123.4567890123456]";
-        auto doc = nlohmann::json_document::parse(json_str);
-        auto materialized = doc.root().materialize();
-        std::cout << doc.root().dump() << " == " << materialized.dump() << std::endl;
-    } catch (const std::exception& e) {
-        std::cout << "EXCEPTION: " << e.what() << std::endl;
-    }
-    return 0;
-}
-```
-
-## gen_09.cpp (compile)
-Intent: Dump deeply nested arrays containing floating point numbers with various precision profiles.
-COMPILE ERROR. The program fails to compile, the same way against the old and the new library. Fix the error (wrong or missing include, typo, misuse of the public API) and keep the intent: the call under test must stay. Include only headers that exist; if you are unsure a header exists, use the library's main header.
-Compiler errors:
-```
-gen_09.cpp:9:30: error: ‘nlohmann::json_document’ has not been declared
-```
-Source:
-```cpp
-#include <nlohmann/json.hpp>
-#include <iostream>
-
-int main() {
-    try {
-        std::string json_str = "[[[3.14159265358979]]]";
-        auto doc = nlohmann::json_document::parse(json_str);
-        std::cout << doc.root().dump() << std::endl;
-    } catch (const std::exception& e) {
-        std::cout << "EXCEPTION: " << e.what() << std::endl;
-    }
-    return 0;
-}
-```
-
-## gen_10.cpp (compile)
-Intent: Inspect serialization of objects mapping keys to high-precision float values.
-COMPILE ERROR. The program fails to compile, the same way against the old and the new library. Fix the error (wrong or missing include, typo, misuse of the public API) and keep the intent: the call under test must stay. Include only headers that exist; if you are unsure a header exists, use the library's main header.
-Compiler errors:
-```
-gen_10.cpp:9:30: error: ‘nlohmann::json_document’ has not been declared
-```
-Source:
-```cpp
-#include <nlohmann/json.hpp>
-#include <iostream>
-
-int main() {
-    try {
-        std::string json_str = "{\"pi\": 3.141592653589, \"e\": 2.718281828459}";
-        auto doc = nlohmann::json_document::parse(json_str);
-        std::cout << doc.root().dump() << std::endl;
-    } catch (const std::exception& e) {
-        std::cout << "EXCEPTION: " << e.what() << std::endl;
-    }
-    return 0;
-}
-```
-
-## gen_11.cpp (compile)
-Intent: Test indented dump output on float-heavy json view documents.
-COMPILE ERROR. The program fails to compile, the same way against the old and the new library. Fix the error (wrong or missing include, typo, misuse of the public API) and keep the intent: the call under test must stay. Include only headers that exist; if you are unsure a header exists, use the library's main header.
-Compiler errors:
-```
-gen_11.cpp:9:30: error: ‘nlohmann::json_document’ has not been declared
-```
-Source:
-```cpp
-#include <nlohmann/json.hpp>
-#include <iostream>
-
-int main() {
-    try {
-        std::string json_str = "[1.123456789, 2.987654321]";
+        std::string json_str = "[3.14, 2.71]";
         auto doc = nlohmann::json_document::parse(json_str);
         std::cout << doc.root().dump(2) << std::endl;
     } catch (const std::exception& e) {
-        std::cout << "EXCEPTION: " << e.what() << std::endl;
+        std::cout << "Exception: " << e.what() << std::endl;
     }
     return 0;
 }
 ```
 
-## gen_12.cpp (compile)
-Intent: Verify dump with ensure_ascii flag set on documents containing floats and strings.
+## gen_20.cpp (compile)
+Intent: Verify dumping empty objects and arrays via json_view.
 COMPILE ERROR. The program fails to compile, the same way against the old and the new library. Fix the error (wrong or missing include, typo, misuse of the public API) and keep the intent: the call under test must stay. Include only headers that exist; if you are unsure a header exists, use the library's main header.
 Compiler errors:
 ```
-gen_12.cpp:9:30: error: ‘nlohmann::json_document’ has not been declared
+gen_20.cpp:9:31: error: ‘nlohmann::json_document’ has not been declared
+gen_20.cpp:11:31: error: ‘nlohmann::json_document’ has not been declared
+gen_20.cpp:11:68: error: ‘nlohmann::json_image_check’ has not been declared
 ```
 Source:
 ```cpp
 #include <nlohmann/json.hpp>
+#include <nlohmann/json_view.hpp>
 #include <iostream>
 
 int main() {
     try {
-        std::string json_str = "{\"val\": 1.234567890123456}";
-        auto doc = nlohmann::json_document::parse(json_str);
-        std::cout << doc.root().dump(-1, ' ', true) << std::endl;
-    } catch (const std::exception& e) {
-        std::cout << "EXCEPTION: " << e.what() << std::endl;
-    }
-    return 0;
-}
-```
-
-## gen_13.cpp (compile)
-Intent: Access and dump a specific subelement float node inside a json document view.
-COMPILE ERROR. The program fails to compile, the same way against the old and the new library. Fix the error (wrong or missing include, typo, misuse of the public API) and keep the intent: the call under test must stay. Include only headers that exist; if you are unsure a header exists, use the library's main header.
-Compiler errors:
-```
-gen_13.cpp:10:36: error: stray ‘’ in program
-gen_13.cpp:10:37: error: missing terminating " character
-gen_13.cpp:9:30: error: ‘nlohmann::json_document’ has not been declared
-gen_13.cpp:11:5: error: expected primary-expression before ‘}’ token
-gen_13.cpp:10:36: error: expected ‘]’ before ‘}’ token
-```
-Source:
-```cpp
-#include <nlohmann/json.hpp>
-#include <iostream>
-
-int main() {
-    try {
-        std::string json_str = "[10, {\"target\": 9.87654321098765}]";
-        auto doc = nlohmann::json_document::parse(json_str);
-        std::cout << doc.root()[1][\"target\"].dump() << std::endl;
-    } catch (const std::exception& e) {
-        std::cout << "EXCEPTION: " << e.what() << std::endl;
-    }
-    return 0;
-}
-```
-
-## gen_14.cpp (compile)
-Intent: Exercise error handling when dumping image under bounds check with invalid patterns.
-COMPILE ERROR. The program fails to compile, the same way against the old and the new library. Fix the error (wrong or missing include, typo, misuse of the public API) and keep the intent: the call under test must stay. Include only headers that exist; if you are unsure a header exists, use the library's main header.
-Compiler errors:
-```
-gen_14.cpp:10:30: error: ‘nlohmann::json_document’ has not been declared
-gen_14.cpp:10:66: error: ‘nlohmann::json_image_check’ has not been declared
-```
-Source:
-```cpp
-#include <nlohmann/json.hpp>
-#include <iostream>
-#include <vector>
-
-int main() {
-    try {
-        std::vector<std::uint8_t> data = {'"', 0xFF, 0xFF, '"', 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0};
-        auto doc = nlohmann::json_document::load(data, nlohmann::json_image_check::bounds);
-        std::string s = doc.root().dump();
-        std::cout << s << std::endl;
-    } catch (const std::exception& e) {
-        std::cout << "EXCEPTION: " << e.what() << std::endl;
-    }
-    return 0;
-}
-```
-
-## gen_15.cpp (compile)
-Intent: Test json document dump containing floats with explicit exponents.
-COMPILE ERROR. The program fails to compile, the same way against the old and the new library. Fix the error (wrong or missing include, typo, misuse of the public API) and keep the intent: the call under test must stay. Include only headers that exist; if you are unsure a header exists, use the library's main header.
-Compiler errors:
-```
-gen_15.cpp:9:30: error: ‘nlohmann::json_document’ has not been declared
-```
-Source:
-```cpp
-#include <nlohmann/json.hpp>
-#include <iostream>
-
-int main() {
-    try {
-        std::string json_str = "[1.23456789e10, 9.87654321E-5]";
+        std::string json_str = "{}";
         auto doc = nlohmann::json_document::parse(json_str);
         std::cout << doc.root().dump() << std::endl;
     } catch (const std::exception& e) {
-        std::cout << "EXCEPTION: " << e.what() << std::endl;
+        std::cout << "Exception: " << e.what() << std::endl;
+    }
+    return 0;
+}
+```
+
+## gen_21.cpp (compile)
+Intent: Verify that normal floating point numbers are correctly batched and dumped by json_view.
+COMPILE ERROR. The program fails to compile, the same way against the old and the new library. Fix the error (wrong or missing include, typo, misuse of the public API) and keep the intent: the call under test must stay. Include only headers that exist; if you are unsure a header exists, use the library's main header.
+Compiler errors:
+```
+gen_21.cpp:10:30: error: ‘nlohmann::json_view_document’ has not been declared
+```
+Source:
+```cpp
+#include <nlohmann/json.hpp>
+#include <nlohmann/json_view.hpp>
+#include <iostream>
+
+int main() {
+    try {
+        std::string json_str = "[123.456, 789.012]";
+        auto doc = nlohmann::json_view_document::parse(json_str);
+        std::cout << doc.root().dump() << std::endl;
+    } catch (const std::exception& e) {
+        std::cout << "Exception: " << e.what() << std::endl;
+    }
+    return 0;
+}
+```
+
+## gen_22.cpp (compile)
+Intent: Check dumping of float numbers with 16 total digits and valid fraction digits.
+COMPILE ERROR. The program fails to compile, the same way against the old and the new library. Fix the error (wrong or missing include, typo, misuse of the public API) and keep the intent: the call under test must stay. Include only headers that exist; if you are unsure a header exists, use the library's main header.
+Compiler errors:
+```
+gen_22.cpp:10:30: error: ‘nlohmann::json_view_document’ has not been declared
+```
+Source:
+```cpp
+#include <nlohmann/json.hpp>
+#include <nlohmann/json_view.hpp>
+#include <iostream>
+
+int main() {
+    try {
+        std::string json_str = "[123456789.1234567]";
+        auto doc = nlohmann::json_view_document::parse(json_str);
+        std::cout << doc.root().dump() << std::endl;
+    } catch (const std::exception& e) {
+        std::cout << "Exception: " << e.what() << std::endl;
+    }
+    return 0;
+}
+```
+
+## gen_23.cpp (compile)
+Intent: Check dumping of float numbers with 17 total digits and valid fraction digits.
+COMPILE ERROR. The program fails to compile, the same way against the old and the new library. Fix the error (wrong or missing include, typo, misuse of the public API) and keep the intent: the call under test must stay. Include only headers that exist; if you are unsure a header exists, use the library's main header.
+Compiler errors:
+```
+gen_23.cpp:10:30: error: ‘nlohmann::json_view_document’ has not been declared
+```
+Source:
+```cpp
+#include <nlohmann/json.hpp>
+#include <nlohmann/json_view.hpp>
+#include <iostream>
+
+int main() {
+    try {
+        std::string json_str = "[1234567890.1234567]";
+        auto doc = nlohmann::json_view_document::parse(json_str);
+        std::cout << doc.root().dump() << std::endl;
+    } catch (const std::exception& e) {
+        std::cout << "Exception: " << e.what() << std::endl;
+    }
+    return 0;
+}
+```
+
+## gen_24.cpp (compile)
+Intent: Save and load a JSON document as a binary image with bounds check, verifying stability.
+COMPILE ERROR. The program fails to compile, the same way against the old and the new library. Fix the error (wrong or missing include, typo, misuse of the public API) and keep the intent: the call under test must stay. Include only headers that exist; if you are unsure a header exists, use the library's main header.
+Compiler errors:
+```
+gen_24.cpp:10:51: error: ‘nlohmann::json_view_document’ has not been declared
+gen_24.cpp:11:30: error: ‘nlohmann::json_view_document’ has not been declared
+gen_24.cpp:11:70: error: ‘nlohmann::image_check’ has not been declared
+```
+Source:
+```cpp
+#include <nlohmann/json.hpp>
+#include <nlohmann/json_view.hpp>
+#include <iostream>
+
+int main() {
+    try {
+        nlohmann::json j = {{"val", 123456.789012345}};
+        std::vector<std::uint8_t> img = nlohmann::json_view_document::parse(j.dump()).save();
+        auto doc = nlohmann::json_view_document::load(img, nlohmann::image_check::bounds);
+        std::cout << doc.root().dump() << std::endl;
+    } catch (const std::exception& e) {
+        std::cout << "Exception: " << e.what() << std::endl;
+    }
+    return 0;
+}
+```
+
+## gen_25.cpp (compile)
+Intent: Test tokens with exactly 8 fraction digits.
+COMPILE ERROR. The program fails to compile, the same way against the old and the new library. Fix the error (wrong or missing include, typo, misuse of the public API) and keep the intent: the call under test must stay. Include only headers that exist; if you are unsure a header exists, use the library's main header.
+Compiler errors:
+```
+gen_25.cpp:10:30: error: ‘nlohmann::json_view_document’ has not been declared
+```
+Source:
+```cpp
+#include <nlohmann/json.hpp>
+#include <nlohmann/json_view.hpp>
+#include <iostream>
+
+int main() {
+    try {
+        std::string json_str = "[12345678.12345678]";
+        auto doc = nlohmann::json_view_document::parse(json_str);
+        std::cout << doc.root().dump() << std::endl;
+    } catch (const std::exception& e) {
+        std::cout << "Exception: " << e.what() << std::endl;
+    }
+    return 0;
+}
+```
+
+## gen_26.cpp (compile)
+Intent: Test tokens with exactly 16 fraction digits.
+COMPILE ERROR. The program fails to compile, the same way against the old and the new library. Fix the error (wrong or missing include, typo, misuse of the public API) and keep the intent: the call under test must stay. Include only headers that exist; if you are unsure a header exists, use the library's main header.
+Compiler errors:
+```
+gen_26.cpp:10:30: error: ‘nlohmann::json_view_document’ has not been declared
+```
+Source:
+```cpp
+#include <nlohmann/json.hpp>
+#include <nlohmann/json_view.hpp>
+#include <iostream>
+
+int main() {
+    try {
+        std::string json_str = "[0.1234567890123456]";
+        auto doc = nlohmann::json_view_document::parse(json_str);
+        std::cout << doc.root().dump() << std::endl;
+    } catch (const std::exception& e) {
+        std::cout << "Exception: " << e.what() << std::endl;
+    }
+    return 0;
+}
+```
+
+## gen_27.cpp (compile)
+Intent: Verify that integer nodes do not trigger the float batch path.
+COMPILE ERROR. The program fails to compile, the same way against the old and the new library. Fix the error (wrong or missing include, typo, misuse of the public API) and keep the intent: the call under test must stay. Include only headers that exist; if you are unsure a header exists, use the library's main header.
+Compiler errors:
+```
+gen_27.cpp:10:30: error: ‘nlohmann::ordered_json_view_document’ has not been declared
+```
+Source:
+```cpp
+#include <nlohmann/json.hpp>
+#include <nlohmann/json_view.hpp>
+#include <iostream>
+
+int main() {
+    try {
+        std::string json_str = "[123456789012345678]";
+        auto doc = nlohmann::ordered_json_view_document::parse(json_str);
+        std::cout << doc.root().dump() << std::endl;
+    } catch (const std::exception& e) {
+        std::cout << "Exception: " << e.what() << std::endl;
+    }
+    return 0;
+}
+```
+
+## gen_28.cpp (compile)
+Intent: Check handling of floats with scientific notation in json_view.
+COMPILE ERROR. The program fails to compile, the same way against the old and the new library. Fix the error (wrong or missing include, typo, misuse of the public API) and keep the intent: the call under test must stay. Include only headers that exist; if you are unsure a header exists, use the library's main header.
+Compiler errors:
+```
+gen_28.cpp:10:30: error: ‘nlohmann::json_view_document’ has not been declared
+```
+Source:
+```cpp
+#include <nlohmann/json.hpp>
+#include <nlohmann/json_view.hpp>
+#include <iostream>
+
+int main() {
+    try {
+        std::string json_str = "[1.23456789e5]";
+        auto doc = nlohmann::json_view_document::parse(json_str);
+        std::cout << doc.root().dump() << std::endl;
+    } catch (const std::exception& e) {
+        std::cout << "Exception: " << e.what() << std::endl;
+    }
+    return 0;
+}
+```
+
+## gen_29.cpp (compile)
+Intent: Dump multiple float tokens in an array to test batch continuation.
+COMPILE ERROR. The program fails to compile, the same way against the old and the new library. Fix the error (wrong or missing include, typo, misuse of the public API) and keep the intent: the call under test must stay. Include only headers that exist; if you are unsure a header exists, use the library's main header.
+Compiler errors:
+```
+gen_29.cpp:10:30: error: ‘nlohmann::json_view_document’ has not been declared
+```
+Source:
+```cpp
+#include <nlohmann/json.hpp>
+#include <nlohmann/json_view.hpp>
+#include <iostream>
+
+int main() {
+    try {
+        std::string json_str = "[123.456789, 987.654321, 111.222333]";
+        auto doc = nlohmann::json_view_document::parse(json_str);
+        std::cout << doc.root().dump() << std::endl;
+    } catch (const std::exception& e) {
+        std::cout << "Exception: " << e.what() << std::endl;
+    }
+    return 0;
+}
+```
+
+## gen_30.cpp (compile)
+Intent: Verify ordered_json_document dump behavior with floats.
+COMPILE ERROR. The program fails to compile, the same way against the old and the new library. Fix the error (wrong or missing include, typo, misuse of the public API) and keep the intent: the call under test must stay. Include only headers that exist; if you are unsure a header exists, use the library's main header.
+Compiler errors:
+```
+gen_30.cpp:10:30: error: ‘nlohmann::ordered_json_view_document’ has not been declared
+```
+Source:
+```cpp
+#include <nlohmann/json.hpp>
+#include <nlohmann/json_view.hpp>
+#include <iostream>
+
+int main() {
+    try {
+        std::string json_str = "{\"a\": 123.45678}";
+        auto doc = nlohmann::ordered_json_view_document::parse(json_str);
+        std::cout << doc.root().dump() << std::endl;
+    } catch (const std::exception& e) {
+        std::cout << "Exception: " << e.what() << std::endl;
     }
     return 0;
 }

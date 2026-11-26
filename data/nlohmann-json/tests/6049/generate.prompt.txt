@@ -88,6 +88,9 @@ buffer/memcpy:Does not check for buffer overflows when copying to destination (C
 
 [Show more details](https://github.com/nlohmann/json/security/code-scanning/1166)
 
+## Headers the programs must include
+- Also write #include <nlohmann/json_view.hpp>. The json_view feature (json_document, json_view and their image loading and editing API) is declared only in this header; nlohmann/json.hpp does not include it, so without this line those names do not exist. Use only names you can see in the diff or the context below.
+
 ## Changed functions (from changes.py)
 - nlohmann::detail::view::view_serializer::convert_ahead(const node *, float_batch &) (private); reached from the public API through: nlohmann::basic_json_view::dump(const int, const char, const bool, const number_format)
 
