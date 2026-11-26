@@ -1,0 +1,368 @@
+[system]
+You write test programs that probe a C++ library for behavioral changes made by one pull request.
+Each program is compiled and run twice, once against the library before the change and once after, and the two
+outputs are compared. Your job is to produce programs whose output reveals whether the change altered behavior,
+including side effects the author did not intend.
+
+Rules for every program:
+- It is standalone: one file with its own int main(), compiled as C++17, printing results to stdout.
+- Use only the library's documented public API. Never include internal headers or use detail/impl namespaces,
+  private members or undocumented macros.
+- Do not judge results (no assert, no expected-value comparisons): just print what the library returns. Print
+  enough to make differences visible, one fact per line.
+- Output must be deterministic. Never print pointers or addresses, uninitialized data, the order of
+  hash-based containers, timings, thread ids, random values, file paths or environment data. Print floating point
+  values with an explicit precision. No input, files, network, threads, clocks or randomness.
+- Wrap calls that may throw in try/catch and print the exception's type and message, so an exception is an
+  observable result. Do not crash on purpose.
+- Aim at the code the diff changes. Prefer calls that compile against both the old and the new library; one or two
+  programs may use an API the PR adds. Cover ordinary inputs and edge cases (empty, minimum and maximum values,
+  boundaries, special values, nesting, unusual types) and also neighbouring behavior the change could disturb.
+- When the diff changes which types or inputs an API accepts or rejects (constraints, overloads, traits,
+  conversions), test it with the detection idiom (std::void_t or requires) and `if constexpr`, so the program
+  compiles against both versions, prints whether the expression is well-formed, and exercises it when it is.
+  Accepting an input is not enough: also use it through every entry point that should follow (const and
+  non-const, read, write, insert, erase, lookup, nested use), because a change that admits new inputs can leave
+  later code unable to handle them.
+- If the changed code is internal (a detail, impl or internal namespace, a trait, a helper), do not name it in the
+  program. Reach it through the public API that depends on it, using detection (as above) where needed.
+- Use the exact types and values the diff is about (the new trait's argument types, the new overload's
+  parameters), not stand-ins.
+- Spread the programs over distinct public entry points and overloads, one main idea per program. Do not write
+  several programs that only rename a type or change a literal.
+- Make the programs differ from each other: different inputs, different entry points, different features.
+
+Rules specific to this library:
+- Include the library with #include <nlohmann/json.hpp>. The public API is nlohmann::json (nlohmann::basic_json), nlohmann::ordered_json, json_pointer, json patch/merge_patch and the documented SAX and conversion interfaces. Never use the detail namespace.
+- It is a header-only library: nothing to link. Programs are compiled as C++17.
+- Print JSON values with dump() (compact) or dump(2). Keys of nlohmann::json objects print in sorted order, so output is deterministic; do not depend on insertion order except with ordered_json.
+
+[user]
+# Pull request #5701: Copy a pair-shaped array value under JSON_BRACE_INIT_COPY_SEMANTICS
+
+## Description
+## Summary
+
+With `JSON_BRACE_INIT_COPY_SEMANTICS` defined to `1`, brace-initializing a `basic_json` from a single JSON value
+decided whether to copy that value or wrap it into an object by inspecting the value's *runtime* shape. A JSON
+value that happens to be a two-element array whose first element is a string, such as `["key", 42]`, was turned
+into an object (`{"key":42}`) instead of being copied, while an array like `[1, 2]` was correctly copied. The same
+happened for `json j = {arr};` and for an rvalue such as `json j{json::array({"key", 42})}`.
+
+## Changes
+
+- `include/nlohmann/detail/json_ref.hpp`: `json_ref` now records whether it was constructed from a braced list
+  (`json_ref(std::initializer_list<json_ref>)`, used for a nested braced list such as the inner `{"key", "value"}`
+  of `{{"key", "value"}}`) via a new `braced_list` flag and `is_braced_list()` accessor. Every other constructor
+  (from a value, moved-from value, or via the templated forwarding constructor) leaves it `false`.
+- `include/nlohmann/json.hpp`: the initializer-list constructor now copies or moves a single element under
+  `JSON_BRACE_INIT_COPY_SEMANTICS` *before* checking whether the list describes an object, but only when that
+  element is not itself a braced list (`!init.begin()->is_braced_list()`). This makes a JSON value always copied
+  regardless of its shape, while a pair *written* as a braced list in the source still creates an object, matching
+  the documented exception.
+- `docs/mkdocs/docs/api/macros/json_brace_init_copy_semantics.md`: clarified that the "still creates an object"
+  exception is based on how the pair is written, not on the shape of its value, with the `["key", 42]` example.
+
+## Tests
+
+Added a section to `tests/src/unit-brace-init-copy-semantics.cpp` (regression for #5662) covering `json j{arr}`,
+`json j = {arr}`, and the rvalue case `json j{json::array({"key", 42})}` for a pair-shaped array value, checking
+each is a copy (`is_array()` and equality with the original), alongside the existing coverage that a braced pair
+such as `{{"key", "value"}}` still creates an object.
+
+- Built and ran the new test against develop's unmodified headers: it fails exactly as described (the three new
+  checks report an object instead of the array).
+- Built and ran it against the fixed headers at C++11, C++17 and C++20, with
+  `-fsanitize=address,undefined -fno-sanitize-recover=undefined`: all pass (44 assertions).
+- Also built and ran `unit-constructor1`, `unit-constructor2`, `unit-conversions`, `unit-regression2` and
+  `unit-regression3` (they exercise `json_ref` without the macro) at C++11 and C++17 with the same sanitizers: all
+  pass.
+- Verified the amalgamated `single_include/nlohmann/json.hpp` compiles and passes the new test.
+
+## Public API
+
+No breaking changes. `JSON_BRACE_INIT_COPY_SEMANTICS` is not part of any released version yet (added for the
+unreleased 3.13.0), and this only corrects its behavior to match the documented "single-element brace
+initialization copies/moves the element" semantics for a value that happens to look like a `[string, value]` pair.
+`json_ref` is a private `detail` type; its new `is_braced_list()` member is not user-facing API.
+
+Fixes #5662
+
+---
+This PR was written by [Claude Code](https://claude.com/claude-code) on behalf of @nlohmann.
+
+🤖 Generated with [Claude Code](https://claude.com/claude-code)
+
+## Commit message
+With JSON_BRACE_INIT_COPY_SEMANTICS enabled, single-element brace
+initialization from a JSON value decided whether to copy the value or
+build an object by inspecting the value's runtime shape: a two-element
+array whose first element is a string, such as ["key", 42], was turned
+into an object instead of being copied. This made the behavior depend
+on the element's content, and it did not distinguish an existing value
+of this shape from a nested braced pair written in the source, such as
+the inner {"key", "value"} of {{"key", "value"}}.
+
+json_ref now records whether it was constructed from a braced list
+(true only for the std::initializer_list<json_ref> constructor used
+for nested braced lists) or from a value. The initializer-list
+constructor uses this to copy or move a single non-braced-list element
+before deciding whether the list describes an object, so a JSON value
+is always copied regardless of its shape, while a braced pair written
+in the source still creates an object.
+
+Fixes #5662.
+
+Signed-off-by: Niels Lohmann <mail@nlohmann.me>
+
+## Linked issue #5662: JSON_BRACE_INIT_COPY_SEMANTICS: json j{arr} turns an array like ["key", 42] into an object
+### Description
+
+With `JSON_BRACE_INIT_COPY_SEMANTICS` defined to `1`, brace-initializing a `basic_json` from a single JSON value does not copy that value if the value is a two-element array whose first element is a string. For `const json arr = {"key", 42};` (the array `["key",42]`), `json j{arr};` yields the object `{"key":42}` instead of a copy of `arr`. Whether the macro copies the element therefore depends on the element's runtime content. For example, `[1, 2]` is copied, but `["key", 42]` is turned into an object. The same happens for `json j = {arr};` and for an rvalue such as `json j{json::array({"key", 42})}`.
+
+**Where:** the initializer-list constructor, [`include/nlohmann/json.hpp#L1671-L1734`](https://github.com/nlohmann/json/blob/633de8e44bbbc29383d72f8c920343ea5d1eaa21/include/nlohmann/json.hpp#L1671-L1734).
+
+**Root cause:** the constructor first decides whether the list describes an object ([#L1677](https://github.com/nlohmann/json/blob/633de8e44bbbc29383d72f8c920343ea5d1eaa21/include/nlohmann/json.hpp#L1677)): every element must be an array of two elements whose first element is a string. Only if it does not describe an object does the macro's copy branch run ([#L1718](https://github.com/nlohmann/json/blob/633de8e44bbbc29383d72f8c920343ea5d1eaa21/include/nlohmann/json.hpp#L1718)). The object check does not distinguish a nested braced list written in the source, such as the inner `{"key", "value"}` of `{{"key", "value"}}`, from an existing JSON value that happens to have the same shape. `detail::json_ref` can tell the two apart: a braced list goes through `json_ref(std::initializer_list<json_ref>)`, while a value goes through `json_ref(const value_type&)` or `json_ref(value_type&&)`. The constructor does not use this information.
+
+**Documentation:** [`JSON_BRACE_INIT_COPY_SEMANTICS`](https://json.nlohmann.me/api/macros/json_brace_init_copy_semantics/) says: "single-element brace initialization of a `basic_json` value is treated as a copy/move of the e
+[... truncated, 3867 more characters]
+
+## Changed functions (from changes.py)
+- nlohmann::detail::json_ref (private); reached from the public API through: nlohmann::basic_json::basic_json<...>(initializer_list_t, bool, value_t), nlohmann::basic_json::operator type-parameter-1-0(), nlohmann::basic_json::array(initializer_list_t), nlohmann::basic_json::insert(const_iterator, initializer_list_t), nlohmann::basic_json::object(initializer_list_t), nlohmann::basic_json::operator+=(initializer_list_t), nlohmann::basic_json::push_back(initializer_list_t), nlohmann::basic_json::basic_json<...>(const JsonRef &), nlohmann::adl_serializer::from_json(BasicJsonType &&), nlohmann::adl_serializer::from_json(BasicJsonType &&, TargetType &)
+- nlohmann::detail::json_ref::json_ref<type-parameter-0-0>(std::initializer_list<json_ref<type-parameter-0-0>>) (private); reached from the public API through: nlohmann::basic_json::basic_json<...>(initializer_list_t, bool, value_t), nlohmann::basic_json::operator type-parameter-1-0(), nlohmann::basic_json::array(initializer_list_t), nlohmann::basic_json::insert(const_iterator, initializer_list_t), nlohmann::basic_json::object(initializer_list_t), nlohmann::basic_json::operator+=(initializer_list_t), nlohmann::basic_json::push_back(initializer_list_t), nlohmann::basic_json::basic_json<...>(const JsonRef &), nlohmann::adl_serializer::from_json(BasicJsonType &&), nlohmann::adl_serializer::from_json(BasicJsonType &&, TargetType &)
+- nlohmann::detail::json_ref::is_braced_list() (private); reached from the public API through: nlohmann::basic_json::basic_json<...>(initializer_list_t, bool, value_t), nlohmann::basic_json::operator type-parameter-1-0(), nlohmann::basic_json::array(initializer_list_t), nlohmann::basic_json::insert(const_iterator, initializer_list_t), nlohmann::basic_json::object(initializer_list_t), nlohmann::basic_json::operator+=(initializer_list_t), nlohmann::basic_json::push_back(initializer_list_t), nlohmann::basic_json::basic_json<...>(const JsonRef &), nlohmann::adl_serializer::from_json(BasicJsonType &&), nlohmann::adl_serializer::from_json(BasicJsonType &&, TargetType &)
+- nlohmann::detail::json_ref::braced_list (private); reached from the public API through: nlohmann::basic_json::basic_json<...>(initializer_list_t, bool, value_t), nlohmann::basic_json::operator type-parameter-1-0(), nlohmann::basic_json::array(initializer_list_t), nlohmann::basic_json::insert(const_iterator, initializer_list_t), nlohmann::basic_json::object(initializer_list_t), nlohmann::basic_json::operator+=(initializer_list_t), nlohmann::basic_json::push_back(initializer_list_t), nlohmann::basic_json::basic_json<...>(const JsonRef &), nlohmann::adl_serializer::from_json(BasicJsonType &&), nlohmann::adl_serializer::from_json(BasicJsonType &&, TargetType &)
+- nlohmann::detail::json_ref::value_ref (private); reached from the public API through: nlohmann::basic_json::basic_json<...>(initializer_list_t, bool, value_t), nlohmann::basic_json::operator type-parameter-1-0(), nlohmann::basic_json::array(initializer_list_t), nlohmann::basic_json::insert(const_iterator, initializer_list_t), nlohmann::basic_json::object(initializer_list_t), nlohmann::basic_json::operator+=(initializer_list_t), nlohmann::basic_json::push_back(initializer_list_t), nlohmann::basic_json::basic_json<...>(const JsonRef &), nlohmann::adl_serializer::from_json(BasicJsonType &&), nlohmann::adl_serializer::from_json(BasicJsonType &&, TargetType &)
+- nlohmann::basic_json::basic_json<...>(initializer_list_t, bool, value_t) (public)
+
+## Diff of the library source (before -> after)
+```diff
+diff --git a/include/nlohmann/detail/json_ref.hpp b/include/nlohmann/detail/json_ref.hpp
+index 0d52b0a62..b270c9c54 100644
+--- a/include/nlohmann/detail/json_ref.hpp
++++ b/include/nlohmann/detail/json_ref.hpp
+@@ -34,6 +34,7 @@ class json_ref
+ 
+     json_ref(std::initializer_list<json_ref> init)
+         : owned_value(init)
++        , braced_list(true)
+     {}
+ 
+     template <
+@@ -69,9 +70,17 @@ class json_ref
+         return &** this;
+     }
+ 
++    /// whether the value was written as a braced list, such as {"key", 1},
++    /// rather than given as a value
++    bool is_braced_list() const noexcept
++    {
++        return braced_list;
++    }
++
+   private:
+     mutable value_type owned_value = nullptr;
+     value_type const* value_ref = nullptr;
++    bool braced_list = false;
+ };
+ 
+ }  // namespace detail
+diff --git a/include/nlohmann/json.hpp b/include/nlohmann/json.hpp
+index 397b253ad..9c89ab0bc 100644
+--- a/include/nlohmann/json.hpp
++++ b/include/nlohmann/json.hpp
+@@ -2252,6 +2252,18 @@ public:
+                bool type_deduction = true,
+                value_t manual_type = value_t::array)
+     {
++#if JSON_BRACE_INIT_COPY_SEMANTICS
++        // a single element that is a value rather than a braced list is
++        // copied or moved as is, whatever its content looks like
++        if (type_deduction && init.size() == 1 && !init.begin()->is_braced_list())
++        {
++            *this = init.begin()->moved_or_copied();
++            set_parents();
++            assert_invariant();
++            return;
++        }
++#endif
++
+         // check if each element is an array with two elements whose first
+         // element is a string
+         bool is_an_object = std::all_of(init.begin(), init.end(),
+```
+
+## Existing upstream tests that call the changed code (for style and API usage)
+// Upstream tests at the PR's parent commit ff6f3d7d4 that use the changed code.
+// Names searched (test lines using each): basic_json (0), array (0), insert (251), object (0), push_back (322), from_json (0), operator+= (7), json_ref (0), is_braced_list (0), braced_list (0), value_ref (0)
+
+// ---- tests/src/unit-class_parser.cpp:2848-2863  (uses: operator+=, push_back)
+            SECTION("push_back on a parsed array")
+            {
+                const std::string s = R"([1,2,3])";
+                json j = json::parse(s);
+                const auto root_start = j.start_pos();
+                const auto root_end = j.end_pos();
+                const auto first_start = j[0].start_pos();
+
+                j.push_back(4);
+
+                CHECK(j.back().start_pos() == std::string::npos);
+                CHECK(j.back().end_pos() == std::string::npos);
+                CHECK(j[0].start_pos() == first_start);
+                CHECK(j.start_pos() == root_start);
+                CHECK(j.end_pos() == root_end);
+            }
+
+// ---- tests/src/unit-regression1.cpp:582-589  (uses: operator+=, push_back)
+    SECTION("issue #235 - ambiguous overload for 'push_back' and 'operator+='")
+    {
+        json data = {{"key", "value"}};
+        data.push_back({"key2", "value2"});
+        data += {"key3", "value3"};
+
+        CHECK(data == json({{"key", "value"}, {"key2", "value2"}, {"key3", "value3"}}));
+    }
+
+// ---- tests/src/unit-cbor.cpp:2762-2774  (uses: operator+=)
+TEST_CASE("examples from RFC 8949 Appendix A")
+{
+    SECTION("numbers")
+    {
+        CHECK(json::to_cbor(json::parse("0")) == std::vector<uint8_t>({0x00}));
+        CHECK(json::parse("0") == json::from_cbor(std::vector<uint8_t>({0x00})));
+
+        CHECK(json::to_cbor(json::parse("1")) == std::vector<uint8_t>({0x01}));
+        CHECK(json::parse("1") == json::from_cbor(std::vector<uint8_t>({0x01})));
+
+        CHECK(json::to_cbor(json::parse("10")) == std::vector<uint8_t>({0x0a}));
+        CHECK(json::parse("10") == json::from_cbor(std::vector<uint8_t>({0x0a})));
+
+
+// ---- tests/src/unit-json_patch.cpp:1716-1728  (uses: operator+=)
+    SECTION("the array-append token '-' is an ordinary child token")
+    {
+        // "-" (append-to-array) addresses a location *inside* the array,
+        // so "from" pointing at the array is still a proper prefix of
+        // "path" ending in "-" and must be rejected like any other child.
+        json const doc = R"({"a": [1, 2]})"_json;
+        json const patch = {{{"op", "move"}, {"from", "/a"}, {"path", "/a/-"}}};
+#if JSON_DIAGNOSTIC_POSITIONS
+        CHECK_THROWS_WITH_AS(doc.patch(patch), "[json.exception.out_of_range.414] (bytes 0-13) cannot move value: 'from' path '/a' is a proper prefix of 'path' '/a/-'", json::out_of_range&);
+#else
+        CHECK_THROWS_WITH_AS(doc.patch(patch), "[json.exception.out_of_range.414] cannot move value: 'from' path '/a' is a proper prefix of 'path' '/a/-'", json::out_of_range&);
+#endif
+    }
+
+// ---- tests/src/unit-merge_patch.cpp:145-157  (uses: operator+=)
+        SECTION("Appendix A")
+        {
+            SECTION("Example 1")
+            {
+                json original = R"({"a":"b"})"_json;
+                json const patch = R"({"a":"c"})"_json;
+                json result = R"({"a":"c"})"_json;
+
+                original.merge_patch(patch);
+                CHECK(original == result);
+            }
+
+            SECTION("Example 2")
+
+// ---- tests/src/unit-modifiers.cpp:213-225  (uses: operator+=)
+    SECTION("push_back()")
+    {
+        SECTION("to array")
+        {
+            SECTION("json&&")
+            {
+                SECTION("null")
+                {
+                    json j;
+                    j.push_back(1);
+                    j.push_back(2);
+                    CHECK(j.type() == json::value_t::array);
+                    CHECK(j == json({1, 2}));
+
+// ---- tests/src/unit-modifiers.cpp:441-453  (uses: operator+=)
+    SECTION("operator+=")
+    {
+        SECTION("to array")
+        {
+            SECTION("json&&")
+            {
+                SECTION("null")
+                {
+                    json j;
+                    j += 1;
+                    j += 2;
+                    CHECK(j.type() == json::value_t::array);
+                    CHECK(j == json({1, 2}));
+
+// ---- tests/src/unit-bon8.cpp:707-715  (uses: insert, push_back)
+    SECTION("a well-formed deep value is read through the SAX interface")
+    {
+        bytes input(300000, 0x85);
+        input.push_back(0x91); // innermost value
+        input.insert(input.end(), 300000, 0xFE);
+
+        SaxCountdown accept_all(600001);
+        CHECK(json::sax_parse(input, &accept_all, json::input_format_t::bon8));
+    }
+
+// ---- tests/src/unit-custom-array-type.cpp:120-134  (uses: insert, push_back)
+    SECTION("insert(pos, initializer_list) compiles and works without reserve()")
+    {
+        // std::deque has no reserve() either; insert(pos, ilist) must not
+        // require it (regression test for #5656, which also covers an ilist
+        // that refers to elements of the array being inserted into)
+        deque_json j = deque_json::array();
+        j.push_back("a");
+        j.push_back("b");
+        j.push_back("c");
+
+        const deque_json& cj = j;
+        auto it = j.insert(j.begin(), {cj[0], cj[1]});
+        CHECK(*it == deque_json("a"));
+        CHECK(j == deque_json({"a", "b", "a", "b", "c"}));
+    }
+
+// ---- tests/src/test_utils.hpp:73-97  (uses: insert)
+
+inline std::vector<std::uint8_t> read_binary_file(const std::string& filename)
+{
+    std::ifstream file(filename, std::ios::binary);
+    file.unsetf(std::ios::skipws);
+
+    file.seekg(0, std::ios::end);
+    const auto size = file.tellg();
+    file.seekg(0, std::ios::beg);
+
+    std::vector<std::uint8_t> byte_vector;
+    byte_vector.reserve(static_cast<std::size_t>(size));
+    byte_vector.insert(byte_vector.begin(), std::istream_iterator<std::uint8_t>(file), std::istream_iterator<std::uint8_t>());
+    return byte_vector;
+}
+
+// sentinel for istreambuf_iterator; compares != true until EOF is reached
+// lets tests read a file directly via the new iterator+sentinel overloads
+// instead of buffering the whole file into a vector first.
+// Only the iterator-first direction (it != sentinel) is ever evaluated by
+// the library's parse loop, so no reversed-order overload is needed.
+struct istreambuf_sentinel
+{
+    friend bool operator!=(const std::istreambuf_iterator<char>& it, const istreambuf_sentinel& /*unused*/) noexcept
+    {
+
+// ---- tests/src/unit-cbor.cpp:2204-2211  (uses: insert)
+    SECTION("a well-formed deep value is read through the SAX interface")
+    {
+        std::vector<uint8_t> input(200000, 0x9F);
+        input.insert(input.end(), 200000, 0xFF);
+
+        SaxCountdown accept_all(1000000);
+        CHECK(json::sax_parse(input, &accept_all, json::input_format_t::cbor));
+    }
+
+# Task
+Write 20 test programs for this pull request. Return JSON with a "tests" array; each item has "name" (short snake_case), "intent" (one sentence: what behavior it probes) and "code" (the complete C++ program).

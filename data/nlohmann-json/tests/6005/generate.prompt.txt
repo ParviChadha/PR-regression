@@ -1,0 +1,317 @@
+[system]
+You write test programs that probe a C++ library for behavioral changes made by one pull request.
+Each program is compiled and run twice, once against the library before the change and once after, and the two
+outputs are compared. Your job is to produce programs whose output reveals whether the change altered behavior,
+including side effects the author did not intend.
+
+Rules for every program:
+- It is standalone: one file with its own int main(), compiled as C++17, printing results to stdout.
+- Use only the library's documented public API. Never include internal headers or use detail/impl namespaces,
+  private members or undocumented macros.
+- Do not judge results (no assert, no expected-value comparisons): just print what the library returns. Print
+  enough to make differences visible, one fact per line.
+- Output must be deterministic. Never print pointers or addresses, uninitialized data, the order of
+  hash-based containers, timings, thread ids, random values, file paths or environment data. Print floating point
+  values with an explicit precision. No input, files, network, threads, clocks or randomness.
+- Wrap calls that may throw in try/catch and print the exception's type and message, so an exception is an
+  observable result. Do not crash on purpose.
+- Aim at the code the diff changes. Prefer calls that compile against both the old and the new library; one or two
+  programs may use an API the PR adds. Cover ordinary inputs and edge cases (empty, minimum and maximum values,
+  boundaries, special values, nesting, unusual types) and also neighbouring behavior the change could disturb.
+- When the diff changes which types or inputs an API accepts or rejects (constraints, overloads, traits,
+  conversions), test it with the detection idiom (std::void_t or requires) and `if constexpr`, so the program
+  compiles against both versions, prints whether the expression is well-formed, and exercises it when it is.
+  Accepting an input is not enough: also use it through every entry point that should follow (const and
+  non-const, read, write, insert, erase, lookup, nested use), because a change that admits new inputs can leave
+  later code unable to handle them.
+- If the changed code is internal (a detail, impl or internal namespace, a trait, a helper), do not name it in the
+  program. Reach it through the public API that depends on it, using detection (as above) where needed.
+- Use the exact types and values the diff is about (the new trait's argument types, the new overload's
+  parameters), not stand-ins.
+- Spread the programs over distinct public entry points and overloads, one main idea per program. Do not write
+  several programs that only rename a type or change a literal.
+- Make the programs differ from each other: different inputs, different entry points, different features.
+
+Rules specific to this library:
+- Include the library with #include <nlohmann/json.hpp>. The public API is nlohmann::json (nlohmann::basic_json), nlohmann::ordered_json, json_pointer, json patch/merge_patch and the documented SAX and conversion interfaces. Never use the detail namespace.
+- It is a header-only library: nothing to link. Programs are compiled as C++17.
+- Print JSON values with dump() (compact) or dump(2). Keys of nlohmann::json objects print in sorted order, so output is deterministic; do not depend on insertion order except with ordered_json.
+
+[user]
+# Pull request #6005: basic_json, iterators, serializer: remove checks that invariants make dead
+
+## Description
+## Summary
+
+Removes runtime checks in `basic_json` and the serializer that the surrounding code already guarantees, so they can never fire. Each condition was shown dead by branch coverage and by a build that aborts on the removed side (see below).
+
+This PR is stacked on #5997 (which removed the surrogate-pair branch of the serializer's `ensure_ascii` path) and on the lexer/parser PR of this series.
+
+- `json.hpp`, `copy_object_level()`: `src_it != src_object.cend()`. `dst` was built from exactly `src_object.size()` unique keys, and `src_it` advances at most once per member of `dst`.
+- `json.hpp`, the general comparison operators (`equal_general`, `less_general`, `three_way_general`, built by `JSON_IMPLEMENT_OPERATOR`): the five same-type scalar cases (null, boolean, integer, unsigned, float). Every operator runs `JSON_IMPLEMENT_SCALAR_FAST` first, which returns for exactly these cases, and `equal_structured()` only calls `equal_general()` after `equal_leaf()` declined, which it never does for them. The cases now assert and return the unordered result. In the same macro, `compares_unordered(lhs, rhs)` in the mixed-type branch is reduced to its discarded half: it is reached only after all six number-pair branches returned, and a float with a non-number operand is never "unordered" there.
+- `serializer.hpp`, `ensure_ascii`: the reset of `bytes` under `error_handler_t::keep` in the `UTF8_ACCEPT` case. Every well-formed multi-byte character is escaped by `write_u_escapes()` before `decode()` sees it, so `decode()` only ever accepts DEL (0x7F) here, a single byte of which nothing was buffered. Both facts are now asserts.
+- ~~`iter_impl.hpp`, `iter_impl(pointer)`: the if/else chain assigned value-initialized iterators to the value-initialized `m_it`.~~ **Dropped** (commit 7196bc5b22): the chain is dead for correctness, but removing it made iteration slower with GCC 13. A recursive range-for over a parsed document took 0.5–2.7 % longer on x86-64; callgrind counted +1.9 % instructions on twitter.json and +0.95 % on canada.json. Clang generates identical code either way. The constructor is back as it was, with a comment saying why it stays. Measurements are in the performance comment below.
+- `JSON_IMPLEMENT_OPERATOR` loses its `null_result` parameter, which only the removed scalar cases used (review follow-up). `JSON_IMPLEMENT_SCALAR_CASES` keeps it, since `JSON_IMPLEMENT_SCALAR_FAST` still uses it.
+
+Net: 23 insertions, 22 deletions in `include/` (including the comment that keeps `iter_impl` as it was); no test changes.
+
+## How the checks were found and verified
+
+1. Branch coverage of the whole test suite (clang `-fprofile-instr-generate`) plus 24,380 mutated JSON and binary inputs through the `tests/src/fuzzer-*.cpp` drivers listed the branch sides never taken in `include/nlohmann/`.
+2. Each candidate was read for the invariant that makes it dead and the line that establishes it (the commit message names them).
+3. A copy of the tree with `abort()` on the supposedly dead side of every check was run through the full test suite under ASan/UBSan, the fuzz corpora and dedicated drivers: no trap fired. (One claim was disproved this way and is not part of these PRs.)
+4. With the checks removed, the full test suite passes under ASan/UBSan, and a wide translation unit compiles without a new warning under the CI clang flag set (C++11 and C++17, with and without `JSON_DIAGNOSTICS` / `JSON_DIAGNOSTIC_POSITIONS`).
+
+The full list of findings, including checks that are dead only in the shipped configurations and were left in place, is in a separate report; this PR covers the high-confidence items of its area only.
+
+In addition, a serializer driver dumped all 1-byte, 2-byte and boundary 4-byte strings (23.2M dumps) in both `ensure_ascii` modes with every error handler against the trap build.
+
+## Breaking changes
+
+No breaking changes. The removed checks are internal; the comparison operators and `dump()` behave as before for every value, and the publi
+[... truncated, 100 more characters]
+
+## Commit message
+Without the same-type scalar cases, the macro body has no use for it, and
+JSON_IMPLEMENT_SCALAR_CASES is now used only by JSON_IMPLEMENT_SCALAR_FAST.
+
+Signed-off-by: Niels Lohmann <mail@nlohmann.me>
+
+## Discussion before merge
+- nlohmann: ### Performance check
+
+**Copy, comparison and `dump()` are neutral. Iteration gets slightly slower with GCC**, which comes from the `iter_impl` constructor change.
+
+- **Generated code** (clang, arm64): `copy_object_level()` loses its cold block. `equal_general()`/`less_general()` get 1–3 blocks shorter, and `compares_unordered()` disappears. The `serializer` grows by 3 blocks with the `keep` branch gone (layout only, see the `dump()` rows). The `iter_impl` change produces **identical code** in every caller on clang: the type-dependent initialization was already folded away.
+- **GCC is different.** Without the `if`/`else if` chain in `iter_impl(pointer)`, GCC 13 builds the loop of a plain recursive walk (`for (const auto& e : j)`) differently, and it executes more instructions. Presumably GCC had jump-threaded the type test into the following `set_begin()`/`set_end()` switch; I did not verify that.
+
+| case | clang/arm64 instr PR/base | GCC/x86-64 instr (callgrind, exact) PR/base | GCC time, VPS (geomean of layouts) |
+|---|---:|---:|---:|
+| iterate twitter (recursive range-for) | 0.9988 | **1.0191** | 1.006–1.012 |
+| iterate canada | 1.0006 | **1.0095** | 1.024–1.027 |
+| copy twitter
+[... truncated, 1833 more characters]
+
+## Changed functions (from changes.py)
+- nlohmann::basic_json::equal_general(const_reference, const_reference) (private); reached from the public API through: nlohmann::operator==(const_reference, const_reference)
+- nlohmann::basic_json::less_general(const_reference, const_reference) (private); reached from the public API through: nlohmann::operator<(const_reference, const_reference)
+- nlohmann::basic_json (public)
+- JSON_IMPLEMENT_OPERATOR
+- JSON_IMPLEMENT_OPERATOR
+
+## Diff of the library source (before -> after)
+```diff
+diff --git a/include/nlohmann/json.hpp b/include/nlohmann/json.hpp
+index 0447f8823..33ea53a08 100644
+--- a/include/nlohmann/json.hpp
++++ b/include/nlohmann/json.hpp
+@@ -5388,8 +5388,7 @@ public:
+     /// @name lexicographical comparison operators
+     /// @{
+ 
+-    // the same-type cases for non-owning scalars, shared by JSON_IMPLEMENT_OPERATOR
+-    // and JSON_IMPLEMENT_SCALAR_FAST
++    // the same-type cases for non-owning scalars, used by JSON_IMPLEMENT_SCALAR_FAST
+ #define JSON_IMPLEMENT_SCALAR_CASES(op, null_result)                                                     \
+   case value_t::null:                                                                                  \
+         return (null_result);                                                                            \
+@@ -5411,7 +5410,7 @@ public:
+     // because any negative signed value is smaller than any unsigned value.
+     // Otherwise, the non-negative signed value is cast to unsigned before the
+     // comparison to avoid wraparound.
+-#define JSON_IMPLEMENT_OPERATOR(op, null_result, unordered_result, default_result, deep_result, may_descend) \
++#define JSON_IMPLEMENT_OPERATOR(op, unordered_result, default_result, deep_result, may_descend)          \
+     const auto lhs_type = lhs.type();                                                                    \
+     const auto rhs_type = rhs.type();                                                                    \
+     \
+@@ -5548,7 +5547,7 @@ public:
+         JSON_HEDLEY_DIAGNOSTIC_PUSH
+         JSON_HEDLEY_PRAGMA(GCC diagnostic ignored "-Wfloat-equal")
+ #endif
+-        JSON_IMPLEMENT_OPERATOR( ==, true, false, false,
++        JSON_IMPLEMENT_OPERATOR( ==, false, false,
+                                  compare_iteratively<false>(lhs, rhs, false) == compare_result::equal, true)
+ #ifdef __GNUC__
+         JSON_HEDLEY_DIAGNOSTIC_POP
+@@ -5562,7 +5561,6 @@ public:
+         // default_result is used if we cannot compare values. In that case,
+         // we compare types.
+         JSON_IMPLEMENT_OPERATOR(<=>, // *NOPAD*
+-                                std::partial_ordering::equivalent,
+                                 std::partial_ordering::unordered,
+                                 lhs_type <=> rhs_type, // *NOPAD*
+                                 to_partial_ordering(compare_iteratively<true>(lhs, rhs, false)), true)
+@@ -5574,7 +5572,7 @@ public:
+         // default_result is used if we cannot compare values. In that case,
+         // we compare types. Note we have to call the operator explicitly,
+         // because MSVC has problems otherwise.
+-        JSON_IMPLEMENT_OPERATOR( <, false, false, operator<(lhs_type, rhs_type),
++        JSON_IMPLEMENT_OPERATOR( <, false, operator<(lhs_type, rhs_type),
+                                  compare_iteratively<true>(lhs, rhs, true) == compare_result::less, false)
+     }
+ #endif
+```
+
+## Existing upstream tests that call the changed code (for style and API usage)
+// Upstream tests at the PR's parent commit 5c4f585ac that use the changed code.
+// Names searched (test lines using each): basic_json (62), JSON_IMPLEMENT_OPERATOR (0), operator== (74), operator< (228), equal_general (0), less_general (0)
+
+// ---- tests/src/unit-json_view_compare_values.cpp:63-82  (uses: basic_json, operator<)
+    SECTION("a basic_json whose members are not sorted")
+    {
+        // (an object type that is not an ordered map, and does not keep its members sorted either)
+        using descending_json = nlohmann::basic_json<descending_object>;
+        using descending_document = nlohmann::basic_json_document<descending_json>;
+        std::string text = "{";
+        for (char key = 'a'; key <= 'p'; ++key)
+        {
+            text += (key != 'a' ? ",\"" : "\"") + std::string(1, key) + "\":[" + std::to_string(key) + "]";
+        }
+        text += "}";
+        const descending_json j = descending_json::parse(text);
+        const descending_document d = descending_document::parse(text);
+        CHECK(d.root() == j);
+        CHECK(j == d.root());
+        descending_json other = j;
+        other["k"] = 0;
+        CHECK(d.root() != other);
+        CHECK(other != d.root());
+    }
+
+// ---- tests/src/unit-comparison.cpp:74-86  (uses: operator<, operator==)
+TEST_CASE("lexicographical comparison operators")
+{
+    constexpr auto f_ = false;
+    constexpr auto _t = true;
+    constexpr auto nan = std::numeric_limits<json::number_float_t>::quiet_NaN();
+#if JSON_HAS_THREE_WAY_COMPARISON
+    constexpr auto lt = std::partial_ordering::less;
+    constexpr auto gt = std::partial_ordering::greater;
+    constexpr auto eq = std::partial_ordering::equivalent;
+    constexpr auto un = std::partial_ordering::unordered;
+#endif
+
+#if JSON_HAS_THREE_WAY_COMPARISON
+
+// ---- tests/src/unit-comparison.cpp:128-148  (uses: operator<, operator==)
+        SECTION("comparison: less")
+        {
+            REQUIRE(expected_lt.size() == j_types.size());
+            for (size_t i = 0; i < j_types.size(); ++i)
+            {
+                REQUIRE(expected_lt[i].size() == j_types.size());
+                for (size_t j = 0; j < j_types.size(); ++j)
+                {
+                    CAPTURE(i)
+                    CAPTURE(j)
+                    // check precomputed values
+#if JSON_HAS_THREE_WAY_COMPARISON
+                    // JSON_HAS_CPP_20 (do not remove; see note at top of file)
+                    CHECK((j_types[i] < j_types[j]) == expected_lt[i][j]);
+#else
+                    CHECK(operator<(j_types[i], j_types[j]) == expected_lt[i][j]);
+#endif
+                    CHECK(f(j_types[i], j_types[j]) == expected_lt[i][j]);
+                }
+            }
+        }
+
+// ---- tests/src/unit-json_view_compare.cpp:31-43  (uses: operator<, operator==)
+TEST_CASE("json_view comparison")
+{
+    SECTION("equality of the values parse() produces")
+    {
+        generator g;
+        std::vector<std::string> texts;
+        for (int i = 0; i < 600; ++i)
+        {
+            std::string text;
+            g.value(text, 0);
+            texts.push_back(text);
+            // the same value written differently: sorted keys, canonical numbers
+            texts.push_back(json::parse(text).dump(1));
+
+// ---- tests/src/unit-json_view_compare_values.cpp:29-41  (uses: operator<, operator==)
+TEST_CASE("json_view comparison of differing values")
+{
+    SECTION("values that differ in their first bytes, or are written differently")
+    {
+        const auto same = [](const char* x, const char* y)
+        {
+            const json_document dx = json_document::parse(x);
+            const json_document dy = json_document::parse(y);
+            const bool equal = dx.root() == dy.root();
+            CHECK(equal == (json::parse(x) == json::parse(y)));
+            CHECK(equal == (dx.root() == json::parse(y)));
+            const nlohmann::json_editable_document ex = nlohmann::json_editable_document::parse(x);
+            CHECK(equal == (ex.root() == dy.root()));
+
+// ---- tests/src/unit-ordered_json2.cpp:378-402  (uses: operator<, operator==)
+TEST_CASE("ordered_json operator== is sensitive to key order")
+{
+    // Unlike nlohmann::json (whose object_t is a std::map, so equality never
+    // depends on insertion order), ordered_json's object_t (ordered_map) is a
+    // std::vector<std::pair<Key, T>> under the hood, and does not define its
+    // own operator==: it inherits std::vector's element-wise comparison. As a
+    // result, two ordered_json objects holding the very same key/value pairs
+    // in different insertion order compare *unequal*. This is the property
+    // that makes the round-trip `CHECK(restored == original)` checks above a
+    // meaningful order-preservation check by themselves (the explicit
+    // collect_keys() comparisons make that check explicit/readable, and
+    // guard against this operator== behavior ever changing).
+    ordered_json a;
+    a["x"] = 1;
+    a["y"] = 2;
+
+    ordered_json b;
+    b["y"] = 2;
+    b["x"] = 1;
+
+    CHECK(a.size() == b.size());
+    CHECK(a["x"] == b["x"]);
+    CHECK(a["y"] == b["y"]);
+    CHECK_FALSE(a == b);
+}
+
+// ---- tests/src/unit-regression3.cpp:385-396  (uses: basic_json, operator<)
+    SECTION("issue #3333 - Ambiguous conversion from nlohmann::basic_json<> to custom class")
+    {
+        const json j
+        {
+            {"x", 1},
+            {"y", 2}
+        };
+        const for_3333 p = j;
+
+        CHECK(p.x == 1);
+        CHECK(p.y == 2);
+    }
+
+// ---- tests/src/unit-algorithms.cpp:126-136  (uses: operator<, operator==)
+            SECTION("using user-defined comparison")
+            {
+                // compare objects only by size of its elements
+                json j_array2 = {13, 29, 3, {"Hello", "World"}, true, false, {{"one", 1}, {"two", 2}, {"three", 3}}, "foo", "baz"};
+                CHECK(!std::equal(j_array.begin(), j_array.end(), j_array2.begin()));
+                CHECK(std::equal(j_array.begin(), j_array.end(), j_array2.begin(),
+                                 [](const json & a, const json & b)
+                {
+                    return (a.size() == b.size());
+                }));
+            }
+
+// ---- tests/src/unit-algorithms.cpp:205-210  (uses: operator<, operator==)
+            SECTION("with standard comparison")
+            {
+                json j = {13, 29, 3, {{"one", 1}, {"two", 2}}, true, false, {1, 2, 3}, "foo", "baz", nullptr};
+                std::sort(j.begin(), j.end());
+                CHECK(j == json({nullptr, false, true, 3, 13, 29, {{"one", 1}, {"two", 2}}, {1, 2, 3}, "baz", "foo"}));
+            }
+
+// ---- tests/src/unit-regression1.cpp:1036-1038  (uses: operator<, operator==)
+    SECTION("issue #414 - compare with literal 0)")
+    {
+#define CHECK_TYPE(v) \
+
+# Task
+Write 20 test programs for this pull request. Return JSON with a "tests" array; each item has "name" (short snake_case), "intent" (one sentence: what behavior it probes) and "code" (the complete C++ program).

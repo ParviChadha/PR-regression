@@ -1,0 +1,372 @@
+[system]
+You write test programs that probe a C++ library for behavioral changes made by one pull request.
+Each program is compiled and run twice, once against the library before the change and once after, and the two
+outputs are compared. Your job is to produce programs whose output reveals whether the change altered behavior,
+including side effects the author did not intend.
+
+Rules for every program:
+- It is standalone: one file with its own int main(), compiled as C++17, printing results to stdout.
+- Use only the library's documented public API. Never include internal headers or use detail/impl namespaces,
+  private members or undocumented macros.
+- Do not judge results (no assert, no expected-value comparisons): just print what the library returns. Print
+  enough to make differences visible, one fact per line.
+- Output must be deterministic. Never print pointers or addresses, uninitialized data, the order of
+  hash-based containers, timings, thread ids, random values, file paths or environment data. Print floating point
+  values with an explicit precision. No input, files, network, threads, clocks or randomness.
+- Wrap calls that may throw in try/catch and print the exception's type and message, so an exception is an
+  observable result. Do not crash on purpose.
+- Aim at the code the diff changes. Prefer calls that compile against both the old and the new library; one or two
+  programs may use an API the PR adds. Cover ordinary inputs and edge cases (empty, minimum and maximum values,
+  boundaries, special values, nesting, unusual types) and also neighbouring behavior the change could disturb.
+- When the diff changes which types or inputs an API accepts or rejects (constraints, overloads, traits,
+  conversions), test it with the detection idiom (std::void_t or requires) and `if constexpr`, so the program
+  compiles against both versions, prints whether the expression is well-formed, and exercises it when it is.
+  Accepting an input is not enough: also use it through every entry point that should follow (const and
+  non-const, read, write, insert, erase, lookup, nested use), because a change that admits new inputs can leave
+  later code unable to handle them.
+- If the changed code is internal (a detail, impl or internal namespace, a trait, a helper), do not name it in the
+  program. Reach it through the public API that depends on it, using detection (as above) where needed.
+- Use the exact types and values the diff is about (the new trait's argument types, the new overload's
+  parameters), not stand-ins.
+- Spread the programs over distinct public entry points and overloads, one main idea per program. Do not write
+  several programs that only rename a type or change a literal.
+- Make the programs differ from each other: different inputs, different entry points, different features.
+
+Rules specific to this library:
+- Include the library with #include <nlohmann/json.hpp>. The public API is nlohmann::json (nlohmann::basic_json), nlohmann::ordered_json, json_pointer, json patch/merge_patch and the documented SAX and conversion interfaces. Never use the detail namespace.
+- It is a header-only library: nothing to link. Programs are compiled as C++17.
+- Print JSON values with dump() (compact) or dump(2). Keys of nlohmann::json objects print in sorted order, so output is deterministic; do not depend on insertion order except with ordered_json.
+
+[user]
+# Pull request #5887: Split and print JSON pointers in one pass
+
+## Description
+Two changes to `json_pointer`. Instructions, macOS / Linux GCC 13 / Linux Clang 18:
+
+| commit | change |
+|---|---|
+| Split a JSON pointer in one scan and construct the tokens in place | parsing citm 42.3 -> 36.4M / -18 % / -16 %; twitter -9 ... -12 % |
+| Copy the tokens of a pointer without escapes straight into `to_string()` | citm 47.5 -> 30.6M / -23 % / -36 %; twitter -32 % / -18 % / -32 % |
+
+`at()`, `contains()`, `unflatten()` and `patch()` are unchanged (+-0.2 %).
+
+## Numbers
+
+macOS timing vs develop: JsonPointerToString 0.71, JsonPointerParse 0.85.
+
+## Validation
+
+- Differential check against develop: random pointer strings for parse, `to_string()`, `back()`, `pop_back()`, `parent_pointer()`, `/`, `at()`, `contains()`, `value()` and `operator[]`. Exception ids and messages are identical.
+- Unit tests with ASan/UBSan, in C++11 and C++20.
+- All commits build on their own, and each commit's `single_include` is a fresh `make amalgamate`.
+
+## Public API
+
+No breaking changes.
+
+Written by Claude Code on behalf of @nlohmann.
+
+🤖 Generated with [Claude Code](https://claude.com/claude-code)
+
+## Commit message
+Signed-off-by: Niels Lohmann <mail@nlohmann.me>
+
+## Discussion before merge
+- github-advanced-security[bot]: ## Flawfinder / Does not check for buffer overflows when copying to destination (CWE-120).
+
+buffer/memcpy:Does not check for buffer overflows when copying to destination (CWE-120).
+
+[Show more details](https://github.com/nlohmann/json/security/code-scanning/962)
+- github-advanced-security[bot]: ## Flawfinder / Does not check for buffer overflows when copying to destination (CWE-120).
+
+buffer/memcpy:Does not check for buffer overflows when copying to destination (CWE-120).
+
+[Show more details](https://github.com/nlohmann/json/security/code-scanning/963)
+- nlohmann: No change: false positive. `result` is first resized to the sum of all token sizes plus one slash each, so every token copied fits.
+
+_🤖 Addressed by [Claude Code](https://claude.com/claude-code)_
+- nlohmann: No change: false positive. `result` is first resized to the sum of all token sizes plus one slash each, so every token copied fits.
+
+_🤖 Addressed by [Claude Code](https://claude.com/claude-code)_
+- gregmarr: Should there be an early return for `length == 0`?
+- nlohmann: Right: an empty pointer now returns `string_t()` at the top of `to_string()`, before the scan loop, and the copy path no longer needs its `length != 0` guard. Fixed in `75e067e3d`.
+
+*(Written by Claude Code on behalf of @nlohmann.)*
+
+## Changed functions (from changes.py)
+- nlohmann::json_pointer::split(const string_t &) (private); reached from the public API through: nlohmann::json_pointer::json_pointer<RefStringType>(const string_t &)
+- nlohmann::json_pointer::to_string() (public)
+
+## Diff of the library source (before -> after)
+```diff
+diff --git a/include/nlohmann/detail/json_pointer.hpp b/include/nlohmann/detail/json_pointer.hpp
+index 32cb350d0..50fe7f53b 100644
+--- a/include/nlohmann/detail/json_pointer.hpp
++++ b/include/nlohmann/detail/json_pointer.hpp
+@@ -8,7 +8,7 @@
+ 
+ #pragma once
+ 
+-#include <algorithm> // all_of
++#include <algorithm> // all_of, copy
+ #include <array> // array
+ #include <cctype> // isdigit
+ #include <cerrno> // errno, ERANGE
+@@ -80,14 +80,38 @@ class json_pointer
+     /// @sa https://json.nlohmann.me/api/json_pointer/to_string/
+     string_t to_string() const
+     {
++        if (reference_tokens.empty())
++        {
++            return string_t();
++        }
++
+         // one buffer: every token adds its escaped form (at least its length) and a slash
+         std::size_t length = 0;
++        bool plain = true;
+         for (const auto& reference_token : reference_tokens)
+         {
+             length += reference_token.size() + 1;
++            const char* const data = reference_token.data();
++            for (std::size_t i = 0, size = reference_token.size(); plain && i < size; ++i)
++            {
++                plain = data[i] != '~' && data[i] != '/';
++            }
+         }
+ 
+         string_t result;
++        if (JSON_HEDLEY_LIKELY(plain))
++        {
++            // nothing to escape: the tokens are copied into the string
++            result.resize(length);
++            char* out = &result[0];
++            for (const auto& reference_token : reference_tokens)
++            {
++                *out++ = '/';
++                out = std::copy(reference_token.data(), reference_token.data() + reference_token.size(), out);
++            }
++            return result;
++        }
++
+         result.reserve(length);
+         for (const auto& reference_token : reference_tokens)
+         {
+@@ -1313,33 +1337,32 @@ class json_pointer
+         }
+         result.reserve(token_count);
+ 
+-        // extract the reference tokens:
+-        // - slash: position of the last read slash (or end of string)
+-        // - start: position after the previous slash
+-        for (
+-            // search for the first slash after the first character
+-            std::size_t slash = reference_string.find_first_of('/', 1),
+-            // set the beginning of the first reference token
+-            start = 1;
+-            // we can stop if start == 0 (if slash == string_t::npos)
+-            start != 0;
+-            // set the beginning of the next reference token
+-            // (will eventually be 0 if slash == string_t::npos)
+-            start = (slash == string_t::npos) ? 0 : slash + 1,
+-            // find next slash
+-            slash = reference_string.find_first_of('/', start))
++        // extract the reference tokens: every one runs from after a slash to
++        // the next slash or the end of the string; a token without a '~' (the
++        // common case) is stored as it is, others are checked and unescaped
++        const char* const data = reference_string.data();
++        const char* const end = data + size;
++        for (const char* start = data + 1;; ++start)
+         {
+-            // use the text between the beginning of the reference token
+-            // (start) and the last slash (slash).
+-            const auto count = (slash == string_t::npos ? reference_string.size() : slash) - start;
+-            auto reference_token = string_t(reference_string.data() + start, count);
+-
+-            // check reference tokens are properly escaped; a token without
+-            // a '~' (the common case) needs neither check nor unescaping
+-            std::size_t pos = reference_token.find_first_of('~');
+-            if (pos != string_t::npos)
++            const char* slash = start;
++            bool escaped = false;
++            while (slash != end && *slash != '/')
+             {
+-                for (; pos != string_t::npos; pos = reference_token.find_first_of('~', pos + 1))
++                escaped = escaped || *slash == '~';
++                ++slash;
++            }
++
++            const auto count = static_cast<std::size_t>(slash - start);
++            if (JSON_HEDLEY_LIKELY(!escaped))
++            {
++                result.emplace_back(start, count);
++            }
++            else
++            {
++                auto reference_token = string_t(start, count);
++
++                // check reference tokens are properly escaped
++                for (std::size_t pos = reference_token.find_first_of('~'); pos != string_t::npos; pos = reference_token.find_first_of('~', pos + 1))
+                 {
+                     JSON_ASSERT(reference_token[pos] == '~');
+ 
+@@ -1353,10 +1376,14 @@ class json_pointer
+                 }
+ 
+                 detail::unescape(reference_token);
++                result.push_back(std::move(reference_token));
+             }
+ 
+-            // finally, store the reference token
+-            result.push_back(std::move(reference_token));
++            if (slash == end)
++            {
++                break;
++            }
++            start = slash;
+         }
+ 
+         return result;
+```
+
+## Existing upstream tests that call the changed code (for style and API usage)
+// Upstream tests at the PR's parent commit 6fa14d8f9 that use the changed code.
+// Names searched (test lines using each): to_string (10), json_pointer (0), split (0)
+
+// ---- tests/src/unit-alt-string.cpp:328-349  (uses: to_string)
+    SECTION("JSON pointer")
+    {
+        // Direct conversion from a json literal to alt_json is not supported due to issue #3425:
+        // alt_json's string_t (alt_string) is not directly constructible from std::string, so the
+        // cross-basic_json conversion falls back to the array-conversion path, incorrectly representing
+        // objects as arrays of [key, value] pairs and strings as arrays of character codes.
+        // See https://github.com/nlohmann/json/issues/3425 for details.
+        // Workaround: use alt_json::parse() instead of implicit conversion.
+        auto j = alt_json::parse(R"({"foo": ["bar", "baz"]})");
+
+        CHECK(j.at(alt_json::json_pointer("/foo/0")) == j["foo"][0]);
+        CHECK(j.at(alt_json::json_pointer("/foo/1")) == j["foo"][1]);
+
+        // RFC 6901 escaping works without string_t::find(str, pos), replace(),
+        // and substr()
+        auto j2 = alt_json::parse(R"({"a/b": 1, "m~n": 2, "~/~~//": 3})");
+        CHECK(j2.at(alt_json::json_pointer("/a~1b")) == 1);
+        CHECK(j2.at(alt_json::json_pointer("/m~0n")) == 2);
+        CHECK(j2.at(alt_json::json_pointer("/~0~1~0~0~1~1")) == 3);
+        CHECK(alt_json::json_pointer("/~0~1~0~0~1~1").to_string() == alt_string("/~0~1~0~0~1~1"));
+        CHECK(j2.flatten().unflatten() == j2);
+    }
+
+// ---- tests/src/unit-custom-base-class.cpp:326-350  (uses: to_string)
+        "/array/2/float - number_float - 1.0",
+        "/array/2/boolean - boolean - true",
+        "/array/2/string - string - \"string\"",
+        "/array/2/array/0 - number_integer - 0",
+        "/array/2/array/1 - number_integer - 1"
+    };
+
+    json.visit(
+            [&](const json_with_visitor_t::json_pointer & p,
+                const json_with_visitor_t& j)
+    {
+        std::stringstream str;
+        str << p.to_string() << " - " ;
+        using value_t = nlohmann::detail::value_t;
+        switch (j.type())
+        {
+            case value_t::object:
+                str << "object";
+                break;
+            case value_t::array:
+                str << "array";
+                break;
+            case value_t::discarded:
+                str << "discarded";
+                break;
+
+// ---- tests/src/unit-delete_deprecated_functions.cpp:81-105  (uses: to_string)
+JSON_TEST_DETECT(istream_gtgt_json, std::declval<std::istream&>() >> std::declval<J&>());
+JSON_TEST_DETECT(json_gtgt_ostream, std::declval<const J&>() >> std::declval<std::ostream&>());
+JSON_TEST_DETECT(ostream_ltlt_json, std::declval<std::ostream&>() << std::declval<const J&>());
+
+JSON_TEST_DETECT(ptr_eq_ptr, std::declval<const typename J::json_pointer&>() == std::declval<const typename J::json_pointer&>());
+JSON_TEST_DETECT(ptr_ne_ptr, std::declval<const typename J::json_pointer&>() != std::declval<const typename J::json_pointer&>());
+JSON_TEST_DETECT(ptr_eq_string, std::declval<const typename J::json_pointer&>() == std::declval<const std::string&>());
+JSON_TEST_DETECT(string_eq_ptr, std::declval<const std::string&>() == std::declval<const typename J::json_pointer&>());
+JSON_TEST_DETECT(ptr_eq_c_string, std::declval<const typename J::json_pointer&>() == std::declval<const char*>());
+JSON_TEST_DETECT(c_string_eq_ptr, std::declval<const char*>() == std::declval<const typename J::json_pointer&>());
+JSON_TEST_DETECT(ptr_ne_string, std::declval<const typename J::json_pointer&>() != std::declval<const std::string&>());
+JSON_TEST_DETECT(string_ne_ptr, std::declval<const std::string&>() != std::declval<const typename J::json_pointer&>());
+JSON_TEST_DETECT(ptr_to_string, std::declval<const typename J::json_pointer&>().to_string());
+
+// json_pointer with a basic_json type as template argument
+template<typename J>
+using legacy_ptr_t = const nlohmann::json_pointer<J>& ;
+JSON_TEST_DETECT(legacy_ptr_value, std::declval<const J&>().value(std::declval<legacy_ptr_t<J>>(), 0));
+JSON_TEST_DETECT(legacy_ptr_value_rvalue, std::declval<const J&>().value(std::declval<legacy_ptr_t<J>>(), std::string()));
+JSON_TEST_DETECT(legacy_ptr_contains, std::declval<const J&>().contains(std::declval<legacy_ptr_t<J>>()));
+JSON_TEST_DETECT(legacy_ptr_subscript, std::declval<J&>()[std::declval<legacy_ptr_t<J>>()]);
+JSON_TEST_DETECT(legacy_ptr_subscript_const, std::declval<const J&>()[std::declval<legacy_ptr_t<J>>()]);
+JSON_TEST_DETECT(legacy_ptr_at, std::declval<J&>().at(std::declval<legacy_ptr_t<J>>()));
+JSON_TEST_DETECT(legacy_ptr_at_const, std::declval<const J&>().at(std::declval<legacy_ptr_t<J>>()));
+JSON_TEST_DETECT(ptr_value, std::declval<const J&>().value(std::declval<const typename J::json_pointer&>(), 0));
+
+// ---- tests/src/unit-delete_deprecated_functions.cpp:207-228  (uses: to_string)
+    SECTION("the non-deprecated functions still work")
+    {
+        const json j = {{"a", {1, 2}}};
+        const auto cbor = json::to_cbor(j);
+        CHECK(json::from_cbor(cbor.data(), cbor.data() + cbor.size()) == j);
+
+        const json::json_pointer ptr("/a/1");
+        CHECK(ptr == json::json_pointer("/a/1"));
+        CHECK(ptr.to_string() == "/a/1");
+        CHECK(j[ptr] == 2);
+        CHECK(j.at(ptr) == 2);
+        CHECK(j.value(ptr, 0) == 2);
+        CHECK(j.contains(ptr));
+
+        std::ostringstream os;
+        os << j;
+        CHECK(os.str() == R"({"a":[1,2]})");
+        std::istringstream is(os.str());
+        json parsed;
+        is >> parsed;
+        CHECK(parsed == j);
+    }
+
+// ---- tests/src/unit-json_pointer.cpp:592-607  (uses: to_string)
+    SECTION("string representation")
+    {
+        for (const auto* ptr_str :
+                {"", "/foo", "/foo/0", "/", "/a~1b", "/c%d", "/e^f", "/g|h", "/i\\j", "/k\"l", "/ ", "/m~0n"
+                })
+        {
+            json::json_pointer const ptr(ptr_str);
+            std::stringstream ss;
+            ss << ptr;
+            CHECK(ptr.to_string() == ptr_str);
+#ifndef JSON_TEST_DEPRECATED_FUNCTIONS_DELETED
+            CHECK(std::string(ptr) == ptr_str);
+#endif
+            CHECK(ss.str() == ptr_str);
+        }
+    }
+
+// ---- tests/src/unit-json_pointer.cpp:767-780  (uses: to_string)
+        CHECK(j[ptr] == j);
+
+        CHECK(ptr / ""_json_pointer == ptr);
+        CHECK(j["/answer"_json_pointer / "/everything"_json_pointer] == j["answer"]["everything"]);
+
+        // list children access
+        CHECK(j["/list"_json_pointer / 1] == j["list"][1]);
+
+        // push key which has to be encoded
+        ptr /= "object";
+        ptr = ptr / "/";
+        CHECK(j[ptr] == j["object"]["/"]);
+        CHECK(ptr.to_string() == "/object/~1");
+    }
+
+# Task
+Write 20 test programs for this pull request. Return JSON with a "tests" array; each item has "name" (short snake_case), "intent" (one sentence: what behavior it probes) and "code" (the complete C++ program).

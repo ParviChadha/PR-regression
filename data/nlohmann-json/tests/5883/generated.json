@@ -1,0 +1,212 @@
+{
+  "target": "nlohmann-json",
+  "pr": 5883,
+  "model": "gemini-3.5-flash-lite",
+  "prompt_sha256": "919c810021a9766ea492347630885dfea2917e88fec08120765285888f57b914",
+  "n_requested": 20,
+  "dropped": 0,
+  "usage": {
+    "promptTokenCount": 17577,
+    "candidatesTokenCount": 4023,
+    "totalTokenCount": 21600,
+    "promptTokensDetails": [
+      {
+        "modality": "TEXT",
+        "tokenCount": 17577
+      }
+    ],
+    "serviceTier": "standard"
+  },
+  "tests": [
+    {
+      "file": "gen_01.cpp",
+      "name": "dump_scalars_and_types",
+      "intent": "Probes serialization of basic scalar types (null, boolean, integers, floating point numbers) through dump() method.",
+      "round": 0
+    },
+    {
+      "file": "gen_02.cpp",
+      "name": "dump_short_and_long_strings",
+      "intent": "Probes serialization of strings of various lengths including short plain strings optimized by the PR and escaped characters.",
+      "round": 0
+    },
+    {
+      "file": "gen_03.cpp",
+      "name": "dump_ensure_ascii_multibyte",
+      "intent": "Probes serialization of multibyte unicode strings with ensure_ascii enabled to exercise fast escaping paths.",
+      "round": 0
+    },
+    {
+      "file": "gen_04.cpp",
+      "name": "dump_containers_pretty_and_compact",
+      "intent": "Probes serialization of nested objects and arrays in both compact and pretty-printed indent modes.",
+      "round": 0
+    },
+    {
+      "file": "gen_05.cpp",
+      "name": "dump_binary_values",
+      "intent": "Probes serialization of binary byte containers with and without custom subtypes in compact and pretty formats.",
+      "round": 0
+    },
+    {
+      "file": "gen_06.cpp",
+      "name": "ordered_json_serialization",
+      "intent": "Probes preservation of key insertion order using nlohmann::ordered_json dump formatting.",
+      "round": 0
+    },
+    {
+      "file": "gen_07.cpp",
+      "name": "deep_nesting_iterative_dump",
+      "intent": "Probes serialization of deeply nested json structures that exceed recursion depth limits and trigger iterative dumping.",
+      "round": 0
+    },
+    {
+      "file": "gen_08.cpp",
+      "name": "serializer_custom_output_stream",
+      "intent": "Probes writing json directly to a standard output stream adapter using serializer and stream operators.",
+      "round": 0
+    },
+    {
+      "file": "gen_09.cpp",
+      "name": "serializer_direct_escaped_check",
+      "intent": "Probes direct usage of serializer's internal dump_escaped helper function via testability macro access.",
+      "round": 0,
+      "superseded_by": "gen_26.cpp"
+    },
+    {
+      "file": "gen_10.cpp",
+      "name": "empty_containers_dump",
+      "intent": "Probes correct serialization of empty objects and arrays in both compact and indented formats.",
+      "round": 0
+    },
+    {
+      "file": "gen_11.cpp",
+      "name": "to_string_format_as_helpers",
+      "intent": "Probes conversion of json objects to strings using to_string and format_as helper functions.",
+      "round": 0
+    },
+    {
+      "file": "gen_12.cpp",
+      "name": "scalar_comparisons_and_dump",
+      "intent": "Probes scalar comparison operators alongside serialization of boundary scalar values.",
+      "round": 0
+    },
+    {
+      "file": "gen_13.cpp",
+      "name": "serializer_error_handlers",
+      "intent": "Probes serializer initialization with different error handler options (strict, ignore, replace).",
+      "round": 0,
+      "superseded_by": "gen_27.cpp"
+    },
+    {
+      "file": "gen_14.cpp",
+      "name": "discarded_value_dump",
+      "intent": "Probes serialization behavior of discarded json values.",
+      "round": 0
+    },
+    {
+      "file": "gen_15.cpp",
+      "name": "long_escaped_runs_serialization",
+      "intent": "Probes serialization of long runs of characters requiring escaping (newlines, tabs, backslashes) to check buffer flushes.",
+      "round": 0
+    },
+    {
+      "file": "gen_16.cpp",
+      "name": "floats_special_values_dump",
+      "intent": "Probes serialization behavior of special floating point values like NaN and infinities if supported.",
+      "round": 0
+    },
+    {
+      "file": "gen_17.cpp",
+      "name": "mixed_type_array_pretty_dump",
+      "intent": "Probes serialization of arrays containing mixed types (objects, strings, arrays, numbers) with custom indentation steps.",
+      "round": 0
+    },
+    {
+      "file": "gen_18.cpp",
+      "name": "key_length_boundary_strings",
+      "intent": "Probes object keys of lengths right around the 16 and 32 byte short string optimization boundaries.",
+      "round": 0
+    },
+    {
+      "file": "gen_19.cpp",
+      "name": "istream_json_extraction",
+      "intent": "Probes stream extraction and insertion roundtrip using standard operators.",
+      "round": 0
+    },
+    {
+      "file": "gen_20.cpp",
+      "name": "serializer_indent_step_variations",
+      "intent": "Probes serializer creation with various indentation steps and indent characters.",
+      "round": 0,
+      "superseded_by": "gen_28.cpp"
+    },
+    {
+      "file": "gen_21.cpp",
+      "name": "gen_21",
+      "intent": "Exercises put_literal_indent and container dump elements with indented objects and arrays using dump(indent_step).",
+      "round": 1
+    },
+    {
+      "file": "gen_22.cpp",
+      "name": "gen_22",
+      "intent": "Exercises boolean serialization and uninitialized buffer construction members inside dump().",
+      "round": 1
+    },
+    {
+      "file": "gen_23.cpp",
+      "name": "gen_23",
+      "intent": "Exercises 2-byte UTF-8 character serialization with ensure_ascii to hit validate_one_utf8 2-byte branches and u-escapes.",
+      "round": 1
+    },
+    {
+      "file": "gen_24.cpp",
+      "name": "gen_24",
+      "intent": "Exercises vector-based plain short string copy paths and short string max optimizations by dumping strings of varying small lengths.",
+      "round": 1
+    },
+    {
+      "file": "gen_25.cpp",
+      "name": "gen_25",
+      "intent": "Exercises serializer uninitialized buffers and direct dump_element handling for arrays containing objects and scalars.",
+      "round": 1
+    },
+    {
+      "file": "gen_26.cpp",
+      "name": "serializer_direct_escaped_check_fixed",
+      "intent": "Probes direct usage of serializer's internal dump_escaped helper function via testability macro access.",
+      "round": 2,
+      "fixes": "gen_09.cpp",
+      "kind": "compile",
+      "superseded_by": "gen_29.cpp"
+    },
+    {
+      "file": "gen_27.cpp",
+      "name": "serializer_error_handlers_fixed",
+      "intent": "Probes serializer initialization with different error handler options (strict, ignore, replace).",
+      "round": 2,
+      "fixes": "gen_13.cpp",
+      "kind": "compile"
+    },
+    {
+      "file": "gen_28.cpp",
+      "name": "serializer_indent_step_variations_fixed",
+      "intent": "Probes serializer creation with various indentation steps and indent characters.",
+      "round": 2,
+      "fixes": "gen_20.cpp",
+      "kind": "compile"
+    },
+    {
+      "file": "gen_29.cpp",
+      "name": "serializer_direct_escaped_check_fixed_fixed",
+      "intent": "Probes direct usage of serializer's internal dump_escaped helper function via testability macro access.",
+      "round": 3,
+      "fixes": "gen_26.cpp",
+      "kind": "compile"
+    }
+  ],
+  "fix": {
+    "rounds_max": 2,
+    "model": "gemini-3.5-flash-lite"
+  }
+}

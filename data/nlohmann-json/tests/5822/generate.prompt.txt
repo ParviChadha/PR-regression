@@ -1,0 +1,617 @@
+[system]
+You write test programs that probe a C++ library for behavioral changes made by one pull request.
+Each program is compiled and run twice, once against the library before the change and once after, and the two
+outputs are compared. Your job is to produce programs whose output reveals whether the change altered behavior,
+including side effects the author did not intend.
+
+Rules for every program:
+- It is standalone: one file with its own int main(), compiled as C++17, printing results to stdout.
+- Use only the library's documented public API. Never include internal headers or use detail/impl namespaces,
+  private members or undocumented macros.
+- Do not judge results (no assert, no expected-value comparisons): just print what the library returns. Print
+  enough to make differences visible, one fact per line.
+- Output must be deterministic. Never print pointers or addresses, uninitialized data, the order of
+  hash-based containers, timings, thread ids, random values, file paths or environment data. Print floating point
+  values with an explicit precision. No input, files, network, threads, clocks or randomness.
+- Wrap calls that may throw in try/catch and print the exception's type and message, so an exception is an
+  observable result. Do not crash on purpose.
+- Aim at the code the diff changes. Prefer calls that compile against both the old and the new library; one or two
+  programs may use an API the PR adds. Cover ordinary inputs and edge cases (empty, minimum and maximum values,
+  boundaries, special values, nesting, unusual types) and also neighbouring behavior the change could disturb.
+- When the diff changes which types or inputs an API accepts or rejects (constraints, overloads, traits,
+  conversions), test it with the detection idiom (std::void_t or requires) and `if constexpr`, so the program
+  compiles against both versions, prints whether the expression is well-formed, and exercises it when it is.
+  Accepting an input is not enough: also use it through every entry point that should follow (const and
+  non-const, read, write, insert, erase, lookup, nested use), because a change that admits new inputs can leave
+  later code unable to handle them.
+- If the changed code is internal (a detail, impl or internal namespace, a trait, a helper), do not name it in the
+  program. Reach it through the public API that depends on it, using detection (as above) where needed.
+- Use the exact types and values the diff is about (the new trait's argument types, the new overload's
+  parameters), not stand-ins.
+- Spread the programs over distinct public entry points and overloads, one main idea per program. Do not write
+  several programs that only rename a type or change a literal.
+- Make the programs differ from each other: different inputs, different entry points, different features.
+
+Rules specific to this library:
+- Include the library with #include <nlohmann/json.hpp>. The public API is nlohmann::json (nlohmann::basic_json), nlohmann::ordered_json, json_pointer, json patch/merge_patch and the documented SAX and conversion interfaces. Never use the detail namespace.
+- It is a header-only library: nothing to link. Programs are compiled as C++17.
+- Print JSON values with dump() (compact) or dump(2). Keys of nlohmann::json objects print in sorted order, so output is deterministic; do not depend on insertion order except with ordered_json.
+
+[user]
+# Pull request #5822: Escape characters below 0x60 from a table straight into the write buffer
+
+## Description
+## What
+
+When the bulk scanner in `dump_escaped_impl()` stops at a control character, a quote or a backslash, that byte went through the UTF-8 decoder and a `switch` that wrote the escape byte by byte into `string_buffer`. The buffer was then copied into `write_buffer` at the next unescaped run.
+
+A byte below 0x60 at a character boundary is a complete code point, so it now skips the decoder. Its escape sequence comes from a 96-entry table with 8-byte rows: the sequence is padded with zeros, and the last byte holds its length. All 8 bytes are copied straight into `write_buffer` after one room check, and the position advances by the length. The idea comes from orjson's `QUOTE_TAB`. Most of the gain comes from skipping the `string_buffer` round trip, not from the table. A table-only variant that still went through `string_buffer` gained only 2–7 %.
+
+The check sits inside the existing character-boundary block, so it runs once each time the scanner stops, not once per byte. A first version tested every byte and cost about 6 % on twitter.json with `ensure_ascii`, where every byte of a CJK character went through the extra comparison.
+
+The `switch` in the decoder's accept branch lost its cases for characters below 0x60, which can no longer reach it. What is left is "\u-escape under `ensure_ascii`, else copy the byte".
+
+Changes:
+- `detail/output/serializer.hpp`: the table (`ascii_escapes()`), the direct write in `dump_escaped_impl()`, and the smaller accept branch.
+- `tests/src/unit-serialization.cpp`: new test case and updated string-buffer boundary tests (see below).
+
+## Performance
+
+Compact `dump()`, `dump(-1, ' ', true)` (ensure_ascii) and `dump(2)`, in ms: `develop` → this PR. Each cell is the median of 3 rounds × 101 runs. The first four rows are the usual corpus files. The last three rows are synthetic and escape-heavy:
+- **json_in_json**: an array of 20 strings that each hold the compact dump of twitter.json (10 MB output, a quote every few bytes).
+- **win_paths**: 100k strings like `C:\Users\name\AppData\Local\Temp\file123.txt`.
+- **log_lines**: 100k strings like `line one\n\tline "two"\r\nend 123`.
+
+**Apple clang 21, M1 Max (arm64)**
+
+| document | compact | ensure_ascii | indent 2 |
+|---|---|---|---|
+| canada | 7.17 → 7.22 (+1%) | 7.05 → 7.06 (+0%) | 8.19 → 8.28 (+1%) |
+| citm | 0.58 → 0.58 (+1%) | 0.52 → 0.54 (+3%) | 0.81 → 0.81 (+0%) |
+| twitter | 0.48 → 0.48 (-1%) | 0.56 → 0.57 (+2%) | 0.53 → 0.52 (-2%) |
+| twitterescaped | 0.48 → 0.47 (-2%) | 0.56 → 0.57 (+2%) | 0.53 → 0.52 (-2%) |
+| json_in_json | 14.41 → 11.92 (-17%) | 14.91 → 13.36 (-10%) | 13.84 → 11.26 (-19%) |
+| win_paths | 9.62 → 8.24 (-14%) | 9.11 → 7.40 (-19%) | 9.56 → 7.91 (-17%) |
+| log_lines | 7.61 → 5.88 (-23%) | 5.68 → 4.60 (-19%) | 7.61 → 5.82 (-24%) |
+
+**GCC 13.3, x86-64 (VPS)**
+
+| document | compact | ensure_ascii | indent 2 |
+|---|---|---|---|
+| canada | 13.63 → 13.93 (+2%) | 13.31 → 13.63 (+2%) | 16.43 → 16.48 (+0%) |
+| citm | 1.36 → 1.35 (-1%) | 1.27 → 1.30 (+2%) | 1.92 → 1.98 (+3%) |
+| twitter | 1.02 → 1.02 (+0%) | 1.24 → 1.33 (+7%) | 1.15 → 1.14 (-1%) |
+| twitterescaped | 1.02 → 1.02 (-0%) | 1.26 → 1.24 (-1%) | 1.13 → 1.12 (-1%) |
+| json_in_json | 32.90 → 26.43 (-20%) | 38.69 → 32.35 (-16%) | 30.90 → 23.64 (-24%) |
+| win_paths | 20.37 → 15.69 (-23%) | 20.91 → 16.82 (-20%) | 20.14 → 14.53 (-28%) |
+| log_lines | 14.32 → 11.63 (-19%) | 12.52 → 9.91 (-21%) | 15.73 → 12.70 (-19%) |
+
+**clang 18.1, x86-64 (VPS)**
+
+| document | compact | ensure_ascii | indent 2 |
+|---|---|---|---|
+| canada | 16.73 → 16.03 (-4%) | 16.63 → 16.23 (-2%) | 18.96 → 18.86 (-1%) |
+| citm | 1.16 → 1.13 (-3%) | 1.07 → 1.07 (-0%) | 1.47 → 1.47 (+0%) |
+| twitter | 1.06 → 1.04 (-1%) | 1.20 → 1.19 (-0%) | 1.13 → 1.11 (-2%) |
+| twitterescaped | 1.00 → 1.05 (+5%) | 1.14 → 1.19 (+4%) | 1.09 → 1.12 (+3%) |
+| json_in_json | 31.76 → 26.85 (-15%) | 32.23 → 30.64 (-5%) | 30.22 → 24.64 (-18%) |
+| win_paths | 19.25 → 16.66 (-13%) | 16.98 → 15.39 (-9%) | 17.82 → 15.69 (-12%) |
+| log_lines | 13.06 → 
+[... truncated, 4295 more characters]
+
+## Commit message
+* Escape characters below 0x60 from a table straight into the write buffer
+
+When the bulk scanner in dump_escaped_impl() stops at a control
+character, a quote or a backslash, that byte used to go through the
+UTF-8 decoder and a switch that wrote the escape byte by byte into
+string_buffer, which was then copied into write_buffer at the next run.
+
+A byte below 0x60 at a character boundary is a complete code point, so
+it now skips the decoder: its escape sequence comes from a 96-entry
+table of 8-byte rows (sequence padded with zeros, length in the last
+byte), and all 8 bytes are copied straight into write_buffer with one
+room check. The check sits inside the existing character-boundary
+block, so it runs once per scanner stop and not once per byte; testing
+every byte cost about 6% on twitter.json with ensure_ascii.
+
+The switch in the decoder's accept branch lost its cases for
+characters below 0x60, which can no longer reach it.
+
+Output is byte-identical. The string-buffer boundary tests now use
+\u-escaped non-ASCII characters, since simple escapes no longer reach
+string_buffer, and a new test case checks every ASCII character at
+every position against a reference escaper.
+
+Signed-off-by: Niels Lohmann <mail@nlohmann.me>
+
+* Avoid raw string literals with backslashes in CHECK macros
+
+MSVC's traditional preprocessor mis-lexes raw string literals inside
+macro arguments and reports illegal escape sequences (C2017, C3850).
+
+Signed-off-by: Niels Lohmann <mail@nlohmann.me>
+
+* Sweep invalid UTF-8 at every position through dump()
+
+Compare dump() of strings with ill-formed UTF-8 (stray continuation
+bytes, invalid lead bytes, overlong encodings, surrogates, code points
+above U+10FFFF, and sequences cut short by ASCII, a quote, a backslash,
+a lead byte, or the end of the string) with an independent reference
+serializer, for every error handler and with ensure_ascii on and off.
+The pattern is put at every position of short strings to cross the
+strides of the bulk scanners, and of lon
+[... truncated, 165 more characters]
+
+## Discussion before merge
+- github-advanced-security[bot]: ## Flawfinder / Does not check for buffer overflows when copying to destination (CWE-120).
+
+buffer/memcpy:Does not check for buffer overflows when copying to destination (CWE-120).
+
+[Show more details](https://github.com/nlohmann/json/security/code-scanning/778)
+- github-advanced-security[bot]: ## Flawfinder / Does not check for buffer overflows when copying to destination (CWE-120).
+
+buffer/memcpy:Does not check for buffer overflows when copying to destination (CWE-120).
+
+[Show more details](https://github.com/nlohmann/json/security/code-scanning/779)
+- gregmarr: Why not take advantage of the stored size up front?
+
+```
+  std::size_t escape_size = static_cast<std::size_t>(escape[7]);
+  if (JSON_HEDLEY_UNLIKELY(write_buffer.size() - write_buffer_pos < escape_size))
+```
+
+This allows you to put more bytes into the buffer without flushing, and copies fewer bytes.
+- gregmarr: Have you considered putting the size first and then you don't need to pad with trailing zeros in the initializers when you're not using all the bytes?
+- nlohmann: The `memcpy` deliberately copies all 8 bytes: with a constant size it compiles to one 64-bit load/store, whereas a variable-size copy becomes a call or a branch cascade. So the room check has to cover 8 bytes, not `escape[7]` — checking only `escape[7]` while copying 8 could write past the end of `write_buffer`. One could add 7 bytes of slack to the buffer and check the real length, but that only saves an occasional flush a few bytes early once per 1 KiB, which doesn't change the output and isn't measurable. I'd keep it as is.
+
+*(Written by Claude Code.)*
+- nlohmann: Then the sequence starts at offset 1, and an 8-byte copy from `data() + 1` would read into the next entry (and past the array for 0x5F). The options are a 7-byte copy (two stores instead of one) or 9-byte entries (losing alignment). The trailing zeros are only how the table looks in the source and cost nothing at runtime, so I'd rather keep the single aligned store.
+
+*(Written by Claude Code.)*
+
+## Changed functions (from changes.py)
+- nlohmann::detail::serializer::dump_escaped_impl(const string_t &) (private); reached from the public API through: nlohmann::operator<<(std::ostream &, const basic_json<...> &), nlohmann::operator<<(basic_json<...> &, std::istream &), nlohmann::operator>>(std::istream &, basic_json<...> &), nlohmann::operator>>(const basic_json<...> &, std::ostream &), nlohmann::format_as(const basic_json<...> &), nlohmann::to_string(const basic_json<...> &), nlohmann::operator!=(const_reference, ScalarType), nlohmann::operator!=(ScalarType, const_reference), nlohmann::operator<(const_reference, ScalarType), nlohmann::operator<(ScalarType, const_reference)
+- nlohmann::detail::serializer (private); reached from the public API through: nlohmann::operator<<(std::ostream &, const basic_json<...> &), nlohmann::operator<<(basic_json<...> &, std::istream &), nlohmann::operator>>(std::istream &, basic_json<...> &), nlohmann::operator>>(const basic_json<...> &, std::ostream &), nlohmann::format_as(const basic_json<...> &), nlohmann::to_string(const basic_json<...> &), nlohmann::operator!=(const_reference, ScalarType), nlohmann::operator!=(ScalarType, const_reference), nlohmann::operator<(const_reference, ScalarType), nlohmann::operator<(ScalarType, const_reference)
+- nlohmann::detail::serializer::ascii_escapes() (private); reached from the public API through: nlohmann::operator<<(std::ostream &, const basic_json<...> &), nlohmann::operator<<(basic_json<...> &, std::istream &), nlohmann::operator>>(std::istream &, basic_json<...> &), nlohmann::operator>>(const basic_json<...> &, std::ostream &), nlohmann::format_as(const basic_json<...> &), nlohmann::to_string(const basic_json<...> &), nlohmann::operator!=(const_reference, ScalarType), nlohmann::operator!=(ScalarType, const_reference), nlohmann::operator<(const_reference, ScalarType), nlohmann::operator<(ScalarType, const_reference)
+
+## Diff of the library source (before -> after)
+```diff
+diff --git a/include/nlohmann/detail/output/serializer.hpp b/include/nlohmann/detail/output/serializer.hpp
+index fb99dc01e..3621a78d9 100644
+--- a/include/nlohmann/detail/output/serializer.hpp
++++ b/include/nlohmann/detail/output/serializer.hpp
+@@ -778,6 +778,33 @@ class serializer
+                         break;
+                     }
+                 }
++
++                // A byte below 0x60 is a complete code point and needs no
++                // UTF-8 decoding. The scanner stops only at a control
++                // character, a quote, or a backslash in that range, so look up
++                // its escape sequence and write all 8 bytes of the table entry
++                // straight into the write buffer; only the length stored in the
++                // last byte of the entry is kept.
++                if (data[i] < 0x60)
++                {
++                    // emit any bytes still pending in string_buffer first to
++                    // preserve output order
++                    if (bytes != 0)
++                    {
++                        put_buffer(string_buffer, bytes);
++                        bytes = 0;
++                    }
++                    const auto& escape = ascii_escapes()[data[i]];
++                    if (JSON_HEDLEY_UNLIKELY(write_buffer.size() - write_buffer_pos < escape.size()))
++                    {
++                        flush();
++                    }
++                    std::memcpy(write_buffer.data() + write_buffer_pos, escape.data(), escape.size());
++                    write_buffer_pos += static_cast<std::size_t>(escape[7]);
++                    bytes_after_last_accept = 0;
++                    undumped_chars = 0;
++                    continue;
++                }
+             }
+ 
+             const auto byte = static_cast<std::uint8_t>(s[i]);
+@@ -786,92 +813,39 @@ class serializer
+             {
+                 case UTF8_ACCEPT:  // decode found a new code point
+                 {
+-                    switch (codepoint)
++                    // the code point is at least 0x60 (smaller ones are handled
++                    // above) and is not printable ASCII (which the scanner
++                    // copies): it is DEL (0x7F) under EnsureAscii or a non-ASCII
++                    // character
++                    if (EnsureAscii)
+                     {
+-                        case 0x08: // backspace
+-                        {
+-                            string_buffer[bytes++] = '\\';
+-                            string_buffer[bytes++] = 'b';
+-                            break;
+-                        }
+-
+-                        case 0x09: // horizontal tab
+-                        {
+-                            string_buffer[bytes++] = '\\';
+-                            string_buffer[bytes++] = 't';
+-                            break;
+-                        }
+-
+-                        case 0x0A: // newline
+-                        {
+-                            string_buffer[bytes++] = '\\';
+-                            string_buffer[bytes++] = 'n';
+-                            break;
+-                        }
+-
+-                        case 0x0C: // formfeed
+-                        {
+-                            string_buffer[bytes++] = '\\';
+-                            string_buffer[bytes++] = 'f';
+-                            break;
+-                        }
+-
+-                        case 0x0D: // carriage return
+-                        {
+-                            string_buffer[bytes++] = '\\';
+-                            string_buffer[bytes++] = 'r';
+-                            break;
+-                        }
+-
+-                        case 0x22: // quotation mark
++                        JSON_ASSERT(codepoint >= 0x7F);
++                        if (error_handler == error_handler_t::keep)
+                         {
+-                            string_buffer[bytes++] = '\\';
+-                            string_buffer[bytes++] = '"';
+-                            break;
++                            // this character was buffered as raw bytes below
++                            // in case it turned out to be part of an
++                            // ill-formed sequence (which is kept as is); now
++                            // that it decoded to a well-formed code point,
++                            // undo that and \u-escape it like any other
++                            // character instead
++                            bytes = bytes_after_last_accept;
+                         }
+-
+-                        case 0x5C: // reverse solidus
++                        if (codepoint <= 0xFFFF)
+                         {
+-                            string_buffer[bytes++] = '\\';
+-                            string_buffer[bytes++] = '\\';
+-                            break;
++                            write_u_escape(bytes, static_cast<std::uint16_t>(codepoint));
+                         }
+-
+-                        default:
++                        else
+                         {
+-                            // escape control characters (0x00..0x1F) or, if
+-                            // EnsureAscii parameter is used, non-ASCII characters
+-                            if ((codepoint <= 0x1F) || (EnsureAscii && (codepoint >= 0x7F)))
+-                            {
+-                                if (EnsureAscii && error_handler == error_handler_t::keep)
+-                                {
+-                                    // this character was buffered as raw bytes
+-                                    // below in case it turned out to be part of
+-                                    // an ill-formed sequence (which is kept as
+-                                    // is); now that it decoded to a well-formed
+-                                    // code point, undo that and \u-escape it
+-                                    // like any other character instead
+-                                    bytes = bytes_after_last_accept;
+-                                }
+-                                if (codepoint <= 0xFFFF)
+-                                {
+-                                    write_u_escape(bytes, static_cast<std::uint16_t>(codepoint));
+-                                }
+-                                else
+-                                {
+-                                    write_u_escape(bytes, static_cast<std::uint16_t>(0xD7C0u + (codepoint >> 10u)));
+-                                    write_u_escape(bytes, static_cast<std::uint16_t>(0xDC00u + (codepoint & 0x3FFu)));
+-                                }
+-                            }
+-                            else
+-                            {
+-                                // copy byte to buffer (all previous bytes
+-                                // been copied have in default case above)
+-                                string_buffer[bytes++] = s[i];
+-                            }
+-                            break;
++                            write_u_escape(bytes, static_cast<std::uint16_t>(0xD7C0u + (codepoint >> 10u)));
++                            write_u_escape(bytes, static_cast<std::uint16_t>(0xDC00u + (codepoint & 0x3FFu)));
+                         }
+                     }
++                    else
++                    {
++                        // copy byte to buffer (all previous bytes of the
++                        // sequence have been copied in the default case below)
++                        string_buffer[bytes++] = s[i];
++                    }
+ 
+                     // write buffer and reset index; there must be 13 bytes
+                     // left, as this is the maximal number of bytes to be
+@@ -1259,6 +1233,121 @@ class serializer
+         }
+     }
+ 
++    /*!
++    @brief the JSON form of each character below 0x60
++
++    Entry c holds the escape sequence of character c - the short form for
++    \\b, \\t, \\n, \\f, \\r, \\" and \\\\, \\u00xx for the other control characters -
++    or c itself if it needs no escaping, padded with zeros to 7 bytes. The last
++    byte is the length of the sequence. The 8 bytes of an entry are copied at
++    once, so writing an escape needs neither a branch nor a byte-wise loop.
++    */
++    static const std::array<std::array<char, 8>, 0x60>& ascii_escapes() noexcept
++    {
++        static const std::array<std::array<char, 8>, 0x60> escapes =
++        {
++            {
++                {{'\\', 'u', '0', '0', '0', '0', 0, 6}}, // 0x00
++                {{'\\', 'u', '0', '0', '0', '1', 0, 6}}, // 0x01
++                {{'\\', 'u', '0', '0', '0', '2', 0, 6}}, // 0x02
++                {{'\\', 'u', '0', '0', '0', '3', 0, 6}}, // 0x03
++                {{'\\', 'u', '0', '0', '0', '4', 0, 6}}, // 0x04
++                {{'\\', 'u', '0', '0', '0', '5', 0, 6}}, // 0x05
++                {{'\\', 'u', '0', '0', '0', '6', 0, 6}}, // 0x06
++                {{'\\', 'u', '0', '0', '0', '7', 0, 6}}, // 0x07
++                {{'\\', 'b', 0, 0, 0, 0, 0, 2}}, // 0x08
++                {{'\\', 't', 0, 0, 0, 0, 0, 2}}, // 0x09
++                {{'\\', 'n', 0, 0, 0, 0, 0, 2}}, // 0x0A
++                {{'\\', 'u', '0', '0', '0', 'b', 0, 6}}, // 0x0B
++                {{'\\', 'f', 0, 0, 0, 0, 0, 2}}, // 0x0C
++                {{'\\', 'r', 0, 0, 0, 0, 0, 2}}, // 0x0D
++                {{'\\', 'u', '0', '0', '0', 'e', 0, 6}}, // 0x0E
++                {{'\\', 'u', '0', '0', '0', 'f', 0, 6}}, // 0x0F
++                {{'\\', 'u', '0', '0', '1', '0', 0, 6}}, // 0x10
++                {{'\\', 'u', '0', '0', '1', '1', 0, 6}}, // 0x11
++                {{'\\', 'u', '0', '0', '1', '2', 0, 6}}, // 0x12
++                {{'\\', 'u', '0', '0', '1', '3', 0, 6}}, // 0x13
++                {{'\\', 'u', '0', '0', '1', '4', 0, 6}}, // 0x14
++                {{'\\', 'u', '0', '0', '1', '5', 0, 6}}, // 0x15
++                {{'\\', 'u', '0', '0', '1', '6', 0, 6}}, // 0x16
++                {{'\\', 'u', '0', '0', '1', '7', 0, 6}}, // 0x17
++                {{'\\', 'u', '0', '0', '1', '8', 0, 6}}, // 0x18
++                {{'\\', 'u', '0', '0', '1', '9', 0, 6}}, // 0x19
++                {{'\\', 'u', '0', '0', '1', 'a', 0, 6}}, // 0x1A
++                {{'\\', 'u', '0', '0', '1', 'b', 0, 6}}, // 0x1B
++                {{'\\', 'u', '0', '0', '1', 'c', 0, 6}}, // 0x1C
++                {{'\\', 'u', '0', '0', '1', 'd', 0, 6}}, // 0x1D
++                {{'\\', 'u', '0', '0', '1', 'e', 0, 6}}, // 0x1E
++                {{'\\', 'u', '0', '0', '1', 'f', 0, 6}}, // 0x1F
++                {{' ', 0, 0, 0, 0, 0, 0, 1}}, // 0x20
++                {{'!', 0, 0, 0, 0, 0, 0, 1}}, // 0x21
++                {{'\\', '"', 0, 0, 0, 0, 0, 2}}, // 0x22
++                {{'#', 0, 0, 0, 0, 0, 0, 1}}, // 0x23
++                {{'$', 0, 0, 0, 0, 0, 0, 1}}, // 0x24
++                {{'%', 0, 0, 0, 0, 0, 0, 1}}, // 0x25
++                {{'&', 0, 0, 0, 0, 0, 0, 1}}, // 0x26
++                {{'\'', 0, 0, 0, 0, 0, 0, 1}}, // 0x27
++                {{'(', 0, 0, 0, 0, 0, 0, 1}}, // 0x28
++                {{')', 0, 0, 0, 0, 0, 0, 1}}, // 0x29
++                {{'*', 0, 0, 0, 0, 0, 0, 1}}, // 0x2A
++                {{'+', 0, 0, 0, 0, 0, 0, 1}}, // 0x2B
++                {{',', 0, 0, 0, 0, 0, 0, 1}}, // 0x2C
++                {{'-', 0, 0, 0, 0, 0, 0, 1}}, // 0x2D
++                {{'.', 0, 0, 0, 0, 0, 0, 1}}, // 0x2E
++                {{'/', 0, 0, 0, 0, 0, 0, 1}}, // 0x2F
++                {{'0', 0, 0, 0, 0, 0, 0, 1}}, // 0x30
++                {{'1', 0, 0, 0, 0, 0, 0, 1}}, // 0x31
++                {{'2', 0, 0, 0, 0, 0, 0, 1}}, // 0x32
++                {{'3', 0, 0, 0, 0, 0, 0, 1}}, // 0x33
++                {{'4', 0, 0, 0, 0, 0, 0, 1}}, // 0x34
++                {{'5', 0, 0, 0, 0, 0, 0, 1}}, // 0x35
++                {{'6', 0, 0, 0, 0, 0, 0, 1}}, // 0x36
++                {{'7', 0, 0, 0, 0, 0, 0, 1}}, // 0x37
++                {{'8', 0, 0, 0, 0, 0, 0, 1}}, // 0x38
++                {{'9', 0, 0, 0, 0, 0, 0, 1}}, // 0x39
++                {{':', 0, 0, 0, 0, 0, 0, 1}}, // 0x3A
++                {{';', 0, 0, 0, 0, 0, 0, 1}}, // 0x3B
++                {{'<', 0, 0, 0, 0, 0, 0, 1}}, // 0x3C
++                {{'=', 0, 0, 0, 0, 0, 0, 1}}, // 0x3D
++                {{'>', 0, 0, 0, 0, 0, 0, 1}}, // 0x3E
++                {{'?', 0, 0, 0, 0, 0, 0, 1}}, // 0x3F
++                {{'@', 0, 0, 0, 0, 0, 0, 1}}, // 0x40
++                {{'A', 0, 0, 0, 0, 0, 0, 1}}, // 0x41
++                {{'B', 0, 0, 0, 0, 0, 0, 1}}, // 0x42
++                {{'C', 0, 0, 0, 0, 0, 0, 1}}, // 0x43
++                {{'D', 0, 0, 0, 0, 0, 0, 1}}, // 0x44
++                {{'E', 0, 0, 0, 0, 0, 0, 1}}, // 0x45
++                {{'F', 0, 0, 0, 0, 0, 0, 1}}, // 0x46
++                {{'G', 0, 0, 0, 0, 0, 0, 1}}, // 0x47
++                {{'H', 0, 0, 0, 0, 0, 0, 1}}, // 0x48
++                {{'I', 0, 0, 0, 0, 0, 0, 1}}, // 0x49
++                {{'J', 0, 0, 0, 0, 0, 0, 1}}, // 0x4A
++                {{'K', 0, 0, 0, 0, 0, 0, 1}}, // 0x4B
++                {{'L', 0, 0, 0, 0, 0, 0, 1}}, // 0x4C
++                {{'M', 0, 0, 0, 0, 0, 0, 1}}, // 0x4D
++                {{'N', 0, 0, 0, 0, 0, 0, 1}}, // 0x4E
++                {{'O', 0, 0, 0, 0, 0, 0, 1}}, // 0x4F
++                {{'P', 0, 0, 0, 0, 0, 0, 1}}, // 0x50
++                {{'Q', 0, 0, 0, 0, 0, 0, 1}}, // 0x51
++                {{'R', 0, 0, 0, 0, 0, 0, 1}}, // 0x52
++                {{'S', 0, 0, 0, 0, 0, 0, 1}}, // 0x53
++                {{'T', 0, 0, 0, 0, 0, 0, 1}}, // 0x54
++                {{'U', 0, 0, 0, 0, 0, 0, 1}}, // 0x55
++                {{'V', 0, 0, 0, 0, 0, 0, 1}}, // 0x56
++                {{'W', 0, 0, 0, 0, 0, 0, 1}}, // 0x57
++                {{'X', 0, 0, 0, 0, 0, 0, 1}}, // 0x58
++                {{'Y', 0, 0, 0, 0, 0, 0, 1}}, // 0x59
++                {{'Z', 0, 0, 0, 0, 0, 0, 1}}, // 0x5A
++                {{'[', 0, 0, 0, 0, 0, 0, 1}}, // 0x5B
++                {{'\\', '\\', 0, 0, 0, 0, 0, 2}}, // 0x5C
++                {{']', 0, 0, 0, 0, 0, 0, 1}}, // 0x5D
++                {{'^', 0, 0, 0, 0, 0, 0, 1}}, // 0x5E
++                {{'_', 0, 0, 0, 0, 0, 0, 1}}, // 0x5F
++            }
++        };
++        return escapes;
++    }
++
+     /*!
+      * @brief write a lowercase "\\uXXXX" escape sequence into @a string_buffer
+      *
+```
+
+## Existing upstream tests that call the changed code (for style and API usage)
+// Upstream tests at the PR's parent commit c7fd5ac19 that use the changed code.
+// Names searched (test lines using each): format_as (23), to_string (102), operator<< (84), operator>> (79), operator!= (56), operator< (204), dump_escaped_impl (0), serializer (5), ascii_escapes (0)
+
+// ---- tests/src/unit-serialization.cpp:806-847  (uses: operator<<, serializer)
+TEST_CASE("serializer buffers are flushed mid-string and mid-binary")
+{
+    SECTION("a long run of escaped characters")
+    {
+        // each character is escaped on its own, so the escape buffer fills up
+        const json newlines = std::string(600, '\n');
+        std::string expected = "\"";
+        for (int i = 0; i < 600; ++i)
+        {
+            expected += "\\n";
+        }
+        expected += '"';
+        CHECK(newlines.dump() == expected);
+
+        // every character is \u-escaped under ensure_ascii
+        std::string umlauts;
+        std::string escaped_umlauts = "\"";
+        for (int i = 0; i < 300; ++i)
+        {
+            umlauts += "\xC3\xA4";
+            escaped_umlauts += "\\u00e4";
+        }
+        escaped_umlauts += '"';
+        CHECK(json(umlauts).dump(-1, ' ', true) == escaped_umlauts);
+    }
+
+    SECTION("a large binary value")
+    {
+        std::vector<std::uint8_t> bytes(3000);
+        std::string expected_bytes;
+        std::string expected_pretty_bytes;
+        for (std::size_t i = 0; i < bytes.size(); ++i)
+        {
+            bytes[i] = static_cast<std::uint8_t>(i % 256);
+            expected_bytes += (i == 0 ? "" : ",") + std::to_string(i % 256);
+            expected_pretty_bytes += (i == 0 ? "" : ", ") + std::to_string(i % 256);
+        }
+        const json j = json::binary(bytes);
+        CHECK(j.dump() == "{\"bytes\":[" + expected_bytes + "],\"subtype\":null}");
+        CHECK(j.dump(2) == "{\n  \"bytes\": [" + expected_pretty_bytes + "],\n  \"subtype\": null\n}");
+    }
+}
+
+// ---- tests/src/unit-udt.cpp:685-701  (uses: operator<<, serializer)
+TEST_CASE("custom serializer for pods" * doctest::test_suite("udt"))
+{
+    using custom_json =
+        nlohmann::json::with_json_serializer_t<pod_serializer>;
+
+    auto p = udt::small_pod{42, '/', 42};
+    custom_json const j = p;
+
+    auto p2 = j.get<udt::small_pod>();
+
+    CHECK(p == p2);
+
+    auto np = udt::non_pod{{"non-pod"}};
+    custom_json const j2 = np;
+    auto np2 = j2.get<udt::non_pod>();
+    CHECK(np == np2);
+}
+
+// ---- tests/src/unit-udt.cpp:724-735  (uses: operator<<, serializer)
+TEST_CASE("custom serializer that does adl by default" * doctest::test_suite("udt"))
+{
+    auto me = udt::person{{23}, {"theo"}, udt::country::france};
+
+    json const j = me;
+    custom_json const cj = me;
+
+    CHECK(j.dump() == cj.dump());
+
+    CHECK(me == j.get<udt::person>());
+    CHECK(me == cj.get<udt::person>());
+}
+
+// ---- tests/src/unit-deserialization.cpp:1271-1316  (uses: operator<<, operator>>, to_string)
+TEST_CASE("parse error positions are the same for contiguous and stream input")
+{
+    // contiguous input derives the position from the input on error, stream
+    // input counts it while reading (see lexer::lazy_position); the cases
+    // cover newlines before the error, ungetting a newline after a number,
+    // newlines inside a string, a comment, and reads at the end of input
+    struct test_case
+    {
+        std::string input;
+        std::size_t byte;
+        std::string message;
+    };
+    const std::vector<test_case> cases =
+    {
+        {"[\n  1,\n  2\n", 12, "[json.exception.parse_error.101] parse error at line 4, column 1: syntax error while parsing array - unexpected end of input; expected ']'"},
+        {"[1\n,2,\n]", 8, "[json.exception.parse_error.101] parse error at line 3, column 1: syntax error while parsing value - unexpected ']'; expected '[', '{', or a literal"},
+        {"[1\n x]", 5, "[json.exception.parse_error.101] parse error at line 2, column 2: syntax error while parsing array - invalid literal; last read: '1<U+000A> x'; expected ']'"},
+        {"1\n2", 3, "[json.exception.parse_error.101] parse error at line 2, column 1: syntax error while parsing value - unexpected number literal; expected end of input"},
+        {
+            "{\"a\":\n\"b\nc\"}", 9, R"([json.exception.parse_error.101] parse error at line 3, column 0: syntax error while parsing value - invalid string: control character U+000A (LF) must be escaped to \u000A or \n; last read: '"b<U+000A>')"
+        },
+        {"/* a\n b */\n x", 13, "[json.exception.parse_error.101] parse error at line 3, column 2: syntax error while parsing value - invalid literal; last read: '/* a<U+000A> b */<U+000A> x'"},
+        {"\n\n", 3, "[json.exception.parse_error.101] parse error at line 3, column 1: syntax error while parsing value - unexpected end of input; expected '[', '{', or a literal"},
+        {"[\"a\",\n 1e\n]", 10, "[json.exception.parse_error.101] parse error at line 3, column 0: syntax error while parsing value - invalid number; expected '+', '-', or digit after exponent; last read: '1e<U+000A>'"},
+        {"[tru\n]", 5, "[json.exception.parse_error.101] parse error at line 2, column 0: syntax error while parsing value - invalid literal; last read: '[tru<U+000A>'"},
+    };
+
+    for (const auto& c : cases)
+    {
+        CAPTURE(c.input)
+        const std::string expected = std::to_string(c.byte) + " " + c.message;
+
+        SaxErrorRecorder string_sax;
+        CHECK_FALSE(json::sax_parse(c.input, &string_sax, json::input_format_t::json, true, true));
+        CHECK(string_sax.error == expected);
+
+        SaxErrorRecorder pointer_sax;
+        CHECK_FALSE(json::sax_parse(c.input.data(), c.input.data() + c.input.size(), &pointer_sax, json::input_format_t::json, true, true));
+        CHECK(pointer_sax.error == expected);
+
+        std::istringstream is(c.input);
+        SaxErrorRecorder stream_sax;
+        CHECK_FALSE(json::sax_parse(is, &stream_sax, json::input_format_t::json, true, true));
+        CHECK(stream_sax.error == expected);
+    }
+}
+
+// ---- tests/src/unit-convenience.cpp:90-114  (uses: serializer)
+        impl += c;
+        return *this;
+    }
+
+    std::string impl{}; // NOLINT(readability-redundant-member-init)
+};
+
+void check_escaped(const char* original, const char* escaped = "", bool ensure_ascii = false);
+void check_escaped(const char* original, const char* escaped, const bool ensure_ascii)
+{
+    std::stringstream ss;
+    nlohmann::detail::output_stream_adapter<char> adapter(ss);
+    json::serializer s(adapter, ' ', false, ensure_ascii);
+    s.dump_escaped(original);
+    s.flush(); // dump_escaped writes into the serializer's internal buffer
+    CHECK(ss.str() == escaped);
+}
+} // namespace
+
+TEST_CASE("convenience functions")
+{
+    SECTION("type name as string")
+    {
+        CHECK(std::string(json(json::value_t::null).type_name()) == "null");
+        CHECK(std::string(json(json::value_t::object).type_name()) == "object");
+
+# Task
+Write 20 test programs for this pull request. Return JSON with a "tests" array; each item has "name" (short snake_case), "intent" (one sentence: what behavior it probes) and "code" (the complete C++ program).

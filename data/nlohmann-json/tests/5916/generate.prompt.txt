@@ -1,0 +1,306 @@
+[system]
+You write test programs that probe a C++ library for behavioral changes made by one pull request.
+Each program is compiled and run twice, once against the library before the change and once after, and the two
+outputs are compared. Your job is to produce programs whose output reveals whether the change altered behavior,
+including side effects the author did not intend.
+
+Rules for every program:
+- It is standalone: one file with its own int main(), compiled as C++17, printing results to stdout.
+- Use only the library's documented public API. Never include internal headers or use detail/impl namespaces,
+  private members or undocumented macros.
+- Do not judge results (no assert, no expected-value comparisons): just print what the library returns. Print
+  enough to make differences visible, one fact per line.
+- Output must be deterministic. Never print pointers or addresses, uninitialized data, the order of
+  hash-based containers, timings, thread ids, random values, file paths or environment data. Print floating point
+  values with an explicit precision. No input, files, network, threads, clocks or randomness.
+- Wrap calls that may throw in try/catch and print the exception's type and message, so an exception is an
+  observable result. Do not crash on purpose.
+- Aim at the code the diff changes. Prefer calls that compile against both the old and the new library; one or two
+  programs may use an API the PR adds. Cover ordinary inputs and edge cases (empty, minimum and maximum values,
+  boundaries, special values, nesting, unusual types) and also neighbouring behavior the change could disturb.
+- When the diff changes which types or inputs an API accepts or rejects (constraints, overloads, traits,
+  conversions), test it with the detection idiom (std::void_t or requires) and `if constexpr`, so the program
+  compiles against both versions, prints whether the expression is well-formed, and exercises it when it is.
+  Accepting an input is not enough: also use it through every entry point that should follow (const and
+  non-const, read, write, insert, erase, lookup, nested use), because a change that admits new inputs can leave
+  later code unable to handle them.
+- If the changed code is internal (a detail, impl or internal namespace, a trait, a helper), do not name it in the
+  program. Reach it through the public API that depends on it, using detection (as above) where needed.
+- Use the exact types and values the diff is about (the new trait's argument types, the new overload's
+  parameters), not stand-ins.
+- Spread the programs over distinct public entry points and overloads, one main idea per program. Do not write
+  several programs that only rename a type or change a literal.
+- Make the programs differ from each other: different inputs, different entry points, different features.
+
+Rules specific to this library:
+- Include the library with #include <nlohmann/json.hpp>. The public API is nlohmann::json (nlohmann::basic_json), nlohmann::ordered_json, json_pointer, json patch/merge_patch and the documented SAX and conversion interfaces. Never use the detail namespace.
+- It is a header-only library: nothing to link. Programs are compiled as C++17.
+- Print JSON values with dump() (compact) or dump(2). Keys of nlohmann::json objects print in sorted order, so output is deterministic; do not depend on insertion order except with ordered_json.
+
+[user]
+# Pull request #5916: Fix VS 2015 build of the DOM parser (#5882)
+
+## Description
+Develop's AppVeyor build has been red since #5882 (last green: build 9409; failing: 9428). All red jobs are VS 2015:
+
+- **C2338 "The C++ Standard doesn't provide a hash for this type"** in `test-alt-string_cpp11`: `detect_indexable_keys` named `std::hash<StringType>` in the same expression as the `emplace_new_key` probe. VS 2015 static-asserts on `std::hash` of a type without one instead of reporting a substitution failure. The probe is now two-staged, so `std::hash` is only named once the object type has `emplace_new_key`.
+- **C4996 (error under /WX)** in `abi_compat_diag_on`, `abi_compat_diag_off` and `abi_compat_inline_ns` (Debug x86): `std::copy` with raw pointers on the frame stack. Replaced by plain loops.
+
+No behavior change; the amalgamation is regenerated. Checked locally with `unit-alt-string`, `unit-ordered_json`, `unit-class_parser` and `unit-regression2`. VS 2015 itself is not reproduced locally; AppVeyor has to confirm it (serial queue, hours).
+
+## Breaks the public API?
+
+No breaking changes. Only private members of `json_sax_dom_parser` change.
+
+🤖 Generated with [Claude Code](https://claude.com/claude-code)
+
+## Commit message
+- Name std::hash only once the object type has emplace_new_key: VS 2015
+  static-asserts on std::hash of a type without one (alt_string) instead of
+  reporting a substitution failure (C2338).
+- Replace the std::copy calls on frames by loops: VS 2015 reports raw
+  pointers handed to std::copy as C4996, an error under /WX.
+
+Signed-off-by: Niels Lohmann <mail@nlohmann.me>
+
+## Changed functions (from changes.py)
+- nlohmann::detail::json_sax_dom_parser::frame_stack::grow() (private); reached from the public API through: nlohmann::basic_json_view::materialize(), nlohmann::operator>>(std::istream &, basic_json<...> &), nlohmann::basic_json::accept(detail::span_input_adapter &&, const bool, const bool), nlohmann::basic_json::accept(InputType &&, const bool, const bool), nlohmann::basic_json::accept(IteratorType, SentinelType, const bool, const bool), nlohmann::basic_json::parse(detail::span_input_adapter &&, parser_callback_t, const bool, const bool, const bool), nlohmann::basic_json::parse(InputType &&, parser_callback_t, const bool, const bool, const bool), nlohmann::basic_json::parse(IteratorType, SentinelType, parser_callback_t, const bool, const bool, const bool), nlohmann::basic_json::sax_parse(detail::span_input_adapter &&, SAX *, input_format_t, const bool, const bool, const bool, const cbor_tag_handler_t), nlohmann::basic_json::sax_parse(InputType &&, SAX *, input_format_t, const bool, const bool, const bool, const cbor_tag_handler_t)
+- nlohmann::detail::json_sax_dom_parser::frame_stack::take(frame_stack &) (private); reached from the public API through: nlohmann::basic_json_view::materialize(), nlohmann::operator>>(std::istream &, basic_json<...> &), nlohmann::basic_json::accept(detail::span_input_adapter &&, const bool, const bool), nlohmann::basic_json::accept(InputType &&, const bool, const bool), nlohmann::basic_json::accept(IteratorType, SentinelType, const bool, const bool), nlohmann::basic_json::parse(detail::span_input_adapter &&, parser_callback_t, const bool, const bool, const bool), nlohmann::basic_json::parse(InputType &&, parser_callback_t, const bool, const bool, const bool), nlohmann::basic_json::parse(IteratorType, SentinelType, parser_callback_t, const bool, const bool, const bool), nlohmann::basic_json::sax_parse(detail::span_input_adapter &&, SAX *, input_format_t, const bool, const bool, const bool, const cbor_tag_handler_t), nlohmann::basic_json::sax_parse(InputType &&, SAX *, input_format_t, const bool, const bool, const bool, const cbor_tag_handler_t)
+- nlohmann::detail::json_sax_dom_parser::indexed_keys (private); reached from the public API through: nlohmann::basic_json_view::materialize(), nlohmann::operator>>(std::istream &, basic_json<...> &), nlohmann::basic_json::accept(detail::span_input_adapter &&, const bool, const bool), nlohmann::basic_json::accept(InputType &&, const bool, const bool), nlohmann::basic_json::accept(IteratorType, SentinelType, const bool, const bool), nlohmann::basic_json::parse(detail::span_input_adapter &&, parser_callback_t, const bool, const bool, const bool), nlohmann::basic_json::parse(InputType &&, parser_callback_t, const bool, const bool, const bool), nlohmann::basic_json::parse(IteratorType, SentinelType, parser_callback_t, const bool, const bool, const bool), nlohmann::basic_json::sax_parse(detail::span_input_adapter &&, SAX *, input_format_t, const bool, const bool, const bool, const cbor_tag_handler_t), nlohmann::basic_json::sax_parse(InputType &&, SAX *, input_format_t, const bool, const bool, const bool, const cbor_tag_handler_t)
+- nlohmann::detail::json_sax_dom_parser (private); reached from the public API through: nlohmann::basic_json_view::materialize(), nlohmann::operator>>(std::istream &, basic_json<...> &), nlohmann::basic_json::accept(detail::span_input_adapter &&, const bool, const bool), nlohmann::basic_json::accept(InputType &&, const bool, const bool), nlohmann::basic_json::accept(IteratorType, SentinelType, const bool, const bool), nlohmann::basic_json::parse(detail::span_input_adapter &&, parser_callback_t, const bool, const bool, const bool), nlohmann::basic_json::parse(InputType &&, parser_callback_t, const bool, const bool, const bool), nlohmann::basic_json::parse(IteratorType, SentinelType, parser_callback_t, const bool, const bool, const bool), nlohmann::basic_json::sax_parse(detail::span_input_adapter &&, SAX *, input_format_t, const bool, const bool, const bool, const cbor_tag_handler_t), nlohmann::basic_json::sax_parse(InputType &&, SAX *, input_format_t, const bool, const bool, const bool, const cbor_tag_handler_t)
+- nlohmann::detail::json_sax_dom_parser::detect_hash (private); reached from the public API through: nlohmann::basic_json_view::materialize(), nlohmann::operator>>(std::istream &, basic_json<...> &), nlohmann::basic_json::accept(detail::span_input_adapter &&, const bool, const bool), nlohmann::basic_json::accept(InputType &&, const bool, const bool), nlohmann::basic_json::accept(IteratorType, SentinelType, const bool, const bool), nlohmann::basic_json::parse(detail::span_input_adapter &&, parser_callback_t, const bool, const bool, const bool), nlohmann::basic_json::parse(InputType &&, parser_callback_t, const bool, const bool, const bool), nlohmann::basic_json::parse(IteratorType, SentinelType, parser_callback_t, const bool, const bool, const bool), nlohmann::basic_json::sax_parse(detail::span_input_adapter &&, SAX *, input_format_t, const bool, const bool, const bool, const cbor_tag_handler_t), nlohmann::basic_json::sax_parse(InputType &&, SAX *, input_format_t, const bool, const bool, const bool, const cbor_tag_handler_t)
+- nlohmann::detail::json_sax_dom_parser::detect_indexable_keys (private); reached from the public API through: nlohmann::basic_json_view::materialize(), nlohmann::operator>>(std::istream &, basic_json<...> &), nlohmann::basic_json::accept(detail::span_input_adapter &&, const bool, const bool), nlohmann::basic_json::accept(InputType &&, const bool, const bool), nlohmann::basic_json::accept(IteratorType, SentinelType, const bool, const bool), nlohmann::basic_json::parse(detail::span_input_adapter &&, parser_callback_t, const bool, const bool, const bool), nlohmann::basic_json::parse(InputType &&, parser_callback_t, const bool, const bool, const bool), nlohmann::basic_json::parse(IteratorType, SentinelType, parser_callback_t, const bool, const bool, const bool), nlohmann::basic_json::sax_parse(detail::span_input_adapter &&, SAX *, input_format_t, const bool, const bool, const bool, const cbor_tag_handler_t), nlohmann::basic_json::sax_parse(InputType &&, SAX *, input_format_t, const bool, const bool, const bool, const cbor_tag_handler_t)
+- nlohmann::detail::json_sax_dom_parser::detect_indexable_keys (private); reached from the public API through: nlohmann::basic_json_view::materialize(), nlohmann::operator>>(std::istream &, basic_json<...> &), nlohmann::basic_json::accept(detail::span_input_adapter &&, const bool, const bool), nlohmann::basic_json::accept(InputType &&, const bool, const bool), nlohmann::basic_json::accept(IteratorType, SentinelType, const bool, const bool), nlohmann::basic_json::parse(detail::span_input_adapter &&, parser_callback_t, const bool, const bool, const bool), nlohmann::basic_json::parse(InputType &&, parser_callback_t, const bool, const bool, const bool), nlohmann::basic_json::parse(IteratorType, SentinelType, parser_callback_t, const bool, const bool, const bool), nlohmann::basic_json::sax_parse(detail::span_input_adapter &&, SAX *, input_format_t, const bool, const bool, const bool, const cbor_tag_handler_t), nlohmann::basic_json::sax_parse(InputType &&, SAX *, input_format_t, const bool, const bool, const bool, const cbor_tag_handler_t)
+- nlohmann::detail::json_sax_dom_parser::detect_emplace_new_key (private); reached from the public API through: nlohmann::basic_json_view::materialize(), nlohmann::operator>>(std::istream &, basic_json<...> &), nlohmann::basic_json::accept(detail::span_input_adapter &&, const bool, const bool), nlohmann::basic_json::accept(InputType &&, const bool, const bool), nlohmann::basic_json::accept(IteratorType, SentinelType, const bool, const bool), nlohmann::basic_json::parse(detail::span_input_adapter &&, parser_callback_t, const bool, const bool, const bool), nlohmann::basic_json::parse(InputType &&, parser_callback_t, const bool, const bool, const bool), nlohmann::basic_json::parse(IteratorType, SentinelType, parser_callback_t, const bool, const bool, const bool), nlohmann::basic_json::sax_parse(detail::span_input_adapter &&, SAX *, input_format_t, const bool, const bool, const bool, const cbor_tag_handler_t), nlohmann::basic_json::sax_parse(InputType &&, SAX *, input_format_t, const bool, const bool, const bool, const cbor_tag_handler_t)
+- nlohmann::detail::json_sax_dom_parser::detect_indexable_keys (private); reached from the public API through: nlohmann::basic_json_view::materialize(), nlohmann::operator>>(std::istream &, basic_json<...> &), nlohmann::basic_json::accept(detail::span_input_adapter &&, const bool, const bool), nlohmann::basic_json::accept(InputType &&, const bool, const bool), nlohmann::basic_json::accept(IteratorType, SentinelType, const bool, const bool), nlohmann::basic_json::parse(detail::span_input_adapter &&, parser_callback_t, const bool, const bool, const bool), nlohmann::basic_json::parse(InputType &&, parser_callback_t, const bool, const bool, const bool), nlohmann::basic_json::parse(IteratorType, SentinelType, parser_callback_t, const bool, const bool, const bool), nlohmann::basic_json::sax_parse(detail::span_input_adapter &&, SAX *, input_format_t, const bool, const bool, const bool, const cbor_tag_handler_t), nlohmann::basic_json::sax_parse(InputType &&, SAX *, input_format_t, const bool, const bool, const bool, const cbor_tag_handler_t)
+
+## Diff of the library source (before -> after)
+```diff
+diff --git a/include/nlohmann/detail/input/json_sax.hpp b/include/nlohmann/detail/input/json_sax.hpp
+index 6fd0be52d..04201efbe 100644
+--- a/include/nlohmann/detail/input/json_sax.hpp
++++ b/include/nlohmann/detail/input/json_sax.hpp
+@@ -650,9 +650,17 @@ class json_sax_dom_parser : public json_sax_dom_error_state
+     /// so that a big object can find the keys it has in a hash table instead of
+     /// searching all of them
+     template<typename ObjectType, typename StringType>
+-    using detect_indexable_keys = decltype(std::declval<ObjectType&>().emplace_new_key(std::declval<const StringType&>(), std::declval<typename ObjectType::mapped_type>()),
+-                                           std::hash<StringType>()(std::declval<const StringType&>()));
+-    static constexpr bool indexed_keys = is_detected<detect_indexable_keys, object_t, string_t>::value;
++    using detect_emplace_new_key = decltype(std::declval<ObjectType&>().emplace_new_key(std::declval<const StringType&>(), std::declval<typename ObjectType::mapped_type>()));
++    template<typename StringType>
++    using detect_hash = decltype(std::hash<StringType>()(std::declval<const StringType&>()));
++    // std::hash is only named once the object can hold the keys in a vector:
++    // VS 2015 static-asserts on std::hash of a type without one instead of
++    // reporting a substitution failure
++    template<typename ObjectType, typename StringType, bool = is_detected<detect_emplace_new_key, ObjectType, StringType>::value>
++    struct detect_indexable_keys : std::false_type {};
++    template<typename ObjectType, typename StringType>
++    struct detect_indexable_keys<ObjectType, StringType, true> : is_detected<detect_hash, StringType> {};
++    static constexpr bool indexed_keys = detect_indexable_keys<object_t, string_t>::value;
+ 
+     /// what a frame holds for objects that are kept in a vector: the key index
+     /// of an object with many keys, and for an object that is collected on the
+@@ -774,7 +782,10 @@ class json_sax_dom_parser : public json_sax_dom_error_state
+         {
+             const std::size_t new_capacity = capacity * 2;
+             std::unique_ptr<frame[]> new_heap(new frame[new_capacity]); // NOLINT(cppcoreguidelines-avoid-c-arrays,hicpp-avoid-c-arrays,modernize-avoid-c-arrays)
+-            std::copy(data, data + count, new_heap.get());
++            for (std::size_t i = 0; i < count; ++i)
++            {
++                new_heap[i] = data[i];
++            }
+             heap = std::move(new_heap);
+             data = heap.get();
+             capacity = new_capacity;
+@@ -792,7 +803,10 @@ class json_sax_dom_parser : public json_sax_dom_error_state
+         {
+             if (other.heap == nullptr)
+             {
+-                std::copy(other.local.begin(), other.local.begin() + static_cast<std::ptrdiff_t>(other.count), local.begin());
++                for (std::size_t i = 0; i < other.count; ++i)
++                {
++                    local[i] = other.local[i];
++                }
+                 data = local.data();
+                 capacity = local_capacity;
+             }
+```
+
+## Existing upstream tests that call the changed code (for style and API usage)
+// Upstream tests at the PR's parent commit d176d8d61 that use the changed code.
+// Names searched (test lines using each): materialize (149), accept (12), parse (11), sax_parse (0), operator>> (94), grow (0), take (0), indexed_keys (0), json_sax_dom_parser (17), detect_hash (0), detect_indexable_keys (0), detect_emplace_new_key (0)
+
+// ---- tests/src/unit-deserialization.cpp:557-577  (uses: json_sax_dom_parser, operator>>)
+            SECTION("iterator_input_adapter advances iterators correctly")
+            {
+                using nlohmann::json;
+                using nlohmann::detail::input_format_t;
+                using nlohmann::detail::json_sax_dom_parser;
+                using proxy = proxy_iterator<std::string>;
+
+                std::string str1 = "[1]";
+                std::string str2 = "[2]";
+                std::string str = str1 + str2;
+
+                auto first = str.begin();
+                auto last = str.end();
+                json j;
+                json_sax_dom_parser<json, nlohmann::detail::string_input_adapter_type> sax(j, true);
+
+                CHECK(json::sax_parse(proxy(first), proxy(last), &sax,
+                                      input_format_t::json, false));
+                CHECK(j.dump() == str1);
+                CHECK(std::string(first, last) == str2);
+            }
+
+// ---- tests/src/unit-stream-bulk-scan.cpp:438-451  (uses: json_sax_dom_parser, operator>>)
+    SECTION("SAX parsing from a stream")
+    {
+        const std::string input = R"({"a": [1, "two", 3.5]} rest)";
+        for (const std::size_t chunk_size : chunk_sizes())
+        {
+            CAPTURE(chunk_size)
+            chunked_streambuf buf(input, chunk_size);
+            std::istream is(&buf);
+            json j;
+            nlohmann::detail::json_sax_dom_parser<json, nlohmann::detail::string_input_adapter_type> sax(j);
+            CHECK(json::sax_parse(is, &sax, json::input_format_t::json, false));
+            CHECK(j == json::parse(R"({"a": [1, "two", 3.5]})"));
+        }
+    }
+
+// ---- tests/src/unit-class_parser.cpp:47-71  (uses: parse)
+using utils::SaxEventLogger;
+
+namespace
+{
+json parser_helper(const std::string& s);
+bool accept_helper(const std::string& s);
+void comments_helper(const std::string& s);
+void trailing_comma_helper(const std::string& s);
+
+json parser_helper(const std::string& s)
+{
+    json j;
+    json::parser(nlohmann::detail::input_adapter(s)).parse(true, j);
+
+    // if this line was reached, no exception occurred
+    // -> check if result is the same without exceptions
+    json j_nothrow;
+    CHECK_NOTHROW(json::parser(nlohmann::detail::input_adapter(s), nullptr, false).parse(true, j_nothrow));
+    CHECK(j_nothrow == j);
+
+    json j_sax;
+    nlohmann::detail::json_sax_dom_parser<json, nlohmann::detail::string_input_adapter_type> sdp(j_sax);
+    json::sax_parse(s, &sdp);
+    CHECK(j_sax == j);
+
+
+// ---- tests/src/unit-class_parser.cpp:73-97  (uses: parse)
+
+    trailing_comma_helper(s);
+
+    return j;
+}
+
+bool accept_helper(const std::string& s)
+{
+    CAPTURE(s)
+
+    // 1. parse s without exceptions
+    json j;
+    CHECK_NOTHROW(json::parser(nlohmann::detail::input_adapter(s), nullptr, false).parse(true, j));
+    const bool ok_noexcept = !j.is_discarded();
+
+    // 2. accept s
+    const bool ok_accept = json::parser(nlohmann::detail::input_adapter(s)).accept(true);
+
+    // 3. check if both approaches come to the same result
+    CHECK(ok_noexcept == ok_accept);
+
+    // 4. parse with SAX (compare with relaxed accept result)
+    SaxEventLogger el;
+    CHECK_NOTHROW(json::sax_parse(s, &el, json::input_format_t::json, false));
+    CHECK(json::parser(nlohmann::detail::input_adapter(s)).accept(false) == !el.errored);
+
+// ---- tests/src/unit-disabled_exceptions.cpp:13-37  (uses: json_sax_dom_parser)
+DOCTEST_GCC_SUPPRESS_WARNING("-Wnoexcept")
+
+#include <nlohmann/json.hpp>
+using nlohmann::json;
+#ifdef JSON_TEST_NO_GLOBAL_UDLS
+    using namespace nlohmann::literals; // NOLINT(google-build-using-namespace)
+#endif
+
+/////////////////////////////////////////////////////////////////////
+// for #2824
+/////////////////////////////////////////////////////////////////////
+
+class sax_no_exception : public nlohmann::detail::json_sax_dom_parser<json, nlohmann::detail::string_input_adapter_type>
+{
+  public:
+    explicit sax_no_exception(json& j) : nlohmann::detail::json_sax_dom_parser<json, nlohmann::detail::string_input_adapter_type>(j, false) {}
+
+    static bool parse_error(std::size_t /*position*/, const std::string& /*last_token*/, const json::exception& ex)
+    {
+        error_string = new std::string(ex.what()); // NOLINT(cppcoreguidelines-owning-memory)
+        return false;
+    }
+
+    static std::string* error_string;
+};
+
+// ---- tests/src/unit-file_input.cpp:192-214  (uses: json_sax_dom_parser)
+    SECTION("the file can be parsed again and read with stdio afterwards")
+    {
+        const file_ptr f = open_with(name, "[1] [2] tail");
+        REQUIRE(f != nullptr);
+
+        // sax_parse with strict == false stops after the first value; an array
+        // ends with its closing bracket, so the space after it is not read
+        json j;
+        nlohmann::detail::json_sax_dom_parser<json, nlohmann::detail::string_input_adapter_type> sax1(j);
+        CHECK(json::sax_parse(f.get(), &sax1, json::input_format_t::json, false));
+        CHECK(j == json({1}));
+        check_unlocked(f.get());
+
+        json k;
+        nlohmann::detail::json_sax_dom_parser<json, nlohmann::detail::string_input_adapter_type> sax2(k);
+        CHECK(json::sax_parse(f.get(), &sax2, json::input_format_t::json, false));
+        CHECK(k == json({2}));
+        check_unlocked(f.get());
+
+        std::array<char, 8> rest{};
+        CHECK(std::fgets(rest.data(), static_cast<int>(rest.size()), f.get()) != nullptr);
+        CHECK(std::string(rest.data()) == " tail");
+    }
+
+// ---- tests/src/unit-precise-stream-position.cpp:240-248  (uses: json_sax_dom_parser)
+    SECTION("sax_parse with strict == false")
+    {
+        std::istringstream ss("1true");
+        json j;
+        nlohmann::detail::json_sax_dom_parser<json, nlohmann::detail::input_stream_adapter> sdp(j, true);
+        CHECK(json::sax_parse(ss, &sdp, nlohmann::detail::input_format_t::json, false));
+        CHECK(j == 1);
+        CHECK(remaining(ss) == "true");
+    }
+
+// ---- tests/src/unit-deserialization.cpp:97-109  (uses: operator>>)
+TEST_CASE("deserialization")
+{
+    SECTION("successful deserialization")
+    {
+        SECTION("stream")
+        {
+            std::stringstream ss1;
+            std::stringstream ss2;
+            std::stringstream ss3;
+            ss1 << R"(["foo",1,2,3,false,{"one":1}])";
+            ss2 << R"(["foo",1,2,3,false,{"one":1}])";
+            ss3 << R"(["foo",1,2,3,false,{"one":1}])";
+            const json j = json::parse(ss1);
+
+# Task
+Write 20 test programs for this pull request. Return JSON with a "tests" array; each item has "name" (short snake_case), "intent" (one sentence: what behavior it probes) and "code" (the complete C++ program).

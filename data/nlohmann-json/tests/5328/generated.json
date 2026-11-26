@@ -1,0 +1,201 @@
+{
+  "target": "nlohmann-json",
+  "pr": 5328,
+  "model": "gemini-3.5-flash-lite",
+  "prompt_sha256": "90b04dd102bab0c001216bd8b311cbf3af13d6110c1e32e262d20e80fe5c8d57",
+  "n_requested": 20,
+  "dropped": 0,
+  "usage": {
+    "promptTokenCount": 8627,
+    "candidatesTokenCount": 3815,
+    "totalTokenCount": 12442,
+    "cachedContentTokenCount": 5952,
+    "promptTokensDetails": [
+      {
+        "modality": "TEXT",
+        "tokenCount": 8627
+      }
+    ],
+    "cacheTokensDetails": [
+      {
+        "modality": "TEXT",
+        "tokenCount": 5952
+      }
+    ],
+    "serviceTier": "standard"
+  },
+  "tests": [
+    {
+      "file": "gen_01.cpp",
+      "name": "cbor_basic_object_serialization",
+      "intent": "Probes CBOR object serialization with string keys, exercising direct string helper paths instead of temporary basic_json objects.",
+      "round": 0
+    },
+    {
+      "file": "gen_02.cpp",
+      "name": "msgpack_basic_object_serialization",
+      "intent": "Probes MessagePack object serialization with string keys to exercise direct write_msgpack_string helper logic.",
+      "round": 0
+    },
+    {
+      "file": "gen_03.cpp",
+      "name": "cbor_iterative_nested_object_keys",
+      "intent": "Probes iterative CBOR serialization for deeply nested objects to exercise write_cbor_iterative and key handling past recursion limits.",
+      "round": 0
+    },
+    {
+      "file": "gen_04.cpp",
+      "name": "msgpack_iterative_nested_object_keys",
+      "intent": "Probes iterative MessagePack serialization on deeply nested objects to exercise write_msgpack_iterative.",
+      "round": 0
+    },
+    {
+      "file": "gen_05.cpp",
+      "name": "cbor_custom_key_type_implicit_convertible",
+      "intent": "Verify compilation and execution with a custom object key type implicitly convertible to string_t when serializing to CBOR.",
+      "round": 0
+    },
+    {
+      "file": "gen_06.cpp",
+      "name": "msgpack_custom_key_type_implicit_convertible",
+      "intent": "Verify compilation and execution with a custom object key type implicitly convertible to string_t when serializing to MessagePack.",
+      "round": 0
+    },
+    {
+      "file": "gen_07.cpp",
+      "name": "cbor_strict_utf8_error_handling",
+      "intent": "Probes CBOR key serialization under strict error handler when invalid UTF-8 string keys are encountered.",
+      "round": 0
+    },
+    {
+      "file": "gen_08.cpp",
+      "name": "msgpack_strict_utf8_error_handling",
+      "intent": "Probes MessagePack key serialization under strict error handler with invalid UTF-8 keys.",
+      "round": 0
+    },
+    {
+      "file": "gen_09.cpp",
+      "name": "cbor_replace_utf8_error_handling",
+      "intent": "Probes CBOR key serialization with replace error handler for invalid UTF-8 sequences in keys.",
+      "round": 0
+    },
+    {
+      "file": "gen_10.cpp",
+      "name": "msgpack_replace_utf8_error_handling",
+      "intent": "Probes MessagePack key serialization with replace error handler for invalid UTF-8 sequences in keys.",
+      "round": 0
+    },
+    {
+      "file": "gen_11.cpp",
+      "name": "cbor_ignore_utf8_error_handling",
+      "intent": "Probes CBOR key serialization with ignore error handler for invalid UTF-8 characters.",
+      "round": 0
+    },
+    {
+      "file": "gen_12.cpp",
+      "name": "msgpack_ignore_utf8_error_handling",
+      "intent": "Probes MessagePack key serialization with ignore error handler for invalid UTF-8 characters.",
+      "round": 0
+    },
+    {
+      "file": "gen_13.cpp",
+      "name": "cbor_empty_object_keys",
+      "intent": "Probes CBOR serialization of an object with an empty string key.",
+      "round": 0
+    },
+    {
+      "file": "gen_14.cpp",
+      "name": "msgpack_empty_object_keys",
+      "intent": "Probes MessagePack serialization of an object containing an empty string key.",
+      "round": 0
+    },
+    {
+      "file": "gen_15.cpp",
+      "name": "cbor_long_object_keys",
+      "intent": "Probes CBOR object serialization with keys longer than short-string optimization (SSO) length threshold.",
+      "round": 0
+    },
+    {
+      "file": "gen_16.cpp",
+      "name": "msgpack_long_object_keys",
+      "intent": "Probes MessagePack object serialization with long keys exceeding fixstr boundaries.",
+      "round": 0
+    },
+    {
+      "file": "gen_17.cpp",
+      "name": "cbor_very_long_msgpack_str32_keys",
+      "intent": "Probes MessagePack object serialization with keys requiring str32 lengths (greater than 65535 bytes).",
+      "round": 0
+    },
+    {
+      "file": "gen_18.cpp",
+      "name": "cbor_multiple_keys_mixed_lengths",
+      "intent": "Probes CBOR serialization with multiple keys of varying lengths (SSO and non-SSO) within a single object.",
+      "round": 0
+    },
+    {
+      "file": "gen_19.cpp",
+      "name": "msgpack_multiple_keys_mixed_lengths",
+      "intent": "Probes MessagePack serialization with multiple keys of mixed lengths in a single object structure.",
+      "round": 0
+    },
+    {
+      "file": "gen_20.cpp",
+      "name": "cbor_ordered_json_object_keys",
+      "intent": "Probes CBOR serialization using nlohmann::ordered_json to verify compatibility with alternative map container types for keys.",
+      "round": 0
+    },
+    {
+      "file": "gen_21.cpp",
+      "name": "test_static_assert_custom_key_type",
+      "intent": "Trigger the static_assert check on object_t::key_type being convertible to string_t during CBOR and MessagePack serialization by instantiating basic_json with a custom key type.",
+      "round": 1,
+      "superseded_by": "gen_26.cpp"
+    },
+    {
+      "file": "gen_22.cpp",
+      "name": "test_iterative_cbor_nested_keys",
+      "intent": "Trigger write_cbor_string via iterative CBOR writing (write_cbor_iterative) by nesting objects beyond the recursion depth limit.",
+      "round": 1
+    },
+    {
+      "file": "gen_23.cpp",
+      "name": "test_iterative_msgpack_nested_keys",
+      "intent": "Trigger write_msgpack_string via iterative MessagePack writing (write_msgpack_iterative) by nesting objects beyond recursion depth limit.",
+      "round": 1
+    },
+    {
+      "file": "gen_24.cpp",
+      "name": "test_msgpack_str16_key",
+      "intent": "Trigger MessagePack str16 output branch for object keys whose length falls between 32 and 65535 bytes.",
+      "round": 1
+    },
+    {
+      "file": "gen_25.cpp",
+      "name": "test_msgpack_str32_key",
+      "intent": "Trigger MessagePack str32 output branch for object keys whose length exceeds 65535 bytes.",
+      "round": 1
+    },
+    {
+      "file": "gen_26.cpp",
+      "name": "test_static_assert_custom_key_type_fixed",
+      "intent": "Trigger the static_assert check on object_t::key_type being convertible to string_t during CBOR and MessagePack serialization by instantiating basic_json with a custom key type.",
+      "round": 2,
+      "fixes": "gen_21.cpp",
+      "kind": "compile",
+      "superseded_by": "gen_27.cpp"
+    },
+    {
+      "file": "gen_27.cpp",
+      "name": "test_static_assert_custom_key_type_fixed_fixed",
+      "intent": "Trigger the static_assert check on object_t::key_type being convertible to string_t during CBOR and MessagePack serialization by instantiating basic_json with a custom key type.",
+      "round": 3,
+      "fixes": "gen_26.cpp",
+      "kind": "compile"
+    }
+  ],
+  "fix": {
+    "rounds_max": 2,
+    "model": "gemini-3.5-flash-lite"
+  }
+}

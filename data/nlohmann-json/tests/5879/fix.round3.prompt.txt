@@ -1,0 +1,535 @@
+[system]
+You write test programs that probe a C++ library for behavioral changes made by one pull request.
+Each program is compiled and run twice, once against the library before the change and once after, and the two
+outputs are compared. Your job is to produce programs whose output reveals whether the change altered behavior,
+including side effects the author did not intend.
+
+Rules for every program:
+- It is standalone: one file with its own int main(), compiled as C++17, printing results to stdout.
+- Use only the library's documented public API. Never include internal headers or use detail/impl namespaces,
+  private members or undocumented macros.
+- Do not judge results (no assert, no expected-value comparisons): just print what the library returns. Print
+  enough to make differences visible, one fact per line.
+- Output must be deterministic. Never print pointers or addresses, uninitialized data, the order of
+  hash-based containers, timings, thread ids, random values, file paths or environment data. Print floating point
+  values with an explicit precision. No input, files, network, threads, clocks or randomness.
+- Wrap calls that may throw in try/catch and print the exception's type and message, so an exception is an
+  observable result. Do not crash on purpose.
+- Aim at the code the diff changes. Prefer calls that compile against both the old and the new library; one or two
+  programs may use an API the PR adds. Cover ordinary inputs and edge cases (empty, minimum and maximum values,
+  boundaries, special values, nesting, unusual types) and also neighbouring behavior the change could disturb.
+- When the diff changes which types or inputs an API accepts or rejects (constraints, overloads, traits,
+  conversions), test it with the detection idiom (std::void_t or requires) and `if constexpr`, so the program
+  compiles against both versions, prints whether the expression is well-formed, and exercises it when it is.
+  Accepting an input is not enough: also use it through every entry point that should follow (const and
+  non-const, read, write, insert, erase, lookup, nested use), because a change that admits new inputs can leave
+  later code unable to handle them.
+- If the changed code is internal (a detail, impl or internal namespace, a trait, a helper), do not name it in the
+  program. Reach it through the public API that depends on it, using detection (as above) where needed.
+- Use the exact types and values the diff is about (the new trait's argument types, the new overload's
+  parameters), not stand-ins.
+- Spread the programs over distinct public entry points and overloads, one main idea per program. Do not write
+  several programs that only rename a type or change a literal.
+- Make the programs differ from each other: different inputs, different entry points, different features.
+
+Rules specific to this library:
+- Include the library with #include <nlohmann/json.hpp>. The public API is nlohmann::json (nlohmann::basic_json), nlohmann::ordered_json, json_pointer, json patch/merge_patch and the documented SAX and conversion interfaces. Never use the detail namespace.
+- It is a header-only library: nothing to link. Programs are compiled as C++17.
+- Print JSON values with dump() (compact) or dump(2). Keys of nlohmann::json objects print in sorted order, so output is deterministic; do not depend on insertion order except with ordered_json.
+
+[user]
+# Pull request #5879: Copy ASCII strings in the json_view dump with ensure_ascii
+
+## Description
+With `ensure_ascii`, the `json_view` dump wrote every string through the escaping path, which decodes UTF-8 byte by byte. It did so even for strings of the source that are plain ASCII. Without `ensure_ascii`, those strings are already copied verbatim.
+
+A string of the source without escape sequences has no quote, backslash or control character. `ensure_ascii` therefore leaves it unchanged exactly when no byte is `0x7F` or above. The dump now checks that eight bytes at a time (`is_ascii_without_delete()`: `(v | (v + 0x01…01)) & 0x80…80`, which flags bytes ≥ 0x80 and DEL) and copies such strings and keys the same way as without `ensure_ascii`. The compact walk (`dump_compact`), which used to serve only the dump without `ensure_ascii`, now serves `ensure_ascii` too. It does so through a separate out-of-line instantiation, so the walk without `ensure_ascii` keeps its speed.
+
+With GCC, adding the check as one combined condition, `!enabled(Ascii) || …`, changed the block layout of the walk without `ensure_ascii`, even though the condition is folded away there. That made it 4–6% slower in cycle counts. One `copied()` overload per `std::integral_constant` keeps its machine code identical to `develop`.
+
+## Alternative considered
+
+The parser could record "all ASCII" in a free node flag, since the scanner branches on bytes ≥ 0x80 anyway. The dump would then not need to check anything. That made compact `ensure_ascii` output about twice as fast again: B/A 0.29–0.58 instead of 0.44–0.67. But it also needed a cached `memchr` for DEL per document and image changes, and it made `json_document::parse` of string-heavy input 1–2% slower with GCC (about 1.4 instructions per string). Parsing matters to every user, and `ensure_ascii` only to some, so this PR leaves the parser alone.
+
+## Performance
+
+`json_document::root().dump()` of the parsed (minified) file, against `develop`. B/A is the ratio of medians from interleaved A/B runs, 10–12 rounds each; below 1 is faster.
+
+With `ensure_ascii`, compact / indent 4:
+
+| | twitter | citm_catalog | jeopardy | canada (floats) |
+|---|---|---|---|---|
+| Apple M1, Apple Clang | 0.668 / 0.909 | 0.435 / 0.914 | 0.558 / 0.857 | 0.943 / 1.003 |
+| Apple M1, GCC 16 | 0.653 / 0.914 | 0.485 / 0.936 | 0.574 / 0.869 | 0.912 / 1.001 |
+| x86-64 (Haswell VPS), Clang 18 | 0.713 / 0.840 | 0.500 / 0.849 | 0.783 / 0.821 | 0.979 / 1.006 |
+| x86-64 (Haswell VPS), GCC 13 | 0.629 / 0.818 | 0.416 / 0.805 | 0.761 / 0.823 | 0.977 / 1.013 |
+
+Without `ensure_ascii` (compact and indent 4, all four files):
+
+- On the M1, every row is between 0.986 and 1.007.
+- On the VPS, every row is between 0.982 and 1.019. That machine had other load, with spreads of 5–17%.
+- Cycle counts on the M1 are within ±0.5%.
+
+Parsing is not touched.
+
+## Tests
+
+Two new sections in `unit-json_view_dump.cpp`:
+
+- **Mixed documents.** A document with plain, non-ASCII, escaped and long strings, as values and as keys, is compared with `ordered_json::dump()` for compact, indented and subtree dumps. The document is tested once with a DEL and once without, and also with strings that edits changed to and from ASCII.
+- **Every position.** DEL, `0x7E` and two 2-byte characters are placed at every position of strings of 1–20 bytes, as values and as keys, which covers the 8-byte steps and the tail loop. As a check that the test can fail, treating DEL as ASCII makes 423 assertions fail.
+
+Also run locally:
+
+- all `unit-json_view*` tests with ASan and UBSan;
+- a differential test of 400,000 random documents (ASCII, DEL, escapes, 2/3/4-byte characters, surrogate escapes) against `ordered_json::dump(-1/2, ' ', true)`, with 0 mismatches;
+- GCC 16 and Clang 22 with the CI warning flags;
+- clang-tidy 22 on `unit-json_view_dump.cpp`.
+
+## Public API
+
+No breaking changes. The output of `dump()` is unchanged.
+
+The one corner case: a damaged image loaded with `image_check::bounds` can contain control characters in source strings. With `ensure_ascii`, these are now copied unchanged, as the
+[... truncated, 174 more characters]
+
+## Commit message
+With ensure_ascii, the view's dump wrote every string through the escaping
+path, which decodes UTF-8 byte by byte, even strings of the source that are
+plain ASCII. A string of the source without escape sequences has no quote,
+backslash, or control character, so ensure_ascii leaves it unchanged
+exactly when it has no byte >= 0x7F. The dump now checks that eight bytes
+at a time (one add and one or per word) and copies such strings like the
+dump without ensure_ascii.
+
+The compact walk (dump_compact) now also serves ensure_ascii, through a
+separate out-of-line instantiation, so the walk without ensure_ascii keeps
+its speed.
+
+Parsing is unchanged. A flag set by the parser would let the dump skip the
+check and was about twice as fast for compact output, but it costs every
+parse of string-heavy input 1-2% with GCC.
+
+Signed-off-by: Niels Lohmann <mail@nlohmann.me>
+
+## Discussion before merge
+- gregmarr: >The parser could record "all ASCII" in a free node flag, since the scanner branches on bytes ≥ 0x80 anyway. The dump would then not need to check anything. That made compact ensure_ascii output about twice as fast again: B/A 0.29–0.58 instead of 0.44–0.67. But it also needed a cached memchr for DEL per document and image changes, and it made json_document::parse of string-heavy input 1–2% slower with GCC (about 1.4 instructions per string).
+
+Can you expand more on this "needed a cached memchr for DEL per document and image changes"?
+- nlohmann: Sure. The scanner only branches on bytes ≥ 0x80, so a node flag set from there means "no byte ≥ 0x80". But `ensure_ascii` also escapes DEL (0x7F), so a string with that flag still can't be copied as is if it contains a DEL. Checking for 0x7F in the scanner would add work to every parse, which is what I wanted to avoid. So the prototype searched the whole source once with `memchr(src, 0x7F, size)` on the first `ensure_ascii` dump, and cached the answer in `document_data`. It's an atomic because two threads can dump the same `const` document at once. The flag only lets the dump copy a string when the source has no DEL at all. The SWAR check in this PR has no such problem, because `v + 0x01…` turns 0x7F into 0x80 and so catches DEL too.
+
+"Image changes" means the saved image (`save_image()` / `load()`). The flag takes a new node bit. `load()` validates node flags and would reject that bit, and the same document should save to the same bytes whether or not it has the flag. So `save_image()` had to clear the bit on every string node, which is one more per-node case in the save loop. The alternative was a format change so that `load()` accepts the bit.
+
+Neither part is large, but togethe
+[... truncated, 146 more characters]
+- gregmarr: That's crazy,
+- nlohmann: Yes, it surprised me too. When both walks are in one function, GCC lays out the blocks differently and stops inlining the small helpers in the hot loop, so the walk without `ensure_ascii` gets slower even though that branch is never taken. Keeping the `ensure_ascii` walk in its own function leaves the plain walk's code as it was.
+
+*(Written by Claude Code)*
+
+## Headers the programs must include
+- Also write #include <nlohmann/json_view.hpp>. The json_view feature (json_document, json_view and their image loading and editing API) is declared only in this header; nlohmann/json.hpp does not include it, so without this line those names do not exist. Use only names you can see in the diff or the context below.
+
+## Changed functions (from changes.py)
+- nlohmann::detail::view::view_serializer (private); reached from the public API through: nlohmann::basic_json_view::dump(const int, const char, const bool, const number_format)
+- nlohmann::detail::view::view_serializer::dump(const node *) (private); reached from the public API through: nlohmann::basic_json_view::dump(const int, const char, const bool, const number_format)
+- nlohmann::detail::view::view_serializer::write_string(const node &) (private); reached from the public API through: nlohmann::basic_json_view::dump(const int, const char, const bool, const number_format)
+- nlohmann::detail::view::is_ascii_without_delete(const char *, std::size_t) (private); reached from the public API through: nlohmann::basic_json_view::dump(const int, const char, const bool, const number_format)
+- nlohmann::detail::view::view_serializer::dump_compact(const node *) (private); reached from the public API through: nlohmann::basic_json_view::dump(const int, const char, const bool, const number_format)
+- nlohmann::detail::view::view_serializer::dump_compact_ascii(const node *) (private); reached from the public API through: nlohmann::basic_json_view::dump(const int, const char, const bool, const number_format)
+- nlohmann::detail::view::view_serializer::copied(const node &, const char *, std::false_type) (private); reached from the public API through: nlohmann::basic_json_view::dump(const int, const char, const bool, const number_format)
+- nlohmann::detail::view::view_serializer::copied(const node &, const char *, std::true_type) (private); reached from the public API through: nlohmann::basic_json_view::dump(const int, const char, const bool, const number_format)
+- nlohmann::detail::view::view_serializer::write_ascii_string(const node &) (private); reached from the public API through: nlohmann::basic_json_view::dump(const int, const char, const bool, const number_format)
+- nlohmann::detail::view::view_serializer::dump_compact(const node *) (private); reached from the public API through: nlohmann::basic_json_view::dump(const int, const char, const bool, const number_format)
+
+## Diff of the library source (before -> after)
+```diff
+diff --git a/include/nlohmann/detail/view/serializer.hpp b/include/nlohmann/detail/view/serializer.hpp
+index 5d1074820..922ca58a1 100644
+--- a/include/nlohmann/detail/view/serializer.hpp
++++ b/include/nlohmann/detail/view/serializer.hpp
+@@ -171,6 +171,34 @@ inline std::size_t plain_output_run(const unsigned char* s, std::size_t n) noexc
+     return n;
+ }
+ 
++/// Whether dump() with ensure_ascii writes the string at s unchanged, for a
++/// string of the source without escape sequences (which has no quote,
++/// backslash, or control character): no byte is DEL (0x7F) or above. Adding 1
++/// to each byte sets its high bit exactly for 0x7F, and a carry into the next
++/// byte only comes from 0xFF, whose own high bit is set anyway.
++inline bool is_ascii_without_delete(const char* s, std::size_t n) noexcept
++{
++    constexpr std::uint64_t ones = 0x0101010101010101ull;
++    constexpr std::uint64_t high = 0x8080808080808080ull;
++    std::size_t i = 0;
++    for (; i + 8 <= n; i += 8)
++    {
++        const std::uint64_t v = read_eight_bytes(s + i);
++        if (((v | (v + ones)) & high) != 0)
++        {
++            return false;
++        }
++    }
++    for (; i < n; ++i)
++    {
++        if (static_cast<unsigned char>(s[i]) >= 0x7F)
++        {
++            return false;
++        }
++    }
++    return true;
++}
++
+ /// A stack that starts in a buffer of the caller (a local array) and moves to
+ /// the heap (a vector of the caller) only when that is full, so that dumps of
+ /// shallow documents need no allocation. The top is a pointer, as in
+@@ -286,15 +314,19 @@ class view_serializer
+ 
+     void dump(const node* root)
+     {
+-        if (!m_style.pretty && !m_style.ensure_ascii)
++        if (!m_style.pretty)
+         {
+-            if (m_style.source_numbers)
++            if (m_style.ensure_ascii)
++            {
++                dump_compact_ascii(root);
++            }
++            else if (m_style.source_numbers)
+             {
+-                dump_compact<true>(root);
++                dump_compact<true, false>(root);
+             }
+             else
+             {
+-                dump_compact<false>(root);
++                dump_compact<false, false>(root);
+             }
+             return;
+         }
+@@ -400,6 +432,41 @@ class view_serializer
+         m_out.put('"');
+     }
+ 
++    /// dump_compact() with ensure_ascii, out of line: the walk without it is
++    /// faster when it is not merged with this one into dump()
++    NLOHMANN_VIEW_NOINLINE void dump_compact_ascii(const node* root)
++    {
++        if (m_style.source_numbers)
++        {
++            dump_compact<true, true>(root);
++        }
++        else
++        {
++            dump_compact<false, true>(root);
++        }
++    }
++
++    /// whether dump_compact() copies a string or key from the source: one of
++    /// the source, and with ensure_ascii one without bytes >= 0x7F (an overload
++    /// each, so that the walk without ensure_ascii is compiled exactly as
++    /// before: with GCC, a condition that only folds away later changed its
++    /// block layout and made it 4-6% slower)
++    static bool copied(const node& n, const char* /*src*/, std::false_type /*ensure_ascii*/) noexcept
++    {
++        return (n.flags & node_flags::storage) == 0;
++    }
++
++    static bool copied(const node& n, const char* src, std::true_type /*ensure_ascii*/) noexcept
++    {
++        return (n.flags & node_flags::storage) == 0 && is_ascii_without_delete(src + n.off, n.len);
++    }
++
++    /// a string with ensure_ascii (dump_compact()), out of line
++    NLOHMANN_VIEW_NOINLINE void write_ascii_string(const node& n)
++    {
++        write_string(n);
++    }
++
+     /// the copies of dump_compact() that are not fixed-size moves (long
+     /// strings, or near the end of the source); out of line, so that the
+     /// compiler does not merge the fixed-size moves into this call
+@@ -417,16 +484,18 @@ class view_serializer
+     }
+ 
+     /*!
+-    @brief the compact output without ensure_ascii (the default dump())
++    @brief the compact output (the default dump(), or with ensure_ascii)
+ 
+     The same walk as dump(), with the write position in a local variable
+     (stores through char pointers would otherwise force a reload of the
+     buffer's members after each one), and with strings and number tokens of
+     the source copied by fixed-size moves of 32 bytes where the source has
+     that many bytes left, instead of a library call per token. The buffer
+-    keeps 64 bytes of slack for the overshoot.
++    keeps 64 bytes of slack for the overshoot. With ensure_ascii (Ascii), a
++    string of the source is copied only if it has no byte >= 0x7F (see
++    is_ascii_without_delete()); any other string is written by write_string().
+     */
+-    template<bool SourceNumbers>
++    template<bool SourceNumbers, bool Ascii>
+     void dump_compact(const node* root)
+     {
+         struct frame
+@@ -478,7 +547,14 @@ class view_serializer
+         const auto escaped = [&](const node & n)
+         {
+             m_out.set_cursor(w);
+-            write_decoded(n);
++            if (enabled(Ascii))
++            {
++                write_ascii_string(n);
++            }
++            else
++            {
++                write_decoded(n);
++            }
+             w = m_out.cursor();
+             lim = m_out.limit();
+         };
+@@ -501,7 +577,7 @@ class view_serializer
+             switch (static_cast<value_t>(n->kind))
+             {
+                 case value_t::string:
+-                    if ((n->flags & node_flags::storage) == 0)
++                    if (copied(*n, src, std::integral_constant<bool, Ascii>()))
+                     {
+                         room(n->len + 2);
+                         *w++ = '"';
+@@ -632,7 +708,7 @@ class view_serializer
+             if (cur.object)
+             {
+                 const node& key = *at;
+-                if ((key.flags & node_flags::storage) == 0)
++                if (copied(key, src, std::integral_constant<bool, Ascii>()))
+                 {
+                     room(key.len + 3);
+                     *w++ = '"';
+@@ -843,9 +919,10 @@ class view_serializer
+     {
+         const char* const s = m_doc.str(n);
+         m_out.put('"');
+-        if ((n.flags & node_flags::storage) == 0 && !m_style.ensure_ascii)
++        if ((n.flags & node_flags::storage) == 0 && (!m_style.ensure_ascii || is_ascii_without_delete(s, n.len)))
+         {
+-            // a string of the source without escape sequences has nothing to escape
++            // a string of the source without escape sequences has nothing to
++            // escape (with ensure_ascii, if it is printable ASCII)
+             m_out.put(s, n.len);
+         }
+         else if (m_style.ensure_ascii)
+```
+
+## Existing upstream tests that call the changed code (for style and API usage)
+// Upstream tests at the PR's parent commit 6aefd8c66 that use the changed code.
+// Names searched (test lines using each): dump (661), view_serializer (0), write_string (0), is_ascii_without_delete (0), dump_compact (0), dump_compact_ascii (0), copied (0), write_ascii_string (0)
+
+// ---- tests/src/unit-json_view_dump.cpp:41-74  (uses: dump)
+    SECTION("the output of ordered_json::dump()")
+    {
+        generator g;
+        for (int i = 0; i < 2000; ++i)
+        {
+            std::string text;
+            g.value(text, 0);
+            const ordered_json_document d = ordered_json_document::parse(text);
+            if (has_duplicate_keys(d.root()))
+            {
+                continue;
+            }
+            CAPTURE(text)
+            const ordered_json j = ordered_json::parse(text);
+            for (const int indent :
+                    {
+                        -1, 0, 2
+                    })
+            {
+                for (const bool ensure_ascii :
+                        {
+                            false, true
+                        })
+                {
+                    CHECK(d.root().dump(indent, i % 2 == 0 ? ' ' : '\t', ensure_ascii) == j.dump(indent, i % 2 == 0 ? ' ' : '\t', ensure_ascii));
+                }
+            }
+            // also of each element
+            for (const ordered_json_view e : d.root())
+            {
+                CHECK(e.dump() == e.materialize().dump());
+            }
+        }
+    }
+
+// ---- tests/src/unit-json_view_dump.cpp:76-88  (uses: dump)
+    SECTION("strings")
+    {
+        const std::string text = R"(["plain", "\u0000\u0001\u001f\u007f\u0080é€￿😀", "\"\\\/\b\f\n\r\t", "aéあ😀b", "long text beyond the eight bytes of a word \n with an escape in the middle"])";
+        const ordered_json_document d = ordered_json_document::parse(text);
+        const ordered_json j = ordered_json::parse(text);
+        CHECK(d.root().dump() == j.dump());
+        CHECK(d.root().dump(-1, ' ', true) == j.dump(-1, ' ', true));
+        CHECK(d.root().dump(4, ' ', true) == j.dump(4, ' ', true));
+        const std::string key_text = R"({"é\n": {"\"": [], "": {}}})";
+        const ordered_json_document keys = ordered_json_document::parse(key_text);
+        const ordered_json key_json = ordered_json::parse(key_text);
+        CHECK(keys.root().dump(2, ' ', true) == key_json.dump(2, ' ', true));
+    }
+
+// ---- tests/src/bjdata_round_trip.hpp:71-95  (uses: dump)
+        for (const auto& initial : all_options)
+        {
+            if (initial.version != initial_version)
+            {
+                continue;
+            }
+
+            const json j1 = json::from_bjdata(json::to_bjdata(j0, initial.use_size, initial.use_type, initial.version));
+            const bool has_binary = utils::round_trip_corpus::contains_binary(j1);
+
+            for (const auto& o : all_options)
+            {
+                INFO("j1 = " << j1.dump() << ", use_size = " << o.use_size << ", use_type = " << o.use_type
+                     << ", draft3 = " << (o.version == json::bjdata_version_t::draft3));
+
+                const std::vector<std::uint8_t> vec = json::to_bjdata(j1, o.use_size, o.use_type, o.version);
+                json j2;
+                // anything the library writes must be parsable by the library
+                REQUIRE_NOTHROW(j2 = json::from_bjdata(vec));
+                const std::vector<std::uint8_t> vec2 = json::to_bjdata(j2, o.use_size, o.use_type, o.version);
+                CHECK(json::from_bjdata(vec2).dump() == j2.dump());
+
+                if (!has_binary)
+                {
+                    CHECK(j2.dump() == j1.dump());
+
+// ---- tests/src/fuzzer-json_view_image.cpp:50-74  (uses: dump)
+        try
+        {
+            d = json_document::load(data, size, check);
+        }
+        catch (const json::parse_error& e)
+        {
+            assert(e.id == 116);
+            continue;
+        }
+        std::string dumped;
+        try
+        {
+            dumped = d.root().dump();
+        }
+        catch (const json::type_error& e)
+        {
+            // invalid UTF-8 can only pass the bounds check
+            assert(check == image_check::bounds && e.id == 316);
+            continue;
+        }
+        const json j = d.root().materialize();
+        if (check == image_check::full)
+        {
+            assert(json::parse(dumped) == j);
+            // an image of the loaded document is the input
+
+// ---- tests/src/fuzzer-json_view_image.cpp:79-95  (uses: dump)
+    // the input as a JSON text
+    const std::string text(reinterpret_cast<const char*>(data), size); // NOLINT(cppcoreguidelines-pro-type-reinterpret-cast)
+    const json_document parsed = json_document::parse(text, false);
+    if (!parsed.is_discarded())
+    {
+        const std::vector<std::uint8_t> image = parsed.save();
+        for (const image_check check :
+                {
+                    image_check::full, image_check::bounds, image_check::none
+                })
+        {
+            const json_document loaded = json_document::load(image, check);
+            assert(loaded.root().dump() == parsed.root().dump());
+        }
+    }
+    return 0;
+}
+
+// ---- tests/src/fuzzer-parse_bjdata.cpp:66-90  (uses: dump)
+    template<typename... Args>
+    json operator()(Args&& ... args) const
+    {
+        return json::from_bjdata(std::forward<Args>(args)...);
+    }
+};
+} // namespace
+
+// value-stable comparison for the round-trip checks below; see the note
+// above on why this compares dump()s rather than the json values directly
+static bool is_value_stable(const json& lhs, const json& rhs)
+{
+    return lhs.dump() == rhs.dump();
+}
+
+// see http://llvm.org/docs/LibFuzzer.html
+extern "C" int LLVMFuzzerTestOneInput(const uint8_t* data, size_t size)
+{
+    std::vector<uint8_t> const vec1(data, data + size);
+
+    // step 0: parse input without exceptions
+    bool noexcept_threw = false;
+    json const j_noexcept = parse_without_exceptions([&] { return json::from_bjdata(vec1, true, false); }, noexcept_threw);
+    // whether step 1 succeeded; if not, the catch blocks below check that
+    // step 0 failed, too
+
+// ---- tests/src/fuzzer-parse_json.cpp:71-95  (uses: dump)
+        // step 1: parse input
+        json const j1 = json::parse(data, data + size);
+        parsed = true;
+
+        // without exceptions, the same input must give the same value
+        assert(!noexcept_threw && !j_noexcept.is_discarded() && same_value(j_noexcept, j1));
+
+        try
+        {
+            // step 2: round trip
+
+            // first serialization
+            std::string const s1 = j1.dump();
+
+            // parse serialization
+            json const j2 = json::parse(s1);
+
+            // second serialization
+            std::string const s2 = j2.dump();
+
+            // serializations must match
+            assert(s1 == s2);
+        }
+        catch (const json::parse_error&)
+        {
+
+# Programs to repair
+
+## gen_27.cpp (compile)
+Intent: Probes dumping an empty string inside a json_view with ensure_ascii enabled.
+COMPILE ERROR. The program fails to compile, the same way against the old and the new library. Fix the error (wrong or missing include, typo, misuse of the public API) and keep the intent: the call under test must stay. Include only headers that exist; if you are unsure a header exists, use the library's main header.
+Compiler errors:
+```
+gen_27.cpp:8:34: error: missing terminating " character
+gen_27.cpp:8:33: error: expected ‘,’ or ‘;’ before ‘]’ token
+gen_27.cpp:10:27: error: ‘doc’ was not declared in this scope
+```
+Source:
+```cpp
+#include <nlohmann/json.hpp>
+#include <nlohmann/json_view.hpp>
+#include <iostream>
+int main() {
+    try {
+        std::string text = "[\""]";
+        nlohmann::json_document doc = nlohmann::json_document::parse(text);
+        std::string res = doc.root().dump(-1, ' ', true);
+        std::cout << res << std::endl;
+    } catch (const std::exception& e) {
+        std::cout << typeid(e).name() << ": " << e.what() << std::endl;
+    }
+    return 0;
+}
+```
+
+# Task
+Return JSON with a "fixes" array: one item per program above, with "file" (exactly as given) and "code" (the complete repaired program, standalone, with its own int main). Do not return programs you cannot repair.

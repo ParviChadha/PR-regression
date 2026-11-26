@@ -1,0 +1,309 @@
+[system]
+You write test programs that probe a C++ library for behavioral changes made by one pull request.
+Each program is compiled and run twice, once against the library before the change and once after, and the two
+outputs are compared. Your job is to produce programs whose output reveals whether the change altered behavior,
+including side effects the author did not intend.
+
+Rules for every program:
+- It is standalone: one file with its own int main(), compiled as C++17, printing results to stdout.
+- Use only the library's documented public API. Never include internal headers or use detail/impl namespaces,
+  private members or undocumented macros.
+- Do not judge results (no assert, no expected-value comparisons): just print what the library returns. Print
+  enough to make differences visible, one fact per line.
+- Output must be deterministic. Never print pointers or addresses, uninitialized data, the order of
+  hash-based containers, timings, thread ids, random values, file paths or environment data. Print floating point
+  values with an explicit precision. No input, files, network, threads, clocks or randomness.
+- Wrap calls that may throw in try/catch and print the exception's type and message, so an exception is an
+  observable result. Do not crash on purpose.
+- Aim at the code the diff changes. Prefer calls that compile against both the old and the new library; one or two
+  programs may use an API the PR adds. Cover ordinary inputs and edge cases (empty, minimum and maximum values,
+  boundaries, special values, nesting, unusual types) and also neighbouring behavior the change could disturb.
+- When the diff changes which types or inputs an API accepts or rejects (constraints, overloads, traits,
+  conversions), test it with the detection idiom (std::void_t or requires) and `if constexpr`, so the program
+  compiles against both versions, prints whether the expression is well-formed, and exercises it when it is.
+  Accepting an input is not enough: also use it through every entry point that should follow (const and
+  non-const, read, write, insert, erase, lookup, nested use), because a change that admits new inputs can leave
+  later code unable to handle them.
+- If the changed code is internal (a detail, impl or internal namespace, a trait, a helper), do not name it in the
+  program. Reach it through the public API that depends on it, using detection (as above) where needed.
+- Use the exact types and values the diff is about (the new trait's argument types, the new overload's
+  parameters), not stand-ins.
+- Spread the programs over distinct public entry points and overloads, one main idea per program. Do not write
+  several programs that only rename a type or change a literal.
+- Make the programs differ from each other: different inputs, different entry points, different features.
+
+Rules specific to this library:
+- Include the library with #include <nlohmann/json.hpp>. The public API is nlohmann::json (nlohmann::basic_json), nlohmann::ordered_json, json_pointer, json patch/merge_patch and the documented SAX and conversion interfaces. Never use the detail namespace.
+- It is a header-only library: nothing to link. Programs are compiled as C++17.
+- Print JSON values with dump() (compact) or dump(2). Keys of nlohmann::json objects print in sorted order, so output is deterministic; do not depend on insertion order except with ordered_json.
+
+[user]
+# Pull request #5707: Round-trip BJData ND-array annotations exactly (single precision, key order)
+
+## Description
+## Summary
+
+`to_bjdata()` encodes a JData-annotated object (`_ArrayType_`, `_ArraySize_`, `_ArrayData_`) as a compact BJData
+ND-array in two cases where `from_bjdata()` then returned a different value, breaking the documented guarantee
+that "an object is only converted if the annotation describes a packed array that is parsed back into the same
+annotated object." (1) A `"single"` element that is finite and in range but not exactly representable as `float`
+(e.g. `0.1`) or that underflows to `0` (e.g. `1e-300`) was silently narrowed instead of falling back to a plain
+object, unlike out-of-range integer elements. (2) `from_bjdata()` returned the annotation keys in the order
+`_ArraySize_`, `_ArrayType_`, `_ArrayData_` instead of the documented `_ArrayType_`, `_ArraySize_`, `_ArrayData_`,
+which made a round trip of an `ordered_json` compare unequal even though the values themselves were preserved.
+
+## Changes
+
+- `write_bjdata_ndarray()` (`binary_writer.hpp`): a `"single"` `_ArrayData_` element is now only treated as
+  in-range if `static_cast<float>` and back reproduces the original `double`, the same criterion
+  `write_compact_float()` already uses for CBOR/MessagePack (with the same `-Wfloat-equal` suppression). Otherwise
+  the object falls back to a plain object encoding, as out-of-range integer elements already do.
+- `get_ubjson_size_value()` / `get_ubjson_size_type()` / `get_ubjson_array()` (`binary_reader.hpp`): the ND-array's
+  element type marker precedes the dimension vector on the wire, so it is now passed down to where the annotation
+  object is opened and the `"_ArrayType_"` key is emitted there, before `"_ArraySize_"`, matching the order used
+  throughout the documentation. `get_ubjson_array()` no longer re-does the type-name lookup and emission.
+- `docs/mkdocs/docs/features/binary_formats/bjdata.md`: clarified the round-trip requirement for `"single"`
+  elements and documented the fixed `_ArrayType_`, `_ArraySize_`, `_ArrayData_` key order.
+
+## Tests
+
+Added to `tests/src/unit-bjdata.cpp`:
+- Two cases in "ndarray with out-of-range `_ArrayData_` elements stays as object": a `"single"` element that is
+  not exactly representable as `float` (`0.1`), and one that underflows to `0` (`1e-300`); both must fall back to
+  a plain object and round-trip exactly.
+- A new section, "ndarray annotation keys are read back in the documented order": an `ordered_json` round trip of
+  the documented example must compare equal (and dump identically).
+
+Verified all six new assertions fail against develop's headers (`633de8e44`) and pass with the fix. Built and ran
+`tests/src/unit-bjdata.cpp` with `-Wall -Wextra -Werror -fsanitize=address,undefined` (and `-Wfloat-equal`) for
+`-std=c++11`, `-std=c++17`, and `-std=c++20`; all 32 test cases (667300 assertions) pass in every configuration.
+The existing "SAX aborts" ndarray sub-tests were re-derived for the new key emission order (four countdown values
+changed; the total event count and everything from `_ArrayData_` onward is unchanged) and pass.
+
+## Public API
+
+No breaking changes. `get_ubjson_size_value()` gained a defaulted `ndarray_dtype` parameter, which is
+private/internal (`binary_reader` is a detail class); `from_bjdata()`'s return value for the two fixed cases
+changes to match the documented behavior, which is a bug fix, not an API change. `ordered_json::from_bjdata()`
+now returns annotation keys in a fixed order instead of an order that depended on the input; this was never
+documented as unspecified.
+
+Fixes #5661
+
+---
+This PR was written by [Claude Code](https://claude.com/claude-code) on behalf of @nlohmann.
+
+🤖 Generated with [Claude Code](https://claude.com/claude-code)
+
+## Commit message
+Squashed onto develop from:
+- Round-trip BJData ND-array annotations exactly (single precision, key order)
+
+Signed-off-by: Niels Lohmann <mail@nlohmann.me>
+
+## Linked issue #5661: BJData ND-array annotations are not parsed back into the same object ("single" precision, ordered_json key order)
+### Description
+
+`to_bjdata()` encodes a JData-annotated object (`_ArrayType_`, `_ArraySize_`, `_ArrayData_`) as a BJData ND-array in two cases where `from_bjdata()` then returns a different value. The documentation says this should not happen: "An object is only converted if the annotation describes a packed array that is parsed back into the same annotated object; otherwise it is serialized as a regular JSON object" ([BJData, ND-array optimized format](https://github.com/nlohmann/json/blob/633de8e44bbbc29383d72f8c920343ea5d1eaa21/docs/mkdocs/docs/features/binary_formats/bjdata.md?plain=1#L124)).
+
+1. **`"single"` elements lose precision.** `write_bjdata_ndarray()` [checks `"single"` elements](https://github.com/nlohmann/json/blob/633de8e44bbbc29383d72f8c920343ea5d1eaa21/include/nlohmann/detail/output/binary_writer.hpp#L1991) only for overflow to infinity, then writes `static_cast<float>(value)`. A double that is not exactly representable as `float` is silently rounded (`0.1` is read back as `0.10000000149011612`), and a double below the `float` range underflows (`1e-300` is read back as `0.0`). The integer types, in contrast, fall back to a plain object when an element does not fit (#5403, #5473); the example shows this for a `"uint8"` element `256`.
+
+2. **`ordered_json` key order changes.** `from_bjdata()` creates the annotation keys in the order `_ArraySize_`, `_ArrayType_`, `_ArrayData_`: the [size key](https://github.com/nlohmann/json/blob/633de8e44bbbc29383d72f8c920343ea5d1eaa21/include/nlohmann/detail/input/binary_reader.hpp#L2904) is emitted while the dimension vector is read, before the [type key](https://github.com/nlohmann/json/blob/633de8e44bbbc29383d72f8c920343ea5d1eaa21/include/nlohmann/detail/input/binary_reader.hpp#L3246). For `ordered_json`, whose comparison takes key order into account, an object in the order used in the documentation's example (`_ArrayType_`, `_ArraySize_`, `_ArrayData_`) is therefore not equal to its round trip. With `json`, the 
+[... truncated, 4651 more characters]
+
+## Changed functions (from changes.py)
+- nlohmann::detail::binary_reader::get_ubjson_array() (private); reached from the public API through: nlohmann::basic_json::sax_parse(detail::span_input_adapter &&, SAX *, input_format_t, const bool, const bool, const bool, const cbor_tag_handler_t), nlohmann::basic_json::sax_parse(InputType &&, SAX *, input_format_t, const bool, const bool, const bool, const cbor_tag_handler_t), nlohmann::basic_json::sax_parse(IteratorType, SentinelType, SAX *, input_format_t, const bool, const bool, const bool, const cbor_tag_handler_t), nlohmann::basic_json::from_bson(detail::span_input_adapter &&, const bool, const bool), nlohmann::basic_json::from_cbor(detail::span_input_adapter &&, const bool, const bool, const cbor_tag_handler_t), nlohmann::basic_json::from_msgpack(detail::span_input_adapter &&, const bool, const bool), nlohmann::basic_json::from_ubjson(detail::span_input_adapter &&, const bool, const bool), nlohmann::basic_json::from_bjdata(InputType &&, const bool, const bool, const error_handler_t), nlohmann::basic_json::from_bon8(InputType &&, const bool, const bool), nlohmann::basic_json::from_bson(InputType &&, const bool, const bool, const error_handler_t)
+- nlohmann::detail::binary_writer::write_bjdata_ndarray_float_element(const BasicJsonType &, const bool) (private); reached from the public API through: nlohmann::basic_json::to_bjdata(const basic_json<...> &, detail::output_adapter<char>, const bool, const bool, const bjdata_version_t, const error_handler_t), nlohmann::basic_json::to_bjdata(const basic_json<...> &, detail::output_adapter<std::uint8_t>, const bool, const bool, const bjdata_version_t, const error_handler_t), nlohmann::basic_json::to_bon8(const basic_json<...> &, detail::output_adapter<char>), nlohmann::basic_json::to_bon8(const basic_json<...> &, detail::output_adapter<std::uint8_t>), nlohmann::basic_json::to_bson(const basic_json<...> &, detail::output_adapter<char>, const error_handler_t), nlohmann::basic_json::to_bson(const basic_json<...> &, detail::output_adapter<std::uint8_t>, const error_handler_t), nlohmann::basic_json::to_cbor(const basic_json<...> &, detail::output_adapter<char>, const error_handler_t), nlohmann::basic_json::to_cbor(const basic_json<...> &, detail::output_adapter<std::uint8_t>, const error_handler_t), nlohmann::basic_json::to_msgpack(const basic_json<...> &, detail::output_adapter<char>, const error_handler_t), nlohmann::basic_json::to_msgpack(const basic_json<...> &, detail::output_adapter<std::uint8_t>, const error_handler_t)
+- nlohmann::detail::binary_reader (private); reached from the public API through: nlohmann::basic_json::sax_parse(detail::span_input_adapter &&, SAX *, input_format_t, const bool, const bool, const bool, const cbor_tag_handler_t), nlohmann::basic_json::sax_parse(InputType &&, SAX *, input_format_t, const bool, const bool, const bool, const cbor_tag_handler_t), nlohmann::basic_json::sax_parse(IteratorType, SentinelType, SAX *, input_format_t, const bool, const bool, const bool, const cbor_tag_handler_t), nlohmann::basic_json::from_bson(detail::span_input_adapter &&, const bool, const bool), nlohmann::basic_json::from_cbor(detail::span_input_adapter &&, const bool, const bool, const cbor_tag_handler_t), nlohmann::basic_json::from_msgpack(detail::span_input_adapter &&, const bool, const bool), nlohmann::basic_json::from_ubjson(detail::span_input_adapter &&, const bool, const bool), nlohmann::basic_json::from_bjdata(InputType &&, const bool, const bool, const error_handler_t), nlohmann::basic_json::from_bon8(InputType &&, const bool, const bool), nlohmann::basic_json::from_bson(InputType &&, const bool, const bool, const error_handler_t)
+- nlohmann::detail::binary_writer (private); reached from the public API through: nlohmann::basic_json::to_bjdata(const basic_json<...> &, detail::output_adapter<char>, const bool, const bool, const bjdata_version_t, const error_handler_t), nlohmann::basic_json::to_bjdata(const basic_json<...> &, detail::output_adapter<std::uint8_t>, const bool, const bool, const bjdata_version_t, const error_handler_t), nlohmann::basic_json::to_bon8(const basic_json<...> &, detail::output_adapter<char>), nlohmann::basic_json::to_bon8(const basic_json<...> &, detail::output_adapter<std::uint8_t>), nlohmann::basic_json::to_bson(const basic_json<...> &, detail::output_adapter<char>, const error_handler_t), nlohmann::basic_json::to_bson(const basic_json<...> &, detail::output_adapter<std::uint8_t>, const error_handler_t), nlohmann::basic_json::to_cbor(const basic_json<...> &, detail::output_adapter<char>, const error_handler_t), nlohmann::basic_json::to_cbor(const basic_json<...> &, detail::output_adapter<std::uint8_t>, const error_handler_t), nlohmann::basic_json::to_msgpack(const basic_json<...> &, detail::output_adapter<char>, const error_handler_t), nlohmann::basic_json::to_msgpack(const basic_json<...> &, detail::output_adapter<std::uint8_t>, const error_handler_t)
+- nlohmann::detail::binary_reader::get_ubjson_size_type(std::pair<std::size_t, char_int_type> &, bool) (private); reached from the public API through: nlohmann::basic_json::sax_parse(detail::span_input_adapter &&, SAX *, input_format_t, const bool, const bool, const bool, const cbor_tag_handler_t), nlohmann::basic_json::sax_parse(InputType &&, SAX *, input_format_t, const bool, const bool, const bool, const cbor_tag_handler_t), nlohmann::basic_json::sax_parse(IteratorType, SentinelType, SAX *, input_format_t, const bool, const bool, const bool, const cbor_tag_handler_t), nlohmann::basic_json::from_bson(detail::span_input_adapter &&, const bool, const bool), nlohmann::basic_json::from_cbor(detail::span_input_adapter &&, const bool, const bool, const cbor_tag_handler_t), nlohmann::basic_json::from_msgpack(detail::span_input_adapter &&, const bool, const bool), nlohmann::basic_json::from_ubjson(detail::span_input_adapter &&, const bool, const bool), nlohmann::basic_json::from_bjdata(InputType &&, const bool, const bool, const error_handler_t), nlohmann::basic_json::from_bon8(InputType &&, const bool, const bool), nlohmann::basic_json::from_bson(InputType &&, const bool, const bool, const error_handler_t)
+- nlohmann::detail::binary_reader::get_ubjson_size_value(std::size_t &, bool &, char_int_type, char_int_type) (private); reached from the public API through: nlohmann::basic_json::sax_parse(detail::span_input_adapter &&, SAX *, input_format_t, const bool, const bool, const bool, const cbor_tag_handler_t), nlohmann::basic_json::sax_parse(InputType &&, SAX *, input_format_t, const bool, const bool, const bool, const cbor_tag_handler_t), nlohmann::basic_json::sax_parse(IteratorType, SentinelType, SAX *, input_format_t, const bool, const bool, const bool, const cbor_tag_handler_t), nlohmann::basic_json::from_bson(detail::span_input_adapter &&, const bool, const bool), nlohmann::basic_json::from_cbor(detail::span_input_adapter &&, const bool, const bool, const cbor_tag_handler_t), nlohmann::basic_json::from_msgpack(detail::span_input_adapter &&, const bool, const bool), nlohmann::basic_json::from_ubjson(detail::span_input_adapter &&, const bool, const bool), nlohmann::basic_json::from_bjdata(InputType &&, const bool, const bool, const error_handler_t), nlohmann::basic_json::from_bon8(InputType &&, const bool, const bool), nlohmann::basic_json::from_bson(InputType &&, const bool, const bool, const error_handler_t)
+- nlohmann::detail::binary_reader::get_ubjson_size_value(std::size_t &, bool &, char_int_type) (private); reached from the public API through: nlohmann::basic_json::sax_parse(detail::span_input_adapter &&, SAX *, input_format_t, const bool, const bool, const bool, const cbor_tag_handler_t), nlohmann::basic_json::sax_parse(InputType &&, SAX *, input_format_t, const bool, const bool, const bool, const cbor_tag_handler_t), nlohmann::basic_json::sax_parse(IteratorType, SentinelType, SAX *, input_format_t, const bool, const bool, const bool, const cbor_tag_handler_t), nlohmann::basic_json::from_bson(detail::span_input_adapter &&, const bool, const bool), nlohmann::basic_json::from_cbor(detail::span_input_adapter &&, const bool, const bool, const cbor_tag_handler_t), nlohmann::basic_json::from_msgpack(detail::span_input_adapter &&, const bool, const bool), nlohmann::basic_json::from_ubjson(detail::span_input_adapter &&, const bool, const bool), nlohmann::basic_json::from_bjdata(InputType &&, const bool, const bool, const error_handler_t), nlohmann::basic_json::from_bon8(InputType &&, const bool, const bool), nlohmann::basic_json::from_bson(InputType &&, const bool, const bool, const error_handler_t)
+
+## Diff of the library source (before -> after)
+```diff
+diff --git a/include/nlohmann/detail/input/binary_reader.hpp b/include/nlohmann/detail/input/binary_reader.hpp
+index 3b0e3b021..3dfff13b9 100644
+--- a/include/nlohmann/detail/input/binary_reader.hpp
++++ b/include/nlohmann/detail/input/binary_reader.hpp
+@@ -2716,10 +2716,15 @@ class binary_reader
+                                is_ndarray can only return `true` when its initial value
+                                is `false`
+     @param[in] prefix  type marker if already read, otherwise set to 0
++    @param[in] ndarray_dtype  the element type marker of the enclosing bjdata ndarray if
++                              already known (it precedes the dimension vector read here),
++                              otherwise 0; used to emit the "_ArrayType_" annotation key
++                              before "_ArraySize_" if a dimension vector turns out to
++                              describe an ndarray
+ 
+     @return whether size determination completed
+     */
+-    bool get_ubjson_size_value(std::size_t& result, bool& is_ndarray, char_int_type prefix = 0)
++    bool get_ubjson_size_value(std::size_t& result, bool& is_ndarray, char_int_type prefix = 0, char_int_type ndarray_dtype = 0)
+     {
+         if (prefix == 0)
+         {
+@@ -2832,8 +2837,34 @@ class binary_reader
+                         }
+                     }
+ 
++                    if (JSON_HEDLEY_UNLIKELY(!sax->start_object(3)))
++                    {
++                        return false;
++                    }
++
++                    // the element type precedes the dimension vector (see get_ubjson_size_type)
++                    // and is passed down as ndarray_dtype; emit it here so the annotation keys
++                    // follow the documented _ArrayType_, _ArraySize_, _ArrayData_ order
++                    if (ndarray_dtype != 0)
++                    {
++                        const char* type_name = bjd_type_name(ndarray_dtype);
++                        if (JSON_HEDLEY_UNLIKELY(type_name == nullptr))
++                        {
++                            auto last_token = get_token_string();
++                            return sax->parse_error(chars_read, last_token, parse_error::create(112, chars_read,
++                                                    exception_message("invalid byte: 0x" + last_token, "type"), nullptr));
++                        }
++
++                        string_t type_key = "_ArrayType_";
++                        string_t type = type_name; // sax->string() takes a reference
++                        if (JSON_HEDLEY_UNLIKELY(!sax->key(type_key) || !sax->string(type)))
++                        {
++                            return false;
++                        }
++                    }
++
+                     string_t key = "_ArraySize_";
+-                    if (JSON_HEDLEY_UNLIKELY(!sax->start_object(3) || !sax->key(key) || !sax->start_array(dim.size())))
++                    if (JSON_HEDLEY_UNLIKELY(!sax->key(key) || !sax->start_array(dim.size())))
+                     {
+                         return false;
+                     }
+@@ -2941,7 +2972,7 @@ class binary_reader
+                                         exception_message(concat("expected '#' after type information; last byte: 0x", last_token), "size"), nullptr));
+             }
+ 
+-            const bool is_error = get_ubjson_size_value(result.first, is_ndarray);
++            const bool is_error = get_ubjson_size_value(result.first, is_ndarray, 0, result.second);
+             // an ndarray was read here only if the flag flipped; when it was
+             // seeded true, get_ubjson_size_value() already rejected the nested
+             // dimension vector
+@@ -3134,27 +3165,17 @@ class binary_reader
+         if (input_format == input_format_t::bjdata && size_and_type.first != npos && (size_and_type.second & (1 << 8)) != 0)
+         {
+             size_and_type.second &= ~(static_cast<char_int_type>(1) << 8);  // use bit 8 to indicate ndarray, here we remove the bit to restore the type marker
+-            const char* type_name = bjd_type_name(size_and_type.second);
+-            string_t key = "_ArrayType_";
+-            if (JSON_HEDLEY_UNLIKELY(type_name == nullptr))
+-            {
+-                auto last_token = get_token_string();
+-                return sax->parse_error(chars_read, last_token, parse_error::create(112, chars_read,
+-                                        exception_message("invalid byte: 0x" + last_token, "type"), nullptr));
+-            }
+-
+-            string_t type = type_name; // sax->string() takes a reference
+-            if (JSON_HEDLEY_UNLIKELY(!sax->key(key) || !sax->string(type)))
+-            {
+-                return false;
+-            }
+ 
++            // the "_ArrayType_" and "_ArraySize_" annotation keys were already emitted by
++            // get_ubjson_size_value() (the type marker is known before the dimension vector
++            // that determines size_and_type.first is read, so it is emitted first there to
++            // match the documented _ArrayType_, _ArraySize_, _ArrayData_ key order)
+             if (size_and_type.second == 'C' || size_and_type.second == 'B')
+             {
+                 size_and_type.second = 'U';
+             }
+ 
+-            key = "_ArrayData_";
++            string_t key = "_ArrayData_";
+             if (JSON_HEDLEY_UNLIKELY(!sax->key(key) || !sax->start_array(size_and_type.first) ))
+             {
+                 return false;
+diff --git a/include/nlohmann/detail/output/binary_writer.hpp b/include/nlohmann/detail/output/binary_writer.hpp
+index c4adf47a6..d5290d2c7 100644
+--- a/include/nlohmann/detail/output/binary_writer.hpp
++++ b/include/nlohmann/detail/output/binary_writer.hpp
+@@ -1839,16 +1839,31 @@ class binary_writer
+ 
+     /*!
+     @brief validate (dry_run) or write one BJData ND-array element of dtype 'd' (single precision)
+-    @return whether @a el's value fits a float without overflow; always true when @a dry_run is false
++    @return whether @a el's value survives narrowing to float and back without any change
++            (so the ND-array round-trips exactly), or is infinite or NaN; always true when
++            @a dry_run is false
+     */
+     bool write_bjdata_ndarray_float_element(const BasicJsonType& el, const bool dry_run)
+     {
+         const auto dval = el.template get<double>();
+         if (dry_run)
+         {
+-            return !std::isfinite(dval) ||
+-                   (dval >= static_cast<double>(std::numeric_limits<float>::lowest()) &&
+-                    dval <= static_cast<double>((std::numeric_limits<float>::max)()));
++#ifdef __GNUC__
++            JSON_HEDLEY_DIAGNOSTIC_PUSH
++            JSON_HEDLEY_PRAGMA(GCC diagnostic ignored "-Wfloat-equal")
++#endif
++            // a value that would be rounded (rather than exactly represented) by the
++            // narrowing to float is treated like an out-of-range integer element; this
++            // is the same criterion write_compact_float() uses for CBOR/MessagePack
++            const bool in_range = std::isnan(dval) ||
++                                  (dval >= static_cast<double>(std::numeric_limits<float>::lowest()) &&
++                                   dval <= static_cast<double>((std::numeric_limits<float>::max)()) &&
++                                   static_cast<double>(static_cast<float>(dval)) == dval) ||
++                                  std::isinf(dval);
++#ifdef __GNUC__
++            JSON_HEDLEY_DIAGNOSTIC_POP
++#endif
++            return in_range;
+         }
+         write_number(static_cast<float>(dval), true);
+         return true;
+```
+
+## Existing upstream tests that call the changed code (for style and API usage)
+// Upstream tests at the PR's parent commit 367336c83 that use the changed code.
+// Names searched (test lines using each): sax_parse (0), from_bson (0), from_cbor (0), from_msgpack (0), from_ubjson (0), from_bjdata (0), from_bon8 (0), to_bjdata (0), to_bon8 (0), to_bson (0), to_cbor (0), to_msgpack (0), get_ubjson_array (0), write_bjdata_ndarray_float_element (0), binary_reader (2), binary_writer (0), get_ubjson_size_type (0), get_ubjson_size_value (0)
+
+// ---- tests/src/unit-bjdata.cpp:76-111  (uses: binary_reader)
+    SECTION("binary_reader BJData lookup tables")
+    {
+        // both lookups are static member functions
+        std::vector<std::uint8_t> const data;
+        using reader_t = nlohmann::detail::binary_reader<json, decltype(nlohmann::detail::input_adapter(data))>;
+
+        // the excluded optimized-type markers must match binary_writer's
+        // is_bjdata_excluded_type_marker(), which encodes the same 8 markers
+        for (const char marker :
+                {'[', '{', 'S', 'H', 'T', 'F', 'N', 'Z'
+                })
+        {
+            CHECK(reader_t::is_bjd_excluded_optimized_type(static_cast<unsigned char>(marker)));
+        }
+        for (const char marker :
+                {'U', 'i', 'u', 'I', 'm', 'l', 'M', 'L', 'd', 'D', 'C', 'B', 'x'
+                })
+        {
+            CHECK(!reader_t::is_bjd_excluded_optimized_type(static_cast<unsigned char>(marker)));
+        }
+
+        // every dtype marker must round-trip to its ND-array type name
+        const std::vector<std::pair<char, std::string>> types
+        {
+            {'B', "byte"}, {'C', "char"}, {'D', "double"}, {'I', "int16"},
+            {'L', "int64"}, {'M', "uint64"}, {'U', "uint8"}, {'d', "single"},
+            {'i', "int8"}, {'l', "int32"}, {'m', "uint32"}, {'u', "uint16"}
+        };
+        for (const auto& type : types)
+        {
+            const char* name = reader_t::bjd_type_name(static_cast<unsigned char>(type.first));
+            REQUIRE(name != nullptr);
+            CHECK(std::string(name) == type.second);
+        }
+        CHECK(reader_t::bjd_type_name(static_cast<unsigned char>('x')) == nullptr);
+    }
+
+# Task
+Write 20 test programs for this pull request. Return JSON with a "tests" array; each item has "name" (short snake_case), "intent" (one sentence: what behavior it probes) and "code" (the complete C++ program).

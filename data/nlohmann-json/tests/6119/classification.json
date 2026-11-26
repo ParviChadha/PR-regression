@@ -1,0 +1,68 @@
+{
+  "target": "nlohmann-json",
+  "pr": 6119,
+  "model": "gemini-3.5-flash-lite",
+  "prompt_sha256": "d137d29138936f4556c3023953d1bffd0bb1fd6573855ee7e0e920e9094e474c",
+  "results_sha256": "8487e2628b7bdb138a9c02e5032b011da54c5977f4016f89601c86919862f5e8",
+  "clusters": [
+    {
+      "id": "C1",
+      "status": "output_diff",
+      "failed_on": null,
+      "programs": [
+        "gen_01.cpp",
+        "gen_04.cpp",
+        "gen_06.cpp"
+      ],
+      "verdict": "intended",
+      "confidence": "high",
+      "reason": "The PR specifically changes BON8 parsing with strict=false to report parse_error.110 when a final string lacks 0xFF, rather than dropping the trailing bytes."
+    },
+    {
+      "id": "C2",
+      "status": "output_diff",
+      "failed_on": null,
+      "programs": [
+        "gen_05.cpp"
+      ],
+      "verdict": "intended",
+      "confidence": "high",
+      "reason": "When allow_exceptions=false, an error during parsing results in a discarded json value, which matches the new parse error introduced by this PR."
+    },
+    {
+      "id": "C3",
+      "status": "output_diff",
+      "failed_on": null,
+      "programs": [
+        "gen_22.cpp"
+      ],
+      "verdict": "intended",
+      "confidence": "high",
+      "reason": "The SAX parser propagates the new parse_error.110 when encountering an unterminated BON8 string even with strict=false."
+    }
+  ],
+  "clusters_not_shown": 0,
+  "counts": {
+    "same": 15,
+    "invalid": 0,
+    "flaky": 0,
+    "superseded": 2,
+    "missing": 0
+  },
+  "pr_verdict": {
+    "regression_candidate": false,
+    "unintended_clusters": []
+  },
+  "usage": {
+    "promptTokenCount": 4653,
+    "candidatesTokenCount": 220,
+    "totalTokenCount": 4873,
+    "promptTokensDetails": [
+      {
+        "modality": "TEXT",
+        "tokenCount": 4653
+      }
+    ],
+    "serviceTier": "standard"
+  }
+}

@@ -1,0 +1,409 @@
+[system]
+You write test programs that probe a C++ library for behavioral changes made by one pull request.
+Each program is compiled and run twice, once against the library before the change and once after, and the two
+outputs are compared. Your job is to produce programs whose output reveals whether the change altered behavior,
+including side effects the author did not intend.
+
+Rules for every program:
+- It is standalone: one file with its own int main(), compiled as C++17, printing results to stdout.
+- Use only the library's documented public API. Never include internal headers or use detail/impl namespaces,
+  private members or undocumented macros.
+- Do not judge results (no assert, no expected-value comparisons): just print what the library returns. Print
+  enough to make differences visible, one fact per line.
+- Output must be deterministic. Never print pointers or addresses, uninitialized data, the order of
+  hash-based containers, timings, thread ids, random values, file paths or environment data. Print floating point
+  values with an explicit precision. No input, files, network, threads, clocks or randomness.
+- Wrap calls that may throw in try/catch and print the exception's type and message, so an exception is an
+  observable result. Do not crash on purpose.
+- Aim at the code the diff changes. Prefer calls that compile against both the old and the new library; one or two
+  programs may use an API the PR adds. Cover ordinary inputs and edge cases (empty, minimum and maximum values,
+  boundaries, special values, nesting, unusual types) and also neighbouring behavior the change could disturb.
+- When the diff changes which types or inputs an API accepts or rejects (constraints, overloads, traits,
+  conversions), test it with the detection idiom (std::void_t or requires) and `if constexpr`, so the program
+  compiles against both versions, prints whether the expression is well-formed, and exercises it when it is.
+  Accepting an input is not enough: also use it through every entry point that should follow (const and
+  non-const, read, write, insert, erase, lookup, nested use), because a change that admits new inputs can leave
+  later code unable to handle them.
+- If the changed code is internal (a detail, impl or internal namespace, a trait, a helper), do not name it in the
+  program. Reach it through the public API that depends on it, using detection (as above) where needed.
+- Use the exact types and values the diff is about (the new trait's argument types, the new overload's
+  parameters), not stand-ins.
+- Spread the programs over distinct public entry points and overloads, one main idea per program. Do not write
+  several programs that only rename a type or change a literal.
+- Make the programs differ from each other: different inputs, different entry points, different features.
+
+Rules specific to this library:
+- Include the library with #include <nlohmann/json.hpp>. The public API is nlohmann::json (nlohmann::basic_json), nlohmann::ordered_json, json_pointer, json patch/merge_patch and the documented SAX and conversion interfaces. Never use the detail namespace.
+- It is a header-only library: nothing to link. Programs are compiled as C++17.
+- Print JSON values with dump() (compact) or dump(2). Keys of nlohmann::json objects print in sorted order, so output is deterministic; do not depend on insertion order except with ordered_json.
+
+[user]
+# Pull request #5758: Add with_*_t alias templates to create basic_json types with changed template parameters
+
+## Description
+Adds member alias templates to `basic_json` that create a `basic_json` type with one of its template parameters replaced, so you don't have to spell out all eleven:
+
+```cpp
+using my_json = nlohmann::json::with_string_t<my_string>;
+// instead of
+using my_json = nlohmann::basic_json<std::map, std::vector, my_string, bool, std::int64_t, std::uint64_t,
+                                     double, std::allocator, nlohmann::adl_serializer, std::vector<std::uint8_t>>;
+```
+
+Aliases: `with_object_t`, `with_array_t`, `with_string_t`, `with_boolean_t`, `with_integers_t<I, U>`, `with_float_t`, `with_allocator_t`, `with_json_serializer_t`, `with_binary_t`, `with_base_class_t`. Together they cover all template parameters. They are members, so they also work from `ordered_json` or any other specialization and keep its other parameters.
+
+This takes over #3898 by @barcode, which went stale. Their commit is included with them as author. On top of it, following the review in #3898:
+
+- `with_changed_*_t` is renamed to the shorter `with_*_t`.
+- The separate signed and unsigned integer aliases are merged into `with_integers_t<I, U>` (@gregmarr's suggestion), because the two are usually changed together.
+- New documentation page `api/basic_json/with_t.md` with an example, linked from the `basic_json` index and `mkdocs.yml`.
+- `std::is_same` tests for every alias in `unit-udt.cpp`, including one that checks `ordered_json::with_string_t` keeps `ordered_map`.
+- Tests and examples that spelled out the full parameter list now use the aliases.
+
+Supersedes #3898. Thanks @barcode!
+
+## Public API
+
+Only additions: ten new public member alias templates on `basic_json`. Nothing existing changes. No breaking changes.
+
+🤖 Generated with [Claude Code](https://claude.com/claude-code)
+
+## Commit message
+* Add helper types to make it easier to create a basic_json type with modified template parameters
+
+Signed-off-by: Niels Lohmann <mail@nlohmann.me>
+
+* Rename with_changed_*_t aliases to with_*_t and merge integer/unsigned aliases
+
+Per review discussion on #3898 between gregmarr and nlohmann:
+- rename with_changed_X_t to with_X_t for brevity
+- replace the separate with_changed_integer_t/with_changed_unsigned_t
+  aliases with a single with_integers_t<NumberIntegerType2, NumberUnsignedType2>
+- add @sa doc comment links for the upcoming documentation page
+
+Co-authored-by: Raphael Grimm <1005058+barcode@users.noreply.github.com>
+Signed-off-by: Niels Lohmann <mail@nlohmann.me>
+
+* Add documentation for the with_*_t member alias templates
+
+Add docs/mkdocs/docs/api/basic_json/with_t.md documenting with_object_t,
+with_array_t, with_string_t, with_boolean_t, with_integers_t, with_float_t,
+with_allocator_t, with_json_serializer_t, with_binary_t and with_base_class_t,
+with an accompanying example, and link the page from the basic_json member
+types list and the mkdocs navigation.
+
+Co-authored-by: Raphael Grimm <1005058+barcode@users.noreply.github.com>
+Signed-off-by: Niels Lohmann <mail@nlohmann.me>
+
+* Add tests for the with_*_t member alias templates
+
+Check with std::is_same that each with_*_t alias produces the expected
+basic_json type, and that with_string_t keeps nlohmann::ordered_map as
+the object type when used on ordered_json.
+
+Co-authored-by: Raphael Grimm <1005058+barcode@users.noreply.github.com>
+Signed-off-by: Niels Lohmann <mail@nlohmann.me>
+
+* Fix with_t nav entry and document chaining of the with_*_t aliases
+
+Indent the with_t entry in mkdocs.yml so it is listed under basic_json,
+explain that the aliases can be chained and work on ordered_json, and
+test both, including json::with_object_t<ordered_map> == ordered_json.
+
+Signed-off-by: Niels Lohmann <mail@nlohmann.me>
+
+* Add docset entry for basic_json::with_t
+
+Signed-off-by: Niels Lohmann <mail@nlohmann.me>
+
+--------
+[... truncated, 169 more characters]
+
+## Discussion before merge
+- gregmarr: Because this is a nested template type, these can chain.  This is not obvious and should probably be called out with an example.  Also, that it can start with `ordered_json` as well.
+
+```
+  using my_json = nlohmann::json::with_integers_t<int, unsigned int>::with_float_t<float>;
+```
+
+I did verify that  `nlohmann::json::with_object_t<nlohmann::ordered_map>` and `nlohmann::ordered_json` are the same type, as least as far as `typeid().name()` is concerned.  That's what I would expect.
+- nlohmann: Good point, thanks for checking. 8ab8fa934 adds a paragraph to `with_t.md` explaining that the aliases are members of every `basic_json` specialization (including `ordered_json`), so they can be chained:
+
+```cpp
+using my_json = nlohmann::json::with_integers_t<int, unsigned int>::with_float_t<float>;
+```
+
+It also notes that the order of chained aliases does not matter and that `json::with_object_t<nlohmann::ordered_map>` is `ordered_json`. These are now checked with `std::is_same` in `unit-udt.cpp` (both chaining orders, and `json` ↔ `ordered_json` in both directions).
+
+*(Written by Claude Code.)*
+- gregmarr: Seems weird that this isn't indented.  Intentional?
+- nlohmann: Not intentional, thanks — the entry ended up at the top level of `nav`. Fixed in 8ab8fa934.
+
+*(Written by Claude Code.)*
+
+## Changed functions (from changes.py)
+- nlohmann::basic_json (public)
+- nlohmann::basic_json::with_allocator_t (public)
+- nlohmann::basic_json::with_array_t (public)
+- nlohmann::basic_json::with_base_class_t (public)
+- nlohmann::basic_json::with_binary_t (public)
+- nlohmann::basic_json::with_boolean_t (public)
+- nlohmann::basic_json::with_float_t (public)
+- nlohmann::basic_json::with_integers_t (public)
+- nlohmann::basic_json::with_json_serializer_t (public)
+- nlohmann::basic_json::with_object_t (public)
+- nlohmann::basic_json::with_string_t (public)
+
+## Diff of the library source (before -> after)
+```diff
+diff --git a/include/nlohmann/json.hpp b/include/nlohmann/json.hpp
+index 8cf3f8397..4eeb326b8 100644
+--- a/include/nlohmann/json.hpp
++++ b/include/nlohmann/json.hpp
+@@ -226,6 +226,70 @@ class basic_json // NOLINT(cppcoreguidelines-special-member-functions,hicpp-spec
+     /// SAX interface type, see @ref nlohmann::json_sax
+     using json_sax_t = json_sax<basic_json>;
+ 
++    ////////////////////////////////////////////////////////////////////////////////
++    // utility templates to create a json type with different template parameters //
++    ////////////////////////////////////////////////////////////////////////////////
++
++    /// Json type using a different type for storing objects
++    /// @sa https://json.nlohmann.me/api/basic_json/with_t/
++    template<template<typename, typename, typename...> class ObjectType2>
++    using with_object_t = basic_json<ObjectType2, ArrayType, StringType, BooleanType,
++          NumberIntegerType, NumberUnsignedType, NumberFloatType, AllocatorType, JSONSerializer, BinaryType, CustomBaseClass>;
++
++    /// Json type using a different type for storing arrays
++    /// @sa https://json.nlohmann.me/api/basic_json/with_t/
++    template<template<typename, typename...> class ArrayType2>
++    using with_array_t =  basic_json<ObjectType, ArrayType2, StringType, BooleanType,
++          NumberIntegerType, NumberUnsignedType, NumberFloatType, AllocatorType, JSONSerializer, BinaryType, CustomBaseClass>;
++
++    /// Json type using a different type for storing strings
++    /// @sa https://json.nlohmann.me/api/basic_json/with_t/
++    template<class StringType2>
++    using with_string_t =  basic_json<ObjectType, ArrayType, StringType2, BooleanType,
++          NumberIntegerType, NumberUnsignedType, NumberFloatType, AllocatorType, JSONSerializer, BinaryType, CustomBaseClass>;
++
++    /// Json type using a different type for storing booleans
++    /// @sa https://json.nlohmann.me/api/basic_json/with_t/
++    template<class BooleanType2>
++    using with_boolean_t =  basic_json<ObjectType, ArrayType, StringType, BooleanType2,
++          NumberIntegerType, NumberUnsignedType, NumberFloatType, AllocatorType, JSONSerializer, BinaryType, CustomBaseClass>;
++
++    /// Json type using different types for storing signed and unsigned integers
++    /// @sa https://json.nlohmann.me/api/basic_json/with_t/
++    template<class NumberIntegerType2, class NumberUnsignedType2>
++    using with_integers_t =  basic_json<ObjectType, ArrayType, StringType, BooleanType,
++          NumberIntegerType2, NumberUnsignedType2, NumberFloatType, AllocatorType, JSONSerializer, BinaryType, CustomBaseClass>;
++
++    /// Json type using a different type for storing floating point numbers
++    /// @sa https://json.nlohmann.me/api/basic_json/with_t/
++    template<class NumberFloatType2>
++    using with_float_t =  basic_json<ObjectType, ArrayType, StringType, BooleanType,
++          NumberIntegerType, NumberUnsignedType, NumberFloatType2, AllocatorType, JSONSerializer, BinaryType, CustomBaseClass>;
++
++    /// Json type using a different type as base allocator
++    /// @sa https://json.nlohmann.me/api/basic_json/with_t/
++    template<template<typename> class AllocatorType2>
++    using with_allocator_t =  basic_json<ObjectType, ArrayType, StringType, BooleanType,
++          NumberIntegerType, NumberUnsignedType, NumberFloatType, AllocatorType2, JSONSerializer, BinaryType, CustomBaseClass>;
++
++    /// Json type using a different type as json serializer
++    /// @sa https://json.nlohmann.me/api/basic_json/with_t/
++    template<template<typename, typename = void> class JSONSerializer2>
++    using with_json_serializer_t =  basic_json<ObjectType, ArrayType, StringType, BooleanType,
++          NumberIntegerType, NumberUnsignedType, NumberFloatType, AllocatorType, JSONSerializer2, BinaryType, CustomBaseClass>;
++
++    /// Json type using a different type for storing binary data
++    /// @sa https://json.nlohmann.me/api/basic_json/with_t/
++    template<class BinaryType2>
++    using with_binary_t =  basic_json<ObjectType, ArrayType, StringType, BooleanType,
++          NumberIntegerType, NumberUnsignedType, NumberFloatType, AllocatorType, JSONSerializer, BinaryType2, CustomBaseClass>;
++
++    /// Json type using a different type as base class
++    /// @sa https://json.nlohmann.me/api/basic_json/with_t/
++    template<class CustomBaseClass2>
++    using with_base_class_t =  basic_json<ObjectType, ArrayType, StringType, BooleanType,
++          NumberIntegerType, NumberUnsignedType, NumberFloatType, AllocatorType, JSONSerializer, BinaryType, CustomBaseClass2>;
++
+     ////////////////
+     // exceptions //
+     ////////////////
+```
+
+## Existing upstream tests that call the changed code (for style and API usage)
+// Upstream tests at the PR's parent commit 69874e454 that use the changed code.
+// Names searched (test lines using each): basic_json (70), with_allocator_t (0), with_array_t (0), with_base_class_t (0), with_binary_t (0), with_boolean_t (0), with_float_t (0), with_integers_t (0), with_json_serializer_t (0), with_object_t (0), with_string_t (0)
+
+// ---- tests/src/unit-allocator.cpp:48-62  (uses: basic_json)
+    SECTION("bad_alloc")
+    {
+        // create JSON type using the throwing allocator
+        using bad_json = nlohmann::basic_json<std::map,
+              std::vector,
+              std::string,
+              bool,
+              std::int64_t,
+              std::uint64_t,
+              double,
+              bad_allocator>;
+
+        // creating an object should throw
+        CHECK_THROWS_AS(bad_json(bad_json::value_t::object), std::bad_alloc&);
+    }
+
+// ---- tests/src/unit-allocator.cpp:129-144  (uses: basic_json)
+TEST_CASE("controlled bad_alloc")
+{
+    // create JSON type using the throwing allocator
+    using my_json = nlohmann::basic_json<std::map,
+          std::vector,
+          std::string,
+          bool,
+          std::int64_t,
+          std::uint64_t,
+          double,
+          my_allocator>;
+
+    SECTION("class json_value")
+    {
+        SECTION("json_value(value_t)")
+        {
+
+// ---- tests/src/unit-alt-string.cpp:154-178  (uses: basic_json)
+
+  private:
+    std::string str_impl {}; // NOLINT(readability-redundant-member-init)
+
+    friend bool operator<(const char* /*op1*/, const alt_string& /*op2*/) noexcept;
+};
+
+void int_to_string(alt_string& target, std::size_t value)
+{
+    target = std::to_string(value).c_str();
+}
+
+using alt_json = nlohmann::basic_json <
+                 std::map,
+                 std::vector,
+                 alt_string,
+                 bool,
+                 std::int64_t,
+                 std::uint64_t,
+                 double,
+                 std::allocator,
+                 nlohmann::adl_serializer >;
+
+bool operator<(const char* op1, const alt_string& op2) noexcept
+{
+
+// ---- tests/src/unit-alt-string.cpp:427-460  (uses: basic_json)
+    SECTION("conversion between basic_json specializations (#2649)")
+    {
+        // explicit conversions are always possible
+        CHECK(std::is_constructible<nlohmann::json, alt_json>::value);
+        CHECK(std::is_constructible<alt_json, nlohmann::json>::value);
+        CHECK(std::is_constructible<nlohmann::json, nlohmann::ordered_json>::value);
+        CHECK(std::is_constructible<nlohmann::ordered_json, nlohmann::json>::value);
+
+        // specializations with the same string type are implicitly convertible
+        CHECK(std::is_convertible<nlohmann::ordered_json, nlohmann::json>::value);
+        CHECK(std::is_convertible<nlohmann::json, nlohmann::ordered_json>::value);
+
+        // specializations with different string types are only implicitly convertible
+        // if implicit conversions are enabled
+#if JSON_USE_IMPLICIT_CONVERSIONS
+        CHECK(std::is_convertible<alt_json, nlohmann::json>::value);
+        CHECK(std::is_convertible<nlohmann::json, alt_json>::value);
+#else
+        CHECK_FALSE(std::is_convertible<alt_json, nlohmann::json>::value);
+        CHECK_FALSE(std::is_convertible<nlohmann::json, alt_json>::value);
+#endif
+
+        // get<BasicJsonType>() works in either case
+        const nlohmann::json j = {{"foo", 1}, {"bar", true}};
+        CHECK(j.get<nlohmann::ordered_json>() == nlohmann::ordered_json(j));
+        // (only a number is converted here, as objects and strings are affected by #3425)
+        CHECK(nlohmann::json(42).get<alt_json>() == 42);
+        CHECK(alt_json(nlohmann::json(42)) == 42);
+
+        // get_to() also works in either case
+        alt_json a;
+        nlohmann::json(42).get_to(a);
+        CHECK(a == 42);
+    }
+
+// ---- tests/src/unit-assert_macro.cpp:30-43  (uses: basic_json)
+    SECTION("basic_json(first, second)")
+    {
+        assert_counter = 0;
+        CHECK(assert_counter == 0);
+
+        const json::iterator it{};
+        json j;
+
+        // in case assertions do not abort execution, an exception is thrown
+        CHECK_THROWS_WITH_AS(json(it, j.end()), "[json.exception.invalid_iterator.201] iterators are not compatible", json::invalid_iterator);
+
+        // check that assertion actually happened
+        CHECK(assert_counter == 1);
+    }
+
+// ---- tests/src/unit-binary_formats.cpp:226-250  (uses: basic_json)
+        CHECK((100.0 * double(msgpack_size) / double(json_size)) == Approx(87.158));
+        CHECK((100.0 * double(ubjson_1_size) / double(json_size)) == Approx(88.153));
+        CHECK((100.0 * double(ubjson_2_size) / double(json_size)) == Approx(89.264));
+        CHECK((100.0 * double(ubjson_3_size) / double(json_size)) == Approx(89.450));
+    }
+}
+
+namespace
+{
+// the binary formats as function pointers for "Binary formats with narrow number types";
+// named functions rather than lambdas, because clang 3.5 cannot convert a lambda
+// to a function pointer in the braced initializer of the format table
+using narrow_json = nlohmann::basic_json<std::map, std::vector, std::string, bool, std::int32_t, std::uint32_t, float>;
+using bytes = std::vector<std::uint8_t>;
+
+bytes encode_cbor(const json& j)
+{
+    return json::to_cbor(j);
+}
+narrow_json decode_cbor(const bytes& v, bool allow_exceptions)
+{
+    return narrow_json::from_cbor(v, true, allow_exceptions);
+}
+
+bytes encode_msgpack(const json& j)
+
+// ---- tests/src/unit-bson.cpp:37-61  (uses: basic_json)
+class huge_binary_t : public std::vector<std::uint8_t>
+{
+  public:
+    using std::vector<std::uint8_t>::vector;
+
+    size_type size() const noexcept // NOLINT(readability-convert-member-functions-to-static)
+    {
+        // one byte more than the BSON length field can represent
+        return static_cast<size_type>((std::numeric_limits<std::int32_t>::max)()) + 1;
+    }
+};
+
+using huge_binary_json = nlohmann::basic_json <
+                         std::map, std::vector, std::string, bool, std::int64_t, std::uint64_t,
+                         double, std::allocator, nlohmann::adl_serializer, huge_binary_t, void >;
+
+// a string type that can be made to report a size beyond INT32_MAX without
+// allocating that much memory, so BSON length overflow can be tested for
+// strings and (embedded) documents as well, following the same idea as
+// huge_binary_t.
+//
+// Unlike huge_binary_t (which is only ever used as the BSON *value* type),
+// this type doubles as basic_json's StringType and is therefore also used
+// for *object keys* (e.g. "s" or "nested" below). Only the designated test
+// value is meant to lie about its size - if every huge_string_t (including
+
+# Task
+Write 20 test programs for this pull request. Return JSON with a "tests" array; each item has "name" (short snake_case), "intent" (one sentence: what behavior it probes) and "code" (the complete C++ program).

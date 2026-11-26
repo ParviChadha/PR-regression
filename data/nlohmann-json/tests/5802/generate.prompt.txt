@@ -1,0 +1,123 @@
+[system]
+You write test programs that probe a C++ library for behavioral changes made by one pull request.
+Each program is compiled and run twice, once against the library before the change and once after, and the two
+outputs are compared. Your job is to produce programs whose output reveals whether the change altered behavior,
+including side effects the author did not intend.
+
+Rules for every program:
+- It is standalone: one file with its own int main(), compiled as C++17, printing results to stdout.
+- Use only the library's documented public API. Never include internal headers or use detail/impl namespaces,
+  private members or undocumented macros.
+- Do not judge results (no assert, no expected-value comparisons): just print what the library returns. Print
+  enough to make differences visible, one fact per line.
+- Output must be deterministic. Never print pointers or addresses, uninitialized data, the order of
+  hash-based containers, timings, thread ids, random values, file paths or environment data. Print floating point
+  values with an explicit precision. No input, files, network, threads, clocks or randomness.
+- Wrap calls that may throw in try/catch and print the exception's type and message, so an exception is an
+  observable result. Do not crash on purpose.
+- Aim at the code the diff changes. Prefer calls that compile against both the old and the new library; one or two
+  programs may use an API the PR adds. Cover ordinary inputs and edge cases (empty, minimum and maximum values,
+  boundaries, special values, nesting, unusual types) and also neighbouring behavior the change could disturb.
+- When the diff changes which types or inputs an API accepts or rejects (constraints, overloads, traits,
+  conversions), test it with the detection idiom (std::void_t or requires) and `if constexpr`, so the program
+  compiles against both versions, prints whether the expression is well-formed, and exercises it when it is.
+  Accepting an input is not enough: also use it through every entry point that should follow (const and
+  non-const, read, write, insert, erase, lookup, nested use), because a change that admits new inputs can leave
+  later code unable to handle them.
+- If the changed code is internal (a detail, impl or internal namespace, a trait, a helper), do not name it in the
+  program. Reach it through the public API that depends on it, using detection (as above) where needed.
+- Use the exact types and values the diff is about (the new trait's argument types, the new overload's
+  parameters), not stand-ins.
+- Spread the programs over distinct public entry points and overloads, one main idea per program. Do not write
+  several programs that only rename a type or change a literal.
+- Make the programs differ from each other: different inputs, different entry points, different features.
+
+Rules specific to this library:
+- Include the library with #include <nlohmann/json.hpp>. The public API is nlohmann::json (nlohmann::basic_json), nlohmann::ordered_json, json_pointer, json patch/merge_patch and the documented SAX and conversion interfaces. Never use the detail namespace.
+- It is a header-only library: nothing to link. Programs are compiled as C++17.
+- Print JSON values with dump() (compact) or dump(2). Keys of nlohmann::json objects print in sorted order, so output is deterministic; do not depend on insertion order except with ordered_json.
+
+[user]
+# Pull request #5802: Throw type_error.321 for discarded values in to_bon8
+
+## Description
+`to_bon8` silently skipped discarded values, but the count marker of small arrays and objects (`0x80+N` / `0x86+N`) still counted them, so the output was malformed BON8:
+
+| Input | Before | After |
+|---|---|---|
+| `[1, discarded]` | `82 91` (marker announces 2 elements, 1 follows) | `type_error.321` |
+| `{"a": discarded}` | `87 61 FF` (key without value) | `type_error.321` |
+| discarded at top level | empty output | `type_error.321` |
+
+`write_bon8_value` now calls `throw_on_discarded`, like the CBOR, MessagePack, UBJSON, BJData, and BSON writers.
+
+- tests in `unit-bon8.cpp` for discarded values at top level and nested in small/large arrays and objects
+- `to_bon8.md` and the `type_error.321` entry in `exceptions.md` document the exception
+
+BON8 support is not in any release yet (#2998), so this bug never shipped.
+
+## Breaking changes
+
+None. BON8 is unreleased; `to_bon8` now throws `type_error.321` where it previously produced invalid output.
+
+This PR was prepared by Claude Code.
+
+🤖 Generated with [Claude Code](https://claude.com/claude-code)
+
+## Commit message
+write_bon8_value silently skipped discarded values, but the array/object
+count marker still counted them, so [1, discarded] produced 82 91: a marker
+announcing two elements followed by one. Throw type_error.321 like the other
+binary writers do, at any nesting level.
+
+Signed-off-by: Niels Lohmann <mail@nlohmann.me>
+
+## Discussion before merge
+- gregmarr: Should this only be for `discarded`, or also `default`?  Should there be a different error for "unexpected type"?
+- gregmarr: Should this only be for `discarded`, or also `default`?  Should there be a different error for "unexpected type"?
+- nlohmann: `default` is unreachable here: the switch handles every `value_t` enumerator (null, object, array, string, boolean, the three number types, binary, discarded), so it's only there to satisfy `-Wswitch-default`/clang-tidy. Folding it into the `discarded` case matches the CBOR, MessagePack and UBJSON/BJData writers. A dedicated "unexpected type" error would be dead code with no way to test it, so I'd rather keep the writers consistent.
+
+---
+_Generated by [Claude Code](https://claude.ai/code)_
+- gregmarr: Makes sense.
+
+## Changed functions (from changes.py)
+- nlohmann::detail::binary_writer (private); reached from the public API through: nlohmann::basic_json::to_bjdata(const basic_json<...> &, detail::output_adapter<char>, const bool, const bool, const bjdata_version_t, const error_handler_t), nlohmann::basic_json::to_bjdata(const basic_json<...> &, detail::output_adapter<std::uint8_t>, const bool, const bool, const bjdata_version_t, const error_handler_t), nlohmann::basic_json::to_bon8(const basic_json<...> &, detail::output_adapter<char>), nlohmann::basic_json::to_bon8(const basic_json<...> &, detail::output_adapter<std::uint8_t>), nlohmann::basic_json::to_bson(const basic_json<...> &, detail::output_adapter<char>, const error_handler_t), nlohmann::basic_json::to_bson(const basic_json<...> &, detail::output_adapter<std::uint8_t>, const error_handler_t), nlohmann::basic_json::to_cbor(const basic_json<...> &, detail::output_adapter<char>, const error_handler_t), nlohmann::basic_json::to_cbor(const basic_json<...> &, detail::output_adapter<std::uint8_t>, const error_handler_t), nlohmann::basic_json::to_msgpack(const basic_json<...> &, detail::output_adapter<char>, const error_handler_t), nlohmann::basic_json::to_msgpack(const basic_json<...> &, detail::output_adapter<std::uint8_t>, const error_handler_t)
+- nlohmann::detail::binary_writer::write_bon8_value(const BasicJsonType &, bool &) (private); reached from the public API through: nlohmann::basic_json::to_bjdata(const basic_json<...> &, detail::output_adapter<char>, const bool, const bool, const bjdata_version_t, const error_handler_t), nlohmann::basic_json::to_bjdata(const basic_json<...> &, detail::output_adapter<std::uint8_t>, const bool, const bool, const bjdata_version_t, const error_handler_t), nlohmann::basic_json::to_bon8(const basic_json<...> &, detail::output_adapter<char>), nlohmann::basic_json::to_bon8(const basic_json<...> &, detail::output_adapter<std::uint8_t>), nlohmann::basic_json::to_bson(const basic_json<...> &, detail::output_adapter<char>, const error_handler_t), nlohmann::basic_json::to_bson(const basic_json<...> &, detail::output_adapter<std::uint8_t>, const error_handler_t), nlohmann::basic_json::to_cbor(const basic_json<...> &, detail::output_adapter<char>, const error_handler_t), nlohmann::basic_json::to_cbor(const basic_json<...> &, detail::output_adapter<std::uint8_t>, const error_handler_t), nlohmann::basic_json::to_msgpack(const basic_json<...> &, detail::output_adapter<char>, const error_handler_t), nlohmann::basic_json::to_msgpack(const basic_json<...> &, detail::output_adapter<std::uint8_t>, const error_handler_t)
+
+## Diff of the library source (before -> after)
+```diff
+diff --git a/include/nlohmann/detail/output/binary_writer.hpp b/include/nlohmann/detail/output/binary_writer.hpp
+index cbe771ee8..59a643edf 100644
+--- a/include/nlohmann/detail/output/binary_writer.hpp
++++ b/include/nlohmann/detail/output/binary_writer.hpp
+@@ -809,6 +809,8 @@ class binary_writer
+ 
+     /*!
+     @param[in] j  JSON value to serialize
++
++    @throw type_error.321 if @a j or a value nested in it is discarded
+     */
+     void write_bon8(const BasicJsonType& j)
+     {
+@@ -2570,6 +2572,8 @@ class binary_writer
+     @param[in] j                JSON value to serialize
+     @param[in,out] string_open  whether the output ends with a non-empty
+                                 string that has not been terminated with 0xFF
++
++    @throw type_error.321 if @a j or a value nested in it is discarded
+     */
+     void write_bon8_value(const BasicJsonType& j, bool& string_open)
+     {
+@@ -2678,7 +2682,7 @@ class binary_writer
+ 
+             case value_t::discarded:
+             default:
+-                break;
++                throw_on_discarded(j, "BON8");
+         }
+     }
+```
+
+# Task
+Write 20 test programs for this pull request. Return JSON with a "tests" array; each item has "name" (short snake_case), "intent" (one sentence: what behavior it probes) and "code" (the complete C++ program).

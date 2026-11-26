@@ -1,0 +1,598 @@
+[system]
+You write test programs that probe a C++ library for behavioral changes made by one pull request.
+Each program is compiled and run twice, once against the library before the change and once after, and the two
+outputs are compared. Your job is to produce programs whose output reveals whether the change altered behavior,
+including side effects the author did not intend.
+
+Rules for every program:
+- It is standalone: one file with its own int main(), compiled as C++17, printing results to stdout.
+- Use only the library's documented public API. Never include internal headers or use detail/impl namespaces,
+  private members or undocumented macros.
+- Do not judge results (no assert, no expected-value comparisons): just print what the library returns. Print
+  enough to make differences visible, one fact per line.
+- Output must be deterministic. Never print pointers or addresses, uninitialized data, the order of
+  hash-based containers, timings, thread ids, random values, file paths or environment data. Print floating point
+  values with an explicit precision. No input, files, network, threads, clocks or randomness.
+- Wrap calls that may throw in try/catch and print the exception's type and message, so an exception is an
+  observable result. Do not crash on purpose.
+- Aim at the code the diff changes. Prefer calls that compile against both the old and the new library; one or two
+  programs may use an API the PR adds. Cover ordinary inputs and edge cases (empty, minimum and maximum values,
+  boundaries, special values, nesting, unusual types) and also neighbouring behavior the change could disturb.
+- When the diff changes which types or inputs an API accepts or rejects (constraints, overloads, traits,
+  conversions), test it with the detection idiom (std::void_t or requires) and `if constexpr`, so the program
+  compiles against both versions, prints whether the expression is well-formed, and exercises it when it is.
+  Accepting an input is not enough: also use it through every entry point that should follow (const and
+  non-const, read, write, insert, erase, lookup, nested use), because a change that admits new inputs can leave
+  later code unable to handle them.
+- If the changed code is internal (a detail, impl or internal namespace, a trait, a helper), do not name it in the
+  program. Reach it through the public API that depends on it, using detection (as above) where needed.
+- Use the exact types and values the diff is about (the new trait's argument types, the new overload's
+  parameters), not stand-ins.
+- Spread the programs over distinct public entry points and overloads, one main idea per program. Do not write
+  several programs that only rename a type or change a literal.
+- Make the programs differ from each other: different inputs, different entry points, different features.
+
+Rules specific to this library:
+- Include the library with #include <nlohmann/json.hpp>. The public API is nlohmann::json (nlohmann::basic_json), nlohmann::ordered_json, json_pointer, json patch/merge_patch and the documented SAX and conversion interfaces. Never use the detail namespace.
+- It is a header-only library: nothing to link. Programs are compiled as C++17.
+- Print JSON values with dump() (compact) or dump(2). Keys of nlohmann::json objects print in sorted order, so output is deterministic; do not depend on insertion order except with ordered_json.
+
+[user]
+# Pull request #5840: Make the value lifecycle inline-friendly
+
+## Description
+## Summary
+
+Clang's `-Rpass-missed=inline` showed that `json_value::destroy`, the copy constructor and scalar comparisons are never inlined (about 380 call sites), even for scalars. This PR keeps the scalar path inline and moves the owning/general paths into never-inlined helpers:
+
+- `destroy(value_t)`: inline "owns memory?" test, work in `destroy_owned()`
+- copy constructor: inline union copy for null/bool/numbers/discarded, `copy_owning()` otherwise (nesting guard unchanged)
+- `==`, `<` (C++11–17) and `==`, `<=>` (C++20): inline same-type scalar fast path (`JSON_IMPLEMENT_SCALAR_FAST`); the old bodies move to `equal_general`, `less_general`, `three_way_general`. The same-type scalar cases are shared with `JSON_IMPLEMENT_OPERATOR` via `JSON_IMPLEMENT_SCALAR_CASES`, with every `value_t` enumerator still listed (`-Wswitch-enum`). Mixed types, NaN, discarded and `JSON_USE_LEGACY_DISCARDED_VALUE_COMPARISON` still take the general path
+- `json_value(value_t)`: allocating cases in `init_owned()`
+
+Coordination: only the `destroy()` dispatch is touched, so it merges cleanly with #5835 (`destroy_container`).
+
+## Numbers (ns/op unless noted, best of 9, -O2, Apple clang 21 / GCC 16.2)
+
+| benchmark | clang before | clang after | GCC before | GCC after |
+|---|---|---|---|---|
+| `json j = 42` | 1.31 | 0.48 | 0.66 | 0.58 |
+| scalar copy | 2.90 | 1.01 | 2.16 | 0.90 |
+| `j == 5` | 3.55 | 0.65 | 2.27 | 0.64 |
+| `j < 3.0` | 3.54 | 0.65 | 2.59 | 0.64 |
+| `vector<json>` 1M ints build+destroy (ms) | 3.53 | 1.06 | 1.36 | 1.16 |
+| canada copy+destroy (ms) | 3.19 | 2.90 | 3.53 | 3.29 |
+| canada `==` (µs) | 540 | 459 | 601 | 639 |
+| citm `==` (µs) | 300 | 301 | 363 | 388 |
+| canada parse (ms) | 9.23 | 8.94 | 9.26 | 8.85 |
+
+Caveats: with GCC, `==` on large documents is ~7 % slower. A scalar move-then-reassign loop shows +8 % on GCC (1.63 → 1.75 ns); GCC emits the same `strb`+`str` → `ldp` sequence in the base, so this is a pre-existing store-forwarding pattern that is merely more visible once the rest of the loop gets cheaper. Code size on a probe TU grows by 13 % at -O2 and 6 % at -Os.
+
+## Testing
+
+New tests: `unit-comparison.cpp` ("comparison of scalars (inline fast path)": same/mixed number types incl. negative vs. unsigned, bool/null, string vs. number, NaN incl. `<=>`, discarded, scalar overloads) and `unit-constructor2.cpp` (copy of scalar vs. string/array/object/binary then mutate, `vector<json>` of mixed types).
+
+
+Full ctest (146 tests, ASan+UBSan, clang) passes. Additionally unit-comparison with `-std=c++11/20` and with `JSON_USE_LEGACY_DISCARDED_VALUE_COMPARISON`, unit-diagnostics and regression2 with `JSON_DIAGNOSTICS=1`. No new `-Weverything` warnings. `make amalgamate` run.
+
+## Breaking changes
+
+None. No public API, ABI tag or behaviour changes; the new helpers are private.
+
+🤖 Generated with [Claude Code](https://claude.com/claude-code)
+
+## Commit message
+* Make the value lifecycle inline-friendly
+
+Signed-off-by: Niels Lohmann <mail@nlohmann.me>
+
+* Compare standard containers without a thread-local depth count
+
+operator== on objects and arrays recursed through the containers' own
+operator== and counted the depth in a thread-local variable. Where reading a
+thread-local costs a call (macOS), that added about 10% to comparing documents
+with many small containers. For the standard containers, walk objects and
+arrays directly, compare scalars and strings inline, and pass the depth as an
+argument, falling back to compare_iteratively beyond the depth limit. Other
+container types keep the previous path.
+
+Signed-off-by: Niels Lohmann <mail@nlohmann.me>
+
+* Address review: owns_memory() helper, leaf compare naming, astyle
+
+- Add detail::owns_memory(value_t), a switch listing every enumerator so
+  -Wswitch-enum flags it when a type is added; destroy() and the copy
+  constructor use it instead of hand-written comparisons. Clang emits the
+  same bitmask test as before.
+- Drop the parentheses around the scalar operands in
+  JSON_IMPLEMENT_SCALAR_CASES; they are only needed for the container
+  operands (#1530), which the comment now says.
+- Build equal_bounded_containers from detail::conjunction so astyle no
+  longer pads the template brackets.
+- Rename equal_scalar() to equal_leaf() and document why it also compares
+  strings, unlike JSON_IMPLEMENT_SCALAR_FAST.
+
+Signed-off-by: Niels Lohmann <mail@nlohmann.me>
+
+---------
+
+Signed-off-by: Niels Lohmann <mail@nlohmann.me>
+
+## Discussion before merge
+- nlohmann: Written by Claude Code on behalf of @nlohmann. Changes since the approval (047c7ea01):
+
+- **Shared macro:** the same-type scalar cases now live in one sub-macro, `JSON_IMPLEMENT_SCALAR_CASES`, used by both `JSON_IMPLEMENT_OPERATOR` and `JSON_IMPLEMENT_SCALAR_FAST`. All enumerators stay listed. Clean with the CI flag sets (`-Weverything` for clang, the full `gcc_flags.cmake` list for GCC 16) in C++11/17/20. Timings are unchanged: best of 15, alternating builds, Apple clang and GCC 16, -O2. `j==5` ≈ 183 ms vs 185 ms (clang) and 180 vs 193 ms (GCC); `==`/`<` on scalars and `==` on canada.json are within noise on both.
+- **Placement:** `copy_owning`, `equal_general`, `less_general` and `three_way_general` moved into the existing private sections, so no `private:`/`public:` toggles remain in the middle of the public API. No public declaration moved.
+- **Tests:** scalar comparison (number types incl. negative vs. unsigned, bool/null, string vs. number, NaN incl. `<=>`, discarded, scalar overloads) and copy/destroy of every value type (including a `vector<json>` of mixed types).
+
+Ran unit-comparison (C++11/20), unit-constructor1/2, unit-diagnostics with `JSON_DIAGNOSTICS=1` and unit-alloc
+[... truncated, 65 more characters]
+- gregmarr: Will this result in a warning about an incomplete switch?
+- nlohmann: Good catch, and yes: GCC's `-Wswitch-enum` (enabled in `cmake/gcc_flags.cmake`) warns about unlisted enumerators even with a `default:` label. I had dropped the explicit cases to silence clang's `-Wcovered-switch-default`, which is already disabled in `cmake/clang_flags.cmake`. The enumerators are listed again in 1 new commit; with that, `-Wswitch`/`-Wswitch-enum`/`-Wswitch-default` give no warnings for GCC 16 or clang. (Written by Claude Code on behalf of @nlohmann.)
+- gregmarr: How does this performance compare to a `switch` that will cause an error if a new `value_t` value is added and this isn't checked?
+- gregmarr: Same as https://github.com/nlohmann/json/pull/5840/changes#r4285361101
+- gregmarr: https://github.com/nlohmann/json/pull/5840/changes#r4285361101
+
+## Changed functions (from changes.py)
+- nlohmann::basic_json::json_value::json_value(value_t) (private); reached from the public API through: nlohmann::operator<<(std::ostream &, const basic_json<...> &), nlohmann::operator<<(basic_json<...> &, std::istream &), nlohmann::operator>>(std::istream &, basic_json<...> &), nlohmann::operator>>(const basic_json<...> &, std::ostream &), nlohmann::format_as(const basic_json<...> &), nlohmann::to_string(const basic_json<...> &), nlohmann::operator!=(const_reference, ScalarType), nlohmann::operator!=(ScalarType, const_reference), nlohmann::operator<(const_reference, ScalarType), nlohmann::operator<(ScalarType, const_reference)
+- nlohmann::basic_json::json_value (private); reached from the public API through: nlohmann::operator<<(std::ostream &, const basic_json<...> &), nlohmann::operator<<(basic_json<...> &, std::istream &), nlohmann::operator>>(std::istream &, basic_json<...> &), nlohmann::operator>>(const basic_json<...> &, std::ostream &), nlohmann::format_as(const basic_json<...> &), nlohmann::to_string(const basic_json<...> &), nlohmann::operator!=(const_reference, ScalarType), nlohmann::operator!=(ScalarType, const_reference), nlohmann::operator<(const_reference, ScalarType), nlohmann::operator<(ScalarType, const_reference)
+- nlohmann::basic_json::json_value::destroy(value_t) (private); reached from the public API through: nlohmann::operator<<(std::ostream &, const basic_json<...> &), nlohmann::operator<<(basic_json<...> &, std::istream &), nlohmann::operator>>(std::istream &, basic_json<...> &), nlohmann::operator>>(const basic_json<...> &, std::ostream &), nlohmann::format_as(const basic_json<...> &), nlohmann::to_string(const basic_json<...> &), nlohmann::operator!=(const_reference, ScalarType), nlohmann::operator!=(ScalarType, const_reference), nlohmann::operator<(const_reference, ScalarType), nlohmann::operator<(ScalarType, const_reference)
+- nlohmann::basic_json::equal_structured(const_reference, const_reference, std::size_t) (private); reached from the public API through: nlohmann::operator==(const_reference, const_reference)
+- nlohmann::basic_json::equal_leaf(const_reference, const_reference) (private); reached from the public API through: nlohmann::operator==(const_reference, const_reference)
+- nlohmann::basic_json::json_value::init_owned(value_t) (private); reached from the public API through: nlohmann::operator<<(std::ostream &, const basic_json<...> &), nlohmann::operator<<(basic_json<...> &, std::istream &), nlohmann::operator>>(std::istream &, basic_json<...> &), nlohmann::operator>>(const basic_json<...> &, std::ostream &), nlohmann::format_as(const basic_json<...> &), nlohmann::to_string(const basic_json<...> &), nlohmann::operator!=(const_reference, ScalarType), nlohmann::operator!=(ScalarType, const_reference), nlohmann::operator<(const_reference, ScalarType), nlohmann::operator<(ScalarType, const_reference)
+- nlohmann::detail::owns_memory(const value_t) (private); reached from the public API through: nlohmann::basic_json::basic_json<...>(const basic_json<...> &), nlohmann::operator<<(std::ostream &, const basic_json<...> &), nlohmann::operator<<(basic_json<...> &, std::istream &), nlohmann::operator>>(std::istream &, basic_json<...> &), nlohmann::operator>>(const basic_json<...> &, std::ostream &), nlohmann::format_as(const basic_json<...> &), nlohmann::to_string(const basic_json<...> &), nlohmann::operator!=(const_reference, ScalarType), nlohmann::operator!=(ScalarType, const_reference), nlohmann::operator<(const_reference, ScalarType)
+- nlohmann::basic_json::copy_owning(const basic_json<...> &) (private); reached from the public API through: nlohmann::basic_json::basic_json<...>(const basic_json<...> &)
+- nlohmann::basic_json::equal_general(const_reference, const_reference) (private); reached from the public API through: nlohmann::operator==(const_reference, const_reference)
+- nlohmann::basic_json::less_general(const_reference, const_reference) (private); reached from the public API through: nlohmann::operator<(const_reference, const_reference)
+- nlohmann::basic_json::equal_bounded(const_reference, const_reference, std::size_t) (private); reached from the public API through: nlohmann::operator==(const_reference, const_reference)
+- nlohmann::basic_json::equal_dispatch(const_reference, const_reference, std::false_type) (private); reached from the public API through: nlohmann::operator==(const_reference, const_reference)
+- nlohmann::basic_json::equal_dispatch(const_reference, const_reference, std::true_type) (private); reached from the public API through: nlohmann::operator==(const_reference, const_reference)
+- nlohmann::basic_json::standard_object_t (private); reached from the public API through: nlohmann::operator==(const_reference, const_reference)
+- nlohmann::basic_json::equal_bounded_containers (private); reached from the public API through: nlohmann::operator==(const_reference, const_reference)
+- nlohmann::basic_json::json_value::destroy_owned(value_t) (private); reached from the public API through: nlohmann::operator<<(std::ostream &, const basic_json<...> &), nlohmann::operator<<(basic_json<...> &, std::istream &), nlohmann::operator>>(std::istream &, basic_json<...> &), nlohmann::operator>>(const basic_json<...> &, std::ostream &), nlohmann::format_as(const basic_json<...> &), nlohmann::to_string(const basic_json<...> &), nlohmann::operator!=(const_reference, ScalarType), nlohmann::operator!=(ScalarType, const_reference), nlohmann::operator<(const_reference, ScalarType), nlohmann::operator<(ScalarType, const_reference)
+- nlohmann::basic_json::standard_array_t (private); reached from the public API through: nlohmann::operator==(const_reference, const_reference)
+- nlohmann::basic_json (public)
+- nlohmann::basic_json::basic_json<...>(const basic_json<...> &) (public)
+- nlohmann::operator<(const_reference, const_reference) (public)
+- nlohmann::operator==(const_reference, const_reference) (public)
+- JSON_IMPLEMENT_SCALAR_FAST
+- JSON_IMPLEMENT_SCALAR_CASES
+- JSON_IMPLEMENT_OPERATOR
+- JSON_IMPLEMENT_OPERATOR
+
+## Diff of the library source (before -> after)
+```diff
+diff --git a/include/nlohmann/detail/value_t.hpp b/include/nlohmann/detail/value_t.hpp
+index 9fc217bcc..cda0facd2 100644
+--- a/include/nlohmann/detail/value_t.hpp
++++ b/include/nlohmann/detail/value_t.hpp
+@@ -117,6 +117,34 @@ inline bool operator<(const value_t lhs, const value_t rhs) noexcept
+ }
+ #endif
+ 
++/*!
++@brief whether a value of the given type owns heap memory
++
++Strings, binaries, objects, and arrays are stored as pointers to allocated
++values; all other types are stored directly in the union. Every enumerator is
++listed so that -Wswitch-enum flags this function when a new type is added.
++*/
++inline bool owns_memory(const value_t t) noexcept
++{
++    switch (t)
++    {
++        case value_t::object:
++        case value_t::array:
++        case value_t::string:
++        case value_t::binary:
++            return true;
++
++        case value_t::null:
++        case value_t::boolean:
++        case value_t::number_integer:
++        case value_t::number_unsigned:
++        case value_t::number_float:
++        case value_t::discarded:
++        default:
++            return false;
++    }
++}
++
+ 
+ /*!
+ @brief compare an integer with a floating point number without precision loss
+diff --git a/include/nlohmann/json.hpp b/include/nlohmann/json.hpp
+index f822b1406..3dc609038 100644
+--- a/include/nlohmann/json.hpp
++++ b/include/nlohmann/json.hpp
+@@ -585,26 +585,12 @@ class basic_json // NOLINT(cppcoreguidelines-special-member-functions,hicpp-spec
+             switch (t)
+             {
+                 case value_t::object:
+-                {
+-                    object = create<object_t>();
+-                    break;
+-                }
+-
+                 case value_t::array:
+-                {
+-                    array = create<array_t>();
+-                    break;
+-                }
+-
+                 case value_t::string:
+-                {
+-                    string = create<string_t>("");
+-                    break;
+-                }
+-
+                 case value_t::binary:
+                 {
+-                    binary = create<binary_t>();
++                    // allocating: kept out of line, so the scalar cases below inline
++                    init_owned(t);
+                     break;
+                 }
+ 
+@@ -651,6 +637,34 @@ class basic_json // NOLINT(cppcoreguidelines-special-member-functions,hicpp-spec
+             }
+         }
+ 
++        JSON_HEDLEY_NEVER_INLINE
++        void init_owned(value_t t)
++        {
++            switch (t)
++            {
++                case value_t::object:
++                    object = create<object_t>();
++                    break;
++                case value_t::array:
++                    array = create<array_t>();
++                    break;
++                case value_t::string:
++                    string = create<string_t>("");
++                    break;
++                case value_t::binary:
++                    binary = create<binary_t>();
++                    break;
++                case value_t::null:
++                case value_t::boolean:
++                case value_t::number_integer:
++                case value_t::number_unsigned:
++                case value_t::number_float:
++                case value_t::discarded:
++                default:
++                    break;
++            }
++        }
++
+         /// constructor for strings
+         json_value(const string_t& value) : string(create<string_t>(value)) {}
+ 
+@@ -911,7 +925,18 @@ public:
+             }
+         }
+ 
++        // keep the check whether t owns memory inline so destroying a scalar
++        // is a compare and a branch, and leave the actual work to an
++        // out-of-line function
+         void destroy(value_t t)
++        {
++            if (JSON_HEDLEY_UNLIKELY(detail::owns_memory(t)))
++            {
++                destroy_owned(t);
++            }
++        }
++
++        JSON_HEDLEY_NEVER_INLINE void destroy_owned(value_t t)
+         {
+             switch (t)
+             {
+@@ -2559,15 +2584,14 @@ public:
+         // check of passed value is valid
+         other.assert_invariant();
+ 
+-        if (m_data.m_type == value_t::object || m_data.m_type == value_t::array)
++        if (JSON_HEDLEY_LIKELY(!detail::owns_memory(m_data.m_type)))
+         {
+-            // copying the container directly would call this constructor again
+-            // for every element, once per nesting level
+-            copy_structured(other);
++            // null, boolean, numbers, discarded: plain copy of the union
++            m_data.m_value = other.m_data.m_value;
+         }
+         else
+         {
+-            copy_leaf_value(other, *this);
++            copy_owning(other);
+         }
+ 
+         assert_invariant();
+@@ -2799,6 +2823,22 @@ public:
+     // value access //
+     //////////////////
+ 
++    /// out-of-line part of the copy constructor for owning types
++    JSON_HEDLEY_NEVER_INLINE
++    void copy_owning(const basic_json& other)
++    {
++        if (m_data.m_type == value_t::object || m_data.m_type == value_t::array)
++        {
++            // copying the container directly would call this constructor again
++            // for every element, once per nesting level
++            copy_structured(other);
++        }
++        else
++        {
++            copy_leaf_value(other, *this);
++        }
++    }
++
+     /// get a pointer to the value (object)
+     object_t* get_impl_ptr(object_t* /*unused*/) noexcept
+     {
+@@ -5173,7 +5213,22 @@ public:
+     /// @name lexicographical comparison operators
+     /// @{
+ 
+-    // note parentheses around operands are necessary; see
++    // the same-type cases for non-owning scalars, shared by JSON_IMPLEMENT_OPERATOR
++    // and JSON_IMPLEMENT_SCALAR_FAST
++#define JSON_IMPLEMENT_SCALAR_CASES(op, null_result)                                                     \
++  case value_t::null:                                                                                  \
++        return (null_result);                                                                            \
++  case value_t::boolean:                                                                               \
++        return lhs.m_data.m_value.boolean op rhs.m_data.m_value.boolean;                                 \
++  case value_t::number_integer:                                                                        \
++        return lhs.m_data.m_value.number_integer op rhs.m_data.m_value.number_integer;                   \
++  case value_t::number_unsigned:                                                                       \
++        return lhs.m_data.m_value.number_unsigned op rhs.m_data.m_value.number_unsigned;                 \
++  case value_t::number_float:                                                                          \
++        return lhs.m_data.m_value.number_float op rhs.m_data.m_value.number_float;
++
++    // note parentheses around the container operands are necessary, because
++    // GCC otherwise parses `array <` as std::array; see
+     // https://github.com/nlohmann/json/issues/1530
+     // Mixed signed/unsigned integer comparisons check whether the signed value
+     // is negative before casting. If it is, the comparison is performed with
+@@ -5209,24 +5264,11 @@ public:
+                 return (*lhs.m_data.m_value.object) op (*rhs.m_data.m_value.object);                                   \
+             }                                                                                            \
+             \
+-            case value_t::null:                                                                          \
+-                return (null_result);                                                                    \
+-                \
++            JSON_IMPLEMENT_SCALAR_CASES(op, null_result)                                                 \
++            \
+             case value_t::string:                                                                        \
+                 return (*lhs.m_data.m_value.string) op (*rhs.m_data.m_value.string);                                   \
+                 \
+-            case value_t::boolean:                                                                       \
+-                return (lhs.m_data.m_value.boolean) op (rhs.m_data.m_value.boolean);                                   \
+-                \
+-            case value_t::number_integer:                                                                \
+-                return (lhs.m_data.m_value.number_integer) op (rhs.m_data.m_value.number_integer);                     \
+-                \
+-            case value_t::number_unsigned:                                                               \
+-                return (lhs.m_data.m_value.number_unsigned) op (rhs.m_data.m_value.number_unsigned);                   \
+-                \
+-            case value_t::number_float:                                                                  \
+-                return (lhs.m_data.m_value.number_float) op (rhs.m_data.m_value.number_float);                         \
+-                \
+             case value_t::binary:                                                                        \
+                 return (*lhs.m_data.m_value.binary) op (*rhs.m_data.m_value.binary);                                   \
+                 \
+@@ -5270,6 +5312,24 @@ public:
+     \
+     return (default_result);
+ 
++    // inline fast path for two values of the same non-owning scalar type; anything
++    // else falls through to the out-of-line general comparison
++#define JSON_IMPLEMENT_SCALAR_FAST(op, null_result)                                                      \
++    if (lhs.m_data.m_type == rhs.m_data.m_type)                                                          \
++    {                                                                                                    \
++        switch (lhs.m_data.m_type)                                                                       \
++        {                                                                                                \
++                JSON_IMPLEMENT_SCALAR_CASES(op, null_result)                                                 \
++            case value_t::object:                                                                       \
++            case value_t::array:                                                                        \
++            case value_t::string:                                                                       \
++            case value_t::binary:                                                                       \
++            case value_t::discarded:                                                                    \
++            default:                                                                                     \
++                break;                                                                                   \
++        }                                                                                                \
++    }
++
+   JSON_PRIVATE_UNLESS_TESTED:
+     // returns true if:
+     // - any operand is NaN and the other operand is of number type
+@@ -5297,6 +5357,173 @@ public:
+         return compares_unordered(*this, rhs, inverse);
+     }
+ 
++    /// @brief whether objects and arrays are the standard containers, whose
++    ///        elements equal_bounded() may therefore compare itself
++    using standard_object_t = std::map<StringType, basic_json, default_object_comparator_t,
++          AllocatorType<std::pair<const StringType, basic_json>>>;
++    using standard_array_t = std::vector<basic_json, AllocatorType<basic_json>>;
++    using equal_bounded_containers = detail::conjunction<std::is_same<object_t, standard_object_t>, std::is_same<array_t, standard_array_t>>;
++
++    // out-of-line general comparisons; the operators below handle same-type
++    // scalars inline and fall through to these
++    JSON_HEDLEY_NEVER_INLINE
++    static bool equal_general(const_reference lhs, const_reference rhs) noexcept
++    {
++#ifdef __GNUC__
++        JSON_HEDLEY_DIAGNOSTIC_PUSH
++        JSON_HEDLEY_PRAGMA(GCC diagnostic ignored "-Wfloat-equal")
++#endif
++        JSON_IMPLEMENT_OPERATOR( ==, true, false, false,
++                                 compare_iteratively<false>(lhs, rhs, false) == compare_result::equal, true)
++#ifdef __GNUC__
++        JSON_HEDLEY_DIAGNOSTIC_POP
++#endif
++    }
++
++    JSON_HEDLEY_NEVER_INLINE
++    static bool less_general(const_reference lhs, const_reference rhs) noexcept
++    {
++        // default_result is used if we cannot compare values. In that case,
++        // we compare types. Note we have to call the operator explicitly,
++        // because MSVC has problems otherwise.
++        JSON_IMPLEMENT_OPERATOR( <, false, false, operator<(lhs_type, rhs_type),
++                                 compare_iteratively<true>(lhs, rhs, true) == compare_result::less, false)
++    }
++
++#if JSON_HAS_THREE_WAY_COMPARISON
++    JSON_HEDLEY_NEVER_INLINE
++    static std::partial_ordering three_way_general(const_reference lhs, const_reference rhs) noexcept // *NOPAD*
++    {
++        // default_result is used if we cannot
+[... truncated, 8084 more characters]
+```
+
+## Existing upstream tests that call the changed code (for style and API usage)
+// Upstream tests at the PR's parent commit 4530d9681 that use the changed code.
+// Names searched (test lines using each): basic_json (35), JSON_IMPLEMENT_SCALAR_FAST (0), JSON_IMPLEMENT_SCALAR_CASES (0), JSON_IMPLEMENT_OPERATOR (0), format_as (23), to_string (97), operator<< (83), operator>> (79), operator!= (52), operator< (199), operator== (57), json_value (0), destroy (1), equal_structured (0), equal_leaf (0), init_owned (0), owns_memory (0), copy_owning (0), equal_general (0), less_general (0), equal_bounded (0), equal_dispatch (0), standard_object_t (0), equal_bounded_containers (0), destroy_owned (0), standard_array_t (0)
+
+// ---- tests/src/unit-allocator.cpp:110-134  (uses: destroy)
+    struct rebind
+    {
+        using other = my_allocator<U>;
+    };
+};
+
+// allows deletion of raw pointer, usually hold by json_value
+template<class T>
+void my_allocator_clean_up(T* p)
+{
+    assert(p != nullptr);
+    my_allocator<T> alloc;
+    alloc.destroy(p);
+    alloc.deallocate(p, 1);
+}
+} // namespace
+
+TEST_CASE("controlled bad_alloc")
+{
+    // create JSON type using the throwing allocator
+    using my_json = nlohmann::json::with_allocator_t<my_allocator>;
+
+    SECTION("class json_value")
+    {
+        SECTION("json_value(value_t)")
+
+// ---- tests/src/unit-comparison.cpp:73-85  (uses: operator!=, operator<, operator==)
+TEST_CASE("lexicographical comparison operators")
+{
+    constexpr auto f_ = false;
+    constexpr auto _t = true;
+    constexpr auto nan = std::numeric_limits<json::number_float_t>::quiet_NaN();
+#if JSON_HAS_THREE_WAY_COMPARISON
+    constexpr auto lt = std::partial_ordering::less;
+    constexpr auto gt = std::partial_ordering::greater;
+    constexpr auto eq = std::partial_ordering::equivalent;
+    constexpr auto un = std::partial_ordering::unordered;
+#endif
+
+#if JSON_HAS_THREE_WAY_COMPARISON
+
+// ---- tests/src/unit-comparison.cpp:127-147  (uses: operator!=, operator<, operator==)
+        SECTION("comparison: less")
+        {
+            REQUIRE(expected_lt.size() == j_types.size());
+            for (size_t i = 0; i < j_types.size(); ++i)
+            {
+                REQUIRE(expected_lt[i].size() == j_types.size());
+                for (size_t j = 0; j < j_types.size(); ++j)
+                {
+                    CAPTURE(i)
+                    CAPTURE(j)
+                    // check precomputed values
+#if JSON_HAS_THREE_WAY_COMPARISON
+                    // JSON_HAS_CPP_20 (do not remove; see note at top of file)
+                    CHECK((j_types[i] < j_types[j]) == expected_lt[i][j]);
+#else
+                    CHECK(operator<(j_types[i], j_types[j]) == expected_lt[i][j]);
+#endif
+                    CHECK(f(j_types[i], j_types[j]) == expected_lt[i][j]);
+                }
+            }
+        }
+
+// ---- tests/src/unit-deserialization.cpp:1271-1316  (uses: operator<<, operator>>, to_string)
+TEST_CASE("parse error positions are the same for contiguous and stream input")
+{
+    // contiguous input derives the position from the input on error, stream
+    // input counts it while reading (see lexer::lazy_position); the cases
+    // cover newlines before the error, ungetting a newline after a number,
+    // newlines inside a string, a comment, and reads at the end of input
+    struct test_case
+    {
+        std::string input;
+        std::size_t byte;
+        std::string message;
+    };
+    const std::vector<test_case> cases =
+    {
+        {"[\n  1,\n  2\n", 12, "[json.exception.parse_error.101] parse error at line 4, column 1: syntax error while parsing array - unexpected end of input; expected ']'"},
+        {"[1\n,2,\n]", 8, "[json.exception.parse_error.101] parse error at line 3, column 1: syntax error while parsing value - unexpected ']'; expected '[', '{', or a literal"},
+        {"[1\n x]", 5, "[json.exception.parse_error.101] parse error at line 2, column 2: syntax error while parsing array - invalid literal; last read: '1<U+000A> x'; expected ']'"},
+        {"1\n2", 3, "[json.exception.parse_error.101] parse error at line 2, column 1: syntax error while parsing value - unexpected number literal; expected end of input"},
+        {
+            "{\"a\":\n\"b\nc\"}", 9, R"([json.exception.parse_error.101] parse error at line 3, column 0: syntax error while parsing value - invalid string: control character U+000A (LF) must be escaped to \u000A or \n; last read: '"b<U+000A>')"
+        },
+        {"/* a\n b */\n x", 13, "[json.exception.parse_error.101] parse error at line 3, column 2: syntax error while parsing value - invalid literal; last read: '/* a<U+000A> b */<U+000A> x'"},
+        {"\n\n", 3, "[json.exception.parse_error.101] parse error at line 3, column 1: syntax error while parsing value - unexpected end of input; expected '[', '{', or a literal"},
+        {"[\"a\",\n 1e\n]", 10, "[json.exception.parse_error.101] parse error at line 3, column 0: syntax error while parsing value - invalid number; expected '+', '-', or digit after exponent; last read: '1e<U+000A>'"},
+        {"[tru\n]", 5, "[json.exception.parse_error.101] parse error at line 2, column 0: syntax error while parsing value - invalid literal; last read: '[tru<U+000A>'"},
+    };
+
+    for (const auto& c : cases)
+    {
+        CAPTURE(c.input)
+        const std::string expected = std::to_string(c.byte) + " " + c.message;
+
+        SaxErrorRecorder string_sax;
+        CHECK_FALSE(json::sax_parse(c.input, &string_sax, json::input_format_t::json, true, true));
+        CHECK(string_sax.error == expected);
+
+        SaxErrorRecorder pointer_sax;
+        CHECK_FALSE(json::sax_parse(c.input.data(), c.input.data() + c.input.size(), &pointer_sax, json::input_format_t::json, true, true));
+        CHECK(pointer_sax.error == expected);
+
+        std::istringstream is(c.input);
+        SaxErrorRecorder stream_sax;
+        CHECK_FALSE(json::sax_parse(is, &stream_sax, json::input_format_t::json, true, true));
+        CHECK(stream_sax.error == expected);
+    }
+}
+
+// ---- tests/src/unit-regression2.cpp:576-591  (uses: operator<<, operator==, operator>>)
+    SECTION("issue #1647 - compile error when deserializing enum if both non-default from_json and non-member operator== exists for other type")
+    {
+        // does not compile on ICPC when targeting C++20
+#if !(defined(__INTEL_COMPILER) && __cplusplus >= 202000)
+        {
+            const json j;
+            const NonDefaultFromJsonStruct x(j);
+            NonDefaultFromJsonStruct y;
+            CHECK(x == y);
+        }
+#endif
+
+        auto val = nlohmann::json("one").get<for_1647>();
+        CHECK(val == for_1647::one);
+        const json j = val;
+    }
+
+// ---- tests/src/unit-custom-object-type.cpp:447-451  (uses: operator!=, operator<, operator==)
+    SECTION("object_comparator_t falls back to default_object_comparator_t")
+    {
+        CHECK(std::is_same < no_key_compare_json::object_comparator_t,
+              no_key_compare_json::default_object_comparator_t >::value);
+    }
+
+# Task
+Write 20 test programs for this pull request. Return JSON with a "tests" array; each item has "name" (short snake_case), "intent" (one sentence: what behavior it probes) and "code" (the complete C++ program).

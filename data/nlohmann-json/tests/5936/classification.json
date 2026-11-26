@@ -1,0 +1,134 @@
+{
+  "target": "nlohmann-json",
+  "pr": 5936,
+  "model": "gemini-3.5-flash-lite",
+  "prompt_sha256": "b70421ce9d345d5d000ad983bede2e91da4da5acb0bba4578608dbcc567263d0",
+  "results_sha256": "fd533537ee03d8c48c1c3a46bfe8c0d9b23d4c855e7a22d1f239c4d91481adc0",
+  "clusters": [
+    {
+      "id": "C1",
+      "status": "output_diff",
+      "failed_on": null,
+      "programs": [
+        "gen_26.cpp",
+        "gen_31.cpp",
+        "gen_37.cpp"
+      ],
+      "verdict": "intended",
+      "confidence": "high",
+      "reason": "The PR specifically fixes self-aliasing in json_pointer::operator/= by appending a copy, changing self-appends from undefined behavior producing trailing slashes to correctly duplicating tokens."
+    },
+    {
+      "id": "C2",
+      "status": "output_diff",
+      "failed_on": null,
+      "programs": [
+        "gen_28.cpp"
+      ],
+      "verdict": "intended",
+      "confidence": "high",
+      "reason": "Multiple self-appends via operator/= now correctly duplicate the pointer tokens rather than hitting undefined behavior."
+    },
+    {
+      "id": "C3",
+      "status": "output_diff",
+      "failed_on": null,
+      "programs": [
+        "gen_30.cpp"
+      ],
+      "verdict": "intended",
+      "confidence": "high",
+      "reason": "Self-appending a json_pointer results in a pointer equal to the duplicated sequence, which the PR's fix correctly achieves."
+    },
+    {
+      "id": "C4",
+      "status": "output_diff",
+      "failed_on": null,
+      "programs": [
+        "gen_32.cpp"
+      ],
+      "verdict": "intended",
+      "confidence": "high",
+      "reason": "Self-appending via operator/= before subsequent operations now correctly builds the duplicated path."
+    },
+    {
+      "id": "C5",
+      "status": "output_diff",
+      "failed_on": null,
+      "programs": [
+        "gen_33.cpp"
+      ],
+      "verdict": "intended",
+      "confidence": "high",
+      "reason": "Tokens containing numbers or slashes self-append correctly as intended by the self-aliasing fix."
+    },
+    {
+      "id": "C6",
+      "status": "output_diff",
+      "failed_on": null,
+      "programs": [
+        "gen_34.cpp"
+      ],
+      "verdict": "intended",
+      "confidence": "high",
+      "reason": "Independent self-appends on multiple json_pointers are correctly handled by the safety check for `&ptr == this`."
+    },
+    {
+      "id": "C7",
+      "status": "output_diff",
+      "failed_on": null,
+      "programs": [
+        "gen_35.cpp"
+      ],
+      "verdict": "intended",
+      "confidence": "high",
+      "reason": "Escaped characters in json_pointer tokens self-append correctly due to the added self-aliasing protection."
+    },
+    {
+      "id": "C8",
+      "status": "output_diff",
+      "failed_on": null,
+      "programs": [
+        "gen_36.cpp"
+      ],
+      "verdict": "intended",
+      "confidence": "high",
+      "reason": "Equality checks between a self-appended json_pointer and the explicitly expanded path now evaluate to match."
+    },
+    {
+      "id": "C9",
+      "status": "output_diff",
+      "failed_on": null,
+      "programs": [
+        "gen_38.cpp"
+      ],
+      "verdict": "intended",
+      "confidence": "high",
+      "reason": "Passing a self-reference via a helper function correctly triggers the `&ptr == this` check and successfully produces the copied path."
+    }
+  ],
+  "clusters_not_shown": 0,
+  "counts": {
+    "same": 14,
+    "invalid": 0,
+    "flaky": 0,
+    "superseded": 14,
+    "missing": 0
+  },
+  "pr_verdict": {
+    "regression_candidate": false,
+    "unintended_clusters": []
+  },
+  "usage": {
+    "promptTokenCount": 5972,
+    "candidatesTokenCount": 568,
+    "totalTokenCount": 6540,
+    "promptTokensDetails": [
+      {
+        "modality": "TEXT",
+        "tokenCount": 5972
+      }
+    ],
+    "serviceTier": "standard"
+  }
+}

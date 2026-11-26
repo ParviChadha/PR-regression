@@ -1,0 +1,185 @@
+{
+  "target": "nlohmann-json",
+  "pr": 5822,
+  "model": "gemini-3.5-flash-lite",
+  "prompt_sha256": "6f1fd23355fe02e8c1bd69fbcc17c2552ec64abb8d88c4cda1412c15788c26a1",
+  "n_requested": 20,
+  "dropped": 0,
+  "usage": {
+    "promptTokenCount": 11851,
+    "candidatesTokenCount": 3192,
+    "totalTokenCount": 15043,
+    "promptTokensDetails": [
+      {
+        "modality": "TEXT",
+        "tokenCount": 11851
+      }
+    ],
+    "serviceTier": "standard"
+  },
+  "tests": [
+    {
+      "file": "gen_01.cpp",
+      "name": "test_ascii_below_0x60_control_chars",
+      "intent": "Probe serialization of control characters below 0x60 (such as \\x00 through \\x1F) to verify their escape sequences generated via the new table lookup.",
+      "round": 0
+    },
+    {
+      "file": "gen_02.cpp",
+      "name": "test_ascii_quotes_and_backslashes",
+      "intent": "Probe serialization of quote and backslash characters which trigger the bulk scanner stop and table-based direct write.",
+      "round": 0
+    },
+    {
+      "file": "gen_03.cpp",
+      "name": "test_ensure_ascii_del_character",
+      "intent": "Probe serialization of DEL (0x7F) with ensure_ascii enabled to verify that code points >= 0x60 route correctly through the updated decoder path.",
+      "round": 0
+    },
+    {
+      "file": "gen_04.cpp",
+      "name": "test_mixed_printable_ascii_below_0x60",
+      "intent": "Probe serialization of printable ASCII characters in the range 0x20 to 0x5F to check their direct table copy without modifications.",
+      "round": 0
+    },
+    {
+      "file": "gen_05.cpp",
+      "name": "test_buffer_flush_mid_string_escapes",
+      "intent": "Probe serialization with a long sequence of control characters to ensure write buffer flushes correctly when filled by table escapes.",
+      "round": 0
+    },
+    {
+      "file": "gen_06.cpp",
+      "name": "test_non_ascii_unicode_ensure_ascii",
+      "intent": "Probe serialization of non-ASCII multibyte UTF-8 sequences under ensure_ascii to verify proper \\u-escaping via the non-accept/decoder paths.",
+      "round": 0
+    },
+    {
+      "file": "gen_07.cpp",
+      "name": "test_invalid_utf8_keep_handler",
+      "intent": "Probe serialization of strings containing malformed UTF-8 byte sequences with keep error handler to test boundary interactions with bulk scanners.",
+      "round": 0
+    },
+    {
+      "file": "gen_08.cpp",
+      "name": "test_windows_paths_string_serialization",
+      "intent": "Probe serialization of typical Windows path strings heavily populated with backslashes and low-index ASCII characters.",
+      "round": 0
+    },
+    {
+      "file": "gen_09.cpp",
+      "name": "test_log_lines_with_mixed_escapes",
+      "intent": "Probe serialization of log lines containing carriage returns, tabs, newlines, and quotes.",
+      "round": 0
+    },
+    {
+      "file": "gen_10.cpp",
+      "name": "test_empty_string_serialization",
+      "intent": "Probe serialization of an empty string to verify edge case handling in the bulk scanner and write buffer setup.",
+      "round": 0
+    },
+    {
+      "file": "gen_11.cpp",
+      "name": "test_string_with_only_backslashes",
+      "intent": "Probe serialization of a string consisting entirely of backslashes to stress the direct write buffer limit and table lookups.",
+      "round": 0
+    },
+    {
+      "file": "gen_12.cpp",
+      "name": "test_string_with_only_quotes",
+      "intent": "Probe serialization of a string consisting entirely of quotation marks.",
+      "round": 0
+    },
+    {
+      "file": "gen_13.cpp",
+      "name": "test_high_unicode_surrogate_pairs",
+      "intent": "Probe serialization of high code points requiring surrogate pairs under ensure_ascii.",
+      "round": 0
+    },
+    {
+      "file": "gen_14.cpp",
+      "name": "test_indentation_pretty_printing",
+      "intent": "Probe pretty-printing dump with indentation (dump(2)) on a string containing characters below 0x60.",
+      "round": 0
+    },
+    {
+      "file": "gen_15.cpp",
+      "name": "test_binary_type_serialization",
+      "intent": "Probe binary type container serialization which exercises serialization buffers and output mechanics.",
+      "round": 0
+    },
+    {
+      "file": "gen_16.cpp",
+      "name": "test_string_boundary_stride_lengths",
+      "intent": "Probe strings of varying lengths around typical bulk scanner block strides containing control characters.",
+      "round": 0
+    },
+    {
+      "file": "gen_17.cpp",
+      "name": "test_serializer_error_handler_replace",
+      "intent": "Probe serialization with replace error handler on invalid UTF-8 sequences.",
+      "round": 0
+    },
+    {
+      "file": "gen_18.cpp",
+      "name": "test_control_characters_boundary_0x1F_0x20",
+      "intent": "Probe the exact boundary between control characters (0x1F) and space/printable characters (0x20) in table lookup.",
+      "round": 0
+    },
+    {
+      "file": "gen_19.cpp",
+      "name": "test_control_characters_boundary_0x5F_0x60",
+      "intent": "Probe the exact boundary condition around 0x5F and 0x60 where table lookup for ASCII escapes switches behavior.",
+      "round": 0
+    },
+    {
+      "file": "gen_20.cpp",
+      "name": "test_json_in_json_nested_strings",
+      "intent": "Probe serialization of deeply nested or repetitive string data containing frequent quotes and backslashes.",
+      "round": 0
+    },
+    {
+      "file": "gen_21.cpp",
+      "name": "gen_21",
+      "intent": "Exercise pending bytes in string_buffer before encountering a byte below 0x60 in serializer dump_escaped_impl to flush string_buffer and hit table direct write.",
+      "round": 1
+    },
+    {
+      "file": "gen_22.cpp",
+      "name": "gen_22",
+      "intent": "Exercise write buffer flushing when a table escape sequence below 0x60 exceeds remaining buffer capacity during serialization.",
+      "round": 1
+    },
+    {
+      "file": "gen_23.cpp",
+      "name": "gen_23",
+      "intent": "Exercise EnsureAscii decoding branch for code points >= 0x7F with error_handler keep.",
+      "round": 1
+    },
+    {
+      "file": "gen_24.cpp",
+      "name": "gen_24",
+      "intent": "Exercise ascii_escapes table initialization and every entry lookup via a comprehensive string containing all characters from 0x00 to 0x5F.",
+      "round": 1
+    },
+    {
+      "file": "gen_25.cpp",
+      "name": "gen_25",
+      "intent": "Exercise specific table elements for control characters like 0x00, 0x0F, and printable characters like 0x20 and 0x5F directly through custom stream insertion of serializer.",
+      "round": 1,
+      "superseded_by": "gen_26.cpp"
+    },
+    {
+      "file": "gen_26.cpp",
+      "name": "gen_25_fixed",
+      "intent": "Exercise specific table elements for control characters like 0x00, 0x0F, and printable characters like 0x20 and 0x5F directly through custom stream insertion of serializer.",
+      "round": 2,
+      "fixes": "gen_25.cpp",
+      "kind": "compile"
+    }
+  ],
+  "fix": {
+    "rounds_max": 2,
+    "model": "gemini-3.5-flash-lite"
+  }
+}

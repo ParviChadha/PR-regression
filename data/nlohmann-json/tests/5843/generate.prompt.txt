@@ -1,0 +1,235 @@
+[system]
+You write test programs that probe a C++ library for behavioral changes made by one pull request.
+Each program is compiled and run twice, once against the library before the change and once after, and the two
+outputs are compared. Your job is to produce programs whose output reveals whether the change altered behavior,
+including side effects the author did not intend.
+
+Rules for every program:
+- It is standalone: one file with its own int main(), compiled as C++17, printing results to stdout.
+- Use only the library's documented public API. Never include internal headers or use detail/impl namespaces,
+  private members or undocumented macros.
+- Do not judge results (no assert, no expected-value comparisons): just print what the library returns. Print
+  enough to make differences visible, one fact per line.
+- Output must be deterministic. Never print pointers or addresses, uninitialized data, the order of
+  hash-based containers, timings, thread ids, random values, file paths or environment data. Print floating point
+  values with an explicit precision. No input, files, network, threads, clocks or randomness.
+- Wrap calls that may throw in try/catch and print the exception's type and message, so an exception is an
+  observable result. Do not crash on purpose.
+- Aim at the code the diff changes. Prefer calls that compile against both the old and the new library; one or two
+  programs may use an API the PR adds. Cover ordinary inputs and edge cases (empty, minimum and maximum values,
+  boundaries, special values, nesting, unusual types) and also neighbouring behavior the change could disturb.
+- When the diff changes which types or inputs an API accepts or rejects (constraints, overloads, traits,
+  conversions), test it with the detection idiom (std::void_t or requires) and `if constexpr`, so the program
+  compiles against both versions, prints whether the expression is well-formed, and exercises it when it is.
+  Accepting an input is not enough: also use it through every entry point that should follow (const and
+  non-const, read, write, insert, erase, lookup, nested use), because a change that admits new inputs can leave
+  later code unable to handle them.
+- If the changed code is internal (a detail, impl or internal namespace, a trait, a helper), do not name it in the
+  program. Reach it through the public API that depends on it, using detection (as above) where needed.
+- Use the exact types and values the diff is about (the new trait's argument types, the new overload's
+  parameters), not stand-ins.
+- Spread the programs over distinct public entry points and overloads, one main idea per program. Do not write
+  several programs that only rename a type or change a literal.
+- Make the programs differ from each other: different inputs, different entry points, different features.
+
+Rules specific to this library:
+- Include the library with #include <nlohmann/json.hpp>. The public API is nlohmann::json (nlohmann::basic_json), nlohmann::ordered_json, json_pointer, json patch/merge_patch and the documented SAX and conversion interfaces. Never use the detail namespace.
+- It is a header-only library: nothing to link. Programs are compiled as C++17.
+- Print JSON values with dump() (compact) or dump(2). Keys of nlohmann::json objects print in sorted order, so output is deterministic; do not depend on insertion order except with ordered_json.
+
+[user]
+# Pull request #5843: Fix AppVeyor failures from the Zmij double writer
+
+## Description
+AppVeyor build [9193](https://ci.appveyor.com/project/nlohmann/json/builds/54896795) on `develop` fails since #5634 (Zmij double writer):
+
+- **VS2015 (all three jobs):** `zmij.hpp(187): warning C4554: '<<': check operator precedence` — a false positive on `(p.high << static_cast<unsigned>(64 - extra_shift)) | (p.low >> static_cast<unsigned>(extra_shift))` despite the parentheses; with `/W4 /WX` nothing builds. The shift amounts are now named `constexpr unsigned` constants, so the expression has no casts.
+- **VS2017, C++17 shard 1/2 (x86 and x64):** `test-to_chars_cpp17` fails 16 checks at `unit-to_chars.cpp:713`, all for two-digit outputs (`0.25`, `16.0`, `1.6e-322`, …). The test built the one-digit-shorter candidates with `std::scientific << std::setprecision(digits.size() - 2)`; MSVC 2017's library ignores a precision of 0, so the "shorter" candidate was the value itself. The test now truncates the digits instead: the value lies within half a unit of the last printed digit, so the truncated digits and their successor are the closest shorter candidates (the existing `mid - 1, mid, mid + 1` loop keeps covering them). The now unused `<iomanip>`, `<sstream>`, `<locale>` includes are dropped.
+
+Checked locally with clang (C++11 and C++17, `-Wall -Wextra -Wconversion -Werror`): the to_chars test passes with the same 623,597 assertions. Neither MSVC version is available locally, so AppVeyor confirms the fix.
+
+## Public API
+
+No breaking changes: the library change only renames internal shift amounts in `detail::zmij`; output is unchanged.
+
+---
+Written by Claude Code.
+
+🤖 Generated with [Claude Code](https://claude.com/claude-code)
+
+## Commit message
+MSVC 2015 warns C4554 on the shifts with casts in the fractional part
+of zmij::to_shortest despite the parentheses; with /WX every target
+fails to build. Name the shift amounts as constants instead.
+
+The shortest-digits test built the candidates with one digit fewer via
+a stream with std::setprecision(digits.size() - 2); the standard library
+of MSVC 2017 ignores a precision of 0, so for two-digit values the
+"shorter" candidates were the value itself. Truncate the digits
+instead: the value lies within half a unit of the last digit, so the
+truncated digits and their successor are the closest candidates.
+
+Signed-off-by: Niels Lohmann <mail@nlohmann.me>
+
+## Changed functions (from changes.py)
+- nlohmann::detail::zmij::to_shortest(std::uint64_t) (private); reached from the public API through: nlohmann::operator<<(std::ostream &, const basic_json<...> &), nlohmann::operator<<(basic_json<...> &, std::istream &), nlohmann::operator>>(std::istream &, basic_json<...> &), nlohmann::operator>>(const basic_json<...> &, std::ostream &), nlohmann::format_as(const basic_json<...> &), nlohmann::to_string(const basic_json<...> &), nlohmann::operator!=(const_reference, ScalarType), nlohmann::operator!=(ScalarType, const_reference), nlohmann::operator<(const_reference, ScalarType), nlohmann::operator<(ScalarType, const_reference)
+
+## Diff of the library source (before -> after)
+```diff
+diff --git a/include/nlohmann/detail/conversions/zmij.hpp b/include/nlohmann/detail/conversions/zmij.hpp
+index 40e477f7b..3820d891a 100644
+--- a/include/nlohmann/detail/conversions/zmij.hpp
++++ b/include/nlohmann/detail/conversions/zmij.hpp
+@@ -184,7 +184,10 @@ JSON_HEDLEY_ALWAYS_INLINE shortest_decimal to_shortest(std::uint64_t bits) noexc
+     const uint128_parts p10 = pow10(-dec_exp - 1);
+     const uint128_parts p = umul192_hi128(p10.high, p10.low, bin_sig << static_cast<unsigned>(shift));
+     std::uint64_t integral = p.high >> static_cast<unsigned>(extra_shift);
+-    const std::uint64_t fractional = (p.high << static_cast<unsigned>(64 - extra_shift)) | (p.low >> static_cast<unsigned>(extra_shift));
++    // (no casts in the shifts: MSVC 2015 warns C4554 on them despite the parentheses)
++    constexpr unsigned fractional_low_shift = static_cast<unsigned>(extra_shift);
++    constexpr unsigned fractional_high_shift = 64u - fractional_low_shift;
++    const std::uint64_t fractional = (p.high << fractional_high_shift) | (p.low >> fractional_low_shift);
+     std::uint64_t digit = 0;
+     bool round_up = false;
+     bool round_down = false;
+```
+
+## Existing upstream tests that call the changed code (for style and API usage)
+// Upstream tests at the PR's parent commit dcb96e82f that use the changed code.
+// Names searched (test lines using each): format_as (23), to_string (103), operator<< (84), operator>> (79), operator!= (56), operator< (204), to_shortest (1)
+
+// ---- tests/src/unit-to_chars.cpp:659-683  (uses: to_shortest)
+}
+
+/// Check the representation of a positive finite double: it reads back as
+/// the same value, and no representation with fewer digits does.
+void check_shortest(double v)
+{
+    std::array<char, 33> buf{};
+    char* end = nlohmann::detail::to_chars(buf.data(), buf.data() + 32, v);
+    const std::string text(buf.data(), end);
+    CAPTURE(text)
+    CHECK(parse_double(text) == v);
+    // the layout is that of format_buffer() for the digits of Zmij
+    const auto sd = nlohmann::detail::zmij::to_shortest(reinterpret_bits<std::uint64_t>(v));
+    const std::uint64_t significand = sd.has_digit ? (sd.integral * 10) + sd.digit : sd.integral;
+    int exponent = sd.has_digit ? sd.exponent : sd.exponent + 1;
+    std::string significand_digits = std::to_string(significand);
+    while (significand_digits.size() > 1 && significand_digits.back() == '0')
+    {
+        significand_digits.pop_back();
+        ++exponent;
+    }
+    std::array<char, 64> reference{};
+    std::copy(significand_digits.begin(), significand_digits.end(), reference.begin());
+    const char* const reference_end = nlohmann::detail::dtoa_impl::format_buffer(reference.data(), static_cast<int>(significand_digits.size()), exponent, -4, 15);
+    CHECK(text == std::string(reference.data(), static_cast<std::size_t>(reference_end - reference.data())));
+
+// ---- tests/src/unit-deserialization.cpp:1271-1316  (uses: operator<<, operator>>, to_string)
+TEST_CASE("parse error positions are the same for contiguous and stream input")
+{
+    // contiguous input derives the position from the input on error, stream
+    // input counts it while reading (see lexer::lazy_position); the cases
+    // cover newlines before the error, ungetting a newline after a number,
+    // newlines inside a string, a comment, and reads at the end of input
+    struct test_case
+    {
+        std::string input;
+        std::size_t byte;
+        std::string message;
+    };
+    const std::vector<test_case> cases =
+    {
+        {"[\n  1,\n  2\n", 12, "[json.exception.parse_error.101] parse error at line 4, column 1: syntax error while parsing array - unexpected end of input; expected ']'"},
+        {"[1\n,2,\n]", 8, "[json.exception.parse_error.101] parse error at line 3, column 1: syntax error while parsing value - unexpected ']'; expected '[', '{', or a literal"},
+        {"[1\n x]", 5, "[json.exception.parse_error.101] parse error at line 2, column 2: syntax error while parsing array - invalid literal; last read: '1<U+000A> x'; expected ']'"},
+        {"1\n2", 3, "[json.exception.parse_error.101] parse error at line 2, column 1: syntax error while parsing value - unexpected number literal; expected end of input"},
+        {
+            "{\"a\":\n\"b\nc\"}", 9, R"([json.exception.parse_error.101] parse error at line 3, column 0: syntax error while parsing value - invalid string: control character U+000A (LF) must be escaped to \u000A or \n; last read: '"b<U+000A>')"
+        },
+        {"/* a\n b */\n x", 13, "[json.exception.parse_error.101] parse error at line 3, column 2: syntax error while parsing value - invalid literal; last read: '/* a<U+000A> b */<U+000A> x'"},
+        {"\n\n", 3, "[json.exception.parse_error.101] parse error at line 3, column 1: syntax error while parsing value - unexpected end of input; expected '[', '{', or a literal"},
+        {"[\"a\",\n 1e\n]", 10, "[json.exception.parse_error.101] parse error at line 3, column 0: syntax error while parsing value - invalid number; expected '+', '-', or digit after exponent; last read: '1e<U+000A>'"},
+        {"[tru\n]", 5, "[json.exception.parse_error.101] parse error at line 2, column 0: syntax error while parsing value - invalid literal; last read: '[tru<U+000A>'"},
+    };
+
+    for (const auto& c : cases)
+    {
+        CAPTURE(c.input)
+        const std::string expected = std::to_string(c.byte) + " " + c.message;
+
+        SaxErrorRecorder string_sax;
+        CHECK_FALSE(json::sax_parse(c.input, &string_sax, json::input_format_t::json, true, true));
+        CHECK(string_sax.error == expected);
+
+        SaxErrorRecorder pointer_sax;
+        CHECK_FALSE(json::sax_parse(c.input.data(), c.input.data() + c.input.size(), &pointer_sax, json::input_format_t::json, true, true));
+        CHECK(pointer_sax.error == expected);
+
+        std::istringstream is(c.input);
+        SaxErrorRecorder stream_sax;
+        CHECK_FALSE(json::sax_parse(is, &stream_sax, json::input_format_t::json, true, true));
+        CHECK(stream_sax.error == expected);
+    }
+}
+
+// ---- tests/src/unit-deserialization.cpp:97-109  (uses: operator<<, operator>>)
+TEST_CASE("deserialization")
+{
+    SECTION("successful deserialization")
+    {
+        SECTION("stream")
+        {
+            std::stringstream ss1;
+            std::stringstream ss2;
+            std::stringstream ss3;
+            ss1 << R"(["foo",1,2,3,false,{"one":1}])";
+            ss2 << R"(["foo",1,2,3,false,{"one":1}])";
+            ss3 << R"(["foo",1,2,3,false,{"one":1}])";
+            const json j = json::parse(ss1);
+
+// ---- tests/src/unit-precise-stream-position.cpp:88-100  (uses: operator<<, operator>>)
+TEST_CASE("JSON_PRECISE_STREAM_POSITION")
+{
+    SECTION("the macro is part of the ABI tag")
+    {
+        const std::string ns = STRINGIZE(NLOHMANN_JSON_NAMESPACE);
+        // other tags may come before it, e.g. json_abi_diag_psp
+        CHECK(ns.find("_psp") != std::string::npos);
+    }
+
+    SECTION("a number does not consume the character that terminates it")
+    {
+        // a number is only terminated by the character following it; that
+        // character must be given back so the stream is positioned right
+
+// ---- tests/src/unit-precise-stream-position.cpp:226-236  (uses: operator<<, operator>>)
+    SECTION("a streambuf that cannot put back is not needed")
+    {
+        // the terminating character is never consumed, so no putback
+        // position is required
+        no_putback_streambuf buf("1true");
+        std::istream is(&buf);
+        json j;
+        is >> j;
+        CHECK(j == json(1));
+        CHECK(remaining(is) == "true");
+    }
+
+// ---- tests/src/unit-comparison.cpp:1154-1166  (uses: operator!=, operator<)
+TEST_CASE("comparison of scalars (inline fast path)")
+{
+    const json::number_integer_t neg = -1;
+    const json::number_integer_t pos = 5;
+    const json::number_unsigned_t big = (std::numeric_limits<json::number_unsigned_t>::max)();
+
+    SECTION("same type")
+    {
+        CHECK(json(pos) == json(pos));
+        CHECK(json(pos) != json(neg));
+        CHECK(json(neg) < json(pos));
+        CHECK_FALSE(json(pos) < json(neg));
+        CHECK_FALSE(json(pos) < json(pos));
+
+# Task
+Write 20 test programs for this pull request. Return JSON with a "tests" array; each item has "name" (short snake_case), "intent" (one sentence: what behavior it probes) and "code" (the complete C++ program).

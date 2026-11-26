@@ -1,0 +1,194 @@
+{
+  "target": "nlohmann-json",
+  "pr": 5940,
+  "model": "gemini-3.5-flash-lite",
+  "prompt_sha256": "c1cfc88a241a16e58dd91e986fd0fb0e66360b5125638f47fcc0cb4cd01895c9",
+  "n_requested": 20,
+  "dropped": 0,
+  "usage": {
+    "promptTokenCount": 22411,
+    "candidatesTokenCount": 4325,
+    "totalTokenCount": 26736,
+    "promptTokensDetails": [
+      {
+        "modality": "TEXT",
+        "tokenCount": 22411
+      }
+    ],
+    "serviceTier": "standard"
+  },
+  "tests": [
+    {
+      "file": "gen_01.cpp",
+      "name": "json_pointer_strong_exception_rollback",
+      "intent": "Verify that non-const operator[](json_pointer) leaves the JSON object completely unchanged when an exception occurs during pointer resolution.",
+      "round": 0
+    },
+    {
+      "file": "gen_02.cpp",
+      "name": "json_pointer_array_padding_rollback",
+      "intent": "Verify that padding an array via json_pointer does not leave intermediate elements if a subsequent token throws an exception.",
+      "round": 0
+    },
+    {
+      "file": "gen_03.cpp",
+      "name": "json_pointer_object_insertion_rollback",
+      "intent": "Verify that object key insertion via json_pointer rolls back cleanly if a nested token resolution throws an exception.",
+      "round": 0
+    },
+    {
+      "file": "gen_04.cpp",
+      "name": "json_pointer_dash_operator_append",
+      "intent": "Verify successful append behavior using the dash (\"-\") reference token with non-const operator[].",
+      "round": 0
+    },
+    {
+      "file": "gen_05.cpp",
+      "name": "json_pointer_null_conversion_rollback",
+      "intent": "Verify that converting a null value during pointer creation is successfully rolled back if a later token fails.",
+      "round": 0
+    },
+    {
+      "file": "gen_06.cpp",
+      "name": "json_pointer_unresolved_primitive",
+      "intent": "Check behavior when a JSON pointer tries to traverse into a non-object/non-array primitive value.",
+      "round": 0
+    },
+    {
+      "file": "gen_07.cpp",
+      "name": "json_pointer_array_index_overflow",
+      "intent": "Verify exception behavior and state preservation when an array index exceeds numeric limits.",
+      "round": 0
+    },
+    {
+      "file": "gen_08.cpp",
+      "name": "json_pointer_leading_zero_array_index",
+      "intent": "Verify parse error when an array index starts with '0' (other than '0' itself) on an existing array.",
+      "round": 0
+    },
+    {
+      "file": "gen_09.cpp",
+      "name": "json_pointer_concatenate_and_traverse",
+      "intent": "Verify concatenation of json_pointers using operator/ and subsequent retrieval.",
+      "round": 0,
+      "superseded_by": "gen_26.cpp"
+    },
+    {
+      "file": "gen_10.cpp",
+      "name": "json_pointer_empty_token",
+      "intent": "Verify behavior of JSON pointers containing empty tokens (e.g., object keys that are empty strings).",
+      "round": 0
+    },
+    {
+      "file": "gen_11.cpp",
+      "name": "json_pointer_escaped_characters",
+      "intent": "Verify parsing and resolution of JSON pointers with escaped characters (~0 for ~ and ~1 for /).",
+      "round": 0
+    },
+    {
+      "file": "gen_12.cpp",
+      "name": "json_pointer_comparison_operators",
+      "intent": "Check equality and relative order comparisons between json_pointer objects.",
+      "round": 0
+    },
+    {
+      "file": "gen_13.cpp",
+      "name": "json_pointer_stream_insertion",
+      "intent": "Verify streaming a json_pointer to an std::ostream.",
+      "round": 0
+    },
+    {
+      "file": "gen_14.cpp",
+      "name": "json_pointer_parent_and_pop",
+      "intent": "Verify pop_back and top operations on json_pointer.",
+      "round": 0
+    },
+    {
+      "file": "gen_15.cpp",
+      "name": "json_pointer_to_string_conversion",
+      "intent": "Verify to_string method and implicit/explicit conversions of json_pointer.",
+      "round": 0
+    },
+    {
+      "file": "gen_16.cpp",
+      "name": "json_pointer_unsupported_type_assignment",
+      "intent": "Verify exception safety when assigning through a pointer that encounters type conflicts.",
+      "round": 0
+    },
+    {
+      "file": "gen_17.cpp",
+      "name": "json_pointer_with_ordered_json",
+      "intent": "Verify json_pointer operations with nlohmann::ordered_json container type.",
+      "round": 0
+    },
+    {
+      "file": "gen_18.cpp",
+      "name": "json_pointer_empty_pointer",
+      "intent": "Verify behavior of an empty json_pointer referencing the root document.",
+      "round": 0
+    },
+    {
+      "file": "gen_19.cpp",
+      "name": "json_pointer_multiple_backtracking_guards",
+      "intent": "Verify correct rollback behavior when nested creations trigger multiple potential failure points.",
+      "round": 0
+    },
+    {
+      "file": "gen_20.cpp",
+      "name": "json_pointer_exception_messages",
+      "intent": "Capture exception types and error codes thrown by invalid json_pointer usages.",
+      "round": 0
+    },
+    {
+      "file": "gen_21.cpp",
+      "name": "gen_21",
+      "intent": "Exercise is_less_comparator and finds_equal_keys traits with standard and custom object types, and invoke object_search/object_search_found path with lower_bound/key_comp.",
+      "round": 1
+    },
+    {
+      "file": "gen_22.cpp",
+      "name": "gen_22",
+      "intent": "Trigger object_search_found_impl with priority_tag<1> and priority_tag<0> by using different map/object container configurations during json_pointer resolution.",
+      "round": 1
+    },
+    {
+      "file": "gen_23.cpp",
+      "name": "gen_23",
+      "intent": "Exercise get_unchecked_rollback with array_grown and key_inserted branches by causing an exception during nested json_pointer creation on an existing array and object.",
+      "round": 1
+    },
+    {
+      "file": "gen_24.cpp",
+      "name": "gen_24",
+      "intent": "Exercise array padding loop paths in get_unchecked and create_values where indices exceed current array size, leading to array_grown rollback or direct expansion.",
+      "round": 1,
+      "superseded_by": "gen_27.cpp"
+    },
+    {
+      "file": "gen_25.cpp",
+      "name": "gen_25",
+      "intent": "Exercise convert_null_to with object_t branch and array index token validation starting with '0' (is_array_index_token returning false).",
+      "round": 1
+    },
+    {
+      "file": "gen_26.cpp",
+      "name": "json_pointer_concatenate_and_traverse_fixed",
+      "intent": "Verify concatenation of json_pointers using operator/ and subsequent retrieval.",
+      "round": 2,
+      "fixes": "gen_09.cpp",
+      "kind": "compile"
+    },
+    {
+      "file": "gen_27.cpp",
+      "name": "gen_24_fixed",
+      "intent": "Exercise array padding loop paths in get_unchecked and create_values where indices exceed current array size, leading to array_grown rollback or direct expansion.",
+      "round": 2,
+      "fixes": "gen_24.cpp",
+      "kind": "compile"
+    }
+  ],
+  "fix": {
+    "rounds_max": 2,
+    "model": "gemini-3.5-flash-lite"
+  }
+}

@@ -1,0 +1,772 @@
+[system]
+You write test programs that probe a C++ library for behavioral changes made by one pull request.
+Each program is compiled and run twice, once against the library before the change and once after, and the two
+outputs are compared. Your job is to produce programs whose output reveals whether the change altered behavior,
+including side effects the author did not intend.
+
+Rules for every program:
+- It is standalone: one file with its own int main(), compiled as C++17, printing results to stdout.
+- Use only the library's documented public API. Never include internal headers or use detail/impl namespaces,
+  private members or undocumented macros.
+- Do not judge results (no assert, no expected-value comparisons): just print what the library returns. Print
+  enough to make differences visible, one fact per line.
+- Output must be deterministic. Never print pointers or addresses, uninitialized data, the order of
+  hash-based containers, timings, thread ids, random values, file paths or environment data. Print floating point
+  values with an explicit precision. No input, files, network, threads, clocks or randomness.
+- Wrap calls that may throw in try/catch and print the exception's type and message, so an exception is an
+  observable result. Do not crash on purpose.
+- Aim at the code the diff changes. Prefer calls that compile against both the old and the new library; one or two
+  programs may use an API the PR adds. Cover ordinary inputs and edge cases (empty, minimum and maximum values,
+  boundaries, special values, nesting, unusual types) and also neighbouring behavior the change could disturb.
+- When the diff changes which types or inputs an API accepts or rejects (constraints, overloads, traits,
+  conversions), test it with the detection idiom (std::void_t or requires) and `if constexpr`, so the program
+  compiles against both versions, prints whether the expression is well-formed, and exercises it when it is.
+  Accepting an input is not enough: also use it through every entry point that should follow (const and
+  non-const, read, write, insert, erase, lookup, nested use), because a change that admits new inputs can leave
+  later code unable to handle them.
+- If the changed code is internal (a detail, impl or internal namespace, a trait, a helper), do not name it in the
+  program. Reach it through the public API that depends on it, using detection (as above) where needed.
+- Use the exact types and values the diff is about (the new trait's argument types, the new overload's
+  parameters), not stand-ins.
+- Spread the programs over distinct public entry points and overloads, one main idea per program. Do not write
+  several programs that only rename a type or change a literal.
+- Make the programs differ from each other: different inputs, different entry points, different features.
+
+Rules specific to this library:
+- Include the library with #include <nlohmann/json.hpp>. The public API is nlohmann::json (nlohmann::basic_json), nlohmann::ordered_json, json_pointer, json patch/merge_patch and the documented SAX and conversion interfaces. Never use the detail namespace.
+- It is a header-only library: nothing to link. Programs are compiled as C++17.
+- Print JSON values with dump() (compact) or dump(2). Keys of nlohmann::json objects print in sorted order, so output is deterministic; do not depend on insertion order except with ordered_json.
+
+[user]
+# Pull request #5585: Create a value before giving it its type
+
+## Description
+## Bug
+
+Several functions set the type of a value before they create the string, array, object or binary value behind it. When that creation throws (for example `std::bad_alloc` from the allocator), the value is left with the new type but nothing behind it:
+
+| Where | Effect of a failed allocation (reproduced with the throwing test allocator) |
+|---|---|
+| `json::binary(…)` (all four overloads) | the temporary's destructor fails `assert_invariant`, which **aborts debug builds** |
+| `operator[]`, `push_back`, `emplace_back`, `emplace` and `update` on a null value | the value becomes an array or object that doesn't exist; later accesses dereference a **null pointer** |
+| `to_json(j, …)` into an existing value (string, binary, array, `std::vector<bool>`, `std::valarray`, ranges, object) | the old value is destroyed first, so `j` keeps a pointer to it; the value is then used and freed again (**heap-use-after-free** under ASan) |
+
+The constructors themselves were never affected: a partially constructed value is cleaned up by `data`'s destructor, which tolerates the null pointer.
+
+## Fix
+
+- **`json.hpp`:** the value is created first and the type is set afterwards. The two statements are swapped at 15 places.
+- **`to_json.hpp`:** each external constructor first creates the new `json_value` (or the complete `array_t` for `std::vector<bool>`, `std::valarray` and ranges), then destroys the old value and takes the new one. A comment at the top of the file explains the order.
+
+A failed allocation now leaves the value unchanged.
+
+## Tests
+
+A new test case in `unit-allocator.cpp` makes the allocator fail for each of the paths above, and checks that the value is unchanged afterwards.
+
+Against `develop`, the three sections fail as follows:
+- an assertion abort;
+- a `CHECK(j.is_null())` failure, followed by a `type_error.305`;
+- an ASan heap-use-after-free.
+
+With this change, the test passes under ASan and UBSan. I also ran the conversion, constructor, UDT, diagnostics and element-access suites against the amalgamated header.
+
+## Breaking changes
+
+None. Behavior only differs after a failed allocation, where the value now stays unchanged instead of becoming invalid.
+
+🤖 Generated with [Claude Code](https://claude.com/claude-code)
+
+## Commit message
+* Create a value before giving it its type
+
+Squashed onto develop from:
+- Create a value before giving it its type
+- Skip the failed-allocation test when exceptions are disabled
+- Keep the created pointer rather than an uninitialized json_value
+- Skip the vector<bool> failed-allocation check for VS 2015 with iterator debugging
+- Test the remaining to_json overloads with a failing allocation
+- Skip the to_json allocation-failure section on VS 2015 Debug
+- Fix false GCC -Warray-bounds error with JSON_DIAGNOSTICS at -O3 (#5744)
+
+Signed-off-by: Niels Lohmann <mail@nlohmann.me>
+
+* Store the new value with a helper in all to_json constructors
+
+Every external_constructor<>::construct now creates the new value first and
+hands it to basic_json::replace_value(), which destroys the old value, stores
+the new one before setting its type (as elsewhere in this PR), sets the
+parents, and checks the invariant.
+
+The std::vector<bool> and std::valarray overloads use array_t's range
+constructor, which the other array overloads already rely on. Range views
+keep their loop, as begin() and end() of a view may have different types.
+
+Signed-off-by: Niels Lohmann <mail@nlohmann.me>
+
+---------
+
+Signed-off-by: Niels Lohmann <mail@nlohmann.me>
+
+## Discussion before merge
+- nlohmann: Review of the exception-safety fix. The fix itself looks complete. One gap in the test is fixed in 90078597c.
+
+**Scope check.** I went through every assignment to `m_type` in `include/`, on this branch and on a merge with current `develop`. No function outside a constructor still sets the type before the value is allocated. The constructors that do (iterator range, copy, `copy_iteratively`) are safe, because `data::~data` → `destroy()` skips a null pointer. `erase` only resets to null.
+
+**Finding (low): 9 of the 14 reordered `to_json` overloads were untested.** `tests/src/unit-allocator.cpp` checks each revert. I reverted each hunk of the fix separately, then ran the new test case under ASan/UBSan at C++11/17/20:
+
+- Every `json.hpp` hunk except the initializer-list constructor fails the test when reverted. That constructor was never affected. The `string_view` `operator[]` needs C++17.
+- Nine `to_json.hpp` hunks passed even with the old code back: `const string_t&`, compatible strings (`const char*`), `binary_t&&`, `const array_t&`, `array_t&&`, `std::valarray`, ranges views, `const object_t&` and `object_t&&`. The PR body lists `std::valarray` and ranges among the paths the test c
+[... truncated, 709 more characters]
+- nlohmann: CI fix: AppVeyor VS 2015 Debug x86
+
+`test-allocator_cpp11` crashed with SIGSEGV in "a failed allocation leaves the value unchanged", section "converting into an existing value", on AppVeyor's Visual Studio 2015 Debug x86 job. All Release jobs passed. With iterator debugging, VS 2015's containers construct a proxy with the allocator in constructors that cannot report its failure, so the throwing test allocator crashes there. The section already had a guard for the `std::vector<bool>` check for this reason, but the other conversions in it hit the same problem.
+
+Fixed in ba6bf32f6: the whole section is skipped for VS 2015 with iterator debugging, using the same condition as before, and the inner guard is gone. Every other toolchain still runs the section, including VS 2015 Release. Locally with clang, the file passes at C++11/17/20 (71/73/75 assertions). I have no VS 2015 here, so only the next AppVeyor run can confirm the fix.
+
+The other failed AppVeyor job on this PR (VS2017 Release x86) hit the 60-minute job limit during the CMake integration tests. It is not related to this PR.
+
+— posted by Claude Code on behalf of @nlohmann
+- gregmarr: seems odd to me that several of these are const
+- gregmarr: Should this just be created up front and then use `value.array.push_back()` rather than creating a vector and moving from it?
+- gregmarr: See previous comment.
+- gregmarr: See previous comment.
+
+## Changed functions (from changes.py)
+- nlohmann::detail::external_constructor (private); reached from the public API through: nlohmann::adl_serializer::to_json(BasicJsonType &, TargetType &&)
+- nlohmann::detail::external_constructor::construct(BasicJsonType &, const std::vector<bool> &) (private); reached from the public API through: nlohmann::adl_serializer::to_json(BasicJsonType &, TargetType &&)
+- nlohmann::detail::external_constructor::construct(BasicJsonType &, const std::valarray<T> &) (private); reached from the public API through: nlohmann::adl_serializer::to_json(BasicJsonType &, TargetType &&)
+- nlohmann::detail::external_constructor::construct(BasicJsonType &, const CompatibleArrayType &) (private); reached from the public API through: nlohmann::adl_serializer::to_json(BasicJsonType &, TargetType &&)
+- nlohmann::detail::external_constructor::construct(BasicJsonType &, const CompatibleObjectType &) (private); reached from the public API through: nlohmann::adl_serializer::to_json(BasicJsonType &, TargetType &&)
+- nlohmann::detail::external_constructor::construct(BasicJsonType &, const typename BasicJsonType::array_t &) (private); reached from the public API through: nlohmann::adl_serializer::to_json(BasicJsonType &, TargetType &&)
+- nlohmann::detail::external_constructor::construct(BasicJsonType &, const typename BasicJsonType::object_t &) (private); reached from the public API through: nlohmann::adl_serializer::to_json(BasicJsonType &, TargetType &&)
+- nlohmann::detail::external_constructor::construct(BasicJsonType &, typename BasicJsonType::array_t &&) (private); reached from the public API through: nlohmann::adl_serializer::to_json(BasicJsonType &, TargetType &&)
+- nlohmann::detail::external_constructor::construct(BasicJsonType &, typename BasicJsonType::object_t &&) (private); reached from the public API through: nlohmann::adl_serializer::to_json(BasicJsonType &, TargetType &&)
+- nlohmann::detail::external_constructor::construct(BasicJsonType &, const CompatibleStringType &) (private); reached from the public API through: nlohmann::adl_serializer::to_json(BasicJsonType &, TargetType &&)
+- nlohmann::detail::external_constructor::construct(BasicJsonType &, const typename BasicJsonType::binary_t &) (private); reached from the public API through: nlohmann::adl_serializer::to_json(BasicJsonType &, TargetType &&)
+- nlohmann::detail::external_constructor::construct(BasicJsonType &, const typename BasicJsonType::string_t &) (private); reached from the public API through: nlohmann::adl_serializer::to_json(BasicJsonType &, TargetType &&)
+- nlohmann::detail::external_constructor::construct(BasicJsonType &, typename BasicJsonType::binary_t &&) (private); reached from the public API through: nlohmann::adl_serializer::to_json(BasicJsonType &, TargetType &&)
+- nlohmann::detail::external_constructor::construct(BasicJsonType &, typename BasicJsonType::string_t &&) (private); reached from the public API through: nlohmann::adl_serializer::to_json(BasicJsonType &, TargetType &&)
+- nlohmann::detail::external_constructor::construct(BasicJsonType &, typename BasicJsonType::boolean_t) (private); reached from the public API through: nlohmann::adl_serializer::to_json(BasicJsonType &, TargetType &&)
+- nlohmann::detail::external_constructor::construct(BasicJsonType &, typename BasicJsonType::number_float_t) (private); reached from the public API through: nlohmann::adl_serializer::to_json(BasicJsonType &, TargetType &&)
+- nlohmann::detail::external_constructor::construct(BasicJsonType &, typename BasicJsonType::number_integer_t) (private); reached from the public API through: nlohmann::adl_serializer::to_json(BasicJsonType &, TargetType &&)
+- nlohmann::detail::external_constructor::construct(BasicJsonType &, typename BasicJsonType::number_unsigned_t) (private); reached from the public API through: nlohmann::adl_serializer::to_json(BasicJsonType &, TargetType &&)
+- nlohmann::basic_json::json_value (private); reached from the public API through: nlohmann::operator<<(std::ostream &, const basic_json<...> &), nlohmann::operator<<(basic_json<...> &, std::istream &), nlohmann::operator>>(std::istream &, basic_json<...> &), nlohmann::operator>>(const basic_json<...> &, std::ostream &), nlohmann::format_as(const basic_json<...> &), nlohmann::to_string(const basic_json<...> &), nlohmann::operator!=(const_reference, ScalarType), nlohmann::operator!=(ScalarType, const_reference), nlohmann::operator<(const_reference, ScalarType), nlohmann::operator<(ScalarType, const_reference)
+- nlohmann::basic_json::replace_value(value_t, const json_value &) (private); reached from the public API through: nlohmann::operator<<(std::ostream &, const basic_json<...> &), nlohmann::operator<<(basic_json<...> &, std::istream &), nlohmann::operator>>(std::istream &, basic_json<...> &), nlohmann::operator>>(const basic_json<...> &, std::ostream &), nlohmann::format_as(const basic_json<...> &), nlohmann::to_string(const basic_json<...> &), nlohmann::operator!=(const_reference, ScalarType), nlohmann::operator!=(ScalarType, const_reference), nlohmann::operator<(const_reference, ScalarType), nlohmann::operator<(ScalarType, const_reference)
+- nlohmann::basic_json::json_value::json_value(array_t *) (private); reached from the public API through: nlohmann::operator<<(std::ostream &, const basic_json<...> &), nlohmann::operator<<(basic_json<...> &, std::istream &), nlohmann::operator>>(std::istream &, basic_json<...> &), nlohmann::operator>>(const basic_json<...> &, std::ostream &), nlohmann::format_as(const basic_json<...> &), nlohmann::to_string(const basic_json<...> &), nlohmann::operator!=(const_reference, ScalarType), nlohmann::operator!=(ScalarType, const_reference), nlohmann::operator<(const_reference, ScalarType), nlohmann::operator<(ScalarType, const_reference)
+- nlohmann::basic_json::json_value::json_value(object_t *) (private); reached from the public API through: nlohmann::operator<<(std::ostream &, const basic_json<...> &), nlohmann::operator<<(basic_json<...> &, std::istream &), nlohmann::operator>>(std::istream &, basic_json<...> &), nlohmann::operator>>(const basic_json<...> &, std::ostream &), nlohmann::format_as(const basic_json<...> &), nlohmann::to_string(const basic_json<...> &), nlohmann::operator!=(const_reference, ScalarType), nlohmann::operator!=(ScalarType, const_reference), nlohmann::operator<(const_reference, ScalarType), nlohmann::operator<(ScalarType, const_reference)
+- nlohmann::basic_json::json_value::json_value(string_t *) (private); reached from the public API through: nlohmann::operator<<(std::ostream &, const basic_json<...> &), nlohmann::operator<<(basic_json<...> &, std::istream &), nlohmann::operator>>(std::istream &, basic_json<...> &), nlohmann::operator>>(const basic_json<...> &, std::ostream &), nlohmann::format_as(const basic_json<...> &), nlohmann::to_string(const basic_json<...> &), nlohmann::operator!=(const_reference, ScalarType), nlohmann::operator!=(ScalarType, const_reference), nlohmann::operator<(const_reference, ScalarType), nlohmann::operator<(ScalarType, const_reference)
+- nlohmann::basic_json::basic_json<...>(initializer_list_t, bool, value_t) (public)
+- nlohmann::basic_json (public)
+- nlohmann::basic_json::binary(const typename binary_t::container_type &) (public)
+- nlohmann::basic_json::binary(const typename binary_t::container_type &, typename binary_t::subtype_type) (public)
+- nlohmann::basic_json::binary(typename binary_t::container_type &&) (public)
+- nlohmann::basic_json::binary(typename binary_t::container_type &&, typename binary_t::subtype_type) (public)
+
+## Diff of the library source (before -> after)
+```diff
+diff --git a/include/nlohmann/detail/conversions/to_json.hpp b/include/nlohmann/detail/conversions/to_json.hpp
+index f3b4994f1..8edaee2fe 100644
+--- a/include/nlohmann/detail/conversions/to_json.hpp
++++ b/include/nlohmann/detail/conversions/to_json.hpp
+@@ -13,7 +13,6 @@
+     #include <optional> // optional
+ #endif
+ 
+-#include <algorithm> // copy
+ #include <iterator> // begin, end
+ #include <memory> // allocator_traits
+ #include <string> //  basic_string, char_traits
+@@ -39,10 +38,14 @@ namespace detail
+ //////////////////
+ 
+ /*
+- * Note all external_constructor<>::construct functions need to call
+- * j.m_data.m_value.destroy(j.m_data.m_type) to avoid a memory leak in case j contains an
+- * allocated value (e.g., a string). See bug issue
++ * Note all external_constructor<>::construct functions need to store the new
++ * value with j.replace_value(), which destroys the old one to avoid a memory
++ * leak in case j contains an allocated value (e.g., a string). See bug issue
+  * https://github.com/nlohmann/json/issues/2865 for more information.
++ *
++ * A value that has to be allocated is created before the old one is destroyed:
++ * were it the other way around, an exception while creating the new value would
++ * leave j with the type of the new value, but the pointer to the destroyed old one.
+  */
+ 
+ template<value_t> struct external_constructor;
+@@ -53,10 +56,7 @@ struct external_constructor<value_t::boolean>
+     template<typename BasicJsonType>
+     static void construct(BasicJsonType& j, typename BasicJsonType::boolean_t b) noexcept
+     {
+-        j.m_data.m_value.destroy(j.m_data.m_type);
+-        j.m_data.m_type = value_t::boolean;
+-        j.m_data.m_value = b;
+-        j.assert_invariant();
++        j.replace_value(value_t::boolean, b);
+     }
+ };
+ 
+@@ -66,19 +66,15 @@ struct external_constructor<value_t::string>
+     template<typename BasicJsonType>
+     static void construct(BasicJsonType& j, const typename BasicJsonType::string_t& s)
+     {
+-        j.m_data.m_value.destroy(j.m_data.m_type);
+-        j.m_data.m_type = value_t::string;
+-        j.m_data.m_value = s;
+-        j.assert_invariant();
++        const typename BasicJsonType::json_value value(s);
++        j.replace_value(value_t::string, value);
+     }
+ 
+     template<typename BasicJsonType>
+     static void construct(BasicJsonType& j, typename BasicJsonType::string_t&& s)
+     {
+-        j.m_data.m_value.destroy(j.m_data.m_type);
+-        j.m_data.m_type = value_t::string;
+-        j.m_data.m_value = std::move(s);
+-        j.assert_invariant();
++        const typename BasicJsonType::json_value value(std::move(s));
++        j.replace_value(value_t::string, value);
+     }
+ 
+     template < typename BasicJsonType, typename CompatibleStringType,
+@@ -86,10 +82,8 @@ struct external_constructor<value_t::string>
+                              int > = 0 >
+     static void construct(BasicJsonType& j, const CompatibleStringType& str)
+     {
+-        j.m_data.m_value.destroy(j.m_data.m_type);
+-        j.m_data.m_type = value_t::string;
+-        j.m_data.m_value.string = j.template create<typename BasicJsonType::string_t>(str);
+-        j.assert_invariant();
++        const typename BasicJsonType::json_value value(j.template create<typename BasicJsonType::string_t>(str));
++        j.replace_value(value_t::string, value);
+     }
+ };
+ 
+@@ -99,19 +93,15 @@ struct external_constructor<value_t::binary>
+     template<typename BasicJsonType>
+     static void construct(BasicJsonType& j, const typename BasicJsonType::binary_t& b)
+     {
+-        j.m_data.m_value.destroy(j.m_data.m_type);
+-        j.m_data.m_type = value_t::binary;
+-        j.m_data.m_value = typename BasicJsonType::binary_t(b);
+-        j.assert_invariant();
++        const typename BasicJsonType::json_value value(b);
++        j.replace_value(value_t::binary, value);
+     }
+ 
+     template<typename BasicJsonType>
+     static void construct(BasicJsonType& j, typename BasicJsonType::binary_t&& b)
+     {
+-        j.m_data.m_value.destroy(j.m_data.m_type);
+-        j.m_data.m_type = value_t::binary;
+-        j.m_data.m_value = typename BasicJsonType::binary_t(std::move(b));
+-        j.assert_invariant();
++        const typename BasicJsonType::json_value value(std::move(b));
++        j.replace_value(value_t::binary, value);
+     }
+ };
+ 
+@@ -121,10 +111,7 @@ struct external_constructor<value_t::number_float>
+     template<typename BasicJsonType>
+     static void construct(BasicJsonType& j, typename BasicJsonType::number_float_t val) noexcept
+     {
+-        j.m_data.m_value.destroy(j.m_data.m_type);
+-        j.m_data.m_type = value_t::number_float;
+-        j.m_data.m_value = val;
+-        j.assert_invariant();
++        j.replace_value(value_t::number_float, val);
+     }
+ };
+ 
+@@ -134,10 +121,7 @@ struct external_constructor<value_t::number_unsigned>
+     template<typename BasicJsonType>
+     static void construct(BasicJsonType& j, typename BasicJsonType::number_unsigned_t val) noexcept
+     {
+-        j.m_data.m_value.destroy(j.m_data.m_type);
+-        j.m_data.m_type = value_t::number_unsigned;
+-        j.m_data.m_value = val;
+-        j.assert_invariant();
++        j.replace_value(value_t::number_unsigned, val);
+     }
+ };
+ 
+@@ -147,10 +131,7 @@ struct external_constructor<value_t::number_integer>
+     template<typename BasicJsonType>
+     static void construct(BasicJsonType& j, typename BasicJsonType::number_integer_t val) noexcept
+     {
+-        j.m_data.m_value.destroy(j.m_data.m_type);
+-        j.m_data.m_type = value_t::number_integer;
+-        j.m_data.m_value = val;
+-        j.assert_invariant();
++        j.replace_value(value_t::number_integer, val);
+     }
+ };
+ 
+@@ -160,21 +141,15 @@ struct external_constructor<value_t::array>
+     template<typename BasicJsonType>
+     static void construct(BasicJsonType& j, const typename BasicJsonType::array_t& arr)
+     {
+-        j.m_data.m_value.destroy(j.m_data.m_type);
+-        j.m_data.m_type = value_t::array;
+-        j.m_data.m_value = arr;
+-        j.set_parents();
+-        j.assert_invariant();
++        const typename BasicJsonType::json_value value(arr);
++        j.replace_value(value_t::array, value);
+     }
+ 
+     template<typename BasicJsonType>
+     static void construct(BasicJsonType& j, typename BasicJsonType::array_t&& arr)
+     {
+-        j.m_data.m_value.destroy(j.m_data.m_type);
+-        j.m_data.m_type = value_t::array;
+-        j.m_data.m_value = std::move(arr);
+-        j.set_parents();
+-        j.assert_invariant();
++        const typename BasicJsonType::json_value value(std::move(arr));
++        j.replace_value(value_t::array, value);
+     }
+ 
+     template < typename BasicJsonType, typename CompatibleArrayType,
+@@ -188,39 +163,23 @@ struct external_constructor<value_t::array>
+         using std::begin;
+         using std::end;
+ 
+-        j.m_data.m_value.destroy(j.m_data.m_type);
+-        j.m_data.m_type = value_t::array;
+-        j.m_data.m_value.array = j.template create<typename BasicJsonType::array_t>(begin(arr), end(arr));
+-        j.set_parents();
+-        j.assert_invariant();
++        const typename BasicJsonType::json_value value(j.template create<typename BasicJsonType::array_t>(begin(arr), end(arr)));
++        j.replace_value(value_t::array, value);
+     }
+ 
+     template<typename BasicJsonType>
+     static void construct(BasicJsonType& j, const std::vector<bool>& arr)
+     {
+-        j.m_data.m_value.destroy(j.m_data.m_type);
+-        j.m_data.m_type = value_t::array;
+-        j.m_data.m_value = value_t::array;
+-        j.m_data.m_value.array->reserve(arr.size());
+-        for (const bool x : arr)
+-        {
+-            j.m_data.m_value.array->push_back(x);
+-            j.set_parent(j.m_data.m_value.array->back());
+-        }
+-        j.assert_invariant();
++        const typename BasicJsonType::json_value value(j.template create<typename BasicJsonType::array_t>(arr.begin(), arr.end()));
++        j.replace_value(value_t::array, value);
+     }
+ 
+     template<typename BasicJsonType, typename T,
+              enable_if_t<std::is_convertible<T, BasicJsonType>::value, int> = 0>
+     static void construct(BasicJsonType& j, const std::valarray<T>& arr)
+     {
+-        j.m_data.m_value.destroy(j.m_data.m_type);
+-        j.m_data.m_type = value_t::array;
+-        j.m_data.m_value = value_t::array;
+-        j.m_data.m_value.array->resize(arr.size());
+-        std::copy(std::begin(arr), std::end(arr), j.m_data.m_value.array->begin());
+-        j.set_parents();
+-        j.assert_invariant();
++        const typename BasicJsonType::json_value value(j.template create<typename BasicJsonType::array_t>(std::begin(arr), std::end(arr)));
++        j.replace_value(value_t::array, value);
+     }
+ 
+ #if JSON_HAS_RANGE_VIEW_CONVERSION
+@@ -228,18 +187,15 @@ struct external_constructor<value_t::array>
+              enable_if_t<is_compatible_range_view<std::remove_cvref_t<CompatibleArrayType>>::value, int> = 0>
+     static void construct(BasicJsonType& j, CompatibleArrayType && arr)
+     {
+-        j.m_data.m_value.destroy(j.m_data.m_type);
+-        j.m_data.m_type = value_t::array;
+-        j.m_data.m_value = value_t::array;
++        // no range constructor: a view's begin() and end() may have different
++        // types, and the view may only be iterable once
++        typename BasicJsonType::array_t elements;
+         for (auto&& x : std::forward<CompatibleArrayType>(arr))
+         {
+-            j.m_data.m_value.array->push_back(x);
++            elements.push_back(x);
+         }
+-        // set the parents only once all elements are in place: a push_back
+-        // that reallocates moves the earlier elements, which does not keep
+-        // their parent pointers
+-        j.set_parents();
+-        j.assert_invariant();
++        const typename BasicJsonType::json_value value(std::move(elements));
++        j.replace_value(value_t::array, value);
+     }
+ #endif
+ };
+@@ -250,21 +206,15 @@ struct external_constructor<value_t::object>
+     template<typename BasicJsonType>
+     static void construct(BasicJsonType& j, const typename BasicJsonType::object_t& obj)
+     {
+-        j.m_data.m_value.destroy(j.m_data.m_type);
+-        j.m_data.m_type = value_t::object;
+-        j.m_data.m_value = obj;
+-        j.set_parents();
+-        j.assert_invariant();
++        const typename BasicJsonType::json_value value(obj);
++        j.replace_value(value_t::object, value);
+     }
+ 
+     template<typename BasicJsonType>
+     static void construct(BasicJsonType& j, typename BasicJsonType::object_t&& obj)
+     {
+-        j.m_data.m_value.destroy(j.m_data.m_type);
+-        j.m_data.m_type = value_t::object;
+-        j.m_data.m_value = std::move(obj);
+-        j.set_parents();
+-        j.assert_invariant();
++        const typename BasicJsonType::json_value value(std::move(obj));
++        j.replace_value(value_t::object, value);
+     }
+ 
+     template < typename BasicJsonType, typename CompatibleObjectType,
+@@ -274,11 +224,8 @@ struct external_constructor<value_t::object>
+         using std::begin;
+         using std::end;
+ 
+-        j.m_data.m_value.destroy(j.m_data.m_type);
+-        j.m_data.m_type = value_t::object;
+-        j.m_data.m_value.object = j.template create<typename BasicJsonType::object_t>(begin(obj), end(obj));
+-        j.set_parents();
+-        j.assert_invariant();
++        const typename BasicJsonType::json_value value(j.template create<typename BasicJsonType::object_t>(begin(obj), end(obj)));
++        j.replace_value(value_t::object, value);
+     }
+ };
+diff --git a/include/nlohmann/json.hpp b/include/nlohmann/json.hpp
+index 4eeb326b8..788cc999c 100644
+--- a/include/nlohmann/json.hpp
++++ b/include/nlohmann/json.hpp
+@@ -676,6 +676,11 @@ class basic_json // NOLINT(cppcoreguidelines-special-member-functions,hicpp-spec
+         /// constructor for rvalue binary arrays (internal type)
+         json_value(binary_t&& value) : binary(create<binary_t>(std::move(value))) {}
+ 
++        /// constructors taking ownership of an already created value
++        explicit json_value(string_t* value) noexcept : string(value) {}
++        explicit json_value(object_t* value) noexcept : object(value) {}
++        explicit json_value(array_t* value) noexcept : array(value) {}
++
+ private:
+         // raw, allocation-free transfer of m_data from src to dst: no
+         // set_parents()/assert_invariant() (the former is O(#children) per
+@@ -1006,6 +1011,18 @@ public:
+ #endif
+     }
+ 
++    /// @brief replace the stored value with an already created one
++    /// The new value must be created before calling this function: if its
++    /// creation throws, the current value is left untouched.
++    void replace_value(value_t t, const json_value& v) noexcept
++    {
++        m_data.m_value.destroy(m_data.m_type);
++        m_data.m_value = v;
++        m_data.m_type = t;
++        set_parents();
++        assert_invariant();
++    }
++
+     iterator set_parents(iterator it, std::ptrdiff_t count_set_parents)
+     {
+ #if JSON_DIAGNOSTICS
+@@ -2265,8 +2282,8 @@ public:
+         if (is_an_object)
+         {
+             // the initializer list is a list of pairs -> create an object
+-            m_data.m_type = value_t::object;
+             m_data.m_value = value_t::object;
++            m_data.m_type = value_t::object;
+ 
+             for (auto& element_ref : init)
+             {
+@@ -2288,8 +2305,8 @@ public:
+             }
+ #endif
+             // the initializer list describes an array -> create an array
+-            m_data.m_type = value_t::array;
+             m_data.m_value.array = create<array_t>(init.begin(), init.end());
++            m_data.m_type = value_t::array;
+         }
+ 
+         set_parents();
+@@ -2302,8 +2319,8 @@ public:
+     static basic_json binary(const typename binary_t::container_type& init)
+     {
+         auto res = basic_json();
+-        res.m_data.m_type = value_t::binary;
+         res.m_data.m_value = init;
++        res.m_data.m_type = value_t::binary;
+         return res;
+     }
+ 
+@@ -2313,8 +2330,8 @@ public:
+     static basic_json binary(const typename binary_t::container_type& init, typename binary_t::subtype_type subtype)
+     {
+         auto res = basic_json();
+-        res.m_data.m_type = value_t::binary;
+         res.m_data.m_value = binary_t(init, subtype);
++        res.m_data.m_type = value_t::binary;
+         return res;
+     }
+ 
+@@ -2324,8 +2341,8 @@ public:
+     static basic_json binary(typename binary_t::container_type&& init)
+     {
+         auto res = basic_json();
+-        res.m_data.m_type = value_t::binary;
+         res.m_data.m_value = std::move(init);
++        res.m_data.m_type = value_t::binary;
+         return res;
+     }
+ 
+@@ -2335,8 +2352,8 @@ public:
+     static basic_json binary(typename binary_t::container_type&& init, typename binary_t::subtype_type subtype)
+     {
+         auto res = basic_json();
+-        res.m_data.m_type = value_t::binary;
+         res.m_data.m_value = binary_t(std::move(init), subtype);
++        res.m_data.m_type = value_t::binary;
+         return res;
+     }
+```
+
+## Existing upstream tests that call the changed code (for style and API usage)
+// Upstream tests at the PR's parent commit 0c2329d0e that use the changed code.
+// Names searched (test lines using each): basic_json (0), binary (0), to_json (0), format_as (23), to_string (76), operator<< (79), operator>> (76), operator!= (52), operator< (185), external_constructor (0), construct (0), json_value (11), replace_value (0)
+
+// ---- tests/src/unit-deserialization.cpp:236-248  (uses: operator<<, operator>>)
+TEST_CASE("deserialization")
+{
+    SECTION("successful deserialization")
+    {
+        SECTION("stream")
+        {
+            std::stringstream ss1;
+            std::stringstream ss2;
+            std::stringstream ss3;
+            ss1 << R"(["foo",1,2,3,false,{"one":1}])";
+            ss2 << R"(["foo",1,2,3,false,{"one":1}])";
+            ss3 << R"(["foo",1,2,3,false,{"one":1}])";
+            const json j = json::parse(ss1);
+
+// ---- tests/src/unit-deserialization.cpp:345-357  (uses: operator<<, operator>>)
+    SECTION("unsuccessful deserialization")
+    {
+        SECTION("stream")
+        {
+            std::stringstream ss1;
+            std::stringstream ss3;
+            std::stringstream ss4;
+            std::stringstream ss5;
+            ss1 << R"(["foo",1,2,3,false,{"one":1})";
+            ss3 << R"(["foo",1,2,3,false,{"one":1})";
+            ss4 << R"(["foo",1,2,3,false,{"one":1})";
+            ss5 << R"(["foo",1,2,3,false,{"one":1})";
+
+
+// ---- tests/src/unit-precise-stream-position.cpp:88-100  (uses: operator<<, operator>>)
+TEST_CASE("JSON_PRECISE_STREAM_POSITION")
+{
+    SECTION("the macro is part of the ABI tag")
+    {
+        const std::string ns = STRINGIZE(NLOHMANN_JSON_NAMESPACE);
+        // other tags may come before it, e.g. json_abi_diag_psp
+        CHECK(ns.find("_psp") != std::string::npos);
+    }
+
+    SECTION("a number does not consume the character that terminates it")
+    {
+        // a number is only terminated by the character following it; that
+        // character must be given back so the stream is positioned right
+
+// ---- tests/src/unit-precise-stream-position.cpp:226-236  (uses: operator<<, operator>>)
+    SECTION("a streambuf that cannot put back is not needed")
+    {
+        // the terminating character is never consumed, so no putback
+        // position is required
+        no_putback_streambuf buf("1true");
+        std::istream is(&buf);
+        json j;
+        is >> j;
+        CHECK(j == json(1));
+        CHECK(remaining(is) == "true");
+    }
+
+// ---- tests/src/unit-comparison.cpp:73-85  (uses: operator!=, operator<)
+TEST_CASE("lexicographical comparison operators")
+{
+    constexpr auto f_ = false;
+    constexpr auto _t = true;
+    constexpr auto nan = std::numeric_limits<json::number_float_t>::quiet_NaN();
+#if JSON_HAS_THREE_WAY_COMPARISON
+    constexpr auto lt = std::partial_ordering::less;
+    constexpr auto gt = std::partial_ordering::greater;
+    constexpr auto eq = std::partial_ordering::equivalent;
+    constexpr auto un = std::partial_ordering::unordered;
+#endif
+
+#if JSON_HAS_THREE_WAY_COMPARISON
+
+// ---- tests/src/unit-comparison.cpp:127-147  (uses: operator!=, operator<)
+        SECTION("comparison: less")
+        {
+            REQUIRE(expected_lt.size() == j_types.size());
+            for (size_t i = 0; i < j_types.size(); ++i)
+            {
+                REQUIRE(expected_lt[i].size() == j_types.size());
+                for (size_t j = 0; j < j_types.size(); ++j)
+                {
+                    CAPTURE(i)
+                    CAPTURE(j)
+                    // check precomputed values
+#if JSON_HAS_THREE_WAY_COMPARISON
+                    // JSON_HAS_CPP_20 (do not remove; see note at top of file)
+                    CHECK((j_types[i] < j_types[j]) == expected_lt[i][j]);
+#else
+                    CHECK(operator<(j_types[i], j_types[j]) == expected_lt[i][j]);
+#endif
+                    CHECK(f(j_types[i], j_types[j]) == expected_lt[i][j]);
+                }
+            }
+        }
+
+// ---- tests/src/unit-ordered_json.cpp:73-83  (uses: operator<, operator>>)
+TEST_CASE("regression test for issue #3732 - iteration_proxy_value<iter_impl<ordered_json>>")
+{
+    // Naming the proxy type in a function-parameter position forces eager
+    // instantiation of basic_json<ordered_map>; previously this hit an
+    // incomplete-type error in set_parents().
+    auto fn = [](nlohmann::detail::iteration_proxy_value<nlohmann::detail::iter_impl<nlohmann::ordered_json>> const & val)
+    {
+        return val.value();
+    };
+    static_cast<void>(fn);
+}
+
+// ---- tests/src/unit-ordered_map.cpp:579-595  (uses: operator<, to_string)
+    SECTION("elements keep their order and values over many growths")
+    {
+        ordered_map<std::string, counted> om;
+        for (int i = 0; i < 1000; ++i)
+        {
+            om.emplace(std::to_string(i), counted(i));
+        }
+
+        CHECK(om.size() == 1000);
+        int i = 0;
+        for (const auto& element : om)
+        {
+            CHECK(element.first == std::to_string(i));
+            CHECK(element.second.payload == i);
+            ++i;
+        }
+    }
+
+// ---- tests/src/unit-ordered_map.cpp:633-649  (uses: operator<, to_string)
+        SECTION("ordered_json")
+        {
+            auto j = nlohmann::ordered_json::object();
+            auto& object = j.get_ref<nlohmann::ordered_json::object_t&>();
+            object.reserve(4);
+            while (object.size() < object.capacity())
+            {
+                const auto i = std::to_string(object.size());
+                j[i] = "a value that is too long for the small string optimization " + i;
+            }
+            const auto size = j.size();
+
+            j.emplace("new", std::move(j["0"]));
+            CHECK(j.size() == size + 1);
+            CHECK(j["new"] == "a value that is too long for the small string optimization 0");
+            CHECK(j["0"].is_null());
+        }
+
+// ---- tests/src/unit-serialization.cpp:30-57  (uses: operator<, operator<<)
+    SECTION("operator<<")
+    {
+        SECTION("no given width")
+        {
+            std::stringstream ss;
+            const json j = {"foo", 1, 2, 3, false, {{"one", 1}}};
+            ss << j;
+            CHECK(ss.str() == "[\"foo\",1,2,3,false,{\"one\":1}]");
+        }
+
+        SECTION("given width")
+        {
+            std::stringstream ss;
+            const json j = {"foo", 1, 2, 3, false, {{"one", 1}}};
+            ss << std::setw(4) << j;
+            CHECK(ss.str() ==
+                  "[\n    \"foo\",\n    1,\n    2,\n    3,\n    false,\n    {\n        \"one\": 1\n    }\n]");
+        }
+
+        SECTION("given fill")
+        {
+            std::stringstream ss;
+            const json j = {"foo", 1, 2, 3, false, {{"one", 1}}};
+            ss << std::setw(1) << std::setfill('\t') << j;
+            CHECK(ss.str() ==
+                  "[\n\t\"foo\",\n\t1,\n\t2,\n\t3,\n\tfalse,\n\t{\n\t\t\"one\": 1\n\t}\n]");
+        }
+    }
+
+# Programs to repair
+
+## gen_20.cpp (compile)
+Intent: Probes direct invocation of basic_json::replace_value via external constructor behavior pattern.
+COMPILE ERROR. The program fails to compile, the same way against the old and the new library. Fix the error (wrong or missing include, typo, misuse of the public API) and keep the intent: the call under test must stay. Include only headers that exist; if you are unsure a header exists, use the library's main header.
+Compiler errors:
+```
+gen_20.cpp:9:25: error: ‘union nlohmann::json_abi_v3_12_0::basic_json<>::json_value’ is private within this context
+gen_20.cpp:10:11: error: ‘using nlohmann::json_abi_v3_12_0::json = class nlohmann::json_abi_v3_12_0::basic_json<>’ {aka ‘class nlohmann::json_abi_v3_12_0::basic_json<>’} has no member named ‘replace_value’
+```
+Source:
+```cpp
+#include <nlohmann/json.hpp>
+#include <iostream>
+
+int main() {
+    try {
+        nlohmann::json j("old value");
+        nlohmann::json::json_value val(new nlohmann::json::string_t("new replaced value"));
+        j.replace_value(nlohmann::json::value_t::string, val);
+        std::cout << j.is_string() << " " << j.get<std::string>() << std::endl;
+    } catch (const std::exception& e) {
+        std::cout << "EXCEPTION: " << e.what() << std::endl;
+    }
+}
+```
+
+## gen_21.cpp (compile)
+Intent: Probes adl_serializer to_json for rvalue binary containers, invoking external_constructor<value_t::binary>::construct with binary_t&&.
+COMPILE ERROR. The program fails to compile, the same way against the old and the new library. Fix the error (wrong or missing include, typo, misuse of the public API) and keep the intent: the call under test must stay. Include only headers that exist; if you are unsure a header exists, use the library's main header.
+Compiler errors:
+```
+gen_21.cpp:8:55: error: could not convert ‘{1, 2, 3}’ from ‘<brace-enclosed initializer list>’ to ‘nlohmann::json_abi_v3_12_0::basic_json<>::binary_t’ {aka ‘nlohmann::json_abi_v3_12_0::byte_container_with_subtype<std::vector<unsigned char> >’}
+```
+Source:
+```cpp
+#include <nlohmann/json.hpp>
+#include <iostream>
+int main() {
+    try {
+        nlohmann::json j;
+        nlohmann::json::binary_t b = {0x01, 0x02, 0x03};
+        nlohmann::to_json(j, std::move(b));
+        std::cout << j.dump() << std::endl;
+    } catch (const std::exception& e) {
+        std::cout << "EXCEPTION: " << e.what() << std::endl;
+    }
+    return 0;
+}
+```
+
+# Task
+Return JSON with a "fixes" array: one item per program above, with "file" (exactly as given) and "code" (the complete repaired program, standalone, with its own int main). Do not return programs you cannot repair.

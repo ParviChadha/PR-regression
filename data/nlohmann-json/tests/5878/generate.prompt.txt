@@ -1,0 +1,410 @@
+[system]
+You write test programs that probe a C++ library for behavioral changes made by one pull request.
+Each program is compiled and run twice, once against the library before the change and once after, and the two
+outputs are compared. Your job is to produce programs whose output reveals whether the change altered behavior,
+including side effects the author did not intend.
+
+Rules for every program:
+- It is standalone: one file with its own int main(), compiled as C++17, printing results to stdout.
+- Use only the library's documented public API. Never include internal headers or use detail/impl namespaces,
+  private members or undocumented macros.
+- Do not judge results (no assert, no expected-value comparisons): just print what the library returns. Print
+  enough to make differences visible, one fact per line.
+- Output must be deterministic. Never print pointers or addresses, uninitialized data, the order of
+  hash-based containers, timings, thread ids, random values, file paths or environment data. Print floating point
+  values with an explicit precision. No input, files, network, threads, clocks or randomness.
+- Wrap calls that may throw in try/catch and print the exception's type and message, so an exception is an
+  observable result. Do not crash on purpose.
+- Aim at the code the diff changes. Prefer calls that compile against both the old and the new library; one or two
+  programs may use an API the PR adds. Cover ordinary inputs and edge cases (empty, minimum and maximum values,
+  boundaries, special values, nesting, unusual types) and also neighbouring behavior the change could disturb.
+- When the diff changes which types or inputs an API accepts or rejects (constraints, overloads, traits,
+  conversions), test it with the detection idiom (std::void_t or requires) and `if constexpr`, so the program
+  compiles against both versions, prints whether the expression is well-formed, and exercises it when it is.
+  Accepting an input is not enough: also use it through every entry point that should follow (const and
+  non-const, read, write, insert, erase, lookup, nested use), because a change that admits new inputs can leave
+  later code unable to handle them.
+- If the changed code is internal (a detail, impl or internal namespace, a trait, a helper), do not name it in the
+  program. Reach it through the public API that depends on it, using detection (as above) where needed.
+- Use the exact types and values the diff is about (the new trait's argument types, the new overload's
+  parameters), not stand-ins.
+- Spread the programs over distinct public entry points and overloads, one main idea per program. Do not write
+  several programs that only rename a type or change a literal.
+- Make the programs differ from each other: different inputs, different entry points, different features.
+
+Rules specific to this library:
+- Include the library with #include <nlohmann/json.hpp>. The public API is nlohmann::json (nlohmann::basic_json), nlohmann::ordered_json, json_pointer, json patch/merge_patch and the documented SAX and conversion interfaces. Never use the detail namespace.
+- It is a header-only library: nothing to link. Programs are compiled as C++17.
+- Print JSON values with dump() (compact) or dump(2). Keys of nlohmann::json objects print in sorted order, so output is deterministic; do not depend on insertion order except with ordered_json.
+
+[user]
+# Pull request #5878: Copy short printable-ASCII strings in dump() without starting the scanner
+
+## Description
+`dump()` now handles short strings of printable ASCII separately: strings of up to 32 bytes are checked against a 256-entry table of bytes that can be written unchanged, four bytes per step, and copied in one go if all bytes pass. Longer strings, and strings with any byte that needs escaping or UTF-8 handling, take the existing path through the vector scanner unchanged.
+
+The idea comes from SQLite's `jsonAppendString()` (`src/json.c`), which writes strings with the same kind of table loop. For short strings, starting the vector scanner costs more than the scan itself. Most object keys and many values are this short: citm_catalog averages 8 bytes per string and jeopardy 14. 32 bytes was the best threshold on the M1. 16 bytes gained less, and 64 bytes or no limit lost again.
+
+GCC 16 and 13 stopped inlining `put_indent()` and `put_literal()` into the pretty-printing loops once `dump_escaped()` had grown, which made indented output up to 13% slower. Both are now always inlined, like `copy_leaf_value()`.
+
+## Performance
+
+`json::dump()` of the parsed file, against `develop`. B/A is the ratio of medians from interleaved A/B runs, 10 rounds each; below 1 is faster. `-` is compact output, `4` indents by 4, and `ascii` is compact output with `ensure_ascii`.
+
+| | twitter `-` / `4` / `ascii` | citm_catalog `-` / `4` / `ascii` | jeopardy `-` / `4` / `ascii` | canada (few strings) |
+|---|---|---|---|---|
+| Apple M1, Apple Clang | 0.958 / 0.954 / 0.959 | 0.859 / 0.904 / 0.847 | 0.894 / 0.879 / 0.886 | 0.994–1.001 |
+| Apple M1, GCC 16 | 0.910 / 0.919 / 0.925 | 0.837 / 0.908 / 0.840 | 0.886 / 0.904 / 0.882 | 1.000–1.007 |
+| x86-64 (Haswell VPS), Clang 18 | 0.896 / 0.886 / 0.951 | 0.859 / 0.912 / 0.852 | 0.917 / 0.954 / 0.940 | 0.97–1.03 (noise) |
+| x86-64 (Haswell VPS), GCC 13 | 0.886 / 0.879 / 0.915 | 0.816 / 0.804 / 0.759 | 0.855 / 0.875 / 0.864 | 0.96–0.99 (noise) |
+
+The VPS had other load, so its spreads are about 10%; the direction is the same on every row. Parsing and `json_view` are not affected: all `parse`/`vparse`/`vdump` rows of the same runs are within ±1.5% on the M1.
+
+## Tests
+
+A new test case puts every ASCII character and a 2-byte character at every position of strings of 1 to 40 bytes. It compares `dump()` with the reference implementation of the existing UTF-8 tests, for all error handlers and both values of `ensure_ascii`, covering both sides of the 32-byte bound. As a check that the test can fail, marking `"` as copyable in the table makes 4,551 assertions fail.
+
+Also run locally: `unit-serialization` with ASan and UBSan; `unit-convenience`, `unit-unicode`, `unit-json_view_dump`, `unit-regression2`, `unit-alt-string`, `unit-ordered_json` and `unit-wstring`; GCC 16 and Clang 22 with the CI warning flags; and clang-tidy 22 on `unit-serialization.cpp`.
+
+## Public API
+
+No breaking changes. The output of `dump()` is unchanged; only internal `detail::serializer` members change.
+
+---
+
+This pull request was written by Claude Code.
+
+🤖 Generated with [Claude Code](https://claude.com/claude-code)
+
+## Commit message
+dump() now checks strings of up to 32 bytes against a table of the bytes
+that can be written verbatim, four bytes per step, and copies them in one
+go if all of them can. That is cheaper than setting up the vector scanner,
+whose setup costs more than such a string takes to scan; SQLite's
+jsonAppendString() writes strings with the same kind of table loop. Most
+object keys and many values are this short (citm_catalog averages 8 bytes
+per string, jeopardy 14).
+
+GCC 16 and 13 stopped inlining put_indent() and put_literal() into the
+pretty-printing loops once dump_escaped() had grown, which made indented
+output up to 13% slower; both are now always inlined.
+
+The new test puts every ASCII character and a 2-byte character at every
+position of strings of 1 to 40 bytes and compares the output with the
+reference implementation of the existing UTF-8 tests.
+
+Signed-off-by: Niels Lohmann <mail@nlohmann.me>
+
+## Changed functions (from changes.py)
+- nlohmann::detail::serializer::dump_escaped(const string_t &) (private); reached from the public API through: nlohmann::operator<<(std::ostream &, const basic_json<...> &), nlohmann::operator<<(basic_json<...> &, std::istream &), nlohmann::operator>>(std::istream &, basic_json<...> &), nlohmann::operator>>(const basic_json<...> &, std::ostream &), nlohmann::format_as(const basic_json<...> &), nlohmann::to_string(const basic_json<...> &), nlohmann::operator!=(const_reference, ScalarType), nlohmann::operator!=(ScalarType, const_reference), nlohmann::operator<(const_reference, ScalarType), nlohmann::operator<(ScalarType, const_reference)
+- nlohmann::detail::serializer (private); reached from the public API through: nlohmann::operator<<(std::ostream &, const basic_json<...> &), nlohmann::operator<<(basic_json<...> &, std::istream &), nlohmann::operator>>(std::istream &, basic_json<...> &), nlohmann::operator>>(const basic_json<...> &, std::ostream &), nlohmann::format_as(const basic_json<...> &), nlohmann::to_string(const basic_json<...> &), nlohmann::operator!=(const_reference, ScalarType), nlohmann::operator!=(ScalarType, const_reference), nlohmann::operator<(const_reference, ScalarType), nlohmann::operator<(ScalarType, const_reference)
+- nlohmann::detail::serializer::put_indent(std::size_t) (private); reached from the public API through: nlohmann::operator<<(std::ostream &, const basic_json<...> &), nlohmann::operator<<(basic_json<...> &, std::istream &), nlohmann::operator>>(std::istream &, basic_json<...> &), nlohmann::operator>>(const basic_json<...> &, std::ostream &), nlohmann::format_as(const basic_json<...> &), nlohmann::to_string(const basic_json<...> &), nlohmann::operator!=(const_reference, ScalarType), nlohmann::operator!=(ScalarType, const_reference), nlohmann::operator<(const_reference, ScalarType), nlohmann::operator<(ScalarType, const_reference)
+- nlohmann::detail::serializer::put_literal(const char (&)[N]) (private); reached from the public API through: nlohmann::operator<<(std::ostream &, const basic_json<...> &), nlohmann::operator<<(basic_json<...> &, std::istream &), nlohmann::operator>>(std::istream &, basic_json<...> &), nlohmann::operator>>(const basic_json<...> &, std::ostream &), nlohmann::format_as(const basic_json<...> &), nlohmann::to_string(const basic_json<...> &), nlohmann::operator!=(const_reference, ScalarType), nlohmann::operator!=(ScalarType, const_reference), nlohmann::operator<(const_reference, ScalarType), nlohmann::operator<(ScalarType, const_reference)
+- nlohmann::detail::serializer::ascii_copyable() (private); reached from the public API through: nlohmann::operator<<(std::ostream &, const basic_json<...> &), nlohmann::operator<<(basic_json<...> &, std::istream &), nlohmann::operator>>(std::istream &, basic_json<...> &), nlohmann::operator>>(const basic_json<...> &, std::ostream &), nlohmann::format_as(const basic_json<...> &), nlohmann::to_string(const basic_json<...> &), nlohmann::operator!=(const_reference, ScalarType), nlohmann::operator!=(ScalarType, const_reference), nlohmann::operator<(const_reference, ScalarType), nlohmann::operator<(ScalarType, const_reference)
+
+## Diff of the library source (before -> after)
+```diff
+diff --git a/include/nlohmann/detail/output/serializer.hpp b/include/nlohmann/detail/output/serializer.hpp
+index 1dd5e41e3..7bb4edfc5 100644
+--- a/include/nlohmann/detail/output/serializer.hpp
++++ b/include/nlohmann/detail/output/serializer.hpp
+@@ -693,6 +693,33 @@ class serializer
+     */
+     void dump_escaped(const string_t& s)
+     {
++        // Short strings of printable ASCII - most object keys and many values -
++        // are checked byte by byte against a table and then copied in one go.
++        // For them, this is cheaper than starting the vector scanner below,
++        // whose setup costs more than such a string takes to scan. The same
++        // check serves both values of ensure_ascii.
++        if (s.size() <= 32)
++        {
++            const auto& copyable = ascii_copyable();
++            const auto* const data = reinterpret_cast<const unsigned char*>(s.data());
++            const std::size_t n = s.size();
++            std::size_t k = 0;
++            while (k + 4 <= n && copyable[data[k]] != 0 && copyable[data[k + 1]] != 0
++                    && copyable[data[k + 2]] != 0 && copyable[data[k + 3]] != 0)
++            {
++                k += 4;
++            }
++            while (k < n && copyable[data[k]] != 0)
++            {
++                ++k;
++            }
++            if (k == n)
++            {
++                put_string(s, 0, n);
++                return;
++            }
++        }
++
+         // dispatch once here rather than test the flag inside the loop: it does
+         // not change while a string is written, and folding it lets each of the
+         // two scanners be inlined into a loop of its own
+@@ -1073,8 +1100,12 @@ class serializer
+     the indentation character once and flushing that same content repeatedly:
+     flushing does not disturb what the buffer holds, so re-filling it between
+     flushes would be redundant work.
++
++    @note inlined on purpose, as is @ref put_literal: GCC otherwise stops
++          inlining both into the pretty-printing loops once @ref dump_escaped
++          has grown, which made indented output up to 13% slower
+     */
+-    void put_indent(std::size_t indent)
++    JSON_HEDLEY_ALWAYS_INLINE void put_indent(std::size_t indent)
+     {
+         // closing braces at the outermost level ask for no indentation at all
+         if (indent == 0)
+@@ -1124,7 +1155,7 @@ class serializer
+     write-through path for oversized runs.
+     */
+     template<std::size_t N>
+-    void put_literal(const char (&s)[N]) // NOLINT(cppcoreguidelines-avoid-c-arrays,hicpp-avoid-c-arrays,modernize-avoid-c-arrays)
++    JSON_HEDLEY_ALWAYS_INLINE void put_literal(const char (&s)[N]) // NOLINT(cppcoreguidelines-avoid-c-arrays,hicpp-avoid-c-arrays,modernize-avoid-c-arrays)
+     {
+         static_assert(N >= 2, "put_literal expects a non-empty string literal");
+         // the array bound counts the terminating NUL, which is not written
+@@ -1233,6 +1264,39 @@ class serializer
+         }
+     }
+ 
++    /*!
++    @brief whether each byte can be written verbatim under either value of ensure_ascii
++
++    Entry c is 1 for printable ASCII other than '"' and '\\' (see
++    is_ascii_copyable()) and 0 otherwise. A table lookup per byte is the
++    cheapest test for the short strings handled first in dump_escaped().
++    */
++    static const std::array<std::uint8_t, 256>& ascii_copyable() noexcept
++    {
++        static const std::array<std::uint8_t, 256> copyable =
++        {
++            {
++                0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, // 0x00
++                0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, // 0x10
++                1, 1, 0, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, // 0x20
++                1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, // 0x30
++                1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, // 0x40
++                1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 0, 1, 1, 1, // 0x50
++                1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, // 0x60
++                1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 0, // 0x70
++                0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, // 0x80
++                0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, // 0x90
++                0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, // 0xA0
++                0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, // 0xB0
++                0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, // 0xC0
++                0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, // 0xD0
++                0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, // 0xE0
++                0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0 // 0xF0
++            }
++        };
++        return copyable;
++    }
++
+     /*!
+     @brief the JSON form of each character below 0x60
+```
+
+## Existing upstream tests that call the changed code (for style and API usage)
+// Upstream tests at the PR's parent commit 52fecc1fa that use the changed code.
+// Names searched (test lines using each): format_as (23), to_string (140), operator<< (97), operator>> (94), operator!= (59), operator< (210), dump_escaped (1), serializer (5), put_indent (0), put_literal (0), ascii_copyable (0)
+
+// ---- tests/src/unit-convenience.cpp:91-115  (uses: dump_escaped)
+        return *this;
+    }
+
+    std::string impl{}; // NOLINT(readability-redundant-member-init)
+};
+
+void check_escaped(const char* original, const char* escaped = "", bool ensure_ascii = false);
+void check_escaped(const char* original, const char* escaped, const bool ensure_ascii)
+{
+    std::stringstream ss;
+    nlohmann::detail::output_stream_adapter<char> adapter(ss);
+    json::serializer s(adapter, ' ', false, ensure_ascii);
+    s.dump_escaped(original);
+    s.flush(); // dump_escaped writes into the serializer's internal buffer
+    CHECK(ss.str() == escaped);
+}
+} // namespace
+
+TEST_CASE("convenience functions")
+{
+    SECTION("type name as string")
+    {
+        CHECK(std::string(json(json::value_t::null).type_name()) == "null");
+        CHECK(std::string(json(json::value_t::object).type_name()) == "object");
+        CHECK(std::string(json(json::value_t::array).type_name()) == "array");
+
+// ---- tests/src/unit-serialization.cpp:809-850  (uses: operator<<, serializer)
+TEST_CASE("serializer buffers are flushed mid-string and mid-binary")
+{
+    SECTION("a long run of escaped characters")
+    {
+        // each character is escaped on its own, so the escape buffer fills up
+        const json newlines = std::string(600, '\n');
+        std::string expected = "\"";
+        for (int i = 0; i < 600; ++i)
+        {
+            expected += "\\n";
+        }
+        expected += '"';
+        CHECK(newlines.dump() == expected);
+
+        // every character is \u-escaped under ensure_ascii
+        std::string umlauts;
+        std::string escaped_umlauts = "\"";
+        for (int i = 0; i < 300; ++i)
+        {
+            umlauts += "\xC3\xA4";
+            escaped_umlauts += "\\u00e4";
+        }
+        escaped_umlauts += '"';
+        CHECK(json(umlauts).dump(-1, ' ', true) == escaped_umlauts);
+    }
+
+    SECTION("a large binary value")
+    {
+        std::vector<std::uint8_t> bytes(3000);
+        std::string expected_bytes;
+        std::string expected_pretty_bytes;
+        for (std::size_t i = 0; i < bytes.size(); ++i)
+        {
+            bytes[i] = static_cast<std::uint8_t>(i % 256);
+            expected_bytes += (i == 0 ? "" : ",") + std::to_string(i % 256);
+            expected_pretty_bytes += (i == 0 ? "" : ", ") + std::to_string(i % 256);
+        }
+        const json j = json::binary(bytes);
+        CHECK(j.dump() == "{\"bytes\":[" + expected_bytes + "],\"subtype\":null}");
+        CHECK(j.dump(2) == "{\n  \"bytes\": [" + expected_pretty_bytes + "],\n  \"subtype\": null\n}");
+    }
+}
+
+// ---- tests/src/unit-udt.cpp:685-701  (uses: operator<<, serializer)
+TEST_CASE("custom serializer for pods" * doctest::test_suite("udt"))
+{
+    using custom_json =
+        nlohmann::json::with_json_serializer_t<pod_serializer>;
+
+    auto p = udt::small_pod{42, '/', 42};
+    custom_json const j = p;
+
+    auto p2 = j.get<udt::small_pod>();
+
+    CHECK(p == p2);
+
+    auto np = udt::non_pod{{"non-pod"}};
+    custom_json const j2 = np;
+    auto np2 = j2.get<udt::non_pod>();
+    CHECK(np == np2);
+}
+
+// ---- tests/src/unit-udt.cpp:724-735  (uses: operator<<, serializer)
+TEST_CASE("custom serializer that does adl by default" * doctest::test_suite("udt"))
+{
+    auto me = udt::person{{23}, {"theo"}, udt::country::france};
+
+    json const j = me;
+    custom_json const cj = me;
+
+    CHECK(j.dump() == cj.dump());
+
+    CHECK(me == j.get<udt::person>());
+    CHECK(me == cj.get<udt::person>());
+}
+
+// ---- tests/src/unit-stream-bulk-scan.cpp:291-322  (uses: operator<<, operator>>, to_string)
+    SECTION("many values from one stream")
+    {
+        std::string input;
+        for (int i = 0; i < 200; ++i)
+        {
+            input += R"({"id":)" + std::to_string(i) + R"(,"name":"user)" + std::to_string(i) + R"(","score":)" + std::to_string(i) + ".5}\n";
+            input += std::to_string(i * 7919) + "\n";
+        }
+
+        for (const std::size_t chunk_size : chunk_sizes())
+        {
+            CAPTURE(chunk_size)
+            chunked_streambuf buf(input, chunk_size);
+            std::istream is(&buf);
+            json j;
+            int count = 0;
+            while (!(is >> std::ws).eof())
+            {
+                is >> j;
+                if (count % 2 == 0)
+                {
+                    CHECK(j["id"] == count / 2);
+                }
+                else
+                {
+                    CHECK(j == (count / 2) * 7919);
+                }
+                ++count;
+            }
+            CHECK(count == 400);
+        }
+    }
+
+// ---- tests/src/unit-stream-bulk-scan.cpp:345-375  (uses: operator<<, operator>>, to_string)
+    SECTION("std::stringstream and std::ifstream")
+    {
+        const std::string input = R"([1, 2.5, "three", {"four": [true, null]}] 5)";
+
+        std::stringstream ss(input);
+        json j1;
+        json j2;
+        ss >> j1 >> j2;
+        CHECK(j1 == json::parse(R"([1, 2.5, "three", {"four": [true, null]}])"));
+        CHECK(j2 == 5);
+        CHECK(ss.eof());
+
+        // a file name of its own for every run: the test runs for several C++
+        // standards and configurations at the same time, in the same directory
+        std::random_device rd;
+        const std::string temp_name = "unit-stream-bulk-scan-" + std::to_string(rd()) + ".tmp";
+        const char* const filename = temp_name.c_str();
+        {
+            std::ofstream file(filename);
+            file << input;
+        }
+        {
+            std::ifstream file(filename);
+            json k1;
+            json k2;
+            file >> k1 >> k2;
+            CHECK(k1 == j1);
+            CHECK(k2 == j2);
+        }
+        static_cast<void>(std::remove(filename));
+    }
+
+// ---- tests/src/unit-deserialization.cpp:97-109  (uses: operator<<, operator>>)
+TEST_CASE("deserialization")
+{
+    SECTION("successful deserialization")
+    {
+        SECTION("stream")
+        {
+            std::stringstream ss1;
+            std::stringstream ss2;
+            std::stringstream ss3;
+            ss1 << R"(["foo",1,2,3,false,{"one":1}])";
+            ss2 << R"(["foo",1,2,3,false,{"one":1}])";
+            ss3 << R"(["foo",1,2,3,false,{"one":1}])";
+            const json j = json::parse(ss1);
+
+// ---- tests/src/unit-deserialization.cpp:164-171  (uses: operator<, operator<<)
+        SECTION("operator<<")
+        {
+            std::stringstream ss;
+            ss << R"(["foo",1,2,3,false,{"one":1}])";
+            json j;
+            j << ss;
+            CHECK(j == json({"foo", 1, 2, 3, false, {{"one", 1}}}));
+        }
+
+# Task
+Write 20 test programs for this pull request. Return JSON with a "tests" array; each item has "name" (short snake_case), "intent" (one sentence: what behavior it probes) and "code" (the complete C++ program).

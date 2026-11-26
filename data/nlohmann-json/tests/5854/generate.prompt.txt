@@ -1,0 +1,459 @@
+[system]
+You write test programs that probe a C++ library for behavioral changes made by one pull request.
+Each program is compiled and run twice, once against the library before the change and once after, and the two
+outputs are compared. Your job is to produce programs whose output reveals whether the change altered behavior,
+including side effects the author did not intend.
+
+Rules for every program:
+- It is standalone: one file with its own int main(), compiled as C++17, printing results to stdout.
+- Use only the library's documented public API. Never include internal headers or use detail/impl namespaces,
+  private members or undocumented macros.
+- Do not judge results (no assert, no expected-value comparisons): just print what the library returns. Print
+  enough to make differences visible, one fact per line.
+- Output must be deterministic. Never print pointers or addresses, uninitialized data, the order of
+  hash-based containers, timings, thread ids, random values, file paths or environment data. Print floating point
+  values with an explicit precision. No input, files, network, threads, clocks or randomness.
+- Wrap calls that may throw in try/catch and print the exception's type and message, so an exception is an
+  observable result. Do not crash on purpose.
+- Aim at the code the diff changes. Prefer calls that compile against both the old and the new library; one or two
+  programs may use an API the PR adds. Cover ordinary inputs and edge cases (empty, minimum and maximum values,
+  boundaries, special values, nesting, unusual types) and also neighbouring behavior the change could disturb.
+- When the diff changes which types or inputs an API accepts or rejects (constraints, overloads, traits,
+  conversions), test it with the detection idiom (std::void_t or requires) and `if constexpr`, so the program
+  compiles against both versions, prints whether the expression is well-formed, and exercises it when it is.
+  Accepting an input is not enough: also use it through every entry point that should follow (const and
+  non-const, read, write, insert, erase, lookup, nested use), because a change that admits new inputs can leave
+  later code unable to handle them.
+- If the changed code is internal (a detail, impl or internal namespace, a trait, a helper), do not name it in the
+  program. Reach it through the public API that depends on it, using detection (as above) where needed.
+- Use the exact types and values the diff is about (the new trait's argument types, the new overload's
+  parameters), not stand-ins.
+- Spread the programs over distinct public entry points and overloads, one main idea per program. Do not write
+  several programs that only rename a type or change a literal.
+- Make the programs differ from each other: different inputs, different entry points, different features.
+
+Rules specific to this library:
+- Include the library with #include <nlohmann/json.hpp>. The public API is nlohmann::json (nlohmann::basic_json), nlohmann::ordered_json, json_pointer, json patch/merge_patch and the documented SAX and conversion interfaces. Never use the detail namespace.
+- It is a header-only library: nothing to link. Programs are compiled as C++17.
+- Print JSON values with dump() (compact) or dump(2). Keys of nlohmann::json objects print in sorted order, so output is deterministic; do not depend on insertion order except with ordered_json.
+
+[user]
+# Pull request #5854: Match literals without a stack array and keep parser states in bytes
+
+## Description
+## Summary
+
+Two costs that every token pays, found in the assembly of the token dispatch:
+
+- **A stack canary on every token.** `scan_after_whitespace()` built the expected text of `true`, `false` and `null` in local `std::array` objects. With `-fstack-protector-strong`, which is the default of Ubuntu's GCC and of other distributions, any local array makes the compiler protect the whole function. So the canary was set and checked for every token, not only for literals: the `%fs:0x28` load alone was 11 % of the function's samples.
+  - `scan_literal()` now takes the text after the first character as a string literal, with its length as a template parameter.
+  - For contiguous input it compares the rest at once and falls back to the byte loop on a mismatch, so errors are reported at the same character.
+  - It is out of line, which keeps the token dispatch small. Inlined, Clang's dispatch grew from 233 to 278 instructions and became slower.
+- **`std::vector<bool>` for the parser's nesting state.** GCC calls its `push_back()` out of line. It is a `std::vector<std::uint8_t>` now.
+
+Stacked on the previous PR.
+
+## Performance
+
+Change of the best-of-runs time against the previous PR (the first: against #5828), negative is faster. *accept* is `json::accept()` (no allocations), *parse* is `json::parse()`. Apple M1 Max: Apple Clang 21 and Homebrew GCC 16; x86-64 (Haswell VM): GCC 13, and Clang 18 with `-falign-loops=64 -falign-functions=64` on both sides (without it, code placement alone moves Clang's numbers by up to ±5 % between builds). Improvements of 3 % or more are bold.
+
+| file | M1 Clang accept | M1 Clang parse | M1 GCC 16 accept | M1 GCC 16 parse | x86 GCC accept | x86 Clang accept |
+|---|--:|--:|--:|--:|--:|--:|
+| `canada.json` | **−4.2 %** | −1.8 % | −1.7 % | −0.8 % | **−10.5 %** | **−4.9 %** |
+| `citm_catalog.json` | −2.9 % | −1.4 % | −2.3 % | −2.4 % | −0.7 % | +0.0 % |
+| `twitter.json` | −2.3 % | −2.1 % | **−6.0 %** | +0.3 % | **−5.7 %** | −1.9 % |
+| `numbers.json` | +2.8 % | +0.7 % | −2.5 % | −2.8 % | −2.9 % | −2.6 % |
+| `long_strings.json` | −0.9 % | −2.7 % | +0.0 % | −1.3 % | −2.8 % | −2.0 % |
+| `twitterescaped.json` | +1.2 % | +0.3 % | −1.0 % | −2.6 % | −2.5 % | +1.9 % |
+| `mesh.json` | −1.7 % | **−3.3 %** | −2.5 % | −1.6 % | **−6.2 %** | −1.8 % |
+
+## Tests
+
+- **New test case "lexer literal fast path"** in `unit-class_lexer.cpp`: every truncation and every wrong character (lower and upper case) of each literal, at the end of the input and followed by more text, gives the byte path's value or error. A mutation that compares only the first character is caught.
+- **More literal cases in `unit-stream-bulk-scan.cpp`:** `[true,false,null]`, `nulL`, `truex`, `[fals e]`, `t`, `true1`, `null null`, `[false]`. That corpus is read with get areas of 1 to 4096 bytes, so literals also span stream windows.
+- **Differential check against #5828's head** (string, `std::istream`, `FILE*`; M1 and x86-64): identical.
+- **Full test suite:** passes under ASan/UBSan on macOS and Linux x86-64.
+
+## Breaking changes
+
+None. Only private lexer and parser internals change.
+
+🤖 Generated with [Claude Code](https://claude.com/claude-code)
+
+## Commit message
+* Match literals without a stack array and keep parser states in bytes
+
+scan_after_whitespace() built the expected text of true, false, and null in
+local std::array objects. With -fstack-protector-strong (the default of
+Ubuntu's GCC, among others), a local array gives the function a stack canary
+check, which then ran on every token. scan_literal() now takes the text
+after the first character as a string literal, with its length as a template
+parameter; for contiguous input it compares the rest at once and falls back
+to the byte loop on a mismatch, so errors are reported at the same
+character. It is out of line, which keeps the token dispatch small.
+
+The parser kept the nesting of arrays and objects in a std::vector<bool>,
+whose push_back() GCC calls out of line; it is a std::vector<std::uint8_t>
+now.
+
+Signed-off-by: Niels Lohmann <mail@nlohmann.me>
+
+* Skip the literal fast path test without exceptions
+
+The test case compares the error messages of both lexer paths, so it does
+not compile with JSON_NOEXCEPTION (the caught exception does not exist).
+
+Signed-off-by: Niels Lohmann <mail@nlohmann.me>
+
+* Allow the string literal parameter of scan_literal() for clang-tidy
+
+The parameter takes the literal by array reference so that its length is
+a template parameter; this is the same exemption the C array overloads of
+to_json() and from_json() have.
+
+Signed-off-by: Niels Lohmann <mail@nlohmann.me>
+
+---------
+
+Signed-off-by: Niels Lohmann <mail@nlohmann.me>
+
+## Changed functions (from changes.py)
+- nlohmann::detail::lexer::scan_after_whitespace() (private); reached from the public API through: nlohmann::basic_json::sax_parse(detail::span_input_adapter &&, SAX *, input_format_t, const bool, const bool, const bool, const cbor_tag_handler_t), nlohmann::basic_json::sax_parse(InputType &&, SAX *, input_format_t, const bool, const bool, const bool, const cbor_tag_handler_t), nlohmann::basic_json::sax_parse(IteratorType, SentinelType, SAX *, input_format_t, const bool, const bool, const bool, const cbor_tag_handler_t), nlohmann::basic_json::from_bson(detail::span_input_adapter &&, const bool, const bool), nlohmann::basic_json::from_cbor(detail::span_input_adapter &&, const bool, const bool, const cbor_tag_handler_t), nlohmann::basic_json::from_msgpack(detail::span_input_adapter &&, const bool, const bool), nlohmann::basic_json::from_ubjson(detail::span_input_adapter &&, const bool, const bool), nlohmann::basic_json::from_bjdata(InputType &&, const bool, const bool, const error_handler_t), nlohmann::basic_json::from_bon8(InputType &&, const bool, const bool), nlohmann::basic_json::from_bson(InputType &&, const bool, const bool, const error_handler_t)
+- nlohmann::detail::lexer (private); reached from the public API through: nlohmann::basic_json::sax_parse(detail::span_input_adapter &&, SAX *, input_format_t, const bool, const bool, const bool, const cbor_tag_handler_t), nlohmann::basic_json::sax_parse(InputType &&, SAX *, input_format_t, const bool, const bool, const bool, const cbor_tag_handler_t), nlohmann::basic_json::sax_parse(IteratorType, SentinelType, SAX *, input_format_t, const bool, const bool, const bool, const cbor_tag_handler_t), nlohmann::basic_json::from_bson(detail::span_input_adapter &&, const bool, const bool), nlohmann::basic_json::from_cbor(detail::span_input_adapter &&, const bool, const bool, const cbor_tag_handler_t), nlohmann::basic_json::from_msgpack(detail::span_input_adapter &&, const bool, const bool), nlohmann::basic_json::from_ubjson(detail::span_input_adapter &&, const bool, const bool), nlohmann::basic_json::from_bjdata(InputType &&, const bool, const bool, const error_handler_t), nlohmann::basic_json::from_bon8(InputType &&, const bool, const bool), nlohmann::basic_json::from_bson(InputType &&, const bool, const bool, const error_handler_t)
+- nlohmann::detail::parser::sax_parse_internal(SAX *) (private); reached from the public API through: nlohmann::operator>>(std::istream &, basic_json<...> &), nlohmann::basic_json::accept(detail::span_input_adapter &&, const bool, const bool), nlohmann::basic_json::parse(detail::span_input_adapter &&, parser_callback_t, const bool, const bool, const bool), nlohmann::basic_json::accept(InputType &&, const bool, const bool), nlohmann::basic_json::parse(InputType &&, parser_callback_t, const bool, const bool, const bool), nlohmann::basic_json::sax_parse(detail::span_input_adapter &&, SAX *, input_format_t, const bool, const bool, const bool, const cbor_tag_handler_t), nlohmann::basic_json::sax_parse(InputType &&, SAX *, input_format_t, const bool, const bool, const bool, const cbor_tag_handler_t), nlohmann::basic_json::accept(IteratorType, SentinelType, const bool, const bool), nlohmann::basic_json::parse(IteratorType, SentinelType, parser_callback_t, const bool, const bool, const bool), nlohmann::basic_json::sax_parse(IteratorType, SentinelType, SAX *, input_format_t, const bool, const bool, const bool, const cbor_tag_handler_t)
+- nlohmann::detail::lexer::scan_literal_bulk(const char *, const std::size_t, std::true_type) (private); reached from the public API through: nlohmann::basic_json::sax_parse(detail::span_input_adapter &&, SAX *, input_format_t, const bool, const bool, const bool, const cbor_tag_handler_t), nlohmann::basic_json::sax_parse(InputType &&, SAX *, input_format_t, const bool, const bool, const bool, const cbor_tag_handler_t), nlohmann::basic_json::sax_parse(IteratorType, SentinelType, SAX *, input_format_t, const bool, const bool, const bool, const cbor_tag_handler_t), nlohmann::basic_json::from_bson(detail::span_input_adapter &&, const bool, const bool), nlohmann::basic_json::from_cbor(detail::span_input_adapter &&, const bool, const bool, const cbor_tag_handler_t), nlohmann::basic_json::from_msgpack(detail::span_input_adapter &&, const bool, const bool), nlohmann::basic_json::from_ubjson(detail::span_input_adapter &&, const bool, const bool), nlohmann::basic_json::from_bjdata(InputType &&, const bool, const bool, const error_handler_t), nlohmann::basic_json::from_bon8(InputType &&, const bool, const bool), nlohmann::basic_json::from_bson(InputType &&, const bool, const bool, const error_handler_t)
+- nlohmann::detail::lexer::scan_literal(const char (&)[N], token_type) (private); reached from the public API through: nlohmann::basic_json::sax_parse(detail::span_input_adapter &&, SAX *, input_format_t, const bool, const bool, const bool, const cbor_tag_handler_t), nlohmann::basic_json::sax_parse(InputType &&, SAX *, input_format_t, const bool, const bool, const bool, const cbor_tag_handler_t), nlohmann::basic_json::sax_parse(IteratorType, SentinelType, SAX *, input_format_t, const bool, const bool, const bool, const cbor_tag_handler_t), nlohmann::basic_json::from_bson(detail::span_input_adapter &&, const bool, const bool), nlohmann::basic_json::from_cbor(detail::span_input_adapter &&, const bool, const bool, const cbor_tag_handler_t), nlohmann::basic_json::from_msgpack(detail::span_input_adapter &&, const bool, const bool), nlohmann::basic_json::from_ubjson(detail::span_input_adapter &&, const bool, const bool), nlohmann::basic_json::from_bjdata(InputType &&, const bool, const bool, const error_handler_t), nlohmann::basic_json::from_bon8(InputType &&, const bool, const bool), nlohmann::basic_json::from_bson(InputType &&, const bool, const bool, const error_handler_t)
+- nlohmann::detail::lexer::scan_literal_bulk(const char *, const std::size_t, std::false_type) (private); reached from the public API through: nlohmann::basic_json::sax_parse(detail::span_input_adapter &&, SAX *, input_format_t, const bool, const bool, const bool, const cbor_tag_handler_t), nlohmann::basic_json::sax_parse(InputType &&, SAX *, input_format_t, const bool, const bool, const bool, const cbor_tag_handler_t), nlohmann::basic_json::sax_parse(IteratorType, SentinelType, SAX *, input_format_t, const bool, const bool, const bool, const cbor_tag_handler_t), nlohmann::basic_json::from_bson(detail::span_input_adapter &&, const bool, const bool), nlohmann::basic_json::from_cbor(detail::span_input_adapter &&, const bool, const bool, const cbor_tag_handler_t), nlohmann::basic_json::from_msgpack(detail::span_input_adapter &&, const bool, const bool), nlohmann::basic_json::from_ubjson(detail::span_input_adapter &&, const bool, const bool), nlohmann::basic_json::from_bjdata(InputType &&, const bool, const bool, const error_handler_t), nlohmann::basic_json::from_bon8(InputType &&, const bool, const bool), nlohmann::basic_json::from_bson(InputType &&, const bool, const bool, const error_handler_t)
+- nlohmann::detail::lexer::scan_literal(const char_type *, const std::size_t, token_type) (private); reached from the public API through: nlohmann::basic_json::sax_parse(detail::span_input_adapter &&, SAX *, input_format_t, const bool, const bool, const bool, const cbor_tag_handler_t), nlohmann::basic_json::sax_parse(InputType &&, SAX *, input_format_t, const bool, const bool, const bool, const cbor_tag_handler_t), nlohmann::basic_json::sax_parse(IteratorType, SentinelType, SAX *, input_format_t, const bool, const bool, const bool, const cbor_tag_handler_t), nlohmann::basic_json::from_bson(detail::span_input_adapter &&, const bool, const bool), nlohmann::basic_json::from_cbor(detail::span_input_adapter &&, const bool, const bool, const cbor_tag_handler_t), nlohmann::basic_json::from_msgpack(detail::span_input_adapter &&, const bool, const bool), nlohmann::basic_json::from_ubjson(detail::span_input_adapter &&, const bool, const bool), nlohmann::basic_json::from_bjdata(InputType &&, const bool, const bool, const error_handler_t), nlohmann::basic_json::from_bon8(InputType &&, const bool, const bool), nlohmann::basic_json::from_bson(InputType &&, const bool, const bool, const error_handler_t)
+
+## Diff of the library source (before -> after)
+```diff
+diff --git a/include/nlohmann/detail/input/lexer.hpp b/include/nlohmann/detail/input/lexer.hpp
+index 1dba753e6..8c13cd6d8 100644
+--- a/include/nlohmann/detail/input/lexer.hpp
++++ b/include/nlohmann/detail/input/lexer.hpp
+@@ -12,6 +12,7 @@
+ #include <cstddef> // size_t
+ #include <cstdint> // uint32_t
+ #include <cstdio> // snprintf
++#include <cstring> // memcmp
+ #include <initializer_list> // initializer_list
+ #include <string> // char_traits, string
+ #include <utility> // move
+@@ -1854,18 +1855,23 @@ scan_number_done:
+     }
+ 
+     /*!
+-    @param[in] literal_text  the literal text to expect
+-    @param[in] length        the length of the passed literal text
+-    @param[in] return_type   the token type to return on success
++    @param[in] rest         the literal text after its first character, which
++                            is current (its length is a template parameter, so
++                            that the comparison of the contiguous fast path is
++                            a fixed-size load, not a call of memcmp)
++    @param[in] return_type  the token type to return on success
+     */
+-    JSON_HEDLEY_NON_NULL(2)
+-    token_type scan_literal(const char_type* literal_text, const std::size_t length,
+-                            token_type return_type)
++    template<std::size_t N>
++    JSON_HEDLEY_NEVER_INLINE token_type scan_literal(const char (&rest)[N], token_type return_type) // NOLINT(cppcoreguidelines-avoid-c-arrays,hicpp-avoid-c-arrays,modernize-avoid-c-arrays)
+     {
+-        JSON_ASSERT(char_traits<char_type>::to_char_type(current) == literal_text[0]);
+-        for (std::size_t i = 1; i < length; ++i)
++        constexpr std::size_t length = N - 1;
++        if (scan_literal_bulk(rest, length, std::integral_constant<bool, bulk_scan> {}))
+         {
+-            if (JSON_HEDLEY_UNLIKELY(char_traits<char_type>::to_char_type(get()) != literal_text[i]))
++            return return_type;
++        }
++        for (std::size_t i = 0; i < length; ++i)
++        {
++            if (JSON_HEDLEY_UNLIKELY(char_traits<char_type>::to_char_type(get()) != static_cast<char_type>(rest[i])))
+             {
+                 error_message = "invalid literal";
+                 return token_type::parse_error;
+@@ -1874,6 +1880,27 @@ scan_number_done:
+         return return_type;
+     }
+ 
++    /// contiguous input: compare the rest of a literal at once; false (and
++    /// nothing consumed) if it does not match, so that the byte path reports
++    /// the error at the right character
++    JSON_HEDLEY_ALWAYS_INLINE bool scan_literal_bulk(const char* rest, const std::size_t length, std::true_type /*bulk*/)
++    {
++        if (next_unget || ia.bulk_remaining() < length
++                || std::memcmp(ia.bulk_data(), rest, length) != 0)
++        {
++            return false;
++        }
++        bulk_consume(reinterpret_cast<const char*>(ia.bulk_data()), length);
++        current = static_cast<char_int_type>(static_cast<unsigned char>(rest[length - 1]));
++        return true;
++    }
++
++    /// streaming input: no bulk fast path
++    bool scan_literal_bulk(const char* /*rest*/, const std::size_t /*length*/, std::false_type /*bulk*/) const noexcept
++    {
++        return false;
++    }
++
+     /////////////////////
+     // input management
+     /////////////////////
+@@ -2499,21 +2526,14 @@ scan_number_done:
+                 return token_type::value_separator;
+ 
+             // literals
++            // (the text after the first character; no local arrays, which
++            // would give this function a stack canary on every token)
+             case 't':
+-            {
+-                std::array<char_type, 4> true_literal = {{static_cast<char_type>('t'), static_cast<char_type>('r'), static_cast<char_type>('u'), static_cast<char_type>('e')}};
+-                return scan_literal(true_literal.data(), true_literal.size(), token_type::literal_true);
+-            }
++                return scan_literal("rue", token_type::literal_true);
+             case 'f':
+-            {
+-                std::array<char_type, 5> false_literal = {{static_cast<char_type>('f'), static_cast<char_type>('a'), static_cast<char_type>('l'), static_cast<char_type>('s'), static_cast<char_type>('e')}};
+-                return scan_literal(false_literal.data(), false_literal.size(), token_type::literal_false);
+-            }
++                return scan_literal("alse", token_type::literal_false);
+             case 'n':
+-            {
+-                std::array<char_type, 4> null_literal = {{static_cast<char_type>('n'), static_cast<char_type>('u'), static_cast<char_type>('l'), static_cast<char_type>('l')}};
+-                return scan_literal(null_literal.data(), null_literal.size(), token_type::literal_null);
+-            }
++                return scan_literal("ull", token_type::literal_null);
+ 
+             // string
+             case '\"':
+diff --git a/include/nlohmann/detail/input/parser.hpp b/include/nlohmann/detail/input/parser.hpp
+index 493ff6f68..38bc9cdc9 100644
+--- a/include/nlohmann/detail/input/parser.hpp
++++ b/include/nlohmann/detail/input/parser.hpp
+@@ -244,8 +244,9 @@ class parser
+     bool sax_parse_internal(SAX* sax)
+     {
+         // stack to remember the hierarchy of structured values we are parsing
+-        // true = array; false = object
+-        std::vector<bool> states;
++        // true = array; false = object (bytes, not std::vector<bool>, whose
++        // push_back() is a call with GCC)
++        std::vector<std::uint8_t> states;
+         // value to avoid a goto (see comment where set to true)
+         bool skip_to_state_evaluation = false;
+ 
+@@ -290,7 +291,7 @@ class parser
+                         }
+ 
+                         // remember we are now inside an object
+-                        states.push_back(false);
++                        states.push_back(0);
+ 
+                         // parse values
+                         get_token();
+@@ -315,7 +316,7 @@ class parser
+                         }
+ 
+                         // remember we are now inside an array
+-                        states.push_back(true);
++                        states.push_back(1);
+ 
+                         // parse values (no need to call get_token)
+                         continue;
+@@ -432,7 +433,7 @@ class parser
+                 return true;
+             }
+ 
+-            if (states.back())  // array
++            if (states.back() != 0)  // array
+             {
+                 // comma -> next value
+                 // or end of array (ignore_trailing_commas = true)
+```
+
+## Existing upstream tests that call the changed code (for style and API usage)
+// Upstream tests at the PR's parent commit e9970066c that use the changed code.
+// Names searched (test lines using each): sax_parse (0), from_bson (0), from_cbor (0), from_msgpack (0), from_ubjson (0), from_bjdata (0), from_bon8 (0), accept (12), parse (11), operator>> (94), scan_after_whitespace (0), lexer (96), sax_parse_internal (0), scan_literal_bulk (0), scan_literal (0)
+
+// ---- tests/src/unit-class_parser.cpp:47-71  (uses: parse)
+using utils::SaxEventLogger;
+
+namespace
+{
+json parser_helper(const std::string& s);
+bool accept_helper(const std::string& s);
+void comments_helper(const std::string& s);
+void trailing_comma_helper(const std::string& s);
+
+json parser_helper(const std::string& s)
+{
+    json j;
+    json::parser(nlohmann::detail::input_adapter(s)).parse(true, j);
+
+    // if this line was reached, no exception occurred
+    // -> check if result is the same without exceptions
+    json j_nothrow;
+    CHECK_NOTHROW(json::parser(nlohmann::detail::input_adapter(s), nullptr, false).parse(true, j_nothrow));
+    CHECK(j_nothrow == j);
+
+    json j_sax;
+    nlohmann::detail::json_sax_dom_parser<json, nlohmann::detail::string_input_adapter_type> sdp(j_sax);
+    json::sax_parse(s, &sdp);
+    CHECK(j_sax == j);
+
+
+// ---- tests/src/unit-class_parser.cpp:73-97  (uses: parse)
+
+    trailing_comma_helper(s);
+
+    return j;
+}
+
+bool accept_helper(const std::string& s)
+{
+    CAPTURE(s)
+
+    // 1. parse s without exceptions
+    json j;
+    CHECK_NOTHROW(json::parser(nlohmann::detail::input_adapter(s), nullptr, false).parse(true, j));
+    const bool ok_noexcept = !j.is_discarded();
+
+    // 2. accept s
+    const bool ok_accept = json::parser(nlohmann::detail::input_adapter(s)).accept(true);
+
+    // 3. check if both approaches come to the same result
+    CHECK(ok_noexcept == ok_accept);
+
+    // 4. parse with SAX (compare with relaxed accept result)
+    SaxEventLogger el;
+    CHECK_NOTHROW(json::sax_parse(s, &el, json::input_format_t::json, false));
+    CHECK(json::parser(nlohmann::detail::input_adapter(s)).accept(false) == !el.errored);
+
+// ---- tests/src/unit-class_lexer.cpp:24-48  (uses: lexer)
+#include <map> // map
+#include <random> // mt19937
+#include <sstream> // stringstream
+#include <string> // string
+#include <utility> // pair
+#include <vector> // vector
+
+#include "float_hard_cases.hpp"
+
+namespace
+{
+// shortcut to scan a string literal
+json::lexer::token_type scan_string(const char* s, bool ignore_comments = false);
+json::lexer::token_type scan_string(const char* s, const bool ignore_comments)
+{
+    auto ia = nlohmann::detail::input_adapter(s);
+    return nlohmann::detail::lexer<json, decltype(ia)>(std::move(ia), ignore_comments).scan(); // NOLINT(hicpp-move-const-arg,performance-move-const-arg)
+}
+} // namespace
+
+std::string get_error_message(const char* s, bool ignore_comments = false); // NOLINT(misc-use-internal-linkage)
+std::string get_error_message(const char* s, const bool ignore_comments)
+{
+    auto ia = nlohmann::detail::input_adapter(s);
+    auto lexer = nlohmann::detail::lexer<json, decltype(ia)>(std::move(ia), ignore_comments); // NOLINT(hicpp-move-const-arg,performance-move-const-arg)
+
+// ---- tests/src/unit-class_lexer.cpp:53-65  (uses: lexer)
+TEST_CASE("lexer class")
+{
+    SECTION("scan")
+    {
+        SECTION("structural characters")
+        {
+            CHECK((scan_string("[") == json::lexer::token_type::begin_array));
+            CHECK((scan_string("]") == json::lexer::token_type::end_array));
+            CHECK((scan_string("{") == json::lexer::token_type::begin_object));
+            CHECK((scan_string("}") == json::lexer::token_type::end_object));
+            CHECK((scan_string(",") == json::lexer::token_type::value_separator));
+            CHECK((scan_string(":") == json::lexer::token_type::name_separator));
+        }
+
+// ---- tests/src/unit-deserialization.cpp:97-109  (uses: operator>>)
+TEST_CASE("deserialization")
+{
+    SECTION("successful deserialization")
+    {
+        SECTION("stream")
+        {
+            std::stringstream ss1;
+            std::stringstream ss2;
+            std::stringstream ss3;
+            ss1 << R"(["foo",1,2,3,false,{"one":1}])";
+            ss2 << R"(["foo",1,2,3,false,{"one":1}])";
+            ss3 << R"(["foo",1,2,3,false,{"one":1}])";
+            const json j = json::parse(ss1);
+
+// ---- tests/src/unit-deserialization.cpp:174-181  (uses: operator>>)
+        SECTION("operator>>")
+        {
+            std::stringstream ss;
+            ss << R"(["foo",1,2,3,false,{"one":1}])";
+            json j;
+            ss >> j;
+            CHECK(j == json({"foo", 1, 2, 3, false, {{"one", 1}}}));
+        }
+
+// ---- tests/src/unit-precise-stream-position.cpp:123-135  (uses: operator>>)
+TEST_CASE("JSON_PRECISE_STREAM_POSITION")
+{
+    SECTION("the macro is part of the ABI tag")
+    {
+        const std::string ns = STRINGIZE(NLOHMANN_JSON_NAMESPACE);
+        // other tags may come before it, e.g. json_abi_diag_psp
+        CHECK(ns.find("_psp") != std::string::npos);
+    }
+
+    SECTION("a number does not consume the character that terminates it")
+    {
+        // a number is only terminated by the character following it; that
+        // character must be given back so the stream is positioned right
+
+// ---- tests/src/unit-precise-stream-position.cpp:181-193  (uses: operator>>)
+    SECTION("a number at the end of the input leaves nothing behind")
+    {
+        for (const std::string s :
+                {"1", "12", "-3.5e2", " 7 "
+                })
+        {
+            CAPTURE(s)
+            std::istringstream ss(s);
+            json j;
+            ss >> j;
+            CHECK(remaining(ss).find_first_not_of(" \t\n\r") == std::string::npos);
+        }
+    }
+
+// ---- tests/src/unit-stream-bulk-scan.cpp:191-203  (uses: operator>>)
+TEST_CASE("parsing from a std::istream scans the get area in bulk")
+{
+#if !defined(JSON_NOEXCEPTION)
+    SECTION("results do not depend on the get area")
+    {
+        const std::vector<read_mode> read_modes = {read_mode::extract, read_mode::parse, read_mode::parse_lenient};
+        for (const auto& input : corpus())
+        {
+            for (const read_mode mode : read_modes)
+            {
+                // no get area: the character-at-a-time path
+                const std::string expected = observe(input, 0, mode);
+                for (const std::size_t chunk_size : chunk_sizes())
+
+// ---- tests/src/unit-bjdata.cpp:3767-3776  (uses: operator>>)
+TEST_CASE("BJData input that cannot be read is discarded by every overload")
+{
+    std::vector<std::uint8_t> input = json::to_bjdata(json({{"a", {1, 2}}}));
+    input.pop_back();
+
+    json _;
+    CHECK_THROWS_AS(_ = json::from_bjdata(input.begin(), input.end()), json::parse_error&);
+    CHECK(json::from_bjdata(input, true, false).is_discarded());
+    CHECK(json::from_bjdata(input.begin(), input.end(), true, false).is_discarded());
+}
+
+# Task
+Write 20 test programs for this pull request. Return JSON with a "tests" array; each item has "name" (short snake_case), "intent" (one sentence: what behavior it probes) and "code" (the complete C++ program).

@@ -1,0 +1,966 @@
+[system]
+You write test programs that probe a C++ library for behavioral changes made by one pull request.
+Each program is compiled and run twice, once against the library before the change and once after, and the two
+outputs are compared. Your job is to produce programs whose output reveals whether the change altered behavior,
+including side effects the author did not intend.
+
+Rules for every program:
+- It is standalone: one file with its own int main(), compiled as C++17, printing results to stdout.
+- Use only the library's documented public API. Never include internal headers or use detail/impl namespaces,
+  private members or undocumented macros.
+- Do not judge results (no assert, no expected-value comparisons): just print what the library returns. Print
+  enough to make differences visible, one fact per line.
+- Output must be deterministic. Never print pointers or addresses, uninitialized data, the order of
+  hash-based containers, timings, thread ids, random values, file paths or environment data. Print floating point
+  values with an explicit precision. No input, files, network, threads, clocks or randomness.
+- Wrap calls that may throw in try/catch and print the exception's type and message, so an exception is an
+  observable result. Do not crash on purpose.
+- Aim at the code the diff changes. Prefer calls that compile against both the old and the new library; one or two
+  programs may use an API the PR adds. Cover ordinary inputs and edge cases (empty, minimum and maximum values,
+  boundaries, special values, nesting, unusual types) and also neighbouring behavior the change could disturb.
+- When the diff changes which types or inputs an API accepts or rejects (constraints, overloads, traits,
+  conversions), test it with the detection idiom (std::void_t or requires) and `if constexpr`, so the program
+  compiles against both versions, prints whether the expression is well-formed, and exercises it when it is.
+  Accepting an input is not enough: also use it through every entry point that should follow (const and
+  non-const, read, write, insert, erase, lookup, nested use), because a change that admits new inputs can leave
+  later code unable to handle them.
+- If the changed code is internal (a detail, impl or internal namespace, a trait, a helper), do not name it in the
+  program. Reach it through the public API that depends on it, using detection (as above) where needed.
+- Use the exact types and values the diff is about (the new trait's argument types, the new overload's
+  parameters), not stand-ins.
+- Spread the programs over distinct public entry points and overloads, one main idea per program. Do not write
+  several programs that only rename a type or change a literal.
+- Make the programs differ from each other: different inputs, different entry points, different features.
+
+Rules specific to this library:
+- Include the library with #include <nlohmann/json.hpp>. The public API is nlohmann::json (nlohmann::basic_json), nlohmann::ordered_json, json_pointer, json patch/merge_patch and the documented SAX and conversion interfaces. Never use the detail namespace.
+- It is a header-only library: nothing to link. Programs are compiled as C++17.
+- Print JSON values with dump() (compact) or dump(2). Keys of nlohmann::json objects print in sorted order, so output is deterministic; do not depend on insertion order except with ordered_json.
+
+[user]
+# Pull request #5883: Write strings, scalars and indentation in dump() with fewer calls
+
+## Description
+`dump()` makes fewer calls per string, scalar and line break. Each commit message has its own numbers.
+
+| commit | macOS instructions |
+|---|---|
+| Write short plain strings and keys in one go | citm -21 %, jeopardy -17 %, twitter -10 % (vs #5878) |
+| Write the scalar elements of a container without entering `dump_internal()` | -5 ... -10 % |
+| Escape runs of multi-byte characters straight into the write buffer | `ensure_ascii`: CJK -56 %, twitter -32 % |
+| Do not zero the serializer's buffers | small objects -6 % |
+| Write the usual indentation with four stores instead of memset | -8 ... -16 % |
+| Write strings and keys of up to 32 characters in one go with vectors | twitter -21 % |
+| Write a line break and the indentation of the next line together | -3 ... -5 % |
+| Copy the short runs between escapes as a block of 16 bytes | JSON embedded in JSON strings -10 % |
+| Test strings of 8 to 15 characters as one vector | jeopardy -15 % / -7 % (Linux) |
+
+The 256-entry table from #5878 stays as the fallback for targets without SSE2/NEON and for big-endian targets.
+
+## Numbers
+
+- **macOS:** at most 0.96x develop's instructions in every cell (14 corpora x output styles x `json`/`ordered_json`).
+- **Linux (GCC 13 / Clang 18):** citm 0.84 / 0.81, twitter 0.78 / 0.76.
+- **macOS timing:** Dump geomean 0.75, best 0.60.
+- Parsing is unchanged.
+
+## Validation
+
+- Differential check against develop, byte-identical:
+  - all error handlers, `ensure_ascii` and indents;
+  - streams, deep nesting and binary values;
+  - with ASan, and with `JSON_NO_SIMD`.
+- 8 unit test files with ASan, in C++11 and C++20.
+- All commits build on their own, and each commit's `single_include` is a fresh `make amalgamate`.
+
+## Public API
+
+No breaking changes: the output is byte-identical.
+
+Written by Claude Code on behalf of @nlohmann.
+
+🤖 Generated with [Claude Code](https://claude.com/claude-code)
+
+## Commit message
+Signed-off-by: Niels Lohmann <mail@nlohmann.me>
+
+## Discussion before merge
+- gregmarr: Has this new define been merged yet?
+- gregmarr: What would the performance impact be of...
+
+```
+                    put_literal_indent("{\n", new_indent);
+
+                    auto i = val.m_data.m_value.object->cbegin();
+
+                    for (std::size_t cnt = 0, size = val.m_data.m_value.object->size() - 1; cnt < size; ++cnt, ++i)
+                    {
+                        put_quoted(i->first, "\": ");
+                        dump_element(i->second, new_indent, depth + 1);
+                        if (cnt < size - 1)
+                        {
+                            put_literal_indent(",\n", new_indent);
+                        }
+                        else
+                        {
+                            put_literal_indent("\n", current_indent);
+                        }
+                    }
+                    put_char('}');
+                }
+```
+- gregmarr: This is pre-existing, but why are we passing `current_indent` on the non-pretty path?
+- gregmarr: Same question as above, what is the impact of putting this `,` vs `}` in the loop?  Then the same two questions for the array case below.
+- gregmarr: Should this and all other `dump_internal` calls outside `dump_element` be changed to `dump_element` so that the scalar cases can be removed from `dump_internal` and it can become just `dump_containers` and use an if for `array` vs `object` instead of a full switch?
+- gregmarr: This is only ever called with `"\":"` or `"\": "` and that is based on `pretty_print` which this has access to.  Can this function take are of that selection itself?
+It could also be `void put_object_key(const string_t& s)`.
+
+## Changed functions (from changes.py)
+- nlohmann::detail::serializer (private); reached from the public API through: nlohmann::operator<<(std::ostream &, const basic_json<...> &), nlohmann::operator<<(basic_json<...> &, std::istream &), nlohmann::operator>>(std::istream &, basic_json<...> &), nlohmann::operator>>(const basic_json<...> &, std::ostream &), nlohmann::format_as(const basic_json<...> &), nlohmann::to_string(const basic_json<...> &), nlohmann::operator!=(const_reference, ScalarType), nlohmann::operator!=(ScalarType, const_reference), nlohmann::operator<(const_reference, ScalarType), nlohmann::operator<(ScalarType, const_reference)
+- nlohmann::detail::serializer::dump_scalar(const BasicJsonType &, const std::size_t) (private); reached from the public API through: nlohmann::operator<<(std::ostream &, const basic_json<...> &), nlohmann::operator<<(basic_json<...> &, std::istream &), nlohmann::operator>>(std::istream &, basic_json<...> &), nlohmann::operator>>(const basic_json<...> &, std::ostream &), nlohmann::format_as(const basic_json<...> &), nlohmann::to_string(const basic_json<...> &), nlohmann::operator!=(const_reference, ScalarType), nlohmann::operator!=(ScalarType, const_reference), nlohmann::operator<(const_reference, ScalarType), nlohmann::operator<(ScalarType, const_reference)
+- nlohmann::detail::serializer::dump_escaped_impl(const string_t &) (private); reached from the public API through: nlohmann::operator<<(std::ostream &, const basic_json<...> &), nlohmann::operator<<(basic_json<...> &, std::istream &), nlohmann::operator>>(std::istream &, basic_json<...> &), nlohmann::operator>>(const basic_json<...> &, std::ostream &), nlohmann::format_as(const basic_json<...> &), nlohmann::to_string(const basic_json<...> &), nlohmann::operator!=(const_reference, ScalarType), nlohmann::operator!=(ScalarType, const_reference), nlohmann::operator<(const_reference, ScalarType), nlohmann::operator<(ScalarType, const_reference)
+- nlohmann::detail::serializer::dump_iteratively(const BasicJsonType &, const std::size_t) (private); reached from the public API through: nlohmann::operator<<(std::ostream &, const basic_json<...> &), nlohmann::operator<<(basic_json<...> &, std::istream &), nlohmann::operator>>(std::istream &, basic_json<...> &), nlohmann::operator>>(const basic_json<...> &, std::ostream &), nlohmann::format_as(const basic_json<...> &), nlohmann::to_string(const basic_json<...> &), nlohmann::operator!=(const_reference, ScalarType), nlohmann::operator!=(ScalarType, const_reference), nlohmann::operator<(const_reference, ScalarType), nlohmann::operator<(ScalarType, const_reference)
+- nlohmann::detail::serializer::dump_escaped(const string_t &) (private); reached from the public API through: nlohmann::operator<<(std::ostream &, const basic_json<...> &), nlohmann::operator<<(basic_json<...> &, std::istream &), nlohmann::operator>>(std::istream &, basic_json<...> &), nlohmann::operator>>(const basic_json<...> &, std::ostream &), nlohmann::format_as(const basic_json<...> &), nlohmann::to_string(const basic_json<...> &), nlohmann::operator!=(const_reference, ScalarType), nlohmann::operator!=(ScalarType, const_reference), nlohmann::operator<(const_reference, ScalarType), nlohmann::operator<(ScalarType, const_reference)
+- nlohmann::detail::serializer::put_indent(std::size_t) (private); reached from the public API through: nlohmann::operator<<(std::ostream &, const basic_json<...> &), nlohmann::operator<<(basic_json<...> &, std::istream &), nlohmann::operator>>(std::istream &, basic_json<...> &), nlohmann::operator>>(const basic_json<...> &, std::ostream &), nlohmann::format_as(const basic_json<...> &), nlohmann::to_string(const basic_json<...> &), nlohmann::operator!=(const_reference, ScalarType), nlohmann::operator!=(ScalarType, const_reference), nlohmann::operator<(const_reference, ScalarType), nlohmann::operator<(ScalarType, const_reference)
+- nlohmann::detail::serializer::serializer<BasicJsonType>(output_adapter_protocol<char> &, const char, const bool, const bool, const std::size_t, error_handler_t) (private); reached from the public API through: nlohmann::operator<<(std::ostream &, const basic_json<...> &), nlohmann::operator<<(basic_json<...> &, std::istream &), nlohmann::operator>>(std::istream &, basic_json<...> &), nlohmann::operator>>(const basic_json<...> &, std::ostream &), nlohmann::format_as(const basic_json<...> &), nlohmann::to_string(const basic_json<...> &), nlohmann::operator!=(const_reference, ScalarType), nlohmann::operator!=(ScalarType, const_reference), nlohmann::operator<(const_reference, ScalarType), nlohmann::operator<(ScalarType, const_reference)
+- nlohmann::detail::serializer::dump(const BasicJsonType &, const std::size_t) (private); reached from the public API through: nlohmann::operator<<(std::ostream &, const basic_json<...> &), nlohmann::operator<<(basic_json<...> &, std::istream &), nlohmann::operator>>(std::istream &, basic_json<...> &), nlohmann::operator>>(const basic_json<...> &, std::ostream &), nlohmann::format_as(const basic_json<...> &), nlohmann::to_string(const basic_json<...> &), nlohmann::operator!=(const_reference, ScalarType), nlohmann::operator!=(ScalarType, const_reference), nlohmann::operator<(const_reference, ScalarType), nlohmann::operator<(ScalarType, const_reference)
+- nlohmann::detail::serializer::number_buffer (private); reached from the public API through: nlohmann::operator<<(std::ostream &, const basic_json<...> &), nlohmann::operator<<(basic_json<...> &, std::istream &), nlohmann::operator>>(std::istream &, basic_json<...> &), nlohmann::operator>>(const basic_json<...> &, std::ostream &), nlohmann::format_as(const basic_json<...> &), nlohmann::to_string(const basic_json<...> &), nlohmann::operator!=(const_reference, ScalarType), nlohmann::operator!=(ScalarType, const_reference), nlohmann::operator<(const_reference, ScalarType), nlohmann::operator<(ScalarType, const_reference)
+- nlohmann::detail::serializer::string_buffer (private); reached from the public API through: nlohmann::operator<<(std::ostream &, const basic_json<...> &), nlohmann::operator<<(basic_json<...> &, std::istream &), nlohmann::operator>>(std::istream &, basic_json<...> &), nlohmann::operator>>(const basic_json<...> &, std::ostream &), nlohmann::format_as(const basic_json<...> &), nlohmann::to_string(const basic_json<...> &), nlohmann::operator!=(const_reference, ScalarType), nlohmann::operator!=(ScalarType, const_reference), nlohmann::operator<(const_reference, ScalarType), nlohmann::operator<(ScalarType, const_reference)
+- nlohmann::detail::serializer::write_buffer (private); reached from the public API through: nlohmann::operator<<(std::ostream &, const basic_json<...> &), nlohmann::operator<<(basic_json<...> &, std::istream &), nlohmann::operator>>(std::istream &, basic_json<...> &), nlohmann::operator>>(const basic_json<...> &, std::ostream &), nlohmann::format_as(const basic_json<...> &), nlohmann::to_string(const basic_json<...> &), nlohmann::operator!=(const_reference, ScalarType), nlohmann::operator!=(ScalarType, const_reference), nlohmann::operator<(const_reference, ScalarType), nlohmann::operator<(ScalarType, const_reference)
+- nlohmann::detail::serializer::dump_container(const BasicJsonType &, const std::size_t, const std::size_t) (private); reached from the public API through: nlohmann::operator<<(std::ostream &, const basic_json<...> &), nlohmann::operator<<(basic_json<...> &, std::istream &), nlohmann::operator>>(std::istream &, basic_json<...> &), nlohmann::operator>>(const basic_json<...> &, std::ostream &), nlohmann::format_as(const basic_json<...> &), nlohmann::to_string(const basic_json<...> &), nlohmann::operator!=(const_reference, ScalarType), nlohmann::operator!=(ScalarType, const_reference), nlohmann::operator<(const_reference, ScalarType), nlohmann::operator<(ScalarType, const_reference)
+- nlohmann::detail::serializer::put_short_quoted(const string_t &, const char (&)[N]) (private); reached from the public API through: nlohmann::operator<<(std::ostream &, const basic_json<...> &), nlohmann::operator<<(basic_json<...> &, std::istream &), nlohmann::operator>>(std::istream &, basic_json<...> &), nlohmann::operator>>(const basic_json<...> &, std::ostream &), nlohmann::format_as(const basic_json<...> &), nlohmann::to_string(const basic_json<...> &), nlohmann::operator!=(const_reference, ScalarType), nlohmann::operator!=(ScalarType, const_reference), nlohmann::operator<(const_reference, ScalarType), nlohmann::operator<(ScalarType, const_reference)
+- nlohmann::detail::serializer::dump_binary_value(const std::size_t, const typename BasicJsonType::binary_t &) (private); reached from the public API through: nlohmann::operator<<(std::ostream &, const basic_json<...> &), nlohmann::operator<<(basic_json<...> &, std::istream &), nlohmann::operator>>(std::istream &, basic_json<...> &), nlohmann::operator>>(const basic_json<...> &, std::ostream &), nlohmann::format_as(const basic_json<...> &), nlohmann::to_string(const basic_json<...> &), nlohmann::operator!=(const_reference, ScalarType), nlohmann::operator!=(ScalarType, const_reference), nlohmann::operator<(const_reference, ScalarType), nlohmann::operator<(ScalarType, const_reference)
+- nlohmann::detail::serializer::write_u_escapes(const unsigned char *, std::size_t) (private); reached from the public API through: nlohmann::operator<<(std::ostream &, const basic_json<...> &), nlohmann::operator<<(basic_json<...> &, std::istream &), nlohmann::operator>>(std::istream &, basic_json<...> &), nlohmann::operator>>(const basic_json<...> &, std::ostream &), nlohmann::format_as(const basic_json<...> &), nlohmann::to_string(const basic_json<...> &), nlohmann::operator!=(const_reference, ScalarType), nlohmann::operator!=(ScalarType, const_reference), nlohmann::operator<(const_reference, ScalarType), nlohmann::operator<(ScalarType, const_reference)
+- nlohmann::detail::serializer::copy_plain_vectors(char *, const char *, const std::size_t) (private); reached from the public API through: nlohmann::operator<<(std::ostream &, const basic_json<...> &), nlohmann::operator<<(basic_json<...> &, std::istream &), nlohmann::operator>>(std::istream &, basic_json<...> &), nlohmann::operator>>(const basic_json<...> &, std::ostream &), nlohmann::format_as(const basic_json<...> &), nlohmann::to_string(const basic_json<...> &), nlohmann::operator!=(const_reference, ScalarType), nlohmann::operator!=(ScalarType, const_reference), nlohmann::operator<(const_reference, ScalarType), nlohmann::operator<(ScalarType, const_reference)
+- nlohmann::detail::serializer::copy_plain_halves(char *, const char *, const std::size_t) (private); reached from the public API through: nlohmann::operator<<(std::ostream &, const basic_json<...> &), nlohmann::operator<<(basic_json<...> &, std::istream &), nlohmann::operator>>(std::istream &, basic_json<...> &), nlohmann::operator>>(const basic_json<...> &, std::ostream &), nlohmann::format_as(const basic_json<...> &), nlohmann::to_string(const basic_json<...> &), nlohmann::operator!=(const_reference, ScalarType), nlohmann::operator!=(ScalarType, const_reference), nlohmann::operator<(const_reference, ScalarType), nlohmann::operator<(ScalarType, const_reference)
+- nlohmann::detail::serializer::put_short_literal_indent(const char (&)[N], const std::size_t) (private); reached from the public API through: nlohmann::operator<<(std::ostream &, const basic_json<...> &), nlohmann::operator<<(basic_json<...> &, std::istream &), nlohmann::operator>>(std::istream &, basic_json<...> &), nlohmann::operator>>(const basic_json<...> &, std::ostream &), nlohmann::format_as(const basic_json<...> &), nlohmann::to_string(const basic_json<...> &), nlohmann::operator!=(const_reference, ScalarType), nlohmann::operator!=(ScalarType, const_reference), nlohmann::operator<(const_reference, ScalarType), nlohmann::operator<(ScalarType, const_reference)
+- nlohmann::detail::serializer::dump_element(const BasicJsonType &, const std::size_t, const std::size_t) (private); reached from the public API through: nlohmann::operator<<(std::ostream &, const basic_json<...> &), nlohmann::operator<<(basic_json<...> &, std::istream &), nlohmann::operator>>(std::istream &, basic_json<...> &), nlohmann::operator>>(const basic_json<...> &, std::ostream &), nlohmann::format_as(const basic_json<...> &), nlohmann::to_string(const basic_json<...> &), nlohmann::operator!=(const_reference, ScalarType), nlohmann::operator!=(ScalarType, const_reference), nlohmann::operator<(const_reference, ScalarType), nlohmann::operator<(ScalarType, const_reference)
+- nlohmann::detail::serializer::put_object_key(const string_t &, const char (&)[N]) (private); reached from the public API through: nlohmann::operator<<(std::ostream &, const basic_json<...> &), nlohmann::operator<<(basic_json<...> &, std::istream &), nlohmann::operator>>(std::istream &, basic_json<...> &), nlohmann::operator>>(const basic_json<...> &, std::ostream &), nlohmann::format_as(const basic_json<...> &), nlohmann::to_string(const basic_json<...> &), nlohmann::operator!=(const_reference, ScalarType), nlohmann::operator!=(ScalarType, const_reference), nlohmann::operator<(const_reference, ScalarType), nlohmann::operator<(ScalarType, const_reference)
+- nlohmann::detail::serializer::put_run(const StringType &, const std::size_t, const std::size_t) (private); reached from the public API through: nlohmann::operator<<(std::ostream &, const basic_json<...> &), nlohmann::operator<<(basic_json<...> &, std::istream &), nlohmann::operator>>(std::istream &, basic_json<...> &), nlohmann::operator>>(const basic_json<...> &, std::ostream &), nlohmann::format_as(const basic_json<...> &), nlohmann::to_string(const basic_json<...> &), nlohmann::operator!=(const_reference, ScalarType), nlohmann::operator!=(ScalarType, const_reference), nlohmann::operator<(const_reference, ScalarType), nlohmann::operator<(ScalarType, const_reference)
+- nlohmann::detail::serializer::dump_string_value(const string_t &) (private); reached from the public API through: nlohmann::operator<<(std::ostream &, const basic_json<...> &), nlohmann::operator<<(basic_json<...> &, std::istream &), nlohmann::operator>>(std::istream &, basic_json<...> &), nlohmann::operator>>(const basic_json<...> &, std::ostream &), nlohmann::format_as(const basic_json<...> &), nlohmann::to_string(const basic_json<...> &), nlohmann::operator!=(const_reference, ScalarType), nlohmann::operator!=(ScalarType, const_reference), nlohmann::operator<(const_reference, ScalarType), nlohmann::operator<(ScalarType, const_reference)
+- nlohmann::detail::serializer::put_u_escape(char *, const std::uint16_t, const char *) (private); reached from the public API through: nlohmann::operator<<(std::ostream &, const basic_json<...> &), nlohmann::operator<<(basic_json<...> &, std::istream &), nlohmann::operator>>(std::istream &, basic_json<...> &), nlohmann::operator>>(const basic_json<...> &, std::ostream &), nlohmann::format_as(const basic_json<...> &), nlohmann::to_string(const basic_json<...> &), nlohmann::operator!=(const_reference, ScalarType), nlohmann::operator!=(ScalarType, const_reference), nlohmann::operator<(const_reference, ScalarType), nlohmann::operator<(ScalarType, const_reference)
+- nlohmann::detail::serializer::put_literal_indent(const char (&)[N], const std::size_t) (private); reached from the public API through: nlohmann::operator<<(std::ostream &, const basic_json<...> &), nlohmann::operator<<(basic_json<...> &, std::istream &), nlohmann::operator>>(std::istream &, basic_json<...> &), nlohmann::operator>>(const basic_json<...> &, std::ostream &), nlohmann::format_as(const basic_json<...> &), nlohmann::to_string(const basic_json<...> &), nlohmann::operator!=(const_reference, ScalarType), nlohmann::operator!=(ScalarType, const_reference), nlohmann::operator<(const_reference, ScalarType), nlohmann::operator<(ScalarType, const_reference)
+- nlohmann::detail::serializer::swar_not_plain(const std::uint64_t) (private); reached from the public API through: nlohmann::operator<<(std::ostream &, const basic_json<...> &), nlohmann::operator<<(basic_json<...> &, std::istream &), nlohmann::operator>>(std::istream &, basic_json<...> &), nlohmann::operator>>(const basic_json<...> &, std::ostream &), nlohmann::format_as(const basic_json<...> &), nlohmann::to_string(const basic_json<...> &), nlohmann::operator!=(const_reference, ScalarType), nlohmann::operator!=(ScalarType, const_reference), nlohmann::operator<(const_reference, ScalarType), nlohmann::operator<(ScalarType, const_reference)
+- nlohmann::detail::serializer::load_word(const char *) (private); reached from the public API through: nlohmann::operator<<(std::ostream &, const basic_json<...> &), nlohmann::operator<<(basic_json<...> &, std::istream &), nlohmann::operator>>(std::istream &, basic_json<...> &), nlohmann::operator>>(const basic_json<...> &, std::ostream &), nlohmann::format_as(const basic_json<...> &), nlohmann::to_string(const basic_json<...> &), nlohmann::operator!=(const_reference, ScalarType), nlohmann::operator!=(ScalarType, const_reference), nlohmann::operator<(const_reference, ScalarType), nlohmann::operator<(ScalarType, const_reference)
+- nlohmann::detail::serializer::store_word(char *, const WordType) (private); reached from the public API through: nlohmann::operator<<(std::ostream &, const basic_json<...> &), nlohmann::operator<<(basic_json<...> &, std::istream &), nlohmann::operator>>(std::istream &, basic_json<...> &), nlohmann::operator>>(const basic_json<...> &, std::ostream &), nlohmann::format_as(const basic_json<...> &), nlohmann::to_string(const basic_json<...> &), nlohmann::operator!=(const_reference, ScalarType), nlohmann::operator!=(ScalarType, const_reference), nlohmann::operator<(const_reference, ScalarType), nlohmann::operator<(ScalarType, const_reference)
+- nlohmann::detail::serializer::dump_float_value(const number_float_t) (private); reached from the public API through: nlohmann::operator<<(std::ostream &, const basic_json<...> &), nlohmann::operator<<(basic_json<...> &, std::istream &), nlohmann::operator>>(std::istream &, basic_json<...> &), nlohmann::operator>>(const basic_json<...> &, std::ostream &), nlohmann::format_as(const basic_json<...> &), nlohmann::to_string(const basic_json<...> &), nlohmann::operator!=(const_reference, ScalarType), nlohmann::operator!=(ScalarType, const_reference), nlohmann::operator<(const_reference, ScalarType), nlohmann::operator<(ScalarType, const_reference)
+- nlohmann::detail::serializer::dump_signed_value(const number_integer_t) (private); reached from the public API through: nlohmann::operator<<(std::ostream &, const basic_json<...> &), nlohmann::operator<<(basic_json<...> &, std::istream &), nlohmann::operator>>(std::istream &, basic_json<...> &), nlohmann::operator>>(const basic_json<...> &, std::ostream &), nlohmann::format_as(const basic_json<...> &), nlohmann::to_string(const basic_json<...> &), nlohmann::operator!=(const_reference, ScalarType), nlohmann::operator!=(ScalarType, const_reference), nlohmann::operator<(const_reference, ScalarType), nlohmann::operator<(ScalarType, const_reference)
+- nlohmann::detail::serializer::dump_unsigned_value(const number_unsigned_t) (private); reached from the public API through: nlohmann::operator<<(std::ostream &, const basic_json<...> &), nlohmann::operator<<(basic_json<...> &, std::istream &), nlohmann::operator>>(std::istream &, basic_json<...> &), nlohmann::operator>>(const basic_json<...> &, std::ostream &), nlohmann::format_as(const basic_json<...> &), nlohmann::to_string(const basic_json<...> &), nlohmann::operator!=(const_reference, ScalarType), nlohmann::operator!=(ScalarType, const_reference), nlohmann::operator<(const_reference, ScalarType), nlohmann::operator<(ScalarType, const_reference)
+- nlohmann::detail::serializer::uninitialized_buffer (private); reached from the public API through: nlohmann::operator<<(std::ostream &, const basic_json<...> &), nlohmann::operator<<(basic_json<...> &, std::istream &), nlohmann::operator>>(std::istream &, basic_json<...> &), nlohmann::operator>>(const basic_json<...> &, std::ostream &), nlohmann::format_as(const basic_json<...> &), nlohmann::to_string(const basic_json<...> &), nlohmann::operator!=(const_reference, ScalarType), nlohmann::operator!=(ScalarType, const_reference), nlohmann::operator<(const_reference, ScalarType), nlohmann::operator<(ScalarType, const_reference)
+- nlohmann::detail::serializer::short_string_max (private); reached from the public API through: nlohmann::operator<<(std::ostream &, const basic_json<...> &), nlohmann::operator<<(basic_json<...> &, std::istream &), nlohmann::operator>>(std::istream &, basic_json<...> &), nlohmann::operator>>(const basic_json<...> &, std::ostream &), nlohmann::format_as(const basic_json<...> &), nlohmann::to_string(const basic_json<...> &), nlohmann::operator!=(const_reference, ScalarType), nlohmann::operator!=(ScalarType, const_reference), nlohmann::operator<(const_reference, ScalarType), nlohmann::operator<(ScalarType, const_reference)
+- nlohmann::detail::serializer::uninitialized_buffer::uninitialized_buffer<N>() (private); reached from the public API through: nlohmann::operator<<(std::ostream &, const basic_json<...> &), nlohmann::operator<<(basic_json<...> &, std::istream &), nlohmann::operator>>(std::istream &, basic_json<...> &), nlohmann::operator>>(const basic_json<...> &, std::ostream &), nlohmann::format_as(const basic_json<...> &), nlohmann::to_string(const basic_json<...> &), nlohmann::operator!=(const_reference, ScalarType), nlohmann::operator!=(ScalarType, const_reference), nlohmann::operator<(const_reference, ScalarType), nlohmann::operator<(ScalarType, const_reference)
+- nlohmann::detail::serializer::dump_internal(const BasicJsonType &, const std::size_t, const std::size_t) (private); reached from the public API through: nlohmann::operator<<(std::ostream &, const basic_json<...> &), nlohmann::operator<<(basic_json<...> &, std::istream &), nlohmann::operator>>(std::istream &, basic_json<...> &), nlohmann::operator>>(const basic_json<...> &, std::ostream &), nlohmann::format_as(const basic_json<...> &), nlohmann::to_string(const basic_json<...> &), nlohmann::operator!=(const_reference, ScalarType), nlohmann::operator!=(ScalarType, const_reference), nlohmann::operator<(const_reference, ScalarType), nlohmann::operator<(ScalarType, const_reference)
+
+## Diff of the library source (before -> after)
+```diff
+diff --git a/include/nlohmann/detail/output/serializer.hpp b/include/nlohmann/detail/output/serializer.hpp
+index 7bb4edfc5..5eb9906a1 100644
+--- a/include/nlohmann/detail/output/serializer.hpp
++++ b/include/nlohmann/detail/output/serializer.hpp
+@@ -71,7 +71,7 @@ class serializer
+ 
+     None of @a pretty_print_, @a ensure_ascii_ and @a indent_step_ change over
+     the life of the serializer, so they are captured once here instead of
+-    being threaded through every call to @ref dump, @ref dump_internal and
++    being threaded through every call to @ref dump, @ref dump_container and
+     @ref dump_iteratively.
+     */
+     serializer(output_adapter_protocol<char>& s, const char ichar,
+@@ -80,11 +80,14 @@ class serializer
+                const std::size_t indent_step_ = 0,
+                error_handler_t error_handler_ = error_handler_t::strict)
+         : o(&s)
++        , number_buffer() // NOLINT(readability-redundant-member-init)
++        , string_buffer() // NOLINT(readability-redundant-member-init)
+         , indent_char(ichar)
+         , pretty_print(pretty_print_)
+         , ensure_ascii(ensure_ascii_)
+         , indent_step(indent_step_)
+         , error_handler(error_handler_)
++        , write_buffer() // NOLINT(readability-redundant-member-init)
+     {}
+ 
+     // deleted because of pointer members
+@@ -115,18 +118,18 @@ class serializer
+     void dump(const BasicJsonType& val,
+               const std::size_t current_indent = 0)
+     {
+-        dump_internal(val, current_indent);
++        dump_element(val, current_indent, 0);
+         flush();
+     }
+ 
+   JSON_PRIVATE_UNLESS_TESTED:
+     /*!
+-    @brief worker for @ref dump
++    @brief serialize the object or array @a val
+ 
+-    Identical in behavior to the historical @ref dump, but writes into the
+-    serializer's internal @ref write_buffer instead of issuing a virtual call
+-    per token. The public @ref dump wraps this and flushes the buffer once the
+-    top-level value has been serialized.
++    Writes into the serializer's internal @ref write_buffer instead of issuing
++    a virtual call per token; the public @ref dump flushes the buffer once the
++    top-level value has been serialized. Scalars are written by @ref dump_scalar,
++    which @ref dump_element calls without entering this function.
+ 
+     Serializing a container descends into its elements, so a value nested deeply
+     enough used to exhaust the call stack and terminate the process with no
+@@ -137,167 +140,149 @@ class serializer
+ 
+     @sa https://github.com/nlohmann/json/issues/5387
+     */
+-    void dump_internal(const BasicJsonType& val,
+-                       const std::size_t current_indent = 0,
+-                       const std::size_t depth = 0)
++    void dump_container(const BasicJsonType& val,
++                        const std::size_t current_indent,
++                        const std::size_t depth)
+     {
+-        switch (val.m_data.m_type)
+-        {
+-            case value_t::object:
+-            {
+-                if (JSON_HEDLEY_UNLIKELY(depth >= recursion_depth_limit()))
+-                {
+-                    dump_iteratively(val, current_indent);
+-                    return;
+-                }
++        JSON_ASSERT(val.m_data.m_type == value_t::object || val.m_data.m_type == value_t::array);
+ 
+-                if (val.m_data.m_value.object->empty())
+-                {
+-                    put_literal("{}");
+-                    return;
+-                }
++        if (JSON_HEDLEY_UNLIKELY(depth >= recursion_depth_limit()))
++        {
++            dump_iteratively(val, current_indent);
++            return;
++        }
+ 
+-                if (pretty_print)
+-                {
+-                    put_literal("{\n");
++        if (val.m_data.m_type == value_t::object)
++        {
++            if (val.m_data.m_value.object->empty())
++            {
++                put_literal("{}");
++                return;
++            }
+ 
+-                    // variable to hold indentation for recursive calls
+-                    const auto new_indent = next_indent(current_indent, indent_step);
++            if (pretty_print)
++            {
++                // variable to hold indentation for recursive calls
++                const auto new_indent = next_indent(current_indent, indent_step);
+ 
+-                    // first n-1 elements
+-                    auto i = val.m_data.m_value.object->cbegin();
+-                    for (std::size_t cnt = 0; cnt < val.m_data.m_value.object->size() - 1; ++cnt, ++i)
+-                    {
+-                        put_indent(new_indent);
+-                        put_char('"');
+-                        dump_escaped(i->first);
+-                        put_literal("\": ");
+-                        dump_internal(i->second, new_indent, depth + 1);
+-                        put_literal(",\n");
+-                    }
++                put_literal_indent("{\n", new_indent);
+ 
+-                    // last element
+-                    JSON_ASSERT(i != val.m_data.m_value.object->cend());
+-                    JSON_ASSERT(std::next(i) == val.m_data.m_value.object->cend());
+-                    put_indent(new_indent);
+-                    put_char('"');
+-                    dump_escaped(i->first);
+-                    put_literal("\": ");
+-                    dump_internal(i->second, new_indent, depth + 1);
+-
+-                    put_char('\n');
+-                    put_indent(current_indent);
+-                    put_char('}');
+-                }
+-                else
++                // first n-1 elements
++                auto i = val.m_data.m_value.object->cbegin();
++                for (std::size_t cnt = 0; cnt < val.m_data.m_value.object->size() - 1; ++cnt, ++i)
+                 {
+-                    put_char('{');
+-
+-                    // first n-1 elements
+-                    auto i = val.m_data.m_value.object->cbegin();
+-                    for (std::size_t cnt = 0; cnt < val.m_data.m_value.object->size() - 1; ++cnt, ++i)
+-                    {
+-                        put_char('"');
+-                        dump_escaped(i->first);
+-                        put_literal("\":");
+-                        dump_internal(i->second, current_indent, depth + 1);
+-                        put_char(',');
+-                    }
+-
+-                    // last element
+-                    JSON_ASSERT(i != val.m_data.m_value.object->cend());
+-                    JSON_ASSERT(std::next(i) == val.m_data.m_value.object->cend());
+-                    put_char('"');
+-                    dump_escaped(i->first);
+-                    put_literal("\":");
+-                    dump_internal(i->second, current_indent, depth + 1);
+-
+-                    put_char('}');
++                    put_object_key(i->first, "\": ");
++                    dump_element(i->second, new_indent, depth + 1);
++                    put_literal_indent(",\n", new_indent);
+                 }
+ 
+-                return;
+-            }
++                // last element
++                JSON_ASSERT(i != val.m_data.m_value.object->cend());
++                JSON_ASSERT(std::next(i) == val.m_data.m_value.object->cend());
++                put_object_key(i->first, "\": ");
++                dump_element(i->second, new_indent, depth + 1);
+ 
+-            case value_t::array:
++                put_literal_indent("\n", current_indent);
++                put_char('}');
++            }
++            else
+             {
+-                if (JSON_HEDLEY_UNLIKELY(depth >= recursion_depth_limit()))
+-                {
+-                    dump_iteratively(val, current_indent);
+-                    return;
+-                }
++                put_char('{');
+ 
+-                if (val.m_data.m_value.array->empty())
++                // first n-1 elements
++                auto i = val.m_data.m_value.object->cbegin();
++                for (std::size_t cnt = 0; cnt < val.m_data.m_value.object->size() - 1; ++cnt, ++i)
+                 {
+-                    put_literal("[]");
+-                    return;
++                    put_object_key(i->first, "\":");
++                    dump_element(i->second, 0, depth + 1);
++                    put_char(',');
+                 }
+ 
+-                if (pretty_print)
+-                {
+-                    put_literal("[\n");
++                // last element
++                JSON_ASSERT(i != val.m_data.m_value.object->cend());
++                JSON_ASSERT(std::next(i) == val.m_data.m_value.object->cend());
++                put_object_key(i->first, "\":");
++                dump_element(i->second, 0, depth + 1);
+ 
+-                    // variable to hold indentation for recursive calls
+-                    const auto new_indent = next_indent(current_indent, indent_step);
++                put_char('}');
++            }
++            return;
++        }
+ 
+-                    // first n-1 elements
+-                    for (auto i = val.m_data.m_value.array->cbegin();
+-                            i != val.m_data.m_value.array->cend() - 1; ++i)
+-                    {
+-                        put_indent(new_indent);
+-                        dump_internal(*i, new_indent, depth + 1);
+-                        put_literal(",\n");
+-                    }
++        if (val.m_data.m_value.array->empty())
++        {
++            put_literal("[]");
++            return;
++        }
+ 
+-                    // last element
+-                    JSON_ASSERT(!val.m_data.m_value.array->empty());
+-                    put_indent(new_indent);
+-                    dump_internal(val.m_data.m_value.array->back(), new_indent, depth + 1);
++        if (pretty_print)
++        {
++            // variable to hold indentation for recursive calls
++            const auto new_indent = next_indent(current_indent, indent_step);
+ 
+-                    put_char('\n');
+-                    put_indent(current_indent);
+-                    put_char(']');
+-                }
+-                else
+-                {
+-                    put_char('[');
++            put_literal_indent("[\n", new_indent);
+ 
+-                    // first n-1 elements
+-                    for (auto i = val.m_data.m_value.array->cbegin();
+-                            i != val.m_data.m_value.array->cend() - 1; ++i)
+-                    {
+-                        dump_internal(*i, current_indent, depth + 1);
+-                        put_char(',');
+-                    }
++            // first n-1 elements
++            for (auto i = val.m_data.m_value.array->cbegin();
++                    i != val.m_data.m_value.array->cend() - 1; ++i)
++            {
++                dump_element(*i, new_indent, depth + 1);
++                put_literal_indent(",\n", new_indent);
++            }
+ 
+-                    // last element
+-                    JSON_ASSERT(!val.m_data.m_value.array->empty());
+-                    dump_internal(val.m_data.m_value.array->back(), current_indent, depth + 1);
++            // last element
++            JSON_ASSERT(!val.m_data.m_value.array->empty());
++            dump_element(val.m_data.m_value.array->back(), new_indent, depth + 1);
+ 
+-                    put_char(']');
+-                }
++            put_literal_indent("\n", current_indent);
++            put_char(']');
++        }
++        else
++        {
++            put_char('[');
+ 
+-                return;
++            // first n-1 elements
++            for (auto i = val.m_data.m_value.array->cbegin();
++                    i != val.m_data.m_value.array->cend() - 1; ++i)
++            {
++                dump_element(*i, 0, depth + 1);
++                put_char(',');
+             }
+ 
+-            case value_t::string:
+-            case value_t::binary:
+-            case value_t::boolean:
+-            case value_t::number_integer:
+-            case value_t::number_unsigned:
+-            case value_t::number_float:
+-            case value_t::discarded:
+-            case value_t::null:
+-            default:
+-                dump_scalar(val, current_indent);
+-                return;
++            // last element
++            JSON_ASSERT(!val.m_data.m_value.array->empty());
++            dump_element(val.m_data.m_value.array->back(), 0, depth + 1);
++
++            put_char(']');
+         }
+     }
+ 
+   private:
++    /*!
++    @brief serialize an element of a container
++
++    Most elements are scalars, which need none of the state dump_container() keeps
++    for a container; writing them from here spares each the entry and exit of
++    that function.
++    */
++    JSON_HEDLEY_ALWAYS_INLINE void dump_element(const BasicJsonType& val,
++            const std::size_t current_indent,
++            const std::size_t depth)
++    {
++        if (val.m_data.m_type == value_t::object || val.m_data.m_type == value_t::array)
++        {
++            dump_container(val, current_indent, depth);
++        }
++        else
++        {
++            dump_scalar(val, current_indent);
++        }
++    }
++
+     /*!
+     @brief write out @a val and everything below it without the call stack
+ 
+-    Emits the same bytes as @ref dump_internal, keeping the containers it has
++    Emits the same bytes as @ref dump_container, keeping the containers it has
+     entered on an explicit stack instead of descending into them. Only reached
+     for values nested deeper than @ref recursion_depth_limit, which is why it is not
+     written for speed: walking every value this way measured up to 20% slower on
+@@ -325,8 +310,7 @@ class serializer
+                 {
+                     if (pretty_print)
+                     {
+-                        put_char('\n');
+-                        put_indent(frame.current_indent);
++                        put_literal_indent("\n", frame.current_indent);
+                     }
+ 
+                     put_char('}');
+@@ -353,16 +337,13 @@ class serializer
+                     put_indent(frame.child_indent);
+                 }
+ 
+-                put_char('"');
+-                dump_escaped(frame.object_it->first);
+-
+                 if (pretty_print)
+                 {
+-                    put_literal("\": ");
++                    put_object_key(frame.object_it->first, "\": ");
+                 }
+                 else
+                 {
+-                    put_literal("\":");
++                    put_object_key(frame.object_it->first, "\":");
+                 }
+ 
+                 const BasicJsonType& element = frame.object_it->second;
+@@ -381,8 +362,7 @@ class serializer
+                 {
+                     if (pretty_print)
+                     {
+-                        put_char('\n');
+-                        put_indent(frame.current_indent);
++                        put_literal_indent("\n", frame.current_indent);
+                     }
+ 
+                     put_char(']');
+@@ -523,7 +503,7 @@ class serializer
+     /*!
+     @brief serialize the value @a val, which is neither an object nor an array
+ 
+-    Shared by @ref dump_internal and @ref dump_value, so that a value is written
++    Shared by @ref dump_element and @ref dump_value, so that a value is written
+     the same way however deeply it is nested. A binary value is written out here
+     in full: it looks like an object, but has no elements to descend into.
+ 
+@@ -537,78 +517,13 @@ class serializer
+         {
+             case value_t::string:
+             {
+-                put_char('"');
+-                dump_escaped(*val.m_data.m_value.string);
+-                put_char('"');
++                dump_string_value(*val.m_data.m_value.string);
+                 return;
+             }
+ 
+             case value_t::binary:
+             {
+-                if (pretty_print)
+-                {
+-                    put_literal("{\n");
+-
+-                    // variable to hold indentation for the bytes
+-                    const auto new_indent = next_indent(current_indent, indent_step);
+-
+-                    put_indent(new_indent);
+-
+-                    put_literal("\"bytes\": [");
+-
+-                    if (!val.m_data.m_value.binary->empty())
+-                    {
+-                        for (auto i = val.m_data.m_value.binary->cbegin();
+-                                i != val.m_data.m_value.binary->cend() - 1; ++i)
+-                        {
+-                            dump_byte(*i);
+-                            put_literal(", ");
+-                        }
+-                        dump_byte(val.m_data.m_value.binary->back());
+-                    }
+-
+-                    put_literal("],\n");
+-                    put_indent(new_indent);
+-
+-                    put_literal("\"subtype\": ");
+-                    if (val.m_data.m_value.binary->has_subtype())
+-                    {
+-                        dump_integer(val.m_data.m_value.binary->subtype());
+-                    }
+-                    else
+-                    {
+-                        put_literal("null");
+-                    }
+-                    put_char('\n');
+-                    put_indent(current_indent);
+-                    put_char('}');
+-                }
+-                else
+-                {
+-                    put_literal("{\"bytes\":[");
+-
+-                    if (!val.m_data.m_value.binary->empty())
+-                    {
+-                        for (auto i = val.m_data.m_value.binary->cbegin();
+-                                i != val.m_data.m_value.binary->cend() - 1; ++i)
+-                        {
+-                            dump_byte(*i);
+-                            put_char(',');
+-                        }
+-                        dump_byte(val.m_data.m_value.binary->back());
+-                    }
+-
+-                    put_literal("],\"subtype\":");
+-                    if (val.m_data.m_value.binary->has_subtype())
+-                    {
+-                        dump_integer(val.m_data.m_value.binary->subtype());
+-                        put_char('}');
+-                    }
+-                    else
+-                    {
+-                        put_literal("null}");
+-                    }
+-                }
++                dump_binary_value(current_indent, *val.m_data.m_value.binary);
+                 return;
+             }
+ 
+@@ -627,19 +542,19 @@ class serializer
+ 
+             case value_t::number_integer:
+             {
+-                dump_integer(val.m_data.m_value.number_integer);
++                dump_signed_value(val.m_data.m_value.number_integer);
+                 return;
+             }
+ 
+             case value_t::number_unsigned:
+             {
+-                dump_integer(val.m_data.m_value.number_unsigned);
++                dump_unsigned_value(val.m_data.m_value.number_unsigned);
+                 return;
+             }
+ 
+             case value_t::number_float:
+             {
+-                dump_float(val.m_data.m_value.number_float);
++                dump_float_value(val.m_data.m_value.number_float);
+                 return;
+             }
+ 
+@@ -662,6 +577,100 @@ class serializer
+         }
+     }
+ 
++    /// @brief write the string @a s in quotes; kept out of line, so that the
++    /// other scalars do not pay for its register needs (and the other way round)
++    JSON_HEDLEY_NEVER_INLINE void dump_string_value(const string_t& s)
++    {
++#if JSON_LITTLE_ENDIAN_TARGET
++        if (s.size() <= short_string_max && put_short_quoted(s, "\""))
++        {
++            return;
++        }
++#endif
++        put_char('"');
++        dump_escaped(s);
++        put_char('"');
++    }
++
++    // The numbers, and the rest of what dump_scalar() writes, are left to
++    // functions of their own as well: a single function holding all of them
++    // saves and restores every register any of them needs, on every call. Now
++    // dump_scalar() only dispatches, and each writer pays for what it uses.
++    JSON_HEDLEY_NEVER_INLINE void dump_signed_value(const number_integer_t x)
++    {
++        dump_integer(x);
++    }
++
++    JSON_HEDLEY_NEVER_INLINE void dump_unsigned_value(const number_unsigned_t x)
++    {
++        dump_integer(x);
++    }
++
++    JSON_HEDLEY_NEVER_INLINE void dump_float_value(const number_float_t x)
++    {
++        dump_float(x);
++    }
++
++    JSON_HEDLEY_NEVER_INLINE void dump_binary_value(const std::size_t current_indent, const typename BasicJsonType::binary_t& binary)
++    {
++        if (pretty_print)
++        {
++            // variable to hold indentation for the bytes
++            const auto new_indent = next_indent(current_indent, indent_step);
++
++            put_literal_indent("{\n", new_indent);
++            put_literal("\"bytes\": [");
++
++            if (!binary.empty())
++            {
++                for (auto i = binary.cbegin(); i != binary.cend() - 1; ++i)
++                {
++                    dump_byte(*i);
++                    put_literal(", ");
++                }
++                dump_byte(binary.back());
++            }
++
++            put_literal_indent("],\n", new_indent);
++
++            put_literal("\"subtype\": ");
++            if (binary.has_subtype())
++            {
++                dump_integer(binary.subtype());
++            }
++            else
++            {
++                put_literal("null");
++            }
++            put_literal_indent("\n", current_indent);
++            put_char('}');
++        }
++        else
++        {
++            put_literal("{\"bytes\":[");
++
++            if (!binary.empty())
++            {
++                for (auto i = binary.cbegin(); i != binary.cend() - 1; ++i)
++                {
++                    dump_byte(*i);
++                    put_char(',');
++                }
++                dump_byte(binary.back());
++            }
++
++            put_literal("],\"subtype\":");
++            if (binary.has_subtype())
++            {
++                dump_integer(binary.subtype());
++                put_char('}');
++            }
++            else
++            {
++                put_literal("null}");
++            }
++        }
++    }
+ 
+     /*!
+     @brief the indentation level to use for the children of the current value
+@@ -678,6 +687,220 @@ class serializer
+         return new_indent;
+     }
+ 
++  private:
++    /*!
++    @brief append the object key @a s in quotes, followed by @a tail
++
++    @a tail is the closing quote and the colon, followed by a space when
++    pretty-printing. The callers pass it because each of them already sits on
++    the pretty-printing or the compact path; choosing it here would test
++    @ref pretty_print once more for every key. Most keys are short and plain
++    and are written in one go by put_short_quoted(); everything else takes the
++    general path.
++    */
++    template<std::size_t N>
++    void put_object_key(const string_t& s, const char (&tail)[N]) // NOLINT(cppcoreguidelines-avoid-c-arrays,hicpp-avoid-c-arrays,modernize-avoid-c-arrays)
++    {
++#if JSON_LITTLE_ENDIAN_TARGET
++        if (put_short_quoted(s, tail))
++        {
++            return;
++        }
++#endif
++        put_char('"');
++        dump_escaped(s);
++        put_literal(tail);
++    }
++
++    // put_short_quoted() assembles words from little-endian loads
++#if JSON_LITTLE_ENDIAN_TARGET
++    /// the longest string put_short_quoted() takes
++    static constexpr std::size_t short_string_max = JSON_SCAN_VECTOR ? 32 : 16;
++
++    /// the high bit of every byte of @a v that is not printable ASCII or is a
++    /// quote, a backslash, or DEL (zero if the bytes can be copied as they are)
++    static std::uint64_t swar_not_plain(const std::uint64_t v) noexcept
++    {
++        constexpr std::uint64_t ones = 0x0101010101010101ull;
++        const std::uint64_t q = v ^ 0x2222222222222222ull; // '"'
++        const std::uint64_t b = v ^ 0x5C5C5C5C5C5C5C5Cull; // '\\'
++        return (((q - ones) & ~q) | ((b - ones) & ~b)         // == '"', == '\\'
++                | ((v - 0x2020202020202020ull) & ~v)          // < 0x20
++                | v | (v + ones))                             // >= 0x7F
++               & 0x8080808080808080ull;
++    }
++
++    template<typename WordType>
++    static WordType load_word(const char* p) noexcept
++    {
++        WordType w;
++        std::memcpy(&
+[... truncated, 19610 more characters]
+```
+
+## Existing upstream tests that call the changed code (for style and API usage)
+// Upstream tests at the PR's parent commit 86d5c56c5 that use the changed code.
+// Names searched (test lines using each): format_as (23), to_string (140), operator<< (97), operator>> (94), operator!= (59), operator< (210), serializer (5), dump_scalar (0), dump_escaped_impl (0), dump_iteratively (0), dump_escaped (1), put_indent (0), dump (672), number_buffer (0), string_buffer (0), write_buffer (0), dump_container (0), put_short_quoted (0), dump_binary_value (0), write_u_escapes (0), copy_plain_vectors (0), copy_plain_halves (0), put_short_literal_indent (0), dump_element (0), put_object_key (0), put_run (0), dump_string_value (0), put_u_escape (0), put_literal_indent (0), swar_not_plain (0), load_word (0), store_word (0), dump_float_value (0), dump_signed_value (0), dump_unsigned_value (0), uninitialized_buffer (0), short_string_max (0), dump_internal (0)
+
+// ---- tests/src/unit-convenience.cpp:91-115  (uses: dump_escaped)
+        return *this;
+    }
+
+    std::string impl{}; // NOLINT(readability-redundant-member-init)
+};
+
+void check_escaped(const char* original, const char* escaped = "", bool ensure_ascii = false);
+void check_escaped(const char* original, const char* escaped, const bool ensure_ascii)
+{
+    std::stringstream ss;
+    nlohmann::detail::output_stream_adapter<char> adapter(ss);
+    json::serializer s(adapter, ' ', false, ensure_ascii);
+    s.dump_escaped(original);
+    s.flush(); // dump_escaped writes into the serializer's internal buffer
+    CHECK(ss.str() == escaped);
+}
+} // namespace
+
+TEST_CASE("convenience functions")
+{
+    SECTION("type name as string")
+    {
+        CHECK(std::string(json(json::value_t::null).type_name()) == "null");
+        CHECK(std::string(json(json::value_t::object).type_name()) == "object");
+        CHECK(std::string(json(json::value_t::array).type_name()) == "array");
+
+// ---- tests/src/unit-udt.cpp:724-735  (uses: dump, operator<<, serializer)
+TEST_CASE("custom serializer that does adl by default" * doctest::test_suite("udt"))
+{
+    auto me = udt::person{{23}, {"theo"}, udt::country::france};
+
+    json const j = me;
+    custom_json const cj = me;
+
+    CHECK(j.dump() == cj.dump());
+
+    CHECK(me == j.get<udt::person>());
+    CHECK(me == cj.get<udt::person>());
+}
+
+// ---- tests/src/unit-serialization.cpp:809-850  (uses: operator<<, serializer)
+TEST_CASE("serializer buffers are flushed mid-string and mid-binary")
+{
+    SECTION("a long run of escaped characters")
+    {
+        // each character is escaped on its own, so the escape buffer fills up
+        const json newlines = std::string(600, '\n');
+        std::string expected = "\"";
+        for (int i = 0; i < 600; ++i)
+        {
+            expected += "\\n";
+        }
+        expected += '"';
+        CHECK(newlines.dump() == expected);
+
+        // every character is \u-escaped under ensure_ascii
+        std::string umlauts;
+        std::string escaped_umlauts = "\"";
+        for (int i = 0; i < 300; ++i)
+        {
+            umlauts += "\xC3\xA4";
+            escaped_umlauts += "\\u00e4";
+        }
+        escaped_umlauts += '"';
+        CHECK(json(umlauts).dump(-1, ' ', true) == escaped_umlauts);
+    }
+
+    SECTION("a large binary value")
+    {
+        std::vector<std::uint8_t> bytes(3000);
+        std::string expected_bytes;
+        std::string expected_pretty_bytes;
+        for (std::size_t i = 0; i < bytes.size(); ++i)
+        {
+            bytes[i] = static_cast<std::uint8_t>(i % 256);
+            expected_bytes += (i == 0 ? "" : ",") + std::to_string(i % 256);
+            expected_pretty_bytes += (i == 0 ? "" : ", ") + std::to_string(i % 256);
+        }
+        const json j = json::binary(bytes);
+        CHECK(j.dump() == "{\"bytes\":[" + expected_bytes + "],\"subtype\":null}");
+        CHECK(j.dump(2) == "{\n  \"bytes\": [" + expected_pretty_bytes + "],\n  \"subtype\": null\n}");
+    }
+}
+
+// ---- tests/src/unit-udt.cpp:685-701  (uses: operator<<, serializer)
+TEST_CASE("custom serializer for pods" * doctest::test_suite("udt"))
+{
+    using custom_json =
+        nlohmann::json::with_json_serializer_t<pod_serializer>;
+
+    auto p = udt::small_pod{42, '/', 42};
+    custom_json const j = p;
+
+    auto p2 = j.get<udt::small_pod>();
+
+    CHECK(p == p2);
+
+    auto np = udt::non_pod{{"non-pod"}};
+    custom_json const j2 = np;
+    auto np2 = j2.get<udt::non_pod>();
+    CHECK(np == np2);
+}
+
+// ---- tests/src/unit-json_view_dump.cpp:293-303  (uses: dump, operator<<, operator>>)
+    SECTION("streams and discarded views")
+    {
+        const json_document d = json_document::parse(R"({"a": [1, 2]})");
+        std::ostringstream compact;
+        compact << d.root();
+        CHECK(compact.str() == R"({"a":[1,2]})");
+        std::ostringstream pretty;
+        pretty << std::setw(2) << std::setfill('.') << d.root() << d.root()["a"];
+        CHECK(pretty.str() == "{\n..\"a\": [\n....1,\n....2\n..]\n}[1,2]");
+        CHECK(json_view().dump() == json(json::value_t::discarded).dump());
+    }
+
+// ---- tests/src/unit-comparison.cpp:957-996  (uses: dump, operator!=, operator<)
+TEST_CASE("copying an object preserves its comparator's state")
+{
+    // Past the iterative deep copy's nesting bound, an object copy used to be
+    // built with a default-constructed comparator instead of a copy of the
+    // original's. For an object type whose comparator carries state - here, a
+    // std::map that compares keys case-sensitively only when created that way
+    // - this reordered the copy's keys and could even drop entries that the
+    // original's comparator kept distinct (see #5649).
+    key_case_json object = key_case_json::object_t(key_case_less(true)); // case-sensitive
+    object["b"] = 1;
+    object["B"] = 2;
+    object["a"] = 3;
+    REQUIRE(object.dump() == R"({"B":2,"a":3,"b":1})");
+
+    for (const std::size_t depth : std::vector<std::size_t> {0, 127, 128, 200})
+    {
+        CAPTURE(depth)
+
+        key_case_json original = object;
+        for (std::size_t i = 0; i < depth; ++i)
+        {
+            original = key_case_json::array({std::move(original)});
+        }
+
+        {
+            const key_case_json copy = original; // NOLINT(performance-unnecessary-copy-initialization)
+            CHECK(innermost(copy).size() == 3);
+            CHECK(innermost(copy).dump() == R"({"B":2,"a":3,"b":1})");
+            CHECK(copy == original);
+        }
+
+        {
+            key_case_json copy = key_case_json::array();
+            copy = original;
+            CHECK(innermost(copy).size() == 3);
+            CHECK(innermost(copy).dump() == R"({"B":2,"a":3,"b":1})");
+            CHECK(copy == original);
+        }
+    }
+}
+
+// ---- tests/src/unit-ordered_json.cpp:104-107  (uses: dump, operator<)
+    SECTION("the key order is preserved at every level")
+    {
+        CHECK(copy.dump() == R"({"z":1,"a":{"y":2,"b":{"x":3}},"m":[1,2,{"w":4}]})");
+    }
+
+# Task
+Write 20 test programs for this pull request. Return JSON with a "tests" array; each item has "name" (short snake_case), "intent" (one sentence: what behavior it probes) and "code" (the complete C++ program).

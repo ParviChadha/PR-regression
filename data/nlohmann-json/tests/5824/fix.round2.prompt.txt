@@ -1,0 +1,1271 @@
+[system]
+You write test programs that probe a C++ library for behavioral changes made by one pull request.
+Each program is compiled and run twice, once against the library before the change and once after, and the two
+outputs are compared. Your job is to produce programs whose output reveals whether the change altered behavior,
+including side effects the author did not intend.
+
+Rules for every program:
+- It is standalone: one file with its own int main(), compiled as C++17, printing results to stdout.
+- Use only the library's documented public API. Never include internal headers or use detail/impl namespaces,
+  private members or undocumented macros.
+- Do not judge results (no assert, no expected-value comparisons): just print what the library returns. Print
+  enough to make differences visible, one fact per line.
+- Output must be deterministic. Never print pointers or addresses, uninitialized data, the order of
+  hash-based containers, timings, thread ids, random values, file paths or environment data. Print floating point
+  values with an explicit precision. No input, files, network, threads, clocks or randomness.
+- Wrap calls that may throw in try/catch and print the exception's type and message, so an exception is an
+  observable result. Do not crash on purpose.
+- Aim at the code the diff changes. Prefer calls that compile against both the old and the new library; one or two
+  programs may use an API the PR adds. Cover ordinary inputs and edge cases (empty, minimum and maximum values,
+  boundaries, special values, nesting, unusual types) and also neighbouring behavior the change could disturb.
+- When the diff changes which types or inputs an API accepts or rejects (constraints, overloads, traits,
+  conversions), test it with the detection idiom (std::void_t or requires) and `if constexpr`, so the program
+  compiles against both versions, prints whether the expression is well-formed, and exercises it when it is.
+  Accepting an input is not enough: also use it through every entry point that should follow (const and
+  non-const, read, write, insert, erase, lookup, nested use), because a change that admits new inputs can leave
+  later code unable to handle them.
+- If the changed code is internal (a detail, impl or internal namespace, a trait, a helper), do not name it in the
+  program. Reach it through the public API that depends on it, using detection (as above) where needed.
+- Use the exact types and values the diff is about (the new trait's argument types, the new overload's
+  parameters), not stand-ins.
+- Spread the programs over distinct public entry points and overloads, one main idea per program. Do not write
+  several programs that only rename a type or change a literal.
+- Make the programs differ from each other: different inputs, different entry points, different features.
+
+Rules specific to this library:
+- Include the library with #include <nlohmann/json.hpp>. The public API is nlohmann::json (nlohmann::basic_json), nlohmann::ordered_json, json_pointer, json patch/merge_patch and the documented SAX and conversion interfaces. Never use the detail namespace.
+- It is a header-only library: nothing to link. Programs are compiled as C++17.
+- Print JSON values with dump() (compact) or dump(2). Keys of nlohmann::json objects print in sorted order, so output is deterministic; do not depend on insertion order except with ordered_json.
+
+[user]
+# Pull request #5824: Speed up writing CBOR and MessagePack, above all integer arrays
+
+## Description
+Writing CBOR or MessagePack from integer-only arrays was no faster on `develop` than in 3.12.0, and with GCC it was slower (ToCbor/*_ints at 0.84–0.93×), although #5286 had made binary writing non-virtual. This PR makes `to_cbor()` and `to_msgpack()` faster than both 3.12.0 and `develop` on every benchmark below, with byte-identical output.
+
+## Cause
+
+- **No single commit.** On clang the difference was noise (±3%, no step anywhere between 3.12.0 and `develop`). On GCC 13 it accumulated gradually, in steps smaller than the noise.
+- **The append.** Each number's 1–8 payload bytes were appended with `vector::insert()`, which libc++ and libstdc++ both implement as an out-of-line insert-anywhere routine. In a profile this was 30% of the time, more than encoding the number, so removing the virtual call in #5286 didn't help. GCC also kept the small sink functions out of line.
+- **Branch mispredictions.** The type switch (positive integers are `number_unsigned`, negative ones `number_integer`), the sign test and the 1/2/4/8-byte length ladder mispredict on mixed data. They accounted for about 40% of what remained.
+
+## Changes
+
+**1. Append to the output vector through a position-tracking sink**
+- `output_vector_sink` keeps its own write position. It grows the vector geometrically ahead of that position with `resize()`, reusing any capacity the vector already has, and copies each write there.
+- Its destructor shrinks the vector to the written length, also when a write throws. That makes the sink move-only.
+- Writes of 256 bytes or more that don't fit are appended with `insert()` plus geometric headroom, so a large string or binary value is copied once instead of being zero-filled and then copied.
+- `output_vector_adapter` (the `to_*(j, vector)` overloads) appends with `push_back()`/`insert()` again, so a caller holding the adapter never sees the space kept ahead.
+
+**2. Write CBOR integers without branching on their sign or size**
+- `number_integer` and `number_unsigned` share one case; the sign is applied with a mask.
+- An integer's head is built without branches: the size class comes from a table indexed by `count_leading_zeros()`, and the head is stored as one byte plus one 8-byte word, of which only the needed bytes are kept. Heads of strings and containers keep the branching `write_cbor_head()`, since their lengths are mostly predictable.
+- Arrays are written by an out-of-line `write_cbor_array()`. Inlined into `write_cbor`, its loop made every call of `write_cbor` save more registers, which cost citm_catalog 13%.
+- Runs of integers are encoded straight into space reserved from the sink with the new `reserve()`/`commit()`, so the write pointer stays in a register.
+
+**3. Write MessagePack integers without branching on their sign or size**
+- MessagePack takes the same approach, with the integer code factored into helpers both formats share: `integer_bits()` (the 64 bits and the sign mask), `integer_size_class()` (the table lookup), `encode_first_byte_and_tail()` (the one-byte plus 8-byte-word store) and `write_array_elements()` (the run loop).
+- Only the first byte is format-specific. For a negative `n`, the size class comes from `2 * (-1 - n) + 1`: `n` fits int 8/16/32 exactly when that value fits uint 8/16/32, so one table lookup serves both signs. The fixint limit (127, or −32) is selected through a mask, and the marker is `0xCB + class` (uint) or `0xCF + class` (int).
+- The new path picks the format from the low 64 bits, so number types wider than that keep the previous range checks.
+
+## Benchmarks
+
+Speedup over 3.12.0 (3.12.0 time / new time), medians:
+
+| benchmark | `develop`, clang | this PR, clang | `develop`, GCC | this PR, GCC |
+|---|---|---|---|---|
+| ToCbor/small_signed_ints | 0.97× | **4.19×** | 0.94× | **2.77×** |
+| ToCbor/signed_ints | 0.97× | **4.03×** | 0.90× | **1.88×** |
+| ToCbor/unsigned_ints | 1.02× | **2.86×** | 0.86× | **1.39×** |
+| ToCbor/twitter | 2.04× | **3.01×** | 1.67× | **2.38×** |
+| ToCbor/citm_catalog |
+[... truncated, 2984 more characters]
+
+## Commit message
+* Speed up writing CBOR and MessagePack, above all integer arrays
+
+Squashed onto develop cd6b428ef (CI fixes from #5860). Original commits:
+
+- Append to the output vector through a position-tracking sink
+- Write CBOR integers without branching on their sign or size
+- Write MessagePack integers without branching on their sign or size
+- Use std::array for the integer size class table
+- Fix clang-tidy and GCC warnings in the integer array test
+- Regenerate the amalgamation
+
+Signed-off-by: Niels Lohmann <mail@nlohmann.me>
+
+* Convert the streamed bytes explicitly in the binary writer sink tests
+
+Signed-off-by: Niels Lohmann <mail@nlohmann.me>
+
+---------
+
+Signed-off-by: Niels Lohmann <mail@nlohmann.me>
+
+## Discussion before merge
+- github-advanced-security[bot]: ## Flawfinder / Does not check for buffer overflows when copying to destination (CWE-120).
+
+buffer/memcpy:Does not check for buffer overflows when copying to destination (CWE-120).
+
+[Show more details](https://github.com/nlohmann/json/security/code-scanning/780)
+- github-advanced-security[bot]: ## Flawfinder / Does not check for buffer overflows when copying to destination (CWE-120).
+
+buffer/memcpy:Does not check for buffer overflows when copying to destination (CWE-120).
+
+[Show more details](https://github.com/nlohmann/json/security/code-scanning/781)
+- github-advanced-security[bot]: ## Flawfinder / Does not check for buffer overflows when copying to destination (CWE-120).
+
+buffer/memcpy:Does not check for buffer overflows when copying to destination (CWE-120).
+
+[Show more details](https://github.com/nlohmann/json/security/code-scanning/782)
+- github-advanced-security[bot]: ## Flawfinder / Does not check for buffer overflows when copying to destination (CWE-120).
+
+buffer/memcpy:Does not check for buffer overflows when copying to destination (CWE-120).
+
+[Show more details](https://github.com/nlohmann/json/security/code-scanning/783)
+
+## Changed functions (from changes.py)
+- nlohmann::detail::binary_writer::write_msgpack(const BasicJsonType &, const std::size_t) (private); reached from the public API through: nlohmann::basic_json::to_bjdata(const basic_json<...> &, detail::output_adapter<char>, const bool, const bool, const bjdata_version_t, const error_handler_t), nlohmann::basic_json::to_bjdata(const basic_json<...> &, detail::output_adapter<std::uint8_t>, const bool, const bool, const bjdata_version_t, const error_handler_t), nlohmann::basic_json::to_bon8(const basic_json<...> &, detail::output_adapter<char>), nlohmann::basic_json::to_bon8(const basic_json<...> &, detail::output_adapter<std::uint8_t>), nlohmann::basic_json::to_bson(const basic_json<...> &, detail::output_adapter<char>, const error_handler_t), nlohmann::basic_json::to_bson(const basic_json<...> &, detail::output_adapter<std::uint8_t>, const error_handler_t), nlohmann::basic_json::to_cbor(const basic_json<...> &, detail::output_adapter<char>, const error_handler_t), nlohmann::basic_json::to_cbor(const basic_json<...> &, detail::output_adapter<std::uint8_t>, const error_handler_t), nlohmann::basic_json::to_msgpack(const basic_json<...> &, detail::output_adapter<char>, const error_handler_t), nlohmann::basic_json::to_msgpack(const basic_json<...> &, detail::output_adapter<std::uint8_t>, const error_handler_t)
+- nlohmann::detail::output_vector_sink (private); reached from the public API through: nlohmann::basic_json::to_bjdata(const basic_json<...> &, const bool, const bool, const bjdata_version_t, const error_handler_t), nlohmann::basic_json::to_bon8(const basic_json<...> &), nlohmann::basic_json::to_bson(const basic_json<...> &, const error_handler_t), nlohmann::basic_json::to_cbor(const basic_json<...> &, const error_handler_t), nlohmann::basic_json::to_msgpack(const basic_json<...> &, const error_handler_t), nlohmann::basic_json::to_ubjson(const basic_json<...> &, const bool, const bool, const error_handler_t)
+- nlohmann::detail::binary_writer::write_cbor(const BasicJsonType &, const std::size_t) (private); reached from the public API through: nlohmann::basic_json::to_bjdata(const basic_json<...> &, detail::output_adapter<char>, const bool, const bool, const bjdata_version_t, const error_handler_t), nlohmann::basic_json::to_bjdata(const basic_json<...> &, detail::output_adapter<std::uint8_t>, const bool, const bool, const bjdata_version_t, const error_handler_t), nlohmann::basic_json::to_bon8(const basic_json<...> &, detail::output_adapter<char>), nlohmann::basic_json::to_bon8(const basic_json<...> &, detail::output_adapter<std::uint8_t>), nlohmann::basic_json::to_bson(const basic_json<...> &, detail::output_adapter<char>, const error_handler_t), nlohmann::basic_json::to_bson(const basic_json<...> &, detail::output_adapter<std::uint8_t>, const error_handler_t), nlohmann::basic_json::to_cbor(const basic_json<...> &, detail::output_adapter<char>, const error_handler_t), nlohmann::basic_json::to_cbor(const basic_json<...> &, detail::output_adapter<std::uint8_t>, const error_handler_t), nlohmann::basic_json::to_msgpack(const basic_json<...> &, detail::output_adapter<char>, const error_handler_t), nlohmann::basic_json::to_msgpack(const basic_json<...> &, detail::output_adapter<std::uint8_t>, const error_handler_t)
+- nlohmann::detail::output_vector_sink::write_characters(const CharType *, std::size_t) (private); reached from the public API through: nlohmann::basic_json::to_bjdata(const basic_json<...> &, const bool, const bool, const bjdata_version_t, const error_handler_t), nlohmann::basic_json::to_bon8(const basic_json<...> &), nlohmann::basic_json::to_bson(const basic_json<...> &, const error_handler_t), nlohmann::basic_json::to_cbor(const basic_json<...> &, const error_handler_t), nlohmann::basic_json::to_msgpack(const basic_json<...> &, const error_handler_t), nlohmann::basic_json::to_ubjson(const basic_json<...> &, const bool, const bool, const error_handler_t)
+- nlohmann::detail::output_vector_sink::write_character(CharType) (private); reached from the public API through: nlohmann::basic_json::to_bjdata(const basic_json<...> &, const bool, const bool, const bjdata_version_t, const error_handler_t), nlohmann::basic_json::to_bon8(const basic_json<...> &), nlohmann::basic_json::to_bson(const basic_json<...> &, const error_handler_t), nlohmann::basic_json::to_cbor(const basic_json<...> &, const error_handler_t), nlohmann::basic_json::to_msgpack(const basic_json<...> &, const error_handler_t), nlohmann::basic_json::to_ubjson(const basic_json<...> &, const bool, const bool, const error_handler_t)
+- nlohmann::detail::output_adapter_sink (private); reached from the public API through: nlohmann::basic_json::to_bjdata(const basic_json<...> &, detail::output_adapter<char>, const bool, const bool, const bjdata_version_t, const error_handler_t), nlohmann::basic_json::to_bjdata(const basic_json<...> &, detail::output_adapter<std::uint8_t>, const bool, const bool, const bjdata_version_t, const error_handler_t), nlohmann::basic_json::to_bon8(const basic_json<...> &, detail::output_adapter<char>), nlohmann::basic_json::to_bon8(const basic_json<...> &, detail::output_adapter<std::uint8_t>), nlohmann::basic_json::to_bson(const basic_json<...> &, detail::output_adapter<char>, const error_handler_t), nlohmann::basic_json::to_bson(const basic_json<...> &, detail::output_adapter<std::uint8_t>, const error_handler_t), nlohmann::basic_json::to_cbor(const basic_json<...> &, detail::output_adapter<char>, const error_handler_t), nlohmann::basic_json::to_cbor(const basic_json<...> &, detail::output_adapter<std::uint8_t>, const error_handler_t), nlohmann::basic_json::to_msgpack(const basic_json<...> &, detail::output_adapter<char>, const error_handler_t), nlohmann::basic_json::to_msgpack(const basic_json<...> &, detail::output_adapter<std::uint8_t>, const error_handler_t)
+- nlohmann::detail::output_vector_adapter (private); reached from the public API through: nlohmann::basic_json::to_bjdata(const basic_json<...> &, detail::output_adapter<char>, const bool, const bool, const bjdata_version_t, const error_handler_t), nlohmann::basic_json::to_bjdata(const basic_json<...> &, detail::output_adapter<std::uint8_t>, const bool, const bool, const bjdata_version_t, const error_handler_t), nlohmann::basic_json::to_bon8(const basic_json<...> &, detail::output_adapter<char>), nlohmann::basic_json::to_bon8(const basic_json<...> &, detail::output_adapter<std::uint8_t>), nlohmann::basic_json::to_bson(const basic_json<...> &, detail::output_adapter<char>, const error_handler_t), nlohmann::basic_json::to_bson(const basic_json<...> &, detail::output_adapter<std::uint8_t>, const error_handler_t), nlohmann::basic_json::to_cbor(const basic_json<...> &, detail::output_adapter<char>, const error_handler_t), nlohmann::basic_json::to_cbor(const basic_json<...> &, detail::output_adapter<std::uint8_t>, const error_handler_t), nlohmann::basic_json::to_msgpack(const basic_json<...> &, detail::output_adapter<char>, const error_handler_t), nlohmann::basic_json::to_msgpack(const basic_json<...> &, detail::output_adapter<std::uint8_t>, const error_handler_t)
+- nlohmann::detail::binary_writer::write_cbor_head(const std::uint8_t, const std::uint64_t) (private); reached from the public API through: nlohmann::basic_json::to_bjdata(const basic_json<...> &, detail::output_adapter<char>, const bool, const bool, const bjdata_version_t, const error_handler_t), nlohmann::basic_json::to_bjdata(const basic_json<...> &, detail::output_adapter<std::uint8_t>, const bool, const bool, const bjdata_version_t, const error_handler_t), nlohmann::basic_json::to_bon8(const basic_json<...> &, detail::output_adapter<char>), nlohmann::basic_json::to_bon8(const basic_json<...> &, detail::output_adapter<std::uint8_t>), nlohmann::basic_json::to_bson(const basic_json<...> &, detail::output_adapter<char>, const error_handler_t), nlohmann::basic_json::to_bson(const basic_json<...> &, detail::output_adapter<std::uint8_t>, const error_handler_t), nlohmann::basic_json::to_cbor(const basic_json<...> &, detail::output_adapter<char>, const error_handler_t), nlohmann::basic_json::to_cbor(const basic_json<...> &, detail::output_adapter<std::uint8_t>, const error_handler_t), nlohmann::basic_json::to_msgpack(const basic_json<...> &, detail::output_adapter<char>, const error_handler_t), nlohmann::basic_json::to_msgpack(const basic_json<...> &, detail::output_adapter<std::uint8_t>, const error_handler_t)
+- nlohmann::detail::output_vector_adapter::output_vector_adapter<CharType, AllocatorType>(std::vector<CharType, AllocatorType> &) (private); reached from the public API through: nlohmann::basic_json::to_bjdata(const basic_json<...> &, detail::output_adapter<char>, const bool, const bool, const bjdata_version_t, const error_handler_t), nlohmann::basic_json::to_bjdata(const basic_json<...> &, detail::output_adapter<std::uint8_t>, const bool, const bool, const bjdata_version_t, const error_handler_t), nlohmann::basic_json::to_bon8(const basic_json<...> &, detail::output_adapter<char>), nlohmann::basic_json::to_bon8(const basic_json<...> &, detail::output_adapter<std::uint8_t>), nlohmann::basic_json::to_bson(const basic_json<...> &, detail::output_adapter<char>, const error_handler_t), nlohmann::basic_json::to_bson(const basic_json<...> &, detail::output_adapter<std::uint8_t>, const error_handler_t), nlohmann::basic_json::to_cbor(const basic_json<...> &, detail::output_adapter<char>, const error_handler_t), nlohmann::basic_json::to_cbor(const basic_json<...> &, detail::output_adapter<std::uint8_t>, const error_handler_t), nlohmann::basic_json::to_msgpack(const basic_json<...> &, detail::output_adapter<char>, const error_handler_t), nlohmann::basic_json::to_msgpack(const basic_json<...> &, detail::output_adapter<std::uint8_t>, const error_handler_t)
+- nlohmann::detail::output_vector_adapter::write_character(CharType) (private); reached from the public API through: nlohmann::basic_json::to_bjdata(const basic_json<...> &, detail::output_adapter<char>, const bool, const bool, const bjdata_version_t, const error_handler_t), nlohmann::basic_json::to_bjdata(const basic_json<...> &, detail::output_adapter<std::uint8_t>, const bool, const bool, const bjdata_version_t, const error_handler_t), nlohmann::basic_json::to_bon8(const basic_json<...> &, detail::output_adapter<char>), nlohmann::basic_json::to_bon8(const basic_json<...> &, detail::output_adapter<std::uint8_t>), nlohmann::basic_json::to_bson(const basic_json<...> &, detail::output_adapter<char>, const error_handler_t), nlohmann::basic_json::to_bson(const basic_json<...> &, detail::output_adapter<std::uint8_t>, const error_handler_t), nlohmann::basic_json::to_cbor(const basic_json<...> &, detail::output_adapter<char>, const error_handler_t), nlohmann::basic_json::to_cbor(const basic_json<...> &, detail::output_adapter<std::uint8_t>, const error_handler_t), nlohmann::basic_json::to_msgpack(const basic_json<...> &, detail::output_adapter<char>, const error_handler_t), nlohmann::basic_json::to_msgpack(const basic_json<...> &, detail::output_adapter<std::uint8_t>, const error_handler_t)
+- nlohmann::detail::output_vector_adapter::write_characters(const CharType *, std::size_t) (private); reached from the public API through: nlohmann::basic_json::to_bjdata(const basic_json<...> &, detail::output_adapter<char>, const bool, const bool, const bjdata_version_t, const error_handler_t), nlohmann::basic_json::to_bjdata(const basic_json<...> &, detail::output_adapter<std::uint8_t>, const bool, const bool, const bjdata_version_t, const error_handler_t), nlohmann::basic_json::to_bon8(const basic_json<...> &, detail::output_adapter<char>), nlohmann::basic_json::to_bon8(const basic_json<...> &, detail::output_adapter<std::uint8_t>), nlohmann::basic_json::to_bson(const basic_json<...> &, detail::output_adapter<char>, const error_handler_t), nlohmann::basic_json::to_bson(const basic_json<...> &, detail::output_adapter<std::uint8_t>, const error_handler_t), nlohmann::basic_json::to_cbor(const basic_json<...> &, detail::output_adapter<char>, const error_handler_t), nlohmann::basic_json::to_cbor(const basic_json<...> &, detail::output_adapter<std::uint8_t>, const error_handler_t), nlohmann::basic_json::to_msgpack(const basic_json<...> &, detail::output_adapter<char>, const error_handler_t), nlohmann::basic_json::to_msgpack(const basic_json<...> &, detail::output_adapter<std::uint8_t>, const error_handler_t)
+- nlohmann::detail::output_vector_sink::output_vector_sink<CharType, AllocatorType>(std::vector<CharType, AllocatorType> &) (private); reached from the public API through: nlohmann::basic_json::to_bjdata(const basic_json<...> &, const bool, const bool, const bjdata_version_t, const error_handler_t), nlohmann::basic_json::to_bon8(const basic_json<...> &), nlohmann::basic_json::to_bson(const basic_json<...> &, const error_handler_t), nlohmann::basic_json::to_cbor(const basic_json<...> &, const error_handler_t), nlohmann::basic_json::to_msgpack(const basic_json<...> &, const error_handler_t), nlohmann::basic_json::to_ubjson(const basic_json<...> &, const bool, const bool, const error_handler_t)
+- nlohmann::detail::output_vector_sink::v (private); reached from the public API through: nlohmann::basic_json::to_bjdata(const basic_json<...> &, const bool, const bool, const bjdata_version_t, const error_handler_t), nlohmann::basic_json::to_bon8(const basic_json<...> &), nlohmann::basic_json::to_bson(const basic_json<...> &, const error_handler_t), nlohmann::basic_json::to_cbor(const basic_json<...> &, const error_handler_t), nlohmann::basic_json::to_msgpack(const basic_json<...> &, const error_handler_t), nlohmann::basic_json::to_ubjson(const basic_json<...> &, const bool, const bool, const error_handler_t)
+- nlohmann::detail::binary_writer (private); reached from the public API through: nlohmann::basic_json::to_bjdata(const basic_json<...> &, detail::output_adapter<char>, const bool, const bool, const bjdata_version_t, const error_handler_t), nlohmann::basic_json::to_bjdata(const basic_json<...> &, detail::output_adapter<std::uint8_t>, const bool, const bool, const bjdata_version_t, const error_handler_t), nlohmann::basic_json::to_bon8(const basic_json<...> &, detail::output_adapter<char>), nlohmann::basic_json::to_bon8(const basic_json<...> &, detail::output_adapter<std::uint8_t>), nlohmann::basic_json::to_bson(const basic_json<...> &, detail::output_adapter<char>, const error_handler_t), nlohmann::basic_json::to_bson(const basic_json<...> &, detail::output_adapter<std::uint8_t>, const error_handler_t), nlohmann::basic_json::to_cbor(const basic_json<...> &, detail::output_adapter<char>, const error_handler_t), nlohmann::basic_json::to_cbor(const basic_json<...> &, detail::output_adapter<std::uint8_t>, const error_handler_t), nlohmann::basic_json::to_msgpack(const basic_json<...> &, detail::output_adapter<char>, const error_handler_t), nlohmann::basic_json::to_msgpack(const basic_json<...> &, detail::output_adapter<std::uint8_t>, const error_handler_t)
+- nlohmann::detail::binary_writer::write_msgpack_integer(const BasicJsonType &, std::false_type) (private); reached from the public API through: nlohmann::basic_json::to_bjdata(const basic_json<...> &, detail::output_adapter<char>, const bool, const bool, const bjdata_version_t, const error_handler_t), nlohmann::basic_json::to_bjdata(const basic_json<...> &, detail::output_adapter<std::uint8_t>, const bool, const bool, const bjdata_version_t, const error_handler_t), nlohmann::basic_json::to_bon8(const basic_json<...> &, detail::output_adapter<char>), nlohmann::basic_json::to_bon8(const basic_json<...> &, detail::output_adapter<std::uint8_t>), nlohmann::basic_json::to_bson(const basic_json<...> &, detail::output_adapter<char>, const error_handler_t), nlohmann::basic_json::to_bson(const basic_json<...> &, detail::output_adapter<std::uint8_t>, const error_handler_t), nlohmann::basic_json::to_cbor(const basic_json<...> &, detail::output_adapter<char>, const error_handler_t), nlohmann::basic_json::to_cbor(const basic_json<...> &, detail::output_adapter<std::uint8_t>, const error_handler_t), nlohmann::basic_json::to_msgpack(const basic_json<...> &, detail::output_adapter<char>, const error_handler_t), nlohmann::basic_json::to_msgpack(const basic_json<...> &, detail::output_adapter<std::uint8_t>, const error_handler_t)
+- nlohmann::detail::binary_writer::write_array_elements(const BasicJsonType &, EncodeInteger, WriteValue) (private); reached from the public API through: nlohmann::basic_json::to_bjdata(const basic_json<...> &, detail::output_adapter<char>, const bool, const bool, const bjdata_version_t, const error_handler_t), nlohmann::basic_json::to_bjdata(const basic_json<...> &, detail::output_adapter<std::uint8_t>, const bool, const bool, const bjdata_version_t, const error_handler_t), nlohmann::basic_json::to_bon8(const basic_json<...> &, detail::output_adapter<char>), nlohmann::basic_json::to_bon8(const basic_json<...> &, detail::output_adapter<std::uint8_t>), nlohmann::basic_json::to_bson(const basic_json<...> &, detail::output_adapter<char>, const error_handler_t), nlohmann::basic_json::to_bson(const basic_json<...> &, detail::output_adapter<std::uint8_t>, const error_handler_t), nlohmann::basic_json::to_cbor(const basic_json<...> &, detail::output_adapter<char>, const error_handler_t), nlohmann::basic_json::to_cbor(const basic_json<...> &, detail::output_adapter<std::uint8_t>, const error_handler_t), nlohmann::basic_json::to_msgpack(const basic_json<...> &, detail::output_adapter<char>, const error_handler_t), nlohmann::basic_json::to_msgpack(const basic_json<...> &, detail::output_adapter<std::uint8_t>, const error_handler_t)
+- nlohmann::detail::binary_writer::encode_msgpack_integer(CharType *, const BasicJsonType &) (private); reached from the public API through: nlohmann::basic_json::to_bjdata(const basic_json<...> &, detail::output_adapter<char>, const bool, const bool, const bjdata_version_t, const error_handler_t), nlohmann::basic_json::to_bjdata(const basic_json<...> &, detail::output_adapter<std::uint8_t>, const bool, const bool, const bjdata_version_t, const error_handler_t), nlohmann::basic_json::to_bon8(const basic_json<...> &, detail::output_adapter<char>), nlohmann::basic_json::to_bon8(const basic_json<...> &, detail::output_adapter<std::uint8_t>), nlohmann::basic_json::to_bson(const basic_json<...> &, detail::output_adapter<char>, const error_handler_t), nlohmann::basic_json::to_bson(const basic_json<...> &, detail::output_adapter<std::uint8_t>, const error_handler_t), nlohmann::basic_json::to_cbor(const basic_json<...> &, detail::output_adapter<char>, const error_handler_t), nlohmann::basic_json::to_cbor(const basic_json<...> &, detail::output_adapter<std::uint8_t>, const error_handler_t), nlohmann::basic_json::to_msgpack(const basic_json<...> &, detail::output_adapter<char>, const error_handler_t), nlohmann::basic_json::to_msgpack(const basic_json<...> &, detail::output_adapter<std::uint8_t>, const error_handler_t)
+- nlohmann::detail::binary_writer::integer_size_class(const std::uint64_t) (private); reached from the public API through: nlohmann::basic_json::to_bjdata(const basic_json<...> &, detail::output_adapter<char>, const bool, const bool, const bjdata_version_t, const error_handler_t), nlohmann::basic_json::to_bjdata(const basic_json<...> &, detail::output_adapter<std::uint8_t>, const bool, const bool, const bjdata_version_t, const error_handler_t), nlohmann::basic_json::to_bon8(const basic_json<...> &, detail::output_adapter<char>), nlohmann::basic_json::to_bon8(const basic_json<...> &, detail::output_adapter<std::uint8_t>), nlohmann::basic_json::to_bson(const basic_json<...> &, detail::output_adapter<char>, const error_handler_t), nlohmann::basic_json::to_bson(const basic_json<...> &, detail::output_adapter<std::uint8_t>, const error_handler_t), nlohmann::basic_json::to_cbor(const basic_json<...> &, detail::output_adapter<char>, const error_handler_t), nlohmann::basic_json::to_cbor(const basic_json<...> &, detail::output_adapter<std::uint8_t>, const error_handler_t), nlohmann::basic_json::to_msgpack(const basic_json<...> &, detail::output_adapter<char>, const error_handler_t), nlohmann::basic_json::to_msgpack(const basic_json<...> &, detail::output_adapter<std::uint8_t>, const error_handler_t)
+- nlohmann::detail::binary_writer::encode_cbor_integer_head(CharType *, const std::uint8_t, const std::uint64_t) (private); reached from the public API through: nlohmann::basic_json::to_bjdata(const basic_json<...> &, detail::output_adapter<char>, const bool, const bool, const bjdata_version_t, const error_handler_t), nlohmann::basic_json::to_bjdata(const basic_json<...> &, detail::output_adapter<std::uint8_t>, const bool, const bool, const bjdata_version_t, const error_handler_t), nlohmann::basic_json::to_bon8(const basic_json<...> &, detail::output_adapter<char>), nlohmann::basic_json::to_bon8(const basic_json<...> &, detail::output_adapter<std::uint8_t>), nlohmann::basic_json::to_bson(const basic_json<...> &, detail::output_adapter<char>, const error_handler_t), nlohmann::basic_json::to_bson(const basic_json<...> &, detail::output_adapter<std::uint8_t>, const error_handler_t), nlohmann::basic_json::to_cbor(const basic_json<...> &, detail::output_adapter<char>, const error_handler_t), nlohmann::basic_json::to_cbor(const basic_json<...> &, detail::output_adapter<std::uint8_t>, const error_handler_t), nlohmann::basic_json::to_msgpack(const basic_json<...> &, detail::output_adapter<char>, const error_handler_t), nlohmann::basic_json::to_msgpack(const basic_json<...> &, detail::output_adapter<std::uint8_t>, const error_handler_t)
+- nlohmann::detail::output_vector_sink::append(const CharType *, const std::size_t) (private); reached from the public API through: nlohmann::basic_json::to_bjdata(const basic_json<...> &, const bool, const bool, const bjdata_version_t, const error_handler_t), nlohmann::basic_json::to_bon8(const basic_json<...> &), nlohmann::basic_json::to_bson(const basic_json<...> &, const error_handler_t), nlohmann::basic_json::to_cbor(const basic_json<...> &, const error_handler_t), nlohmann::basic_json::to_msgpack(const basic_json<...> &, const error_handler_t), nlohmann::basic_json::to_ubjson(const basic_json<...> &, const bool, const bool, const error_handler_t)
+- nlohmann::detail::binary_writer::write_cbor_array(const BasicJsonType &, const std::size_t) (private); reached from the public API through: nlohmann::basic_json::to_bjdata(const basic_json<...> &, detail::output_adapter<char>, const bool, const bool, const bjdata_version_t, const error_handler_t), nlohmann::basic_json::to_bjdata(const basic_json<...> &, detail::output_adapter<std::uint8_t>, const bool, const bool, const bjdata_version_t, const error_handler_t), nlohmann::basic_json::to_bon8(const basic_json<...> &, detail::output_adapter<char>), nlohmann::basic_json::to_bon8(const basic_json<...> &, detail::output_adapter<std::uint8_t>), nlohmann::basic_json::to_bson(const basic_json<...> &, detail::output_adapter<char>, const error_handler_t), nlohmann::basic_json::to_bson(const basic_json<...> &, detail::output_adapter<std::uint8_t>, const error_handler_t), nlohmann::basic_json::to_cbor(const basic_json<...> &, detail::output_adapter<char>, const error_handler_t), nlohmann::basic_json::to_cbor(const basic_json<...> &, detail::output_adapter<std::uint8_t>, const error_handler_t), nlohmann::basic_json::to_msgpack(const basic_json<...> &, detail::output_adapter<char>, const error_handler_t), nlohmann::basic_json::to_msgpack(const basic_json<...> &, detail::output_adapter<std::uint8_t>, const error_handler_t)
+- nlohmann::detail::binary_writer::integer_bits(const BasicJsonType &, std::uint64_t &) (private); reached from the public API through: nlohmann::basic_json::to_bjdata(const basic_json<...> &, detail::output_adapter<char>, const bool, const bool, const bjdata_version_t, const error_handler_t), nlohmann::basic_json::to_bjdata(const basic_json<...> &, detail::output_adapter<std::uint8_t>, const bool, const bool, const bjdata_version_t, const error_handler_t), nlohmann::basic_json::to_bon8(const basic_json<...> &, detail::output_adapter<char>), nlohmann::basic_json::to_bon8(const basic_json<...> &, detail::output_adapter<std::uint8_t>), nlohmann::basic_json::to_bson(const basic_json<...> &, detail::output_adapter<char>, const error_handler_t), nlohmann::basic_json::to_bson(const basic_json<...> &, detail::output_adapter<std::uint8_t>, const error_handler_t), nlohmann::basic_json::to_cbor(const basic_json<...> &, detail::output_adapter<char>, const error_handler_t), nlohmann::basic_json::to_cbor(const basic_json<...> &, detail::output_adapter<std::uint8_t>, const error_handler_t), nlohmann::basic_json::to_msgpack(const basic_json<...> &, detail::output_adapter<char>, const error_handler_t), nlohmann::basic_json::to_msgpack(const basic_json<...> &, detail::output_adapter<std::uint8_t>, const error_handler_t)
+- nlohmann::detail::output_vector_sink::grow(const std::size_t) (private); reached from the public API through: nlohmann::basic_json::to_bjdata(const basic_json<...> &, const bool, const bool, const bjdata_version_t, const error_handler_t), nlohmann::basic_json::to_bon8(const basic_json<...> &), nlohmann::basic_json::to_bson(const basic_json<...> &, const error_handler_t), nlohmann::basic_json::to_cbor(const basic_json<...> &, const error_handler_t), nlohmann::basic_json::to_msgpack(const basic_json<...> &, const error_handler_t), nlohmann::basic_json::to_ubjson(const basic_json<...> &, const bool, const bool, const error_handler_t)
+- nlohmann::detail::binary_writer::write_msgpack_array_elements(const BasicJsonType &, const std::size_t, std::true_type) (private); reached from the public API through: nlohmann::basic_json::to_bjdata(const basic_json<...> &, detail::output_adapter<char>, const bool, const bool, const bjdata_version_t, const error_handler_t), nlohmann::basic_json::to_bjdata(const basic_json<...> &, detail::output_adapter<std::uint8_t>, const bool, const bool, const bjdata_version_t, const error_handler_t), nlohmann::basic_json::to_bon8(const basic_json<...> &, detail::output_adapter<char>), nlohmann::basic_json::to_bon8(const basic_json<...> &, detail::output_adapter<std::uint8_t>), nlohmann::basic_json::to_bson(const basic_json<...> &, detail::output_adapter<char>, const error_handler_t), nlohmann::basic_json::to_bson(const basic_json<...> &, detail::output_adapter<std::uint8_t>, const error_handler_t), nlohmann::basic_json::to_cbor(const basic_json<...> &, detail::output_adapter<char>, const error_handler_t), nlohmann::basic_json::to_cbor(const basic_json<...> &, detail::output_adapter<std::uint8_t>, const error_handler_t), nlohmann::basic_json::to_msgpack(const basic_json<...> &, detail::output_adapter<char>, const error_handler_t), nlohmann::basic_json::to_msgpack(const basic_json<...> &, detail::output_adapter<std::uint8_t>, const error_handler_t)
+- nlohmann::detail::output_vector_sink::reserve(const std::size_t) (private); reached from the public API through: nlohmann::basic_json::to_bjdata(const basic_json<...> &, const bool, const bool, const bjdata_version_t, const error_handler_t), nlohmann::basic_json::to_bon8(const basic_json<...> &), nlohmann::basic_json::to_bson(const basic_json<...> &, const error_handler_t), nlohmann::basic_json::to_cbor(const basic_json<...> &, const error_handler_t), nlohmann::basic_json::to_msgpack(const basic_json<...> &, const error_handler_t), nlohmann::basic_json::to_ubjson(const basic_json<...> &, const bool, const bool, const error_handler_t)
+- nlohmann::detail::binary_writer::encode_first_byte_and_tail(CharType *, const std::uint8_t, const unsigned int, const std::uint64_t) (private); reached from the public API through: nlohmann::basic_json::to_bjdata(const basic_json<...> &, detail::output_adapter<char>, const bool, const bool, const bjdata_version_t, const error_handler_t), nlohmann::basic_json::to_bjdata(const basic_json<...> &, detail::output_adapter<std::uint8_t>, const bool, const bool, const bjdata_version_t, const error_handler_t), nlohmann::basic_json::to_bon8(const basic_json<...> &, detail::output_adapter<char>), nlohmann::basic_json::to_bon8(const basic_json<...> &, detail::output_adapter<std::uint8_t>), nlohmann::basic_json::to_bson(const basic_json<...> &, detail::output_adapter<char>, const error_handler_t), nlohmann::basic_json::to_bson(const basic_json<...> &, detail::output_adapter<std::uint8_t>, const error_handler_t), nlohmann::basic_json::to_cbor(const basic_json<...> &, detail::output_adapter<char>, const error_handler_t), nlohmann::basic_json::to_cbor(const basic_json<...> &, detail::output_adapter<std::uint8_t>, const error_handler_t), nlohmann::basic_json::to_msgpack(const basic_json<...> &, detail::output_adapter<char>, const error_handler_t), nlohmann::basic_json::to_msgpack(const basic_json<...> &, detail::output_adapter<std::uint8_t>, const error_handler_t)
+- nlohmann::detail::binary_writer::encode_cbor_integer(CharType *, const BasicJsonType &) (private); reached from the public API through: nlohmann::basic_json::to_bjdata(const basic_json<...> &, detail::output_adapter<char>, const bool, const bool, const bjdata_version_t, const error_handler_t), nlohmann::basic_json::to_bjdata(const basic_json<...> &, detail::output_adapter<std::uint8_t>, const bool, const bool, const bjdata_version_t, const error_handler_t), nlohmann::basic_json::to_bon8(const basic_json<...> &, detail::output_adapter<char>), nlohmann::basic_json::to_bon8(const basic_json<...> &, detail::output_adapter<std::uint8_t>), nlohmann::basic_json::to_bson(const basic_json<...> &, detail::output_adapter<char>, const error_handler_t), nlohmann::basic_json::to_bson(const basic_json<...> &, detail::output_adapter<std::uint8_t>, const error_handler_t), nlohmann::basic_json::to_cbor(const basic_json<...> &, detail::output_adapter<char>, const error_handler_t), nlohmann::basic_json::to_cbor(const basic_json<...> &, detail::output_adapter<std::uint8_t>, const error_handler_t), nlohmann::basic_json::to_msgpack(const basic_json<...> &, detail::output_adapter<char>, const error_handler_t), nlohmann::basic_json::to_msgpack(const basic_json<...> &, detail::output_adapter<std::uint8_t>, const error_handler_t)
+- nlohmann::detail::output_vector_sink::~output_vector_sink<CharType, AllocatorType>() (private); reached from the public API through: nlohmann::basic_json::to_bjdata(const basic_json<...> &, const bool, const bool, const bjdata_version_t, const error_handler_t), nlohmann::basic_json::to_bon8(const basic_json<...> &), nlohmann::basic_json::to_bson(const basic_json<...> &, const error_handler_t), nlohmann::basic_json::to_cbor(const basic_json<...> &, const error_handler_t), nlohmann::basic_json::to_msgpack(const basic_json<...> &, const error_handler_t), nlohmann::basic_json::to_ubjson(const basic_json<...> &, const bool, const bool, const error_handler_t)
+- nlohmann::detail::binary_writer::write_msgpack_array(const BasicJsonType &, const std::size_t) (private); reached from the public API through: nlohmann::basic_json::to_bjdata(const basic_json<...> &, detail::output_adapter<char>, const bool, const bool, const bjdata_version_t, const error_handler_t), nlohmann::basic_json::to_bjdata(const basic_json<...> &, detail::output_adapter<std::uint8_t>, const bool, const bool, const bjdata_version_t, const error_handler_t), nlohmann::basic_json::to_bon8(const basic_json<...> &, detail::output_adapter<char>), nlohmann::basic_json::to_bon8(const basic_json<...> &, detail::output_adapter<std::uint8_t>), nlohmann::basic_json::to_bson(const basic_json<...> &, detail::output_adapter<char>, const error_handler_t), nlohmann::basic_json::to_bson(const basic_json<...> &, detail::output_adapter<std::uint8_t>, const error_handler_t), nlohmann::basic_json::to_cbor(const basic_json<...> &, detail::output_adapter<char>, const error_handler_t), nlohmann::basic_json::to_cbor(const basic_json<...> &, detail::output_adapter<std::uint8_t>, const error_handler_t), nlohmann::basic_json::to_msgpack(const basic_json<...> &, detail::output_adapter<char>, const error_handler_t), nlohmann::basic_json::to_msgpack(const basic_json<...> &, detail::output_adapter<std::uint8_t>, const error_handler_t)
+- nlohmann::detail::binary_writer::write_msgpack_array_elements(const BasicJsonType &, const std::size_t, std::false_type) (private); reached from the public API through: nlohmann::basic_json::to_bjdata(const basic_json<...> &, detail::output_adapter<char>, const bool, const bool, const bjdata_version_t, const error_handler_t), nlohmann::basic_json::to_bjdata(const basic_json<...> &, detail::output_adapter<std::uint8_t>, const bool, const bool, const bjdata_version_t, const error_handler_t), nlohmann::basic_json::to_bon8(const basic_json<...> &, detail::output_adapter<char>), nlohmann::basic_json::to_bon8(const basic_json<...> &, detail::output_adapter<std::uint8_t>), nlohmann::basic_json::to_bson(const basic_json<...> &, detail::output_adapter<char>, const error_handler_t), nlohmann::basic_json::to_bson(const basic_json<...> &, detail::output_adapter<std::uint8_t>, const error_handler_t), nlohmann::basic_json::to_cbor(const basic_json<...> &, detail::output_adapter<char>, const error_handler_t), nlohmann::basic_json::to_cbor(const basic_json<...> &, detail::output_adapter<std::uint8_t>, const error_handler_t), nlohmann::basic_json::to_msgpack(const basic_json<...> &, detail::output_adapter<char>, const error_handler_t), nlohmann::basic_json::to_msgpack(const basic_json<...> &, detail::output_adapter<std::uint8_t>, const error_handler_t)
+- nlohmann::detail::output_adapter_sink::reserve(const std::size_t) (private); reached from the public API through: nlohmann::basic_json::to_bjdata(const basic_json<...> &, detail::output_adapter<char>, const bool, const bool, const bjdata_version_t, const error_handler_t), nlohmann::basic_json::to_bjdata(const basic_json<...> &, detail::output_adapter<std::uint8_t>, const bool, const bool, const bjdata_version_t, const error_handler_t), nlohmann::basic_json::to_bon8(const basic_json<...> &, detail::output_adapter<char>), nlohmann::basic_json::to_bon8(const basic_json<...> &, detail::output_adapter<std::uint8_t>), nlohmann::basic_json::to_bson(const basic_json<...> &, detail::output_adapter<char>, const error_handler_t), nlohmann::basic_json::to_bson(const basic_json<...> &, detail::output_adapter<std::uint8_t>, const error_handler_t), nlohmann::basic_json::to_cbor(const basic_json<...> &, detail::output_adapter<char>, const error_handler_t), nlohmann::basic_json::to_cbor(const basic_json<...> &, detail::output_adapter<std::uint8_t>, const error_handler_t), nlohmann::basic_json::to_msgpack(const basic_json<...> &, detail::output_adapter<char>, const error_handler_t), nlohmann::basic_json::to_msgpack(const basic_json<...> &, detail::output_adapter<std::uint8_t>, const error_handler_t)
+- nlohmann::detail::binary_writer::msgpack_integers_fit_64_bits() (private); reached from the public API through: nlohmann::basic_json::to_bjdata(const basic_json<...> &, detail::output_adapter<char>, const bool, const bool, const bjdata_version_t, const error_handler_t), nlohmann::basic_json::to_bjdata(const basic_json<...> &, detail::output_adapter<std::uint8_t>, const bool, const bool, const bjdata_version_t, const error_handler_t), nlohmann::basic_json::to_bon8(const basic_json<...> &, detail::output_adapter<char>), nlohmann::basic_json::to_bon8(const basic_json<...> &, detail::output_adapter<std::uint8_t>), nlohmann::basic_json::to_bson(const basic_json<...> &, detail::output_adapter<char>, const error_handler_t), nlohmann::basic_json::to_bson(const basic_json<...> &, detail::output_adapter<std::uint8_t>, const error_handler_t), nlohmann::basic_json::to_cbor(const basic_json<...> &, detail::output_adapter<char>, const error_handler_t), nlohmann::basic_json::to_cbor(const basic_json<...> &, detail::output_adapter<std::uint8_t>, const error_handler_t), nlohmann::basic_json::to_msgpack(const basic_json<...> &, detail::output_adapter<char>, const error_handler_t), nlohmann::basic_json::to_msgpack(const basic_json<...> &, detail::output_adapter<std::uint8_t>, const error_handler_t)
+- nlohmann::detail::binary_writer::write_cbor_integer(const BasicJsonType &) (private); reached from the public API through: nlohmann::basic_json::to_bjdata(const basic_json<...> &, detail::output_adapter<char>, const bool, const bool, const bjdata_version_t, const error_handler_t), nlohmann::basic_json::to_bjdata(const basic_json<...> &, detail::output_adapter<std::uint8_t>, const bool, const bool, const bjdata_version_t, const error_handler_t), nlohmann::basic_json::to_bon8(const basic_json<...> &, detail::output_adapter<char>), nlohmann::basic_json::to_bon8(const basic_json<...> &, detail::output_adapter<std::uint8_t>), nlohmann::basic_json::to_bson(const basic_json<...> &, detail::output_adapter<char>, const error_handler_t), nlohmann::basic_json::to_bson(const basic_json<...> &, detail::output_adapter<std::uint8_t>, const error_handler_t), nlohmann::basic_json::to_cbor(const basic_json<...> &, detail::output_adapter<char>, const error_handler_t), nlohmann::basic_json::to_cbor(const basic_json<...> &, detail::output_adapter<std::uint8_t>, const error_handler_t), nlohmann::basic_json::to_msgpack(const basic_json<...> &, detail::output_adapter<char>, const error_handler_t), nlohmann::basic_json::to_msgpack(const basic_json<...> &, detail::output_adapter<std::uint8_t>, const error_handler_t)
+- nlohmann::detail::binary_writer::write_msgpack_integer(const BasicJsonType &, std::true_type) (private); reached from the public API through: nlohmann::basic_json::to_bjdata(const basic_json<...> &, detail::output_adapter<char>, const bool, const bool, const bjdata_version_t, const error_handler_t), nlohmann::basic_json::to_bjdata(const basic_json<...> &, detail::output_adapter<std::uint8_t>, const bool, const bool, const bjdata_version_t, const error_handler_t), nlohmann::basic_json::to_bon8(const basic_json<...> &, detail::output_adapter<char>), nlohmann::basic_json::to_bon8(const basic_json<...> &, detail::output_adapter<std::uint8_t>), nlohmann::basic_json::to_bson(const basic_json<...> &, detail::output_adapter<char>, const error_handler_t), nlohmann::basic_json::to_bson(const basic_json<...> &, detail::output_adapter<std::uint8_t>, const error_handler_t), nlohmann::basic_json::to_cbor(const basic_json<...> &, detail::output_adapter<char>, const error_handler_t), nlohmann::basic_json::to_cbor(const basic_json<...> &, detail::output_adapter<std::uint8_t>, const error_handler_t), nlohmann::basic_json::to_msgpack(const basic_json<...> &, detail::output_adapter<char>, const error_handler_t), nlohmann::basic_json::to_msgpack(const basic_json<...> &, detail::output_adapter<std::uint8_t>, const error_handler_t)
+- nlohmann::detail::output_vector_sink::output_vector_sink<CharType, AllocatorType>(output_vector_sink<CharType, AllocatorType> &&) (private); reached from the public API through: nlohmann::basic_json::to_bjdata(const basic_json<...> &, const bool, const bool, const bjdata_version_t, const error_handler_t), nlohmann::basic_json::to_bon8(const basic_json<...> &), nlohmann::basic_json::to_bson(const basic_json<...> &, const error_handler_t), nlohmann::basic_json::to_cbor(const basic_json<...> &, const error_handler_t), nlohmann::basic_json::to_msgpack(const basic_json<...> &, const error_handler_t), nlohmann::basic_json::to_ubjson(const basic_json<...> &, const bool, const bool, const error_handler_t)
+- nlohmann::detail::output_adapter_sink::commit(const std::size_t) (private); reached from the public API through: nlohmann::basic_json::to_bjdata(const basic_json<...> &, detail::output_adapter<char>, const bool, const bool, const bjdata_version_t, const error_handler_t), nlohmann::basic_json::to_bjdata(const basic_json<...> &, detail::output_adapter<std::uint8_t>, const bool, const bool, const bjdata_version_t, const error_handler_t), nlohmann::basic_json::to_bon8(const basic_json<...> &, detail::output_adapter<char>), nlohmann::basic_json::to_bon8(const basic_json<...> &, detail::output_adapter<std::uint8_t>), nlohmann::basic_json::to_bson(const basic_json<...> &, detail::output_adapter<char>, const error_handler_t), nlohmann::basic_json::to_bson(const basic_json<...> &, detail::output_adapter<std::uint8_t>, const error_handler_t), nlohmann::basic_json::to_cbor(const basic_json<...> &, detail::output_adapter<char>, const error_handler_t), nlohmann::basic_json::to_cbor(const basic_json<...> &, detail::output_adapter<std::uint8_t>, const error_handler_t), nlohmann::basic_json::to_msgpack(const basic_json<...> &, detail::output_adapter<char>, const error_handler_t), nlohmann::basic_json::to_msgpack(const basic_json<...> &, detail::output_adapter<std::uint8_t>, const error_handler_t)
+- nlohmann::detail::output_vector_sink::commit(const std::size_t) (private); reached from the public API through: nlohmann::basic_json::to_bjdata(const basic_json<...> &, const bool, const bool, const bjdata_version_t, const error_handler_t), nlohmann::basic_json::to_bon8(const basic_json<...> &), nlohmann::basic_json::to_bson(const basic_json<...> &, const error_handler_t), nlohmann::basic_json::to_cbor(const basic_json<...> &, const error_handler_t), nlohmann::basic_json::to_msgpack(const basic_json<...> &, const error_handler_t), nlohmann::basic_json::to_ubjson(const basic_json<...> &, const bool, const bool, const error_handler_t)
+- nlohmann::detail::binary_writer::integer_encoding_space (private); reached from the public API through: nlohmann::basic_json::to_bjdata(const basic_json<...> &, detail::output_adapter<char>, const bool, const bool, const bjdata_version_t, const error_handler_t), nlohmann::basic_json::to_bjdata(const basic_json<...> &, detail::output_adapter<std::uint8_t>, const bool, const bool, const bjdata_version_t, const error_handler_t), nlohmann::basic_json::to_bon8(const basic_json<...> &, detail::output_adapter<char>), nlohmann::basic_json::to_bon8(const basic_json<...> &, detail::output_adapter<std::uint8_t>), nlohmann::basic_json::to_bson(const basic_json<...> &, detail::output_adapter<char>, const error_handler_t), nlohmann::basic_json::to_bson(const basic_json<...> &, detail::output_adapter<std::uint8_t>, const error_handler_t), nlohmann::basic_json::to_cbor(const basic_json<...> &, detail::output_adapter<char>, const error_handler_t), nlohmann::basic_json::to_cbor(const basic_json<...> &, detail::output_adapter<std::uint8_t>, const error_handler_t), nlohmann::basic_json::to_msgpack(const basic_json<...> &, detail::output_adapter<char>, const error_handler_t), nlohmann::basic_json::to_msgpack(const basic_json<...> &, detail::output_adapter<std::uint8_t>, const error_handler_t)
+- nlohmann::detail::max_reserve_size (private); reached from the public API through: nlohmann::basic_json::to_bjdata(const basic_json<...> &, detail::output_adapter<char>, const bool, const bool, const bjdata_version_t, const error_handler_t), nlohmann::basic_json::to_bjdata(const basic_json<...> &, detail::output_adapter<std::uint8_t>, const bool, const bool, const bjdata_version_t, const error_handler_t), nlohmann::basic_json::to_bon8(const basic_json<...> &, detail::output_adapter<char>), nlohmann::basic_json::to_bon8(const basic_json<...> &, detail::output_adapter<std::uint8_t>), nlohmann::basic_json::to_bson(const basic_json<...> &, detail::output_adapter<char>, const error_handler_t), nlohmann::basic_json::to_bson(const basic_json<...> &, detail::output_adapter<std::uint8_t>, const error_handler_t), nlohmann::basic_json::to_cbor(const basic_json<...> &, detail::output_adapter<char>, const error_handler_t), nlohmann::basic_json::to_cbor(const basic_json<...> &, detail::output_adapter<std::uint8_t>, const error_handler_t), nlohmann::basic_json::to_msgpack(const basic_json<...> &, detail::output_adapter<char>, const error_handler_t), nlohmann::basic_json::to_msgpack(const basic_json<...> &, detail::output_adapter<std::uint8_t>, const error_handler_t)
+- nlohmann::detail::output_adapter_sink::reserved (private); reached from the public API through: nlohmann::basic_json::to_bjdata(const basic_json<...> &, detail::output_adapter<char>, const bool, const bool, const bjdata_version_t, const error_handler_t), nlohmann::basic_json::to_bjdata(const basic_json<...> &, detail::output_adapter<std::uint8_t>, const bool, const bool, const bjdata_version_t, const error_handler_t), nlohmann::basic_json::to_bon8(const basic_json<...> &, detail::output_adapter<char>), nlohmann::basic_json::to_bon8(const basic_json<...> &, detail::output_adapter<std::uint8_t>), nlohmann::basic_json::to_bson(const basic_json<...> &, detail::output_adapter<char>, const error_handler_t), nlohmann::basic_json::to_bson(const basic_json<...> &, detail::output_adapter<std::uint8_t>, const error_handler_t), nlohmann::basic_json::to_cbor(const basic_json<...> &, detail::output_adapter<char>, const error_handler_t), nlohmann::basic_json::to_cbor(const basic_json<...> &, detail::output_adapter<std::uint8_t>, const error_handler_t), nlohmann::basic_json::to_msgpack(const basic_json<...> &, detail::output_adapter<char>, const error_handler_t), nlohmann::basic_json::to_msgpack(const basic_json<...> &, detail::output_adapter<std::uint8_t>, const error_handler_t)
+- nlohmann::detail::output_vector_adapter::v (private); reached from the public API through: nlohmann::basic_json::to_bjdata(const basic_json<...> &, detail::output_adapter<char>, const bool, const bool, const bjdata_version_t, const error_handler_t), nlohmann::basic_json::to_bjdata(const basic_json<...> &, detail::output_adapter<std::uint8_t>, const bool, const bool, const bjdata_version_t, const error_handler_t), nlohmann::basic_json::to_bon8(const basic_json<...> &, detail::output_adapter<char>), nlohmann::basic_json::to_bon8(const basic_json<...> &, detail::output_adapter<std::uint8_t>), nlohmann::basic_json::to_bson(const basic_json<...> &, detail::output_adapter<char>, const error_handler_t), nlohmann::basic_json::to_bson(const basic_json<...> &, detail::output_adapter<std::uint8_t>, const error_handler_t), nlohmann::basic_json::to_cbor(const basic_json<...> &, detail::output_adapter<char>, const error_handler_t), nlohmann::basic_json::to_cbor(const basic_json<...> &, detail::output_adapter<std::uint8_t>, const error_handler_t), nlohmann::basic_json::to_msgpack(const basic_json<...> &, detail::output_adapter<char>, const error_handler_t), nlohmann::basic_json::to_msgpack(const basic_json<...> &, detail::output_adapter<std::uint8_t>, const error_handler_t)
+- nlohmann::detail::output_vector_sink::operator=(const output_vector_sink<CharType, AllocatorType> &) (private); reached from the public API through: nlohmann::basic_json::to_bjdata(const basic_json<...> &, const bool, const bool, const bjdata_version_t, const error_handler_t), nlohmann::basic_json::to_bon8(const basic_json<...> &), nlohmann::basic_json::to_bson(const basic_json<...> &, const error_handler_t), nlohmann::basic_json::to_cbor(const basic_json<...> &, const error_handler_t), nlohmann::basic_json::to_msgpack(const basic_json<...> &, const error_handler_t), nlohmann::basic_json::to_ubjson(const basic_json<...> &, const bool, const bool, const error_handler_t)
+- nlohmann::detail::output_vector_sink::operator=(output_vector_sink<CharType, AllocatorType> &&) (private); reached from the public API through: nlohmann::basic_json::to_bjdata(const basic_json<...> &, const bool, const bool, const bjdata_version_t, const error_handler_t), nlohmann::basic_json::to_bon8(const basic_json<...> &), nlohmann::basic_json::to_bson(const basic_json<...> &, const error_handler_t), nlohmann::basic_json::to_cbor(const basic_json<...> &, const error_handler_t), nlohmann::basic_json::to_msgpack(const basic_json<...> &, const error_handler_t), nlohmann::basic_json::to_ubjson(const basic_json<...> &, const bool, const bool, const error_handler_t)
+- nlohmann::detail::output_vector_sink::output_vector_sink<CharType, AllocatorType>(const output_vector_sink<CharType, AllocatorType> &) (private); reached from the public API through: nlohmann::basic_json::to_bjdata(const basic_json<...> &, const bool, const bool, const bjdata_version_t, const error_handler_t), nlohmann::basic_json::to_bon8(const basic_json<...> &), nlohmann::basic_json::to_bson(const basic_json<...> &, const error_handler_t), nlohmann::basic_json::to_cbor(const basic_json<...> &, const error_handler_t), nlohmann::basic_json::to_msgpack(const basic_json<...> &, const error_handler_t), nlohmann::basic_json::to_ubjson(const basic_json<...> &, const bool, const bool, const error_handler_t)
+- nlohmann::detail::output_vector_sink::position (private); reached from the public API through: nlohmann::basic_json::to_bjdata(const basic_json<...> &, const bool, const bool, const bjdata_version_t, const error_handler_t), nlohmann::basic_json::to_bon8(const basic_json<...> &), nlohmann::basic_json::to_bson(const basic_json<...> &, const error_handler_t), nlohmann::basic_json::to_cbor(const basic_json<...> &, const error_handler_t), nlohmann::basic_json::to_msgpack(const basic_json<...> &, const error_handler_t), nlohmann::basic_json::to_ubjson(const basic_json<...> &, const bool, const bool, const error_handler_t)
+- nlohmann::detail::output_adapter_sink::oa (private); reached from the public API through: nlohmann::basic_json::to_bjdata(const basic_json<...> &, detail::output_adapter<char>, const bool, const bool, const bjdata_version_t, const error_handler_t), nlohmann::basic_json::to_bjdata(const basic_json<...> &, detail::output_adapter<std::uint8_t>, const bool, const bool, const bjdata_version_t, const error_handler_t), nlohmann::basic_json::to_bon8(const basic_json<...> &, detail::output_adapter<char>), nlohmann::basic_json::to_bon8(const basic_json<...> &, detail::output_adapter<std::uint8_t>), nlohmann::basic_json::to_bson(const basic_json<...> &, detail::output_adapter<char>, const error_handler_t), nlohmann::basic_json::to_bson(const basic_json<...> &, detail::output_adapter<std::uint8_t>, const error_handler_t), nlohmann::basic_json::to_cbor(const basic_json<...> &, detail::output_adapter<char>, const error_handler_t), nlohmann::basic_json::to_cbor(const basic_json<...> &, detail::output_adapter<std::uint8_t>, const error_handler_t), nlohmann::basic_json::to_msgpack(const basic_json<...> &, detail::output_adapter<char>, const error_handler_t), nlohmann::basic_json::to_msgpack(const basic_json<...> &, detail::output_adapter<std::uint8_t>, const error_handler_t)
+- nlohmann::detail::output_vector_adapter::sink (private); reached from the public API through: nlohmann::basic_json::to_bjdata(const basic_json<...> &, detail::output_adapter<char>, const bool, const bool, const bjdata_version_t, const error_handler_t), nlohmann::basic_json::to_bjdata(const basic_json<...> &, detail::output_adapter<std::uint8_t>, const bool, const bool, const bjdata_version_t, const error_handler_t), nlohmann::basic_json::to_bon8(const basic_json<...> &, detail::output_adapter<char>), nlohmann::basic_json::to_bon8(const basic_json<...> &, detail::output_adapter<std::uint8_t>), nlohmann::basic_json::to_bson(const basic_json<...> &, detail::output_adapter<char>, const error_handler_t), nlohmann::basic_json::to_bson(const basic_json<...> &, detail::output_adapter<std::uint8_t>, const error_handler_t), nlohmann::basic_json::to_cbor(const basic_json<...> &, detail::output_adapter<char>, const error_handler_t), nlohmann::basic_json::to_cbor(const basic_json<...> &, detail::output_adapter<std::uint8_t>, const error_handler_t), nlohmann::basic_json::to_msgpack(const basic_json<...> &, detail::output_adapter<char>, const error_handler_t), nlohmann::basic_json::to_msgpack(const basic_json<...> &, detail::output_adapter<std::uint8_t>, const error_handler_t)
+
+## Diff of the library source (before -> after)
+```diff
+diff --git a/include/nlohmann/detail/output/binary_writer.hpp b/include/nlohmann/detail/output/binary_writer.hpp
+index 3a9abbc08..0fe8b51f9 100644
+--- a/include/nlohmann/detail/output/binary_writer.hpp
++++ b/include/nlohmann/detail/output/binary_writer.hpp
+@@ -23,6 +23,7 @@
+     #include <cstdlib> // _byteswap_ushort, _byteswap_ulong, _byteswap_uint64
+ #endif
+ 
++#include <nlohmann/detail/bit_ops.hpp>
+ #include <nlohmann/detail/input/binary_reader.hpp>
+ #include <nlohmann/detail/input/string_scan.hpp>
+ #include <nlohmann/detail/macro_scope.hpp>
+@@ -204,24 +205,12 @@ class binary_writer
+             }
+ 
+             case value_t::number_integer:
+-            {
+-                if (j.m_data.m_value.number_integer >= 0)
+-                {
+-                    // CBOR does not differentiate between positive signed
+-                    // integers and unsigned integers
+-                    write_cbor_head(0x00, static_cast<std::uint64_t>(j.m_data.m_value.number_integer));
+-                }
+-                else
+-                {
+-                    // a negative integer n is encoded as -1 - n
+-                    write_cbor_head(0x20, static_cast<std::uint64_t>(-1 - j.m_data.m_value.number_integer));
+-                }
+-                break;
+-            }
+-
+             case value_t::number_unsigned:
+             {
+-                write_cbor_head(0x00, conditional_static_cast<std::uint64_t>(j.m_data.m_value.number_unsigned));
++                // one case for both, so that an array mixing negative
++                // (number_integer) and non-negative (number_unsigned) values
++                // does not mispredict the switch
++                write_cbor_integer(j);
+                 break;
+             }
+ 
+@@ -256,13 +245,7 @@ class binary_writer
+ 
+             case value_t::array:
+             {
+-                // step 1: write control byte and the array size
+-                write_cbor_head(0x80, j.m_data.m_value.array->size());
+-
+-                for (const auto& el : *j.m_data.m_value.array)
+-                {
+-                    write_cbor(el, depth + 1);
+-                }
++                write_cbor_array(j, depth);
+                 break;
+             }
+ 
+@@ -420,54 +403,12 @@ class binary_writer
+             }
+ 
+             case value_t::number_integer:
+-            {
+-                if (j.m_data.m_value.number_integer >= 0)
+-                {
+-                    // MessagePack does not differentiate between positive
+-                    // signed integers and unsigned integers.
+-                    write_msgpack_unsigned(static_cast<std::uint64_t>(j.m_data.m_value.number_integer));
+-                }
+-                else
+-                {
+-                    if (j.m_data.m_value.number_integer >= -32)
+-                    {
+-                        // negative fixnum
+-                        write_number(static_cast<std::int8_t>(j.m_data.m_value.number_integer));
+-                    }
+-                    else if (j.m_data.m_value.number_integer >= (std::numeric_limits<std::int8_t>::min)() &&
+-                             j.m_data.m_value.number_integer <= (std::numeric_limits<std::int8_t>::max)())
+-                    {
+-                        // int 8
+-                        oa.write_character(to_char_type(0xD0));
+-                        write_number(static_cast<std::int8_t>(j.m_data.m_value.number_integer));
+-                    }
+-                    else if (j.m_data.m_value.number_integer >= (std::numeric_limits<std::int16_t>::min)() &&
+-                             j.m_data.m_value.number_integer <= (std::numeric_limits<std::int16_t>::max)())
+-                    {
+-                        // int 16
+-                        oa.write_character(to_char_type(0xD1));
+-                        write_number(static_cast<std::int16_t>(j.m_data.m_value.number_integer));
+-                    }
+-                    else if (j.m_data.m_value.number_integer >= (std::numeric_limits<std::int32_t>::min)() &&
+-                             j.m_data.m_value.number_integer <= (std::numeric_limits<std::int32_t>::max)())
+-                    {
+-                        // int 32
+-                        oa.write_character(to_char_type(0xD2));
+-                        write_number(static_cast<std::int32_t>(j.m_data.m_value.number_integer));
+-                    }
+-                    else
+-                    {
+-                        // int 64
+-                        oa.write_character(to_char_type(0xD3));
+-                        write_number(static_cast<std::int64_t>(j.m_data.m_value.number_integer));
+-                    }
+-                }
+-                break;
+-            }
+-
+             case value_t::number_unsigned:
+             {
+-                write_msgpack_unsigned(static_cast<std::uint64_t>(j.m_data.m_value.number_unsigned));
++                // one case for both, so that an array mixing negative
++                // (number_integer) and non-negative (number_unsigned) values
++                // does not mispredict the switch
++                write_msgpack_integer(j, std::integral_constant<bool, msgpack_integers_fit_64_bits()>());
+                 break;
+             }
+ 
+@@ -485,13 +426,7 @@ class binary_writer
+ 
+             case value_t::array:
+             {
+-                // step 1: write control byte and the array size
+-                write_msgpack_array_prefix(j.m_data.m_value.array->size(), j);
+-
+-                for (const auto& el : *j.m_data.m_value.array)
+-                {
+-                    write_msgpack(el, depth + 1);
+-                }
++                write_msgpack_array(j, depth);
+                 break;
+             }
+ 
+@@ -1951,6 +1886,316 @@ class binary_writer
+         }
+     }
+ 
++    /*!
++    @brief size class of an unsigned integer from its bit length
++
++    1, 2, 3, or 4 if @a x fits 1, 2, 4, or 8 bytes. Looked up from the number
++    of leading zero bits instead of found by branches: the sizes of a stream
++    of numbers are hard to predict, and a mispredicted branch costs more than
++    writing the number. (A table, as comparisons are vectorized by clang into
++    slower code.)
++    */
++    static unsigned integer_size_class(const std::uint64_t x) noexcept
++    {
++        static constexpr std::array<std::uint8_t, 64> size_class_by_leading_zeros =
++        {
++            {
++                4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4,
++                3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3,
++                2, 2, 2, 2, 2, 2, 2, 2,
++                1, 1, 1, 1, 1, 1, 1, 1
++            }
++        };
++        // x | 1 keeps count_leading_zeros() away from 0
++        return size_class_by_leading_zeros[static_cast<std::size_t>(count_leading_zeros(x | 1u))];
++    }
++
++    /*!
++    @brief encode @a first_byte and the low-order bytes of @a value that
++           @a size_class calls for (none, or 1, 2, 4, or 8) in network order
++           to @a out
++    @return the number of characters of the encoding; up to
++            @ref integer_encoding_space characters at @a out are overwritten
++
++    The bytes are written as one byte and one 8-byte word whose bytes after
++    the value are scratch that the caller drops, so that writing them does not
++    depend on the size class. For class 0 the word is all scratch; it is
++    shifted by 60 bits rather than 64, which would be undefined.
++    */
++    std::size_t encode_first_byte_and_tail(CharType* out, const std::uint8_t first_byte, const unsigned size_class, const std::uint64_t value) const noexcept
++    {
++        out[0] = to_char_type(first_byte);
++        const unsigned unused_bits = 64u - ((8u << size_class) >> 1u);
++        const std::uint64_t tail = is_little_endian ? byte_swap(value) >> unused_bits : value << unused_bits;
++        std::memcpy(out + 1, &tail, sizeof(tail));
++        return ((std::size_t{1} << size_class) >> 1u) + 1;
++    }
++
++    /// characters encode_first_byte_and_tail() may overwrite: the first byte
++    /// and one 8-byte word
++    static constexpr std::size_t integer_encoding_space = 9;
++
++    /*!
++    @brief the 64 bits of a number_integer or number_unsigned value, and a mask
++           that is all ones if it is negative, else zero
++
++    Selected through masks rather than branches, as the type and the sign of
++    the values in an array of mixed signs alternate unpredictably (non-negative
++    integers are number_unsigned after parsing). Up to 64 bits, the sign is bit
++    63 of the result (a narrower integer is sign-extended); computing it with
++    masks keeps GCC from branching on the type. A wider integer has to be
++    compared.
++    */
++    static std::uint64_t integer_bits(const BasicJsonType& j, std::uint64_t& sign_mask) noexcept
++    {
++        const bool is_signed = j.m_data.m_type == value_t::number_integer;
++        const std::uint64_t raw = is_signed
++                                  ? static_cast<std::uint64_t>(j.m_data.m_value.number_integer)
++                                  : static_cast<std::uint64_t>(j.m_data.m_value.number_unsigned);
++        sign_mask = sizeof(typename BasicJsonType::number_integer_t) <= sizeof(std::uint64_t)
++                    ? (std::uint64_t{0} - static_cast<std::uint64_t>(is_signed)) & (std::uint64_t{0} - (raw >> 63u))
++                    : std::uint64_t{0} - static_cast<std::uint64_t>(is_signed && j.m_data.m_value.number_integer < 0);
++        return raw;
++    }
++
++    /*!
++    @brief encode the head of a CBOR integer to @a out without branching on its
++           size
++    @return the number of characters of the head
++
++    Same output as @ref write_cbor_head. The lengths of strings and containers
++    are mostly predictable, so their heads keep the branches; the sizes of a
++    run of integers are not, so an integer's head is assembled without them.
++    */
++    std::size_t encode_cbor_integer_head(CharType* out, const std::uint8_t major_type, const std::uint64_t argument) const noexcept
++    {
++        // an argument of at most 23 is in size class 1 (one byte) and is moved
++        // to class 0, the first byte, by subtracting 1
++        const auto is_immediate = static_cast<unsigned>(argument <= 0x17u);
++        const unsigned size_class = integer_size_class(argument) - is_immediate;
++
++        // the first byte: the argument itself if it is immediate, else
++        // 0x17 + size_class, selected through a mask
++        const std::uint64_t immediate_mask = std::uint64_t{0} - is_immediate;
++        const auto first_byte = static_cast<std::uint8_t>(major_type + ((argument & immediate_mask) | ((0x17u + size_class) & ~immediate_mask)));
++        return encode_first_byte_and_tail(out, first_byte, size_class, argument);
++    }
++
++    /*!
++    @brief write an array value (head and elements) as CBOR
++
++    Integer elements, the most common scalar, are written without a call to
++    @ref write_cbor. The loop is kept out of line: inlined into write_cbor, its
++    registers would be saved and restored on every call of write_cbor, which
++    is one call per value nested in an object.
++    */
++    JSON_HEDLEY_NEVER_INLINE
++    void write_cbor_array(const BasicJsonType& j, const std::size_t depth)
++    {
++        write_cbor_head(0x80, j.m_data.m_value.array->size());
++        write_array_elements(j, [this](CharType * out, const BasicJsonType & el)
++        {
++            return encode_cbor_integer(out, el);
++        }, [this, depth](const BasicJsonType & el)
++        {
++            write_cbor(el, depth + 1);
++        });
++    }
++
++    /*!
++    @brief write the elements of the array @a j, runs of integers with
++           @a encode_integer and all other values with @a write_value
++
++    Runs of integers are encoded straight into space reserved from the sink
++    for a whole run: the write pointer stays a local, where it would otherwise
++    be reloaded from the sink for every value, as a store of a character may
++    alias it.
++    */
++    template<typename Encod
+[... truncated, 8217 more characters]
+diff --git a/include/nlohmann/detail/output/output_adapters.hpp b/include/nlohmann/detail/output/output_adapters.hpp
+index 53a14d42f..f9aa76688 100644
+--- a/include/nlohmann/detail/output/output_adapters.hpp
++++ b/include/nlohmann/detail/output/output_adapters.hpp
+@@ -8,7 +8,10 @@
+ 
+ #pragma once
+ 
++#include <algorithm> // max
++#include <array> // array
+ #include <cstddef> // size_t
++#include <cstring> // memcpy
+ #include <memory> // shared_ptr, make_shared
+ #include <string> // basic_string
+ #include <type_traits> // conditional, integral_constant, is_same
+@@ -48,65 +51,176 @@ template<typename CharType> struct output_adapter_protocol
+ template<typename CharType>
+ using output_adapter_t = std::shared_ptr<output_adapter_protocol<CharType>>;
+ 
++/// the largest number of characters a writer may reserve() from a sink at once;
++/// output_vector_sink also appends writes of at least this size with insert()
++constexpr std::size_t max_reserve_size = 256;
++
+ /// @brief non-virtual output sink writing into a std::vector
+ ///
+ /// This sink is not part of the virtual output_adapter_protocol hierarchy: it is
+ /// passed to binary_writer by value as a template parameter, so
+ /// write_character()/write_characters() are ordinary (inlinable) calls with no
+ /// vtable lookup and no shared_ptr. It is used for the common
+-/// `to_cbor`/`to_msgpack`/... into a std::vector. output_vector_adapter below
+-/// wraps this same sink to provide the virtual interface.
++/// `to_cbor`/`to_msgpack`/... into a std::vector.
++///
++/// Most writes are a few bytes - a type marker, or a number of 1, 2, 4, or 8
++/// bytes - and appending those with push_back() or insert() cost more than
++/// encoding them: insert() is an out-of-line call into a routine that can insert
++/// anywhere, and resize() is one as well with libstdc++. The sink therefore keeps
++/// its own write position: it grows the vector geometrically ahead of the
++/// position and copies each write to it, so a write is a capacity check and a
++/// short copy. The destructor shrinks the vector to the bytes actually written,
++/// also when a write throws; shrinking a vector never allocates. The sink owns
++/// that trim, so it can be moved but not copied, and the vector must not be used
++/// while the sink is alive.
+ template<typename CharType, typename AllocatorType = std::allocator<CharType>>
+ class output_vector_sink
+ {
+   public:
+     explicit output_vector_sink(std::vector<CharType, AllocatorType>& vec) noexcept
+-        : v(vec)
++        : v(&vec), position(vec.size())
+     {}
+ 
++    output_vector_sink(const output_vector_sink&) = delete;
++    output_vector_sink& operator=(const output_vector_sink&) = delete;
++    output_vector_sink& operator=(output_vector_sink&&) = delete;
++
++    output_vector_sink(output_vector_sink&& other) noexcept
++        : v(other.v), position(other.position)
++    {
++        other.v = nullptr;
++    }
++
++    ~output_vector_sink()
++    {
++        if (v != nullptr)
++        {
++            v->resize(position);
++        }
++    }
++
++    // always inlined: GCC otherwise keeps these out of line in a large
++    // translation unit, and a call per byte or number costs more than the write
++    JSON_HEDLEY_ALWAYS_INLINE
+     void write_character(CharType c)
+     {
+-        v.push_back(c);
++        if (JSON_HEDLEY_UNLIKELY(position == v->size()))
++        {
++            grow(1);
++        }
++        (*v)[position++] = c;
+     }
+ 
+     // no JSON_HEDLEY_NON_NULL here: binary_writer legitimately passes a null
+-    // pointer with length 0 for empty strings/binary values. Appending an empty
+-    // range is a no-op; the type-erased path tolerates this via the (unattributed)
+-    // virtual base, and the concrete sink must do the same.
++    // pointer with length 0 for empty strings/binary values; memcpy must not
++    // see it.
++    JSON_HEDLEY_ALWAYS_INLINE
+     void write_characters(const CharType* s, std::size_t length)
+     {
+-        v.insert(v.end(), s, s + length);
++        if (JSON_HEDLEY_UNLIKELY(v->size() - position < length))
++        {
++            if (length >= max_reserve_size)
++            {
++                append(s, length);
++                return;
++            }
++            grow(length);
++        }
++        if (length != 0)
++        {
++            std::memcpy(v->data() + position, s, length * sizeof(CharType));
++            position += length;
++        }
++    }
++
++    /// @brief space for writing up to @a length characters directly
++    ///
++    /// Returns a pointer to at least @a length (at most @ref max_reserve_size)
++    /// writable characters at the write position; @ref commit then keeps the
++    /// first ones of them. A writer can store whole words there and keep only
++    /// the bytes it needs, and keep its write pointer in a register across many
++    /// values instead of updating the sink after each.
++    JSON_HEDLEY_ALWAYS_INLINE
++    CharType* reserve(const std::size_t length)
++    {
++        JSON_ASSERT(length <= max_reserve_size);
++        if (JSON_HEDLEY_UNLIKELY(v->size() - position < length))
++        {
++            grow(length);
++        }
++        return v->data() + position;
++    }
++
++    /// keep the first @a length characters written to the space from reserve()
++    JSON_HEDLEY_ALWAYS_INLINE
++    void commit(const std::size_t length) noexcept
++    {
++        position += length;
+     }
+ 
+   private:
+-    std::vector<CharType, AllocatorType>& v;
++    /// make room for at least @a length more characters after the position;
++    /// kept out of line so that the write functions stay small enough for
++    /// GCC to inline them into the writer
++    JSON_HEDLEY_NEVER_INLINE
++    void grow(const std::size_t length)
++    {
++        // use the capacity the vector already has, else at least double it;
++        // never less than 64 characters, so that a small value does not
++        // reallocate for every few bytes
++        const std::size_t needed = position + length;
++        v->resize((std::max)(std::size_t{64}, needed <= v->capacity()
++                             ? v->capacity()
++                             : (std::max)(needed, v->capacity() * 2)));
++    }
++
++    /// append @a length (at least max_reserve_size) characters that do not fit
++    /// the space ahead of the position: insert() copies them once into the
++    /// grown vector, where grow() would first zero the new space and then copy
++    /// over it - noticeable for a large string or binary value
++    JSON_HEDLEY_NEVER_INLINE
++    void append(const CharType* s, const std::size_t length)
++    {
++        v->resize(position);
++        if (v->capacity() - position < length)
++        {
++            // grow geometrically, with room for the writes that follow, so
++            // that the next grow() need not reallocate right away
++            v->reserve((std::max)(v->capacity() * 2, position + length + max_reserve_size));
++        }
++        v->insert(v->end(), s, s + length);
++        position = v->size();
++    }
++
++    std::vector<CharType, AllocatorType>* v;
++    /// number of characters of *v written so far
++    std::size_t position;
+ };
+ 
+ /// output adapter for byte vectors
+-///
+-/// The appending itself lives in output_vector_sink; this class only adds the
+-/// virtual output_adapter_protocol interface on top of it, so both the
+-/// type-erased and the templated path share one implementation.
+ template<typename CharType, typename AllocatorType = std::allocator<CharType>>
+ class output_vector_adapter : public output_adapter_protocol<CharType>
+ {
+   public:
+     explicit output_vector_adapter(std::vector<CharType, AllocatorType>& vec) noexcept
+-        : sink(vec)
++        : v(vec)
+     {}
+ 
+     void write_character(CharType c) override
+     {
+-        sink.write_character(c);
++        v.push_back(c);
+     }
+ 
++    // no JSON_HEDLEY_NON_NULL here: binary_writer legitimately passes a null
++    // pointer with length 0 for empty strings/binary values; appending an empty
++    // range is a no-op
+     void write_characters(const CharType* s, std::size_t length) override
+     {
+-        sink.write_characters(s, length);
++        v.insert(v.end(), s, s + length);
+     }
+ 
+   private:
+-    output_vector_sink<CharType, AllocatorType> sink;
++    std::vector<CharType, AllocatorType>& v;
+ };
+ 
+ #ifndef JSON_NO_IO
+@@ -188,8 +302,24 @@ class output_adapter_sink
+         oa->write_characters(s, length);
+     }
+ 
++    /// space for writing up to @a length characters (see
++    /// output_vector_sink::reserve)
++    CharType* reserve(const std::size_t length) noexcept
++    {
++        JSON_ASSERT(length <= max_reserve_size);
++        static_cast<void>(length);
++        return reserved.data();
++    }
++
++    /// write the first @a length characters written to the space from reserve()
++    void commit(const std::size_t length)
++    {
++        oa->write_characters(reserved.data(), length);
++    }
++
+   private:
+     output_adapter_t<CharType> oa;
++    std::array<CharType, max_reserve_size> reserved{};
+ };
+ 
+ /// @brief whether std::basic_string<CharType> has a non-deprecated std::char_traits
+```
+
+## Existing upstream tests that call the changed code (for style and API usage)
+// Upstream tests at the PR's parent commit 08d7fbb0a that use the changed code.
+// Names searched (test lines using each): to_bjdata (0), to_bon8 (0), to_bson (0), to_cbor (0), to_msgpack (0), to_ubjson (0), write_msgpack (0), output_vector_sink (0), write_cbor (0), write_characters (0), write_character (0), output_adapter_sink (0), output_vector_adapter (0), write_cbor_head (0), v (1110), binary_writer (0), write_msgpack_integer (0), write_array_elements (0), encode_msgpack_integer (0), integer_size_class (0), encode_cbor_integer_head (0), append (28), write_cbor_array (0), integer_bits (0), grow (0), write_msgpack_array_elements (0), reserve (28), encode_first_byte_and_tail (0), encode_cbor_integer (0), write_msgpack_array (0), msgpack_integers_fit_64_bits (0), write_cbor_integer (0), commit (0), integer_encoding_space (0), max_reserve_size (0), reserved (2), position (35), oa (3), sink (1)
+
+// ---- tests/src/unit-binary_writer_sinks.cpp:85-97  (uses: sink)
+    SECTION("vector sink and adapter sink agree")
+    {
+        // note: no SUBCASE inside these loops - doctest keys subcases by
+        // name/file/line, so a subcase in a loop body would only ever run for
+        // the first iteration
+        for (const auto& j : test_values())
+        {
+            CAPTURE(j.dump(-1, ' ', false, json::error_handler_t::replace))
+
+            std::vector<std::uint8_t> cbor;
+            json::to_cbor(j, cbor);
+            CHECK(json::to_cbor(j) == cbor);
+
+
+// ---- tests/src/unit-json_view_image.cpp:719-743  (uses: reserved)
+        CHECK(exception_of([&]
+        {
+            const json_document d = json_document::load(image.data(), 63);
+            static_cast<void>(d);
+        }) == prefix + "too short");
+
+        std::vector<std::uint8_t> bad = image;
+        bad[0] = 'X';
+        CHECK(load_result(bad, image_check::full) == prefix + "unknown format");
+        bad = image;
+        bad[4] = 2; // version
+        CHECK(load_result(bad, image_check::full) == prefix + "unknown format");
+        for (std::size_t reserved = 32; reserved < 64; reserved += 8)
+        {
+            bad = image;
+            bad[reserved + 3] = 1;
+            CHECK(load_result(bad, image_check::none) == prefix + "unknown format");
+        }
+
+        const auto sizes = [&](std::size_t offset, std::uint64_t v)
+        {
+            std::vector<std::uint8_t> b = image;
+            set_header_field(b, offset, v);
+            return load_result(b, image_check::none);
+        };
+
+// ---- tests/src/unit-json_view_dump.cpp:237-275  (uses: oa)
+    SECTION("equality of the values parse() produces")
+    {
+        generator g;
+        std::vector<std::string> texts;
+        for (int i = 0; i < 600; ++i)
+        {
+            std::string text;
+            g.value(text, 0);
+            texts.push_back(text);
+            // the same value written differently: sorted keys, canonical numbers
+            texts.push_back(json::parse(text).dump(1));
+        }
+        for (std::size_t i = 0; i + 2 < texts.size(); ++i)
+        {
+            for (std::size_t k = i; k < i + 3; ++k)
+            {
+                CAPTURE(texts[i])
+                CAPTURE(texts[k])
+                const json_document a = json_document::parse(texts[i]);
+                const json_document b = json_document::parse(texts[k]);
+                const json ja = json::parse(texts[i]);
+                const json jb = json::parse(texts[k]);
+                CHECK((a.root() == b.root()) == (ja == jb));
+                CHECK((a.root() != b.root()) == (ja != jb));
+                CHECK((a.root() == jb) == (ja == jb));
+                CHECK((jb == a.root()) == (ja == jb));
+                CHECK((a.root() != jb) == (ja != jb));
+                CHECK((jb != a.root()) == (ja != jb));
+
+                // ordered_json compares members in order
+                const ordered_json_document oa = ordered_json_document::parse(texts[i]);
+                const ordered_json_document ob = ordered_json_document::parse(texts[k]);
+                const ordered_json oja = ordered_json::parse(texts[i]);
+                const ordered_json ojb = ordered_json::parse(texts[k]);
+                CHECK((oa.root() == ob.root()) == (oja == ojb));
+                CHECK((oa.root() == ojb) == (oja == ojb));
+            }
+        }
+    }
+
+// ---- tests/src/unit-large_json.cpp:77-95  (uses: append, reserve)
+        SECTION("object")
+        {
+            std::string s;
+            s.reserve((6 * depth) + 1);
+            for (std::size_t i = 0; i < depth; ++i)
+            {
+                s += "{\"a\":";
+            }
+            s += '1';
+            s.append(depth, '}');
+
+            const json j = json::parse(s);
+
+            const json copy(j); // NOLINT(performance-unnecessary-copy-initialization): the copy is what is tested
+
+            std::size_t copy_depth = 0;
+            CHECK(*innermost_value(copy, copy_depth) == 1);
+            CHECK(copy_depth == depth);
+        }
+
+// ---- tests/src/unit-large_json.cpp:188-206  (uses: append, reserve)
+        SECTION("comparing objects")
+        {
+            std::string text;
+            text.reserve((6 * depth) + 1);
+            for (std::size_t i = 0; i < depth; ++i)
+            {
+                text += "{\"a\":";
+            }
+            text += '1';
+            text.append(depth, '}');
+
+            const json j = json::parse(text);
+            const json same = json::parse(text);
+
+            CHECK(j == same);
+            CHECK_FALSE(j != same);
+            CHECK(j <= same);
+            CHECK(j >= same);
+        }
+
+// ---- tests/src/unit-serialization.cpp:611-628  (uses: append, reserve)
+    SECTION("nested deeper than the call stack could follow")
+    {
+        // parsing is iterative, so building these costs little
+        const std::size_t depth = 100000;
+
+        const std::string array_text = std::string(depth, '[') + '0' + std::string(depth, ']');
+        CHECK(json::parse(array_text).dump() == array_text);
+
+        std::string object_text;
+        object_text.reserve((6 * depth) + 1);
+        for (std::size_t i = 0; i < depth; ++i)
+        {
+            object_text += "{\"a\":";
+        }
+        object_text += '1';
+        object_text.append(depth, '}');
+        CHECK(json::parse(object_text).dump() == object_text);
+    }
+
+// ---- tests/src/unit-ordered_map.cpp:616-631  (uses: reserve, v)
+        SECTION("using a value as key")
+        {
+            ordered_map<std::string, std::string> om;
+            om.reserve(4);
+            while (om.size() < om.capacity())
+            {
+                const auto i = std::to_string(om.size());
+                om.emplace("k" + i, "v" + i);
+            }
+            const auto size = om.size();
+
+            om.emplace(om.at("k0"), std::string("x"));
+            CHECK(om.size() == size + 1);
+            CHECK(om.at("k0") == "v0");
+            CHECK(om.at("v0") == "x");
+        }
+
+# Programs to repair
+
+## gen_01.cpp (compile)
+Intent: Probes CBOR serialization of large unsigned integer arrays using the optimized unbranched writer.
+COMPILE ERROR. The program fails to compile, the same way against the old and the new library. Fix the error (wrong or missing include, typo, misuse of the public API) and keep the intent: the call under test must stay. Include only headers that exist; if you are unsure a header exists, use the library's main header.
+Compiler errors:
+```
+gen_01.cpp:14:19: error: ‘to_cbor’ is not a member of ‘nlohmann’
+```
+Source:
+```cpp
+#include <nlohmann/json.hpp>
+#include <iostream>
+#include <vector>
+
+int main() {
+    try {
+        nlohmann::json j = nlohmann::json::array();
+        for (std::uint64_t i = 0; i < 150; ++i) {
+            j.push_back(i * 1000ULL);
+        }
+        std::vector<std::uint8_t> cbor;
+        nlohmann::to_cbor(j, cbor);
+        std::cout << "cbor_size: " << cbor.size() << std::endl;
+    } catch (const std::exception& e) {
+        std::cout << "Exception: " << e.what() << std::endl;
+    }
+    return 0;
+}
+```
+
+## gen_02.cpp (compile)
+Intent: Probes CBOR serialization of an array containing both positive and negative integers.
+COMPILE ERROR. The program fails to compile, the same way against the old and the new library. Fix the error (wrong or missing include, typo, misuse of the public API) and keep the intent: the call under test must stay. Include only headers that exist; if you are unsure a header exists, use the library's main header.
+Compiler errors:
+```
+gen_02.cpp:14:19: error: ‘to_cbor’ is not a member of ‘nlohmann’
+```
+Source:
+```cpp
+#include <nlohmann/json.hpp>
+#include <iostream>
+#include <vector>
+
+int main() {
+    try {
+        nlohmann::json j = nlohmann::json::array();
+        for (int i = -50; i < 50; ++i) {
+            j.push_back(i);
+        }
+        std::vector<std::uint8_t> cbor;
+        nlohmann::to_cbor(j, cbor);
+        std::cout << "mixed_size: " << cbor.size() << std::endl;
+    } catch (const std::exception& e) {
+        std::cout << "Exception: " << e.what() << std::endl;
+    }
+    return 0;
+}
+```
+
+## gen_03.cpp (compile)
+Intent: Probes MessagePack serialization of an array of various sizes of unsigned integers.
+COMPILE ERROR. The program fails to compile, the same way against the old and the new library. Fix the error (wrong or missing include, typo, misuse of the public API) and keep the intent: the call under test must stay. Include only headers that exist; if you are unsure a header exists, use the library's main header.
+Compiler errors:
+```
+gen_03.cpp:15:19: error: ‘to_msgpack’ is not a member of ‘nlohmann’
+```
+Source:
+```cpp
+#include <nlohmann/json.hpp>
+#include <iostream>
+#include <vector>
+
+int main() {
+    try {
+        nlohmann::json j = nlohmann::json::array();
+        j.push_back(5ULL);
+        j.push_back(300ULL);
+        j.push_back(70000ULL);
+        j.push_back(5000000000ULL);
+        std::vector<std::uint8_t> msgpack;
+        nlohmann::to_msgpack(j, msgpack);
+        std::cout << "msgpack_pos_size: " << msgpack.size() << std::endl;
+    } catch (const std::exception& e) {
+        std::cout << "Exception: " << e.what() << std::endl;
+    }
+    return 0;
+}
+```
+
+## gen_04.cpp (compile)
+Intent: Probes MessagePack serialization of negative integers spanning all size classes (fixnum, int8, int16, int32, int64).
+COMPILE ERROR. The program fails to compile, the same way against the old and the new library. Fix the error (wrong or missing include, typo, misuse of the public API) and keep the intent: the call under test must stay. Include only headers that exist; if you are unsure a header exists, use the library's main header.
+Compiler errors:
+```
+gen_04.cpp:16:19: error: ‘to_msgpack’ is not a member of ‘nlohmann’
+```
+Source:
+```cpp
+#include <nlohmann/json.hpp>
+#include <iostream>
+#include <vector>
+
+int main() {
+    try {
+        nlohmann::json j = nlohmann::json::array();
+        j.push_back(-5);
+        j.push_back(-50);
+        j.push_back(-1000);
+        j.push_back(-100000);
+        j.push_back(-5000000000LL);
+        std::vector<std::uint8_t> msgpack;
+        nlohmann::to_msgpack(j, msgpack);
+        std::cout << "msgpack_neg_size: " << msgpack.size() << std::endl;
+    } catch (const std::exception& e) {
+        std::cout << "Exception: " << e.what() << std::endl;
+    }
+    return 0;
+}
+```
+
+## gen_05.cpp (compile)
+Intent: Probes output_vector_sink geometric growth and direct append path for strings larger than max_reserve_size.
+COMPILE ERROR. The program fails to compile, the same way against the old and the new library. Fix the error (wrong or missing include, typo, misuse of the public API) and keep the intent: the call under test must stay. Include only headers that exist; if you are unsure a header exists, use the library's main header.
+Compiler errors:
+```
+gen_05.cpp:12:19: error: ‘to_cbor’ is not a member of ‘nlohmann’
+```
+Source:
+```cpp
+#include <nlohmann/json.hpp>
+#include <iostream>
+#include <vector>
+
+int main() {
+    try {
+        std::string large_str(600, 'a');
+        nlohmann::json j = large_str;
+        std::vector<std::uint8_t> cbor;
+        nlohmann::to_cbor(j, cbor);
+        std::cout << "large_str_cbor_size: " << cbor.size() << std::endl;
+    } catch (const std::exception& e) {
+        std::cout << "Exception: " << e.what() << std::endl;
+    }
+    return 0;
+}
+```
+
+## gen_06.cpp (compile)
+Intent: Probes output_vector_sink optimization when serializing binary blobs larger than max_reserve_size.
+COMPILE ERROR. The program fails to compile, the same way against the old and the new library. Fix the error (wrong or missing include, typo, misuse of the public API) and keep the intent: the call under test must stay. Include only headers that exist; if you are unsure a header exists, use the library's main header.
+Compiler errors:
+```
+gen_06.cpp:12:19: error: ‘to_cbor’ is not a member of ‘nlohmann’
+```
+Source:
+```cpp
+#include <nlohmann/json.hpp>
+#include <iostream>
+#include <vector>
+
+int main() {
+    try {
+        std::vector<std::uint8_t> raw_bytes(512, 0x42);
+        nlohmann::json j = nlohmann::json::binary(raw_bytes);
+        std::vector<std::uint8_t> cbor;
+        nlohmann::to_cbor(j, cbor);
+        std::cout << "binary_cbor_size: " << cbor.size() << std::endl;
+    } catch (const std::exception& e) {
+        std::cout << "Exception: " << e.what() << std::endl;
+    }
+    return 0;
+}
+```
+
+## gen_07.cpp (compile)
+Intent: Probes output_vector_sink destructor trimming vector size back to the exact written length.
+COMPILE ERROR. The program fails to compile, the same way against the old and the new library. Fix the error (wrong or missing include, typo, misuse of the public API) and keep the intent: the call under test must stay. Include only headers that exist; if you are unsure a header exists, use the library's main header.
+Compiler errors:
+```
+gen_07.cpp:12:19: error: ‘to_cbor’ is not a member of ‘nlohmann’
+```
+Source:
+```cpp
+#include <nlohmann/json.hpp>
+#include <iostream>
+#include <vector>
+
+int main() {
+    try {
+        std::vector<std::uint8_t> cbor;
+        cbor.reserve(10000);
+        nlohmann::json j = {1, 2, 3};
+        nlohmann::to_cbor(j, cbor);
+        std::cout << "trimmed_capacity_equals_size: " << (cbor.capacity() >= cbor.size()) << std::endl;
+        std::cout << "trimmed_size: " << cbor.size() << std::endl;
+    } catch (const std::exception& e) {
+        std::cout << "Exception: " << e.what() << std::endl;
+    }
+    return 0;
+}
+```
+
+## gen_08.cpp (compile)
+Intent: Probes serialization of empty container structures using the refactored writer pathways.
+COMPILE ERROR. The program fails to compile, the same way against the old and the new library. Fix the error (wrong or missing include, typo, misuse of the public API) and keep the intent: the call under test must stay. Include only headers that exist; if you are unsure a header exists, use the library's main header.
+Compiler errors:
+```
+gen_08.cpp:12:19: error: ‘to_cbor’ is not a member of ‘nlohmann’
+gen_08.cpp:13:19: error: ‘to_cbor’ is not a member of ‘nlohmann’
+```
+Source:
+```cpp
+#include <nlohmann/json.hpp>
+#include <iostream>
+#include <vector>
+
+int main() {
+    try {
+        nlohmann::json j_arr = nlohmann::json::array();
+        nlohmann::json j_obj = nlohmann::json::object();
+        std::vector<std::uint8_t> cbor1, cbor2;
+        nlohmann::to_cbor(j_arr, cbor1);
+        nlohmann::to_cbor(j_obj, cbor2);
+        std::cout << "empty_arr_size: " << cbor1.size() << ", empty_obj_size: " << cbor2.size() << std::endl;
+    } catch (const std::exception& e) {
+        std::cout << "Exception: " << e.what() << std::endl;
+    }
+    return 0;
+}
+```
+
+## gen_09.cpp (compile)
+Intent: Probes MessagePack serialization of empty containers.
+COMPILE ERROR. The program fails to compile, the same way against the old and the new library. Fix the error (wrong or missing include, typo, misuse of the public API) and keep the intent: the call under test must stay. Include only headers that exist; if you are unsure a header exists, use the library's main header.
+Compiler errors:
+```
+gen_09.cpp:12:19: error: ‘to_msgpack’ is not a member of ‘nlohmann’
+gen_09.cpp:13:19: error: ‘to_msgpack’ is not a member of ‘nlohmann’
+```
+Source:
+```cpp
+#include <nlohmann/json.hpp>
+#include <iostream>
+#include <vector>
+
+int main() {
+    try {
+        nlohmann::json j_arr = nlohmann::json::array();
+        nlohmann::json j_obj = nlohmann::json::object();
+        std::vector<std::uint8_t> mp1, mp2;
+        nlohmann::to_msgpack(j_arr, mp1);
+        nlohmann::to_msgpack(j_obj, mp2);
+        std::cout << "mp_empty_arr: " << mp1.size() << ", mp_empty_obj: " << mp2.size() << std::endl;
+    } catch (const std::exception& e) {
+        std::cout << "Exception: " << e.what() << std::endl;
+    }
+    return 0;
+}
+```
+
+## gen_10.cpp (compile)
+Intent: Probes deeply nested array structures to verify correct handling of recursion and sink positions.
+COMPILE ERROR. The program fails to compile, the same way against the old and the new library. Fix the error (wrong or missing include, typo, misuse of the public API) and keep the intent: the call under test must stay. Include only headers that exist; if you are unsure a header exists, use the library's main header.
+Compiler errors:
+```
+gen_10.cpp:14:19: error: ‘to_cbor’ is not a member of ‘nlohmann’
+```
+Source:
+```cpp
+#include <nlohmann/json.hpp>
+#include <iostream>
+#include <vector>
+
+int main() {
+    try {
+        nlohmann::json j = 1;
+        for (int i = 0; i < 20; ++i) {
+            j = nlohmann::json::array({j});
+        }
+        std::vector<std::uint8_t> cbor;
+        nlohmann::to_cbor(j, cbor);
+        std::cout << "nested_cbor_size: " << cbor.size() << std::endl;
+    } catch (const std::exception& e) {
+        std::cout << "Exception: " << e.what() << std::endl;
+    }
+    return 0;
+}
+```
+
+## gen_11.cpp (compile)
+Intent: Probes the alternative output_adapter_sink path via stream serialization interface.
+COMPILE ERROR. The program fails to compile, the same way against the old and the new library. Fix the error (wrong or missing include, typo, misuse of the public API) and keep the intent: the call under test must stay. Include only headers that exist; if you are unsure a header exists, use the library's main header.
+Compiler errors:
+```
+gen_11.cpp:11:19: error: ‘to_cbor’ is not a member of ‘nlohmann’
+```
+Source:
+```cpp
+#include <nlohmann/json.hpp>
+#include <iostream>
+#include <sstream>
+
+int main() {
+    try {
+        nlohmann::json j = {1, 2, 3, 4, 5};
+        std::stringstream ss;
+        nlohmann::to_cbor(j, ss);
+        std::cout << "stream_size: " << ss.str().size() << std::endl;
+    } catch (const std::exception& e) {
+        std::cout << "Exception: " << e.what() << std::endl;
+    }
+    return 0;
+}
+```
+
+## gen_12.cpp (compile)
+Intent: Probes CBOR encoding of integer boundaries (e.g., powers of 2 minus/plus one).
+COMPILE ERROR. The program fails to compile, the same way against the old and the new library. Fix the error (wrong or missing include, typo, misuse of the public API) and keep the intent: the call under test must stay. Include only headers that exist; if you are unsure a header exists, use the library's main header.
+Compiler errors:
+```
+gen_12.cpp:14:19: error: ‘to_cbor’ is not a member of ‘nlohmann’
+```
+Source:
+```cpp
+#include <nlohmann/json.hpp>
+#include <iostream>
+#include <vector>
+
+int main() {
+    try {
+        nlohmann::json j = nlohmann::json::array({
+            0, 23, 24, 255, 256, 65535, 65536,
+            4294967295ULL, 4294967296ULL
+        });
+        std::vector<std::uint8_t> cbor;
+        nlohmann::to_cbor(j, cbor);
+        std::cout << "boundary_cbor_size: " << cbor.size() << std::endl;
+    } catch (const std::exception& e) {
+        std::cout << "Exception: " << e.what() << std::endl;
+    }
+    return 0;
+}
+```
+
+## gen_13.cpp (compile)
+Intent: Probes MessagePack encoding across all integer width boundaries.
+COMPILE ERROR. The program fails to compile, the same way against the old and the new library. Fix the error (wrong or missing include, typo, misuse of the public API) and keep the intent: the call under test must stay. Include only headers that exist; if you are unsure a header exists, use the library's main header.
+Compiler errors:
+```
+gen_13.cpp:15:19: error: ‘to_msgpack’ is not a member of ‘nlohmann’
+```
+Source:
+```cpp
+#include <nlohmann/json.hpp>
+#include <iostream>
+#include <vector>
+
+int main() {
+    try {
+        nlohmann::json j = nlohmann::json::array({
+            -33, -129, -32769, -2147483649LL,
+            127, 128, 255, 256, 65535, 65536,
+            4294967295ULL, 4294967296ULL
+        });
+        std::vector<std::uint8_t> mp;
+        nlohmann::to_msgpack(j, mp);
+        std::cout << "boundary_mp_size: " << mp.size() << std::endl;
+    } catch (const std::exception& e) {
+        std::cout << "Exception: " << e.what() << std::endl;
+    }
+    return 0;
+}
+```
+
+## gen_14.cpp (compile)
+Intent: Probes serialization of booleans and null values alongside numbers.
+COMPILE ERROR. The program fails to compile, the same way against the old and the new library. Fix the error (wrong or missing include, typo, misuse of the public API) and keep the intent: the call under test must stay. Include only headers that exist; if you are unsure a header exists, use the library's main header.
+Compiler errors:
+```
+gen_14.cpp:11:19: error: ‘to_cbor’ is not a member of ‘nlohmann’
+```
+Source:
+```cpp
+#include <nlohmann/json.hpp>
+#include <iostream>
+#include <vector>
+
+int main() {
+    try {
+        nlohmann::json j = nlohmann::json::array({nullptr, true, false, 42});
+        std::vector<std::uint8_t> cbor;
+        nlohmann::to_cbor(j, cbor);
+        std::cout << "bool_null_cbor_size: " << cbor.size() << std::endl;
+    } catch (const std::exception& e) {
+        std::cout << "Exception: " << e.what() << std::endl;
+    }
+    return 0;
+}
+```
+
+## gen_15.cpp (compile)
+Intent: Probes MessagePack serialization of non-numeric scalar primitives.
+COMPILE ERROR. The program fails to compile, the same way against the old and the new library. Fix the error (wrong or missing include, typo, misuse of the public API) and keep the intent: the call under test must stay. Include only headers that exist; if you are unsure a header exists, use the library's main header.
+Compiler errors:
+```
+gen_15.cpp:11:19: error: ‘to_msgpack’ is not a member of ‘nlohmann’
+```
+Source:
+```cpp
+#include <nlohmann/json.hpp>
+#include <iostream>
+#include <vector>
+
+int main() {
+    try {
+        nlohmann::json j = nlohmann::json::array({nullptr, true, false, 100});
+        std::vector<std::uint8_t> mp;
+        nlohmann::to_msgpack(j, mp);
+        std::cout << "bool_null_mp_size: " << mp.size() << std::endl;
+    } catch (const std::exception& e) {
+        std::cout << "Exception: " << e.what() << std::endl;
+    }
+    return 0;
+}
+```
+
+# Task
+Return JSON with a "fixes" array: one item per program above, with "file" (exactly as given) and "code" (the complete repaired program, standalone, with its own int main). Do not return programs you cannot repair.

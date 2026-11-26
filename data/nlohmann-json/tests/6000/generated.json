@@ -1,0 +1,212 @@
+{
+  "target": "nlohmann-json",
+  "pr": 6000,
+  "model": "gemini-3.5-flash-lite",
+  "prompt_sha256": "885359fe82c011a019e95c2fd0dda19e31edb10f20704200c0c9bb315d2cf1d8",
+  "n_requested": 20,
+  "dropped": 0,
+  "usage": {
+    "promptTokenCount": 12617,
+    "candidatesTokenCount": 3435,
+    "totalTokenCount": 16052,
+    "promptTokensDetails": [
+      {
+        "modality": "TEXT",
+        "tokenCount": 12617
+      }
+    ],
+    "serviceTier": "standard"
+  },
+  "tests": [
+    {
+      "file": "gen_01.cpp",
+      "name": "destroy_empty_array",
+      "intent": "Verify destruction of an empty array via public JSON parse and scope exit.",
+      "round": 0
+    },
+    {
+      "file": "gen_02.cpp",
+      "name": "destroy_empty_object",
+      "intent": "Verify destruction of an empty object via public JSON parse and scope exit.",
+      "round": 0
+    },
+    {
+      "file": "gen_03.cpp",
+      "name": "destroy_nested_containers",
+      "intent": "Verify destruction of a moderately nested array and object structure.",
+      "round": 0
+    },
+    {
+      "file": "gen_04.cpp",
+      "name": "parse_and_destroy_large_flat_array",
+      "intent": "Verify destruction of a large flat array parsed from a string.",
+      "round": 0
+    },
+    {
+      "file": "gen_05.cpp",
+      "name": "deeply_nested_containers_walk",
+      "intent": "Verify destruction of containers nested beyond recursion limit to exercise destroy_walk.",
+      "round": 0
+    },
+    {
+      "file": "gen_06.cpp",
+      "name": "stream_extraction_destruction",
+      "intent": "Verify container destruction after extraction from a stringstream.",
+      "round": 0,
+      "superseded_by": "gen_26.cpp"
+    },
+    {
+      "file": "gen_07.cpp",
+      "name": "stream_insertion_serialization",
+      "intent": "Verify container operations through stream insertion and destruction.",
+      "round": 0
+    },
+    {
+      "file": "gen_08.cpp",
+      "name": "to_string_and_destroy",
+      "intent": "Verify string conversion and subsequent cleanup of complex json objects.",
+      "round": 0
+    },
+    {
+      "file": "gen_09.cpp",
+      "name": "ordered_json_container_destruction",
+      "intent": "Verify destruction path for ordered_json containers.",
+      "round": 0
+    },
+    {
+      "file": "gen_10.cpp",
+      "name": "comparison_scalar_operators",
+      "intent": "Verify comparison operators that reach json_value handling.",
+      "round": 0
+    },
+    {
+      "file": "gen_11.cpp",
+      "name": "format_as_custom_type",
+      "intent": "Verify format_as integration which reaches basic_json handling.",
+      "round": 0
+    },
+    {
+      "file": "gen_12.cpp",
+      "name": "clear_and_destroy_container",
+      "intent": "Verify clearing containers explicitly followed by destruction.",
+      "round": 0
+    },
+    {
+      "file": "gen_13.cpp",
+      "name": "push_back_pop_back_destruction",
+      "intent": "Verify dynamic modification and destruction of container elements.",
+      "round": 0,
+      "superseded_by": "gen_27.cpp"
+    },
+    {
+      "file": "gen_14.cpp",
+      "name": "object_erase_destruction",
+      "intent": "Verify erasure of object members and their immediate destruction.",
+      "round": 0
+    },
+    {
+      "file": "gen_15.cpp",
+      "name": "assignment_destroys_old_value",
+      "intent": "Verify that assigning a new value properly destroys the old container value.",
+      "round": 0
+    },
+    {
+      "file": "gen_16.cpp",
+      "name": "move_constructor_container",
+      "intent": "Verify move construction of container values.",
+      "round": 0
+    },
+    {
+      "file": "gen_17.cpp",
+      "name": "move_assignment_container",
+      "intent": "Verify move assignment of container values and destruction of target.",
+      "round": 0
+    },
+    {
+      "file": "gen_18.cpp",
+      "name": "json_pointer_destruction",
+      "intent": "Verify destruction of values accessed and manipulated via json_pointer.",
+      "round": 0
+    },
+    {
+      "file": "gen_19.cpp",
+      "name": "merge_patch_destruction",
+      "intent": "Verify application of merge_patch and cleanup of replaced containers.",
+      "round": 0
+    },
+    {
+      "file": "gen_20.cpp",
+      "name": "json_patch_destruction",
+      "intent": "Verify application of RFC 6902 json patch and associated container memory management.",
+      "round": 0
+    },
+    {
+      "file": "gen_21.cpp",
+      "name": "gen_21",
+      "intent": "Exercise destroy_walk and walk_child with deeply nested objects (rather than arrays) to execute walk_child for object type, hitting the JSON_ASSERT(v.m_type == value_t::object) line.",
+      "round": 1,
+      "superseded_by": "gen_28.cpp"
+    },
+    {
+      "file": "gen_22.cpp",
+      "name": "gen_22",
+      "intent": "Exercise pop_walk_child with deeply nested objects to hit the object path containing JSON_ASSERT(v.m_type == value_t::object) and object::erase inside destroy_walk.",
+      "round": 1
+    },
+    {
+      "file": "gen_23.cpp",
+      "name": "gen_23",
+      "intent": "Directly instantiate and reference basic_json::data via JSON_PRIVATE_UNLESS_TESTED to explicitly instantiate and touch basic_json::data.",
+      "round": 1,
+      "superseded_by": "gen_29.cpp"
+    },
+    {
+      "file": "gen_24.cpp",
+      "name": "gen_24",
+      "intent": "Combine deep nesting of alternating objects and arrays to ensure both object and array walk_child and pop_walk_child branches are robustly tested in destroy_walk.",
+      "round": 1
+    },
+    {
+      "file": "gen_25.cpp",
+      "name": "gen_25",
+      "intent": "Exercise destroy_walk with large object structures nested past recursion limit, ensuring element erasure and iterator traversal on object types are fully exercised.",
+      "round": 1
+    },
+    {
+      "file": "gen_26.cpp",
+      "name": "stream_extraction_destruction_fixed",
+      "intent": "Verify container destruction after extraction from a stringstream.",
+      "round": 2,
+      "fixes": "gen_06.cpp",
+      "kind": "compile"
+    },
+    {
+      "file": "gen_27.cpp",
+      "name": "push_back_pop_back_destruction_fixed",
+      "intent": "Verify dynamic modification and destruction of container elements.",
+      "round": 2,
+      "fixes": "gen_13.cpp",
+      "kind": "compile"
+    },
+    {
+      "file": "gen_28.cpp",
+      "name": "gen_21_fixed",
+      "intent": "Exercise destroy_walk and walk_child with deeply nested objects (rather than arrays) to execute walk_child for object type, hitting the JSON_ASSERT(v.m_type == value_t::object) line.",
+      "round": 2,
+      "fixes": "gen_21.cpp",
+      "kind": "compile"
+    },
+    {
+      "file": "gen_29.cpp",
+      "name": "gen_23_fixed",
+      "intent": "Directly instantiate and reference basic_json::data via JSON_PRIVATE_UNLESS_TESTED to explicitly instantiate and touch basic_json::data.",
+      "round": 2,
+      "fixes": "gen_23.cpp",
+      "kind": "compile"
+    }
+  ],
+  "fix": {
+    "rounds_max": 2,
+    "model": "gemini-3.5-flash-lite"
+  }
+}

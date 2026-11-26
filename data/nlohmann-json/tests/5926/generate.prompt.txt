@@ -1,0 +1,375 @@
+[system]
+You write test programs that probe a C++ library for behavioral changes made by one pull request.
+Each program is compiled and run twice, once against the library before the change and once after, and the two
+outputs are compared. Your job is to produce programs whose output reveals whether the change altered behavior,
+including side effects the author did not intend.
+
+Rules for every program:
+- It is standalone: one file with its own int main(), compiled as C++17, printing results to stdout.
+- Use only the library's documented public API. Never include internal headers or use detail/impl namespaces,
+  private members or undocumented macros.
+- Do not judge results (no assert, no expected-value comparisons): just print what the library returns. Print
+  enough to make differences visible, one fact per line.
+- Output must be deterministic. Never print pointers or addresses, uninitialized data, the order of
+  hash-based containers, timings, thread ids, random values, file paths or environment data. Print floating point
+  values with an explicit precision. No input, files, network, threads, clocks or randomness.
+- Wrap calls that may throw in try/catch and print the exception's type and message, so an exception is an
+  observable result. Do not crash on purpose.
+- Aim at the code the diff changes. Prefer calls that compile against both the old and the new library; one or two
+  programs may use an API the PR adds. Cover ordinary inputs and edge cases (empty, minimum and maximum values,
+  boundaries, special values, nesting, unusual types) and also neighbouring behavior the change could disturb.
+- When the diff changes which types or inputs an API accepts or rejects (constraints, overloads, traits,
+  conversions), test it with the detection idiom (std::void_t or requires) and `if constexpr`, so the program
+  compiles against both versions, prints whether the expression is well-formed, and exercises it when it is.
+  Accepting an input is not enough: also use it through every entry point that should follow (const and
+  non-const, read, write, insert, erase, lookup, nested use), because a change that admits new inputs can leave
+  later code unable to handle them.
+- If the changed code is internal (a detail, impl or internal namespace, a trait, a helper), do not name it in the
+  program. Reach it through the public API that depends on it, using detection (as above) where needed.
+- Use the exact types and values the diff is about (the new trait's argument types, the new overload's
+  parameters), not stand-ins.
+- Spread the programs over distinct public entry points and overloads, one main idea per program. Do not write
+  several programs that only rename a type or change a literal.
+- Make the programs differ from each other: different inputs, different entry points, different features.
+
+Rules specific to this library:
+- Include the library with #include <nlohmann/json.hpp>. The public API is nlohmann::json (nlohmann::basic_json), nlohmann::ordered_json, json_pointer, json patch/merge_patch and the documented SAX and conversion interfaces. Never use the detail namespace.
+- It is a header-only library: nothing to link. Programs are compiled as C++17.
+- Print JSON values with dump() (compact) or dump(2). Keys of nlohmann::json objects print in sorted order, so output is deterministic; do not depend on insertion order except with ordered_json.
+
+[user]
+# Pull request #5926: json_view: check_utf8 skips well-formed runs with the parser's string scan
+
+## Description
+The `check_utf8` experiment from #5869, stacked on #5924. Suggested by @gregmarr in #5630 ([comment](https://github.com/nlohmann/json/pull/5630#discussion_r4309190167)).
+
+## What changes
+
+Strings written into an editable document (`set()`, `push_back()`, `insert()`, keys) are checked for valid UTF-8 by `check_utf8()`. Until now, that was byte by byte.
+
+- **Strings of 32 bytes or more** first skip their well-formed part with the parser's string scan, `scan_string_run<true>()`. It checks 16 bytes at a time with NEON, SSE2/SSSE3, or the portable code under `JSON_NO_SIMD`. The scan also stops at quotes, backslashes, and control characters; these are legal in an edited string and are skipped.
+- **Errors are reported by the same code as before.** If the scan stops at ill-formed UTF-8, the byte-wise check runs from that position, so `type_error.316` has the same message and the same byte index.
+- **Shorter strings keep the byte-wise check.** The vector scan costs more than it saves there: a first version that scanned every string was 14–16 % slower on 16-byte strings. The byte-wise loop is force-inlined with a constant start, so this path compiles to the code it was, plus one length test. An earlier revision called it out of line with a run-time start index; on x86 that cost about 2 extra mispredicted branches per call for short emoji strings (+5–7 %).
+
+## Numbers
+
+Measured with an A/B harness: both versions are linked into one binary and timed alternately. Each result is the median of the per-pair ratios, averaged over 4–6 code layouts. Pairs during which the other CPUs of the shared VPS were busy are discarded. On the VPS, an A/A check (the same tree twice) is within 1 % of 1.
+
+`set()`/`push_back()` of one string, time patch / base:
+
+| string | 16 B | 24 B | 32 B | 64 B | 1 KiB | 64 KiB |
+|---|---|---|---|---|---|---|
+| ASCII, x86-64 (GCC 13.3, Haswell) | 1.006 | 1.001 | 0.76 | 0.59 | 0.39 | 0.36 |
+| ~30 % 2-/3-byte UTF-8, x86-64 | 0.95 | 0.93 | 0.86 | 0.65 | 0.32 | 0.30 |
+| emoji, x86-64 | 0.97 | 0.91 | 0.76 | 0.57 | 0.30 | 0.29 |
+| ASCII, AArch64 (Apple clang) | 1.003 | — | 0.81 | 0.70 | 0.26 | — |
+| emoji, AArch64 | 0.997 | — | — | — | 0.25 | — |
+
+Instructions per call at 16 bytes: x86-64 (callgrind) 0.958 (ASCII), 0.967 (mixed), 0.985 (emoji); AArch64 0.9996 (ASCII), 0.9999 (emoji).
+
+**Other rows (`bench_edit`, json_view engine).** These edits write short strings and numbers.
+
+- Time patch / base on x86-64, over 6 layouts: 0.995–1.007. The one exception is rpc at 1.013; its layouts split both ways (0.97–1.08), and in the A/A check it alone varied by up to 2.2 %.
+- Instructions: rpc +0.04 %, status −0.06 %, twitter update +0.04 %, canada update +0.001 %.
+
+Earlier single-layout runs had shown canada patch 2.5 % slower. callgrind traced that to placement alone: the instructions per function and the machine code of the hot functions were identical, and only their addresses moved.
+
+## Breaking changes
+
+None. The exceptions and their messages are unchanged.
+
+## Tests
+
+- **New test** in `unit-json_view_edit.cpp`. It compares `check_utf8()` with the byte-wise check (the same message, or "ok") on these inputs:
+  - every special piece (quotes, controls, valid 2- to 4-byte sequences, lone continuation bytes, overlongs, surrogates, U+110000, truncated sequences) behind prefixes of length 0 to 64;
+  - a bad byte at every position of ASCII and mixed strings of length 0 to 64;
+  - 100,000 random strings.
+- **Paths covered:**
+  - AArch64 NEON, with ASan/UBSan;
+  - `JSON_NO_SIMD`;
+  - x86-64 under Rosetta: SSSE3, `-mssse3`, and baseline x86-64 with the runtime CPU check.
+- Full suite with ASan/UBSan: 175/175. clang-tidy 22 is clean on the new code.
+
+🤖 Generated with [Claude Code](https://claude.com/claude-code)
+
+## Commit message
+* json_view: check_utf8 skips well-formed runs with the parser's string scan
+
+Strings of 32 bytes or more that are written into an editable document
+are validated with scan_string_run(), which skips well-formed UTF-8 16
+bytes at a time; the byte-wise check runs only from where the scan found
+ill-formed UTF-8, to report the same type_error.316. Shorter strings
+keep the byte-wise check (inlined with a constant start, so that this
+path is the code it was), where the vector scan costs more than it
+saves.
+
+set()/push_back() of strings of 32 bytes or more take 0.29-0.76 of the
+time (x86-64 GCC, averaged over code layouts) and 0.25-0.80 (AArch64
+clang); shorter strings take 1.5-4 % fewer instructions; the json_view
+rows of bench_edit execute at most 0.04 % more instructions.
+
+Signed-off-by: Niels Lohmann <mail@nlohmann.me>
+
+* tests: avoid sign conversion in json_view_edit UTF-8 check
+
+Signed-off-by: Niels Lohmann <mail@nlohmann.me>
+
+* json_view: use while in check_utf8_bytewise
+
+Signed-off-by: Niels Lohmann <mail@nlohmann.me>
+
+---------
+
+Signed-off-by: Niels Lohmann <mail@nlohmann.me>
+
+## Discussion before merge
+- github-actions[bot]: ## 🔴 Amalgamation check failed! 🔴
+The source code has not been amalgamated and/or formatted correctly, or `BUILD.bazel`, `nlohmann_json.natvis`, or the macro_builder tables in `macro_scope.hpp` are out of date. `make amalgamate BUILD.bazel natvis` fixes all but the tables (see `tools/macro_builder/README.md`).
+
+📎 A ready-to-apply patch is attached to the [failed workflow run](https://github.com/nlohmann/json/actions/runs/40384854045) as the `amalgamation-patch` artifact. Download it, then apply it locally from the repository root with:
+
+```shell
+git apply amalgamation.patch
+```
+
+This does not require installing astyle yourself.
+- gregmarr: Why `for` instead of `while`?
+- gregmarr: Why not just put these two lines at the start of the existing `check_utf8` since `check_utf8_bytewise` is "always inline".
+- nlohmann: No reason: `i` is a parameter with no init-statement, so `while (i < n)` is the clearer form. Changed in 5462f70.
+
+---
+_Generated by [Claude Code](https://claude.ai/code)_
+- nlohmann: I read this as: fold the `n >= 32` dispatch into the byte-wise function itself. That would not work, because `check_utf8_scan` calls `check_utf8_bytewise` from the first ill-formed byte (`i != 0`). A dispatch inside it would have to be skipped on that call, or it would rescan the string. It would also lose the constant `i = 0` that lets the short-string path inline to the plain loop. So I left the split as it is. If you meant something else, tell me which two lines and I'll look again.
+
+---
+_Generated by [Claude Code](https://claude.ai/code)_
+- gregmarr: You are correct, that won't work because `check_utf8_scan` calls `check_utf8_bytewise` and thus it needs to be a separate function.
+
+## Headers the programs must include
+- Also write #include <nlohmann/json_view.hpp>. The json_view feature (json_document, json_view and their image loading and editing API) is declared only in this header; nlohmann/json.hpp does not include it, so without this line those names do not exist. Use only names you can see in the diff or the context below.
+
+## Changed functions (from changes.py)
+- nlohmann::detail::view::check_utf8(const char *, std::size_t) (private); reached from the public API through: nlohmann::basic_json_document::erase(view_type, string_view_t), nlohmann::basic_json_document::push_back(view_type, V &&), nlohmann::basic_json_document::set(view_type, V &&), nlohmann::basic_json_document::set(view_type, string_view_t, V &&), nlohmann::basic_json_document::erase(view_type, I), nlohmann::basic_json_document::insert(view_type, I, V &&), nlohmann::basic_json_document::set(view_type, I, V &&)
+- nlohmann::detail::view::check_utf8_scan(const unsigned char *, std::size_t) (private); reached from the public API through: nlohmann::basic_json_document::erase(view_type, string_view_t), nlohmann::basic_json_document::push_back(view_type, V &&), nlohmann::basic_json_document::set(view_type, V &&), nlohmann::basic_json_document::set(view_type, string_view_t, V &&), nlohmann::basic_json_document::erase(view_type, I), nlohmann::basic_json_document::insert(view_type, I, V &&), nlohmann::basic_json_document::set(view_type, I, V &&)
+- nlohmann::detail::view::check_utf8_bytewise(const unsigned char *, std::size_t, std::size_t) (private); reached from the public API through: nlohmann::basic_json_document::erase(view_type, string_view_t), nlohmann::basic_json_document::push_back(view_type, V &&), nlohmann::basic_json_document::set(view_type, V &&), nlohmann::basic_json_document::set(view_type, string_view_t, V &&), nlohmann::basic_json_document::erase(view_type, I), nlohmann::basic_json_document::insert(view_type, I, V &&), nlohmann::basic_json_document::set(view_type, I, V &&)
+
+## Diff of the library source (before -> after)
+```diff
+diff --git a/include/nlohmann/detail/view/edit.hpp b/include/nlohmann/detail/view/edit.hpp
+index f47bf5985..c542c1141 100644
+--- a/include/nlohmann/detail/view/edit.hpp
++++ b/include/nlohmann/detail/view/edit.hpp
+@@ -26,6 +26,7 @@
+ #include <nlohmann/detail/view/lookup.hpp>
+ #include <nlohmann/detail/view/macro_scope.hpp>
+ #include <nlohmann/detail/view/node.hpp>
++#include <nlohmann/detail/view/scan.hpp>
+ #include <nlohmann/detail/view/view_mode.hpp>
+ 
+ NLOHMANN_JSON_NAMESPACE_BEGIN
+@@ -46,10 +47,9 @@ struct first_true<false, Conditions...> : std::integral_constant < int, 1 + firs
+ /// (type_error.316 with the same message), so that an editable document
+ /// only holds valid UTF-8: the error is at the first byte that no
+ /// well-formed sequence can continue with (Unicode, Table 3-7).
+-inline void check_utf8(const char* s, std::size_t n)
++NLOHMANN_VIEW_ALWAYS_INLINE void check_utf8_bytewise(const unsigned char* p, std::size_t n, std::size_t i)
+ {
+-    const auto* const p = reinterpret_cast<const unsigned char*>(s); // NOLINT(cppcoreguidelines-pro-type-reinterpret-cast)
+-    for (std::size_t i = 0; i < n;)
++    while (i < n)
+     {
+         const unsigned char c = p[i];
+         if (c < 0x80)
+@@ -79,6 +79,43 @@ inline void check_utf8(const char* s, std::size_t n)
+     }
+ }
+ 
++/// The long-string path of check_utf8(): skips well-formed runs with the
++/// parser's string scan (which stops at a quote, a backslash, or a control
++/// character, all legal here, and at ill-formed UTF-8); the byte-wise check
++/// runs only from where the scan found ill-formed UTF-8, to report it.
++NLOHMANN_VIEW_NOINLINE inline void check_utf8_scan(const unsigned char* p, std::size_t n)
++{
++    const unsigned char* const e = p + n;
++    const unsigned char* q = p;
++    for (;;)
++    {
++        q = scan_string_run<true>(q, e);
++        if (q == e)
++        {
++            return;
++        }
++        if (*q >= 0x80)
++        {
++            check_utf8_bytewise(p, n, static_cast<std::size_t>(q - p));
++            return; // not reached: the scan stopped at ill-formed UTF-8
++        }
++        ++q; // a quote, backslash, or control character
++    }
++}
++
++inline void check_utf8(const char* s, std::size_t n)
++{
++    const auto* const p = reinterpret_cast<const unsigned char*>(s); // NOLINT(cppcoreguidelines-pro-type-reinterpret-cast)
++    if (NLOHMANN_VIEW_UNLIKELY(n >= 32))
++    {
++        check_utf8_scan(p, n);
++        return;
++    }
++    // short strings: the vector scan costs more than it saves; (the loop is
++    // inlined with a constant start, so this path is the plain byte-wise check)
++    check_utf8_bytewise(p, n, 0);
++}
++
+ /*!
+ @brief the edits of an editable basic_json_document
+```
+
+## Existing upstream tests that call the changed code (for style and API usage)
+// Upstream tests at the PR's parent commit 0115bb47b that use the changed code.
+// Names searched (test lines using each): erase (269), push_back (470), set (136), insert (293), check_utf8 (0), check_utf8_scan (0), check_utf8_bytewise (0)
+
+// ---- tests/src/unit-json_view_edit.cpp:664-704  (uses: erase, insert, push_back, set)
+TEST_CASE("json_view edits: arrays whose elements have no subtrees")
+{
+    // such an array is indexed directly while it is in its parsed layout; edits
+    // that replace elements by scalars keep it, others move it
+    json_editable_document d = json_editable_document::parse("[10,20,30,40]");
+    json expected = json::array({10, 20, 30, 40});
+    const auto check = [&]
+    {
+        CHECK(d.root().size() == expected.size());
+        for (std::size_t i = 0; i < expected.size(); ++i)
+        {
+            CHECK(d.root()[i].materialize() == expected[i]);
+            CHECK(d.root().at(i).materialize() == expected[i]);
+        }
+        CHECK(d.root()[expected.size()].is_discarded());
+        CHECK(d.root().back().materialize() == expected.back());
+        CHECK(d.root().dump() == expected.dump());
+    };
+    check();
+    d.set(d.root()[1], "x");
+    expected[1] = "x";
+    check();
+    d.set(d.root()[3], 2.5);
+    expected[3] = 2.5;
+    check();
+    d.set(d.root()[2], json::array({1, 2}));
+    expected[2] = json::array({1, 2});
+    check();
+    d.push_back(d.root(), 50);
+    expected.push_back(50);
+    check();
+    d.insert(d.root(), 0, true);
+    expected.insert(expected.begin(), true);
+    check();
+    d.erase(d.root(), 1);
+    expected.erase(expected.begin() + 1);
+    check();
+    d.set(d.root()[2], nullptr);
+    expected[2] = nullptr;
+    check();
+}
+
+// ---- tests/src/unit-json_view_edit.cpp:907-923  (uses: erase, insert, push_back, set)
+    SECTION("objects in moved arrays and in new values")
+    {
+        json_editable_document d = json_editable_document::parse(R"([{"a": 1, "a": 2}, {"a": 3, "b": 0, "a": 4}])");
+        check_first_wins(d.root()[0], 1);
+        check_first_wins(d.root()[1], 3);
+        d.insert(d.root(), 0, json::parse(R"({"a": 0})"));
+        d.push_back(d.root(), json::parse(R"({"a": 5, "a": 6})")); // (a basic_json value has one member)
+        check_first_wins(d.root()[1], 1);
+        check_first_wins(d.root()[2], 3);
+        CHECK(d.root()[3]["a"].get<int>() == 6);
+        d.set(d.root()[1], "a", 8);
+        check_first_wins(d.root()[1], 8);
+        CHECK(d.root()[1].dump() == R"({"a":8})");
+        d.erase(d.root(), 0);
+        check_first_wins(d.root()[1], 3);
+        CHECK(d.root().dump() == R"([{"a":8},{"a":3,"b":0,"a":4},{"a":6}])");
+    }
+
+// ---- tests/src/unit-json_view_edit_values.cpp:158-177  (uses: erase, insert, push_back, set)
+    SECTION("views keep referring to their value")
+    {
+        json_editable_document d = json_editable_document::parse(R"({"a": [10, 20, 30], "b": {"c": "text"}})");
+        const json_editable_view a = d.root()["a"];
+        const json_editable_view twenty = a[1];
+        const json_editable_view c = d.root()["b"]["c"];
+        d.insert(a, 0, 5);
+        d.push_back(a, 40);
+        CHECK(twenty.get<int>() == 20);
+        CHECK(a[2].get<int>() == 20);
+        d.erase(a, 2);
+        CHECK(twenty.get<int>() == 20); // an erased value keeps its last value
+        d.set(c, 7);
+        CHECK(c.get<int>() == 7); // a held view sees an assignment
+        d.set(d.root()["b"], json::array({1, 2}));
+        CHECK(d.root()["b"].dump() == "[1,2]");
+        CHECK(d.root().dump() == R"({"a":[5,10,30,40],"b":[1,2]})");
+        CHECK(d.root()["a"][0].source_offset() == static_cast<std::size_t>(-1)); // a new value
+        CHECK(d.root()["a"][1].source_offset() != static_cast<std::size_t>(-1));
+    }
+
+// ---- tests/src/unit-json_view_image.cpp:430-473  (uses: erase, insert, push_back, set)
+    SECTION("every kind of edit")
+    {
+        ordered_json_editable_document d = ordered_json_editable_document::parse(text);
+        d.set(d.root()["name"], "a new \"name\"");      // string in the edit arena
+        d.set(d.root()["n"], -17);                     // negative integer
+        d.set(d.root(), "p", 5);                       // non-negative number_integer
+        d.set(d.root(), "u", 18446744073709551615u);   // unsigned
+        d.set(d.root()["f"], 0.1);                     // float token
+        d.set(d.root(), "nan", std::numeric_limits<double>::quiet_NaN());
+        d.set(d.root(), "inf", -std::numeric_limits<double>::infinity());
+        d.push_back(d.root()["list"], "pushed");       // moved array
+        d.insert(d.root()["list"], 0, ordered_json::object({{"new", {1, 2}}}));
+        d.erase(d.root()["list"], 2);
+        d.erase(d.root(), "s");
+        d.set(d.root()["obj"], "c", ordered_json::array({1, "two", 3.5, nullptr, false})); // new object member with a new array
+        d.set(d.root(), "copy", d.root()["obj"]);     // a copy of a subtree
+        d.set(d.root(), "key \xc3\xa9", true);        // a key in the edit arena
+
+        const std::vector<std::uint8_t> image = d.save();
+        const ordered_json expected = ordered_json::parse(d.root().dump());
+        for (const image_check check :
+                {
+                    image_check::full, image_check::bounds, image_check::none
+                })
+        {
+            const ordered_json_document l = ordered_json_document::load(image, check);
+            CHECK(l.root().dump() == d.root().dump());
+            CHECK(l.root().materialize() == expected);
+            CHECK(l.root()["nan"].is_null());
+            CHECK(l.root()["inf"].is_null());
+            CHECK(l.root()["p"].is_number_integer());
+            CHECK(l.root()["p"].get<int>() == 5);
+            CHECK(l.root()["f"].get<double>() == 0.1);
+            CHECK(l.root()["u"].get<std::uint64_t>() == 18446744073709551615u);
+        }
+        // the node index is in document order again: an image of the loaded
+        // document is the same image
+        CHECK(ordered_json_document::load(image).save() == image);
+        // number tokens of edits follow the source; the text is the source's
+        // prefix
+        const ordered_json_document l = ordered_json_document::load(image);
+        REQUIRE(l.source().size() > text.size());
+        CHECK(std::string(l.source().data(), text.size()) == text); // NOLINT(bugprone-suspicious-stringview-data-usage): the size is given and checked above
+    }
+
+// ---- tests/src/unit-json_view_image.cpp:571-580  (uses: erase, push_back, set)
+        SECTION("erase")
+        {
+            json_editable_document d = json_editable_document::parse(nested);
+            d.push_back(d.root()["a"], 6);
+            d.erase(d.root()["a"], 0);
+            d.erase(d.root()["a"], 1);
+            d.set(d.root()["a"][0], 1);
+            d.erase(d.root()["b"], "d");
+            check_image(d);
+        }
+
+# Task
+Write 20 test programs for this pull request. Return JSON with a "tests" array; each item has "name" (short snake_case), "intent" (one sentence: what behavior it probes) and "code" (the complete C++ program).

@@ -1,0 +1,194 @@
+{
+  "target": "nlohmann-json",
+  "pr": 5836,
+  "model": "gemini-3.5-flash-lite",
+  "prompt_sha256": "7eff7963e6525d5505fcd7ecf5b27c8cbae20779af49de4985e9cd3c778a5819",
+  "n_requested": 20,
+  "dropped": 0,
+  "usage": {
+    "promptTokenCount": 19236,
+    "candidatesTokenCount": 3904,
+    "totalTokenCount": 23140,
+    "promptTokensDetails": [
+      {
+        "modality": "TEXT",
+        "tokenCount": 19236
+      }
+    ],
+    "serviceTier": "standard"
+  },
+  "tests": [
+    {
+      "file": "gen_01.cpp",
+      "name": "json_pointer_fast_array_index",
+      "intent": "Probe array-index parsing optimization with fast digit loop for values under 18 digits.",
+      "round": 0
+    },
+    {
+      "file": "gen_02.cpp",
+      "name": "json_pointer_equals_string",
+      "intent": "Probe direct string comparison with json_pointer via equals_string without splitting.",
+      "round": 0
+    },
+    {
+      "file": "gen_03.cpp",
+      "name": "json_pointer_to_string_buffer",
+      "intent": "Probe optimized single-buffer to_string formatting with escaped tokens.",
+      "round": 0
+    },
+    {
+      "file": "gen_04.cpp",
+      "name": "json_pointer_operator_slash_reserve",
+      "intent": "Probe operator/ overloads for json_pointer concatenation and size_t append using reserve.",
+      "round": 0
+    },
+    {
+      "file": "gen_05.cpp",
+      "name": "json_pointer_parent_pointer",
+      "intent": "Probe parent_pointer range-based construction from begin() and end() - 1.",
+      "round": 0
+    },
+    {
+      "file": "gen_06.cpp",
+      "name": "json_pointer_lookup_accessors",
+      "intent": "Probe direct container access in get_checked, contains, and get_checked_or_null.",
+      "round": 0
+    },
+    {
+      "file": "gen_07.cpp",
+      "name": "json_pointer_non_const_get_unchecked",
+      "intent": "Probe non-const get_unchecked and operator[] avoiding key copies.",
+      "round": 0
+    },
+    {
+      "file": "gen_08.cpp",
+      "name": "json_pointer_unflatten_optimized",
+      "intent": "Probe linear-time unflatten with open-addressing table and parent links.",
+      "round": 0
+    },
+    {
+      "file": "gen_09.cpp",
+      "name": "json_patch_operations_speedup",
+      "intent": "Probe optimized patch execution avoiding redundant copies for add, remove, move, and copy.",
+      "round": 0
+    },
+    {
+      "file": "gen_10.cpp",
+      "name": "string_escape_into",
+      "intent": "Probe detail::escape_into appending escaped strings into existing buffers.",
+      "round": 0,
+      "superseded_by": "gen_26.cpp"
+    },
+    {
+      "file": "gen_11.cpp",
+      "name": "string_escape_scan",
+      "intent": "Probe detail::escape scanning once for both special characters '~' and '/' without extra copies.",
+      "round": 0
+    },
+    {
+      "file": "gen_12.cpp",
+      "name": "string_unescape_move",
+      "intent": "Probe detail::unescape moving its result string instead of copying.",
+      "round": 0
+    },
+    {
+      "file": "gen_13.cpp",
+      "name": "json_pointer_split_validation",
+      "intent": "Probe pointer token splitting skipping ~ validation/unescaping when no ~ is present.",
+      "round": 0
+    },
+    {
+      "file": "gen_14.cpp",
+      "name": "json_pointer_equals_string_errors",
+      "intent": "Probe error throwing in equals_string for missing slashes and invalid escapes.",
+      "round": 0
+    },
+    {
+      "file": "gen_15.cpp",
+      "name": "json_patch_add_missing_ancestor",
+      "intent": "Probe patch add operation throwing via at() when parent or ancestors do not exist.",
+      "round": 0
+    },
+    {
+      "file": "gen_16.cpp",
+      "name": "json_patch_move_root_edge_case",
+      "intent": "Probe move operation edge case where from_ptr is empty root.",
+      "round": 0
+    },
+    {
+      "file": "gen_17.cpp",
+      "name": "json_patch_copy_validation",
+      "intent": "Probe copy operation validating that from location exists using at().",
+      "round": 0
+    },
+    {
+      "file": "gen_18.cpp",
+      "name": "json_pointer_array_index_overflow",
+      "intent": "Probe array index parsing with numbers exceeding size_type limits or malformed strings.",
+      "round": 0
+    },
+    {
+      "file": "gen_19.cpp",
+      "name": "json_pointer_empty_and_root",
+      "intent": "Probe empty json_pointer handling and root access behaviors.",
+      "round": 0
+    },
+    {
+      "file": "gen_20.cpp",
+      "name": "json_pointer_streaming_operator",
+      "intent": "Probe ostream operator<< for json_pointer formatting.",
+      "round": 0
+    },
+    {
+      "file": "gen_21.cpp",
+      "name": "test_throw_no_parent",
+      "intent": "Trigger throw_no_parent by calling pop_back or top on an empty json_pointer.",
+      "round": 1
+    },
+    {
+      "file": "gen_22.cpp",
+      "name": "test_array_index_non_digit_break",
+      "intent": "Exercise parse_array_index with a string containing a non-digit character early in the fast digit loop.",
+      "round": 1
+    },
+    {
+      "file": "gen_23.cpp",
+      "name": "test_equals_string_empty_and_mismatch",
+      "intent": "Exercise equals_string with empty pointers and mismatching token comparisons.",
+      "round": 1
+    },
+    {
+      "file": "gen_24.cpp",
+      "name": "test_unflatten_complex",
+      "intent": "Exercise unflatten on a flattened object with nested objects to instantiate the prefix_tree and grow/get_and_create mechanisms.",
+      "round": 1
+    },
+    {
+      "file": "gen_25.cpp",
+      "name": "test_patch_root_and_append",
+      "intent": "Exercise patch operation adding to root (ptr empty) and appending to array with '-' via JSON patch.",
+      "round": 1
+    },
+    {
+      "file": "gen_26.cpp",
+      "name": "string_escape_into_fixed",
+      "intent": "Probe detail::escape_into appending escaped strings into existing buffers.",
+      "round": 2,
+      "fixes": "gen_10.cpp",
+      "kind": "detect",
+      "superseded_by": "gen_27.cpp"
+    },
+    {
+      "file": "gen_27.cpp",
+      "name": "string_escape_into_fixed_fixed",
+      "intent": "Probe detail::escape_into appending escaped strings into existing buffers.",
+      "round": 3,
+      "fixes": "gen_26.cpp",
+      "kind": "detect"
+    }
+  ],
+  "fix": {
+    "rounds_max": 2,
+    "model": "gemini-3.5-flash-lite"
+  }
+}

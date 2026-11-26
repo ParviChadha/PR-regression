@@ -1,0 +1,469 @@
+[system]
+You write test programs that probe a C++ library for behavioral changes made by one pull request.
+Each program is compiled and run twice, once against the library before the change and once after, and the two
+outputs are compared. Your job is to produce programs whose output reveals whether the change altered behavior,
+including side effects the author did not intend.
+
+Rules for every program:
+- It is standalone: one file with its own int main(), compiled as C++17, printing results to stdout.
+- Use only the library's documented public API. Never include internal headers or use detail/impl namespaces,
+  private members or undocumented macros.
+- Do not judge results (no assert, no expected-value comparisons): just print what the library returns. Print
+  enough to make differences visible, one fact per line.
+- Output must be deterministic. Never print pointers or addresses, uninitialized data, the order of
+  hash-based containers, timings, thread ids, random values, file paths or environment data. Print floating point
+  values with an explicit precision. No input, files, network, threads, clocks or randomness.
+- Wrap calls that may throw in try/catch and print the exception's type and message, so an exception is an
+  observable result. Do not crash on purpose.
+- Aim at the code the diff changes. Prefer calls that compile against both the old and the new library; one or two
+  programs may use an API the PR adds. Cover ordinary inputs and edge cases (empty, minimum and maximum values,
+  boundaries, special values, nesting, unusual types) and also neighbouring behavior the change could disturb.
+- When the diff changes which types or inputs an API accepts or rejects (constraints, overloads, traits,
+  conversions), test it with the detection idiom (std::void_t or requires) and `if constexpr`, so the program
+  compiles against both versions, prints whether the expression is well-formed, and exercises it when it is.
+  Accepting an input is not enough: also use it through every entry point that should follow (const and
+  non-const, read, write, insert, erase, lookup, nested use), because a change that admits new inputs can leave
+  later code unable to handle them.
+- If the changed code is internal (a detail, impl or internal namespace, a trait, a helper), do not name it in the
+  program. Reach it through the public API that depends on it, using detection (as above) where needed.
+- Use the exact types and values the diff is about (the new trait's argument types, the new overload's
+  parameters), not stand-ins.
+- Spread the programs over distinct public entry points and overloads, one main idea per program. Do not write
+  several programs that only rename a type or change a literal.
+- Make the programs differ from each other: different inputs, different entry points, different features.
+
+Rules specific to this library:
+- Include the library with #include <nlohmann/json.hpp>. The public API is nlohmann::json (nlohmann::basic_json), nlohmann::ordered_json, json_pointer, json patch/merge_patch and the documented SAX and conversion interfaces. Never use the detail namespace.
+- It is a header-only library: nothing to link. Programs are compiled as C++17.
+- Print JSON values with dump() (compact) or dump(2). Keys of nlohmann::json objects print in sorted order, so output is deterministic; do not depend on insertion order except with ordered_json.
+
+[user]
+# Pull request #5902: from_json: number-first dispatch for arithmetic types, loop for std::array
+
+## Description
+Follow-up to #5901 for #5891: it adopts the `get_number_value()` shape of `from_json(ArithmeticType&)` that #5901 left out because it made `GetArray<std::array<int, 1000>>` 2.4x slower. This PR finds the cause and fixes it.
+
+## Why the shape mattered
+
+- **vector/deque speedup.** `from_json(int&)` is inlined into every per-element loop. With one switch over four cases (boolean included), clang places the `boolean` test inside the hot compare chain. With `get_number_value()` plus a cold boolean path, the three number types (`value_t` 5–7) form the main path and the boolean moves behind a single `type <= 4` branch. This makes the vector loop 31% faster and the deque loop 12% faster.
+- **std::array slowdown.** `get<std::array<T, N>>()` always takes the `identity_tag` overload (the `has_non_default_from_json` path), so it is never the `std::array<T, N>&` loop. That overload is the pack expansion `{ { j.at(Idx).template get<T>()... } }`. For N = 1000, clang emits one straight-line function of about 28,000 instructions: 1,000 inlined copies of the `at()` bounds and type checks plus the conversion. Its speed depends on how that ~110 KB body is inlined and laid out, not on the conversion itself. The pinned-alignment base build alone moves it from 657 to 957 ns, so any change to `from_json(int&)` shows up there 1,000 times.
+
+## Change
+
+- `from_json(ArithmeticType&)` uses `get_number_value()`, then accepts a boolean on a cold path. `get_arithmetic_value()` still rejects booleans.
+- New `from_json_std_array()`: it checks the size once and reads the inner array directly instead of calling `at(i)` per element. Both `std::array` paths use it:
+  - `from_json(j, std::array<T, N>&)` (`get_to`), for all `T`;
+  - `from_json(j, identity_tag<std::array<T, N>>)` (`get`), when `T` is trivial (`std::is_trivial`, or the two `is_trivially_*` traits in C++26, as in `binary_writer`). A trivial type can't tell default construction plus assignment from construction in place. Non-trivial and non-default-constructible element types keep the pack expansion.
+- Codegen with Apple clang 21 at `-O3` on a probe TU: `from_json(identity_tag<std::array<int, 1000>>)` drops from about 28,000 instructions (1,000 `throw_array_index_out_of_range` and 986 `throw_type_must_be` call sites) to 49.
+
+Behaviour is unchanged. Elements are still converted in order, so a type error in an earlier element is still reported before a missing element. A short array still throws `out_of_range.401` for the first missing index (via `j.at(size)`), and longer arrays and booleans convert as before. New tests in `unit-constructor1.cpp` cover these cases and also pass against the #5901 head.
+
+## Benchmarks
+
+Apple M-series, Apple clang 21, `-O3 -flto`, Google Benchmark 1.10.0, `tests/benchmarks`. Base is the #5901 head (0e5a906cd). Each binary ran 4 rounds of 5 repetitions with random interleaving, and the two binaries alternated in random order per round. Values are medians of 20 runs, relative to base.
+
+| benchmark | base | `get_number_value` only | `std::array` loop only | this PR | this PR, alignment-pinned¹ |
+|---|---:|---:|---:|---:|---:|
+| GetArray<std::vector<int>> | 1005 ns | −31.5% | −0.1% | **−31.5%** | **−31.7%** |
+| GetArray<std::deque<int>> | 1355 ns | −12.0% | +0.1% | **−11.6%** | **−12.2%** |
+| GetArray<std::array<int, 1000>> | 657 ns | **+138.6%** | +0.2% | −0.2% | **−31.7%** |
+| GetArray<std::set<int>> | 41.9 µs | +1.0% | +0.8% | +1.3% | +1.3%² |
+| GetVectorInt/signed_ints | 3.50 ms | | | +1.4% | +0.4% |
+| GetVectorDouble/floats | 0.69 ms | | | +1.7% | +0.5% |
+| GetMap/citm_catalog | 2.52 ms | | | +1.9% | +0.5% |
+| ToJsonStrings/copy | 5.95 ms | | | +1.2% | +0.4% |
+| ToJsonStrings/move | 3.26 ms | | | +2.1% | +0.4% |
+| ParseString/canada | 5.61 ms | | | +1.7% | +1.1%² |
+| ParseString/citm_catalog | 2.01 ms | | | +0.7% | +1.2%² |
+| ParseString/twitter | 1.10 ms | | | +3.5% | +0.4% |
+| ParseString/floats | 31.9 ms | | | +3.6% | +0.1% |
+| ParseString/jeopardy | 133 ms | | | +2.5% |
+[... truncated, 1266 more characters]
+
+## Commit message
+* from_json: number-first dispatch for arithmetic types, loop for std::array (#5891)
+
+from_json(ArithmeticType&) now reads numbers through get_number_value() and
+handles a boolean on a cold path, which puts the three number types first in
+the per-element type dispatch.
+
+get<std::array<T, N>>() always took the identity_tag overload, a pack
+expansion of N calls j.at(i).get<T>() that clang unrolls into straight-line
+code (about 28,000 instructions for N = 1000), so its speed depended on
+inlining decisions in that body. For trivial element types, which cannot tell
+default construction plus assignment from construction in place, it now fills
+a std::array in a loop. That loop, shared with get_to(), checks the size once
+and reads the inner array directly; a short array still converts the elements
+it has and then throws the out_of_range error at() would throw.
+
+Signed-off-by: Niels Lohmann <mail@nlohmann.me>
+
+* Skip the get_to result check without exceptions
+
+Without exceptions, the get_to calls in CHECK_THROWS_WITH_AS do not run,
+so the array keeps its initial values (ci_test_noexceptions).
+
+Signed-off-by: Niels Lohmann <mail@nlohmann.me>
+
+* Make is_trivial_element a struct so astyle does not indent it
+
+Signed-off-by: Niels Lohmann <mail@nlohmann.me>
+
+* Expect the element path in the std::array type-error tests with JSON_DIAGNOSTICS
+
+Signed-off-by: Niels Lohmann <mail@nlohmann.me>
+
+* Shorten from_json_inplace_array so astyle aligns its parameters
+
+The opening parenthesis of the previous name sat in column 41, beyond
+astyle's default --max-continuation-indent of 40, so the continuation
+lines fell back to a plain double indent.
+
+Signed-off-by: Niels Lohmann <mail@nlohmann.me>
+
+* Use the compact template<...> style for the new from_json overloads
+
+Signed-off-by: Niels Lohmann <mail@nlohmann.me>
+
+---------
+
+Signed-off-by: Niels Lohmann <mail@nlohmann.me>
+
+## Discussion before merge
+- gregmarr: Can this astyle be fixed?  Don't see an obvious trigger.
+- nlohmann: Yes. The trigger is our `--indent-preproc-block` option: astyle indents everything inside an `#ifdef` block at namespace level, so two aliases inside `#ifdef`/`#else` always get pushed in. `is_trivial_element` is now a struct, and the `#ifdef` only picks its base (`conjunction<std::is_trivially_copyable<T>, std::is_trivially_default_constructible<T>>` or `std::is_trivial<T>`), which astyle leaves at column 0. Fixed in `469e29334`.
+
+*(Written by Claude Code on behalf of @nlohmann.)*
+- gregmarr: It was actually the next function that I was marking.
+`template < typename BasicJsonType, typename T, std::size_t N >`
+- nlohmann: Right, I misread which function you meant. The trigger is astyle's default `--max-continuation-indent=40`: the `(` of `std::array<T, N> from_json_inplace_array(` was in column 41, so astyle falls back to a plain double indent for the continuation lines instead of aligning them. Fixed in `cf4e0164c` by renaming the function to `from_json_make_array`, which keeps the parenthesis within the limit, so both overloads now align normally.
+
+*(Written by Claude Code on behalf of @nlohmann.)*
+- gregmarr: but the template line is still spaced out, does it need a manual fix now?
+- nlohmann: Yes, this needed a manual fix: astyle accepts both `template<...>` and `template < ... >` and does not add the spaces itself. I had copied the spaced form from the existing `from_json_inplace_array_impl` above. The two new overloads now use the compact form like the rest of the file, in `8085a8f5e`. I left the pre-existing spaced lines untouched to keep the diff small.
+
+*(Written by Claude Code on behalf of @nlohmann.)*
+
+## Changed functions (from changes.py)
+- nlohmann::detail::from_json(const BasicJsonType &, ArithmeticType &) (private); reached from the public API through: nlohmann::adl_serializer::from_json(BasicJsonType &&), nlohmann::adl_serializer::from_json(BasicJsonType &&, TargetType &)
+- nlohmann::detail::from_json_array_impl(const BasicJsonType &, std::array<T, N> &, priority_tag<2>) (private); reached from the public API through: nlohmann::adl_serializer::from_json(BasicJsonType &&), nlohmann::adl_serializer::from_json(BasicJsonType &&, TargetType &)
+- nlohmann::detail::from_json(const BasicJsonType &, identity_tag<std::array<T, N>>) (private); reached from the public API through: nlohmann::adl_serializer::from_json(BasicJsonType &&), nlohmann::adl_serializer::from_json(BasicJsonType &&, TargetType &)
+- nlohmann::detail::from_json_std_array(const BasicJsonType &, std::array<T, N> &) (private); reached from the public API through: nlohmann::adl_serializer::from_json(BasicJsonType &&), nlohmann::adl_serializer::from_json(BasicJsonType &&, TargetType &)
+- nlohmann::detail::from_json_make_array(const BasicJsonType &, identity_tag<std::array<T, N>>, std::true_type) (private); reached from the public API through: nlohmann::adl_serializer::from_json(BasicJsonType &&), nlohmann::adl_serializer::from_json(BasicJsonType &&, TargetType &)
+- nlohmann::detail::is_trivial_element (private); reached from the public API through: nlohmann::adl_serializer::from_json(BasicJsonType &&), nlohmann::adl_serializer::from_json(BasicJsonType &&, TargetType &)
+- nlohmann::detail::from_json_make_array(const BasicJsonType &, identity_tag<std::array<T, N>>, std::false_type) (private); reached from the public API through: nlohmann::adl_serializer::from_json(BasicJsonType &&), nlohmann::adl_serializer::from_json(BasicJsonType &&, TargetType &)
+
+## Diff of the library source (before -> after)
+```diff
+diff --git a/include/nlohmann/detail/conversions/from_json.hpp b/include/nlohmann/detail/conversions/from_json.hpp
+index fd2361d81..51f26706c 100644
+--- a/include/nlohmann/detail/conversions/from_json.hpp
++++ b/include/nlohmann/detail/conversions/from_json.hpp
+@@ -8,7 +8,7 @@
+ 
+ #pragma once
+ 
+-#include <algorithm> // transform
++#include <algorithm> // min, transform
+ #include <array> // array
+ #include <forward_list> // forward_list
+ #include <iterator> // inserter, front_inserter, end
+@@ -256,15 +256,30 @@ inline void from_json_array_impl(const BasicJsonType& j, typename BasicJsonType:
+     arr = *j.template get_ptr<const typename BasicJsonType::array_t*>();
+ }
+ 
++// fill a std::array from the JSON array j: the size is checked once and the
++// elements are read in order, so a short array converts the elements it has and
++// then throws the out_of_range error at() would throw for the first missing one
++template<typename BasicJsonType, typename T, std::size_t N>
++void from_json_std_array(const BasicJsonType& j, std::array<T, N>& arr)
++{
++    const auto& inner_array = *j.template get_ptr<const typename BasicJsonType::array_t*>();
++    const std::size_t size = (std::min)(N, inner_array.size());
++    for (std::size_t i = 0; i < size; ++i)
++    {
++        arr[i] = inner_array[i].template get<T>();
++    }
++    if (JSON_HEDLEY_UNLIKELY(size < N))
++    {
++        static_cast<void>(j.at(size));
++    }
++}
++
+ template<typename BasicJsonType, typename T, std::size_t N>
+ auto from_json_array_impl(const BasicJsonType& j, std::array<T, N>& arr,
+                           priority_tag<2> /*unused*/)
+ -> decltype(j.template get<T>(), void())
+ {
+-    for (std::size_t i = 0; i < N; ++i)
+-    {
+-        arr[i] = j.at(i).template get<T>();
+-    }
++    from_json_std_array(j, arr);
+ }
+ 
+ // reserve() is called through this pair (used for arrays and objects alike)
+@@ -347,6 +362,37 @@ std::array<T, sizeof...(Idx)> from_json_inplace_array_impl(const BasicJsonType&
+     return { { j.at(Idx).template get<T>()... } };
+ }
+ 
++// std::is_trivial is deprecated in C++26 (see binary_writer::to_char_type);
++// a struct rather than an alias, as astyle indents an #ifdef block of aliases
++template<typename T>
++struct is_trivial_element
++#ifdef JSON_HAS_CPP_26
++    : conjunction<std::is_trivially_copyable<T>, std::is_trivially_default_constructible<T>>
++#else
++    : std::is_trivial<T>
++#endif
++{};
++
++// the element type may not be default constructible: construct every element
++// in place (a pack expansion that is unrolled N times)
++template<typename BasicJsonType, typename T, std::size_t N>
++std::array<T, N> from_json_make_array(const BasicJsonType& j, identity_tag<std::array<T, N>> tag,
++                                      std::false_type /*is_trivial_element*/)
++{
++    return from_json_inplace_array_impl(j, tag, make_index_sequence<N> {});
++}
++
++// a trivial element type cannot tell default construction plus assignment from
++// construction in place, so use a loop instead of unrolling N conversions
++template<typename BasicJsonType, typename T, std::size_t N>
++std::array<T, N> from_json_make_array(const BasicJsonType& j, identity_tag<std::array<T, N>> /*unused*/,
++                                      std::true_type /*is_trivial_element*/)
++{
++    std::array<T, N> arr; // NOLINT(cppcoreguidelines-pro-type-member-init,hicpp-member-init): every element is assigned or an exception is thrown
++    from_json_std_array(j, arr);
++    return arr;
++}
++
+ template < typename BasicJsonType, typename T, std::size_t N >
+ auto from_json(const BasicJsonType& j, identity_tag<std::array<T, N>> tag)
+ -> decltype(from_json_inplace_array_impl(j, tag, make_index_sequence<N> {}))
+@@ -356,7 +402,7 @@ auto from_json(const BasicJsonType& j, identity_tag<std::array<T, N>> tag)
+         throw_type_must_be("array", j);
+     }
+ 
+-    return from_json_inplace_array_impl(j, tag, make_index_sequence<N> {});
++    return from_json_make_array(j, tag, is_trivial_element<T> {});
+ }
+ 
+ template<typename BasicJsonType>
+@@ -437,46 +483,17 @@ template < typename BasicJsonType, typename ArithmeticType,
+                int > = 0 >
+ inline void from_json(const BasicJsonType& j, ArithmeticType& val)
+ {
+-    // the number cases repeat get_number_value() on purpose: calling it here
+-    // changes the inlining of get<T>() in the std::array conversion, which then
+-    // runs 2.4x slower (GetArray benchmark, #5891); unlike get_arithmetic_value(),
+-    // a boolean is accepted
+-    switch (static_cast<value_t>(j))
++    if (get_number_value(j, val))
+     {
+-        case value_t::number_unsigned:
+-        {
+-            // never null: a basic_json whose number_unsigned_t is number_integer_t
+-            // stores no number_unsigned values (#2573)
+-            const auto* ptr = j.template get_ptr<const typename BasicJsonType::number_unsigned_t*>();
+-            JSON_ASSERT(ptr != nullptr);
+-            val = static_cast<ArithmeticType>(*ptr);
+-            break;
+-        }
+-        case value_t::number_integer:
+-        {
+-            val = static_cast<ArithmeticType>(*j.template get_ptr<const typename BasicJsonType::number_integer_t*>());
+-            break;
+-        }
+-        case value_t::number_float:
+-        {
+-            val = static_cast<ArithmeticType>(*j.template get_ptr<const typename BasicJsonType::number_float_t*>());
+-            break;
+-        }
+-        case value_t::boolean:
+-        {
+-            val = static_cast<ArithmeticType>(*j.template get_ptr<const typename BasicJsonType::boolean_t*>());
+-            break;
+-        }
++        return;
++    }
+ 
+-        case value_t::null:
+-        case value_t::object:
+-        case value_t::array:
+-        case value_t::string:
+-        case value_t::binary:
+-        case value_t::discarded:
+-        default:
+-            throw_type_must_be("number", j);
++    // unlike get_arithmetic_value(), a boolean is accepted here
++    if (JSON_HEDLEY_UNLIKELY(!j.is_boolean()))
++    {
++        throw_type_must_be("number", j);
+     }
++    val = static_cast<ArithmeticType>(*j.template get_ptr<const typename BasicJsonType::boolean_t*>());
+ }
+ 
+ template<typename BasicJsonType, typename Type>
+```
+
+# Programs to repair
+
+## gen_21.cpp (detect)
+Intent: Explicitly instantiate is_trivial_element with a trivial type and evaluate its value_type base or bool conversion to cover is_trivial_element definition.
+DETECTION REWRITE. The program fails to compile against the OLD library because the API or type it uses is not accepted there; it compiles against the NEW one. Rewrite it so it compiles against both. Check whether the expression is well-formed with the detection idiom (std::void_t or requires), print that result, and use the expression ONLY inside a function template that depends on the types involved, guarded by `if constexpr`. This matters: `if constexpr` in a plain function such as main() does NOT discard the other branch, so the old library would still fail to compile. Call that function template from main. When the expression is supported, exercise it fully (print every result, wrap throwing calls in try/catch). Keep the same types and inputs. Skeleton:
+```cpp
+template <class J, class K, class = void> struct can_use : std::false_type {};
+template <class J, class K>
+struct can_use<J, K, std::void_t<decltype(std::declval<J&>()[std::declval<K>()])>> : std::true_type {};
+template <class J, class K> void probe(J& j, K&& k) {
+    std::cout << "supported: " << can_use<J, K>::value << "\n";
+    if constexpr (can_use<J, K>::value) { /* use j[k] here, print results */ }
+}
+```
+(Replace the decltype expression with the one under test.)
+Compiler errors:
+```
+gen_21.cpp:7:55: error: ‘is_trivial_element’ is not a member of ‘nlohmann::json_abi_v3_12_0::detail’
+gen_21.cpp:7:74: error: expected primary-expression before ‘int’
+```
+Source:
+```cpp
+#include <nlohmann/json.hpp>
+#include <iostream>
+
+int main() {
+    constexpr bool is_trivial_int = nlohmann::detail::is_trivial_element<int>::value;
+    std::cout << "is_trivial_element<int>::value: " << (is_trivial_int ? "true" : "false") << std::endl;
+    return 0;
+}
+```
+
+## gen_22.cpp (detect)
+Intent: Explicitly instantiate is_trivial_element with a non-trivial type to cover the non-trivial instantiation path.
+DETECTION REWRITE. The program fails to compile against the OLD library because the API or type it uses is not accepted there; it compiles against the NEW one. Rewrite it so it compiles against both. Check whether the expression is well-formed with the detection idiom (std::void_t or requires), print that result, and use the expression ONLY inside a function template that depends on the types involved, guarded by `if constexpr`. This matters: `if constexpr` in a plain function such as main() does NOT discard the other branch, so the old library would still fail to compile. Call that function template from main. When the expression is supported, exercise it fully (print every result, wrap throwing calls in try/catch). Keep the same types and inputs. Skeleton:
+```cpp
+template <class J, class K, class = void> struct can_use : std::false_type {};
+template <class J, class K>
+struct can_use<J, K, std::void_t<decltype(std::declval<J&>()[std::declval<K>()])>> : std::true_type {};
+template <class J, class K> void probe(J& j, K&& k) {
+    std::cout << "supported: " << can_use<J, K>::value << "\n";
+    if constexpr (can_use<J, K>::value) { /* use j[k] here, print results */ }
+}
+```
+(Replace the decltype expression with the one under test.)
+Compiler errors:
+```
+gen_22.cpp:14:62: error: ‘is_trivial_element’ is not a member of ‘nlohmann::json_abi_v3_12_0::detail’
+gen_22.cpp:14:91: error: expected primary-expression before ‘>’ token
+gen_22.cpp:14:94: error: ‘::value’ has not been declared
+```
+Source:
+```cpp
+#include <nlohmann/json.hpp>
+#include <iostream>
+
+struct NonTrivial {
+    NonTrivial() : x(0) {}
+    NonTrivial(const NonTrivial& other) : x(other.x) {}
+    ~NonTrivial() {}
+    int x;
+};
+
+int main() {
+    constexpr bool is_trivial_nontrivial = nlohmann::detail::is_trivial_element<NonTrivial>::value;
+    std::cout << "is_trivial_element<NonTrivial>::value: " << (is_trivial_nontrivial ? "true" : "false") << std::endl;
+    return 0;
+}
+```
+
+## gen_24.cpp (detect)
+Intent: Directly exercise from_json_make_array with std::true_type using a trivial element array identity_tag to ensure full coverage of the true_type overload of from_json_make_array.
+DETECTION REWRITE. The program fails to compile against the OLD library because the API or type it uses is not accepted there; it compiles against the NEW one. Rewrite it so it compiles against both. Check whether the expression is well-formed with the detection idiom (std::void_t or requires), print that result, and use the expression ONLY inside a function template that depends on the types involved, guarded by `if constexpr`. This matters: `if constexpr` in a plain function such as main() does NOT discard the other branch, so the old library would still fail to compile. Call that function template from main. When the expression is supported, exercise it fully (print every result, wrap throwing calls in try/catch). Keep the same types and inputs. Skeleton:
+```cpp
+template <class J, class K, class = void> struct can_use : std::false_type {};
+template <class J, class K>
+struct can_use<J, K, std::void_t<decltype(std::declval<J&>()[std::declval<K>()])>> : std::true_type {};
+template <class J, class K> void probe(J& j, K&& k) {
+    std::cout << "supported: " << can_use<J, K>::value << "\n";
+    if constexpr (can_use<J, K>::value) { /* use j[k] here, print results */ }
+}
+```
+(Replace the decltype expression with the one under test.)
+Compiler errors:
+```
+gen_24.cpp:11:55: error: ‘from_json_make_array’ is not a member of ‘nlohmann::json_abi_v3_12_0::detail’
+```
+Source:
+```cpp
+#include <nlohmann/json.hpp>
+#include <iostream>
+#include <array>
+
+int main() {
+    try {
+        nlohmann::json j = nlohmann::json::array({10, 20, 30});
+        nlohmann::detail::identity_tag<std::array<int, 3>> tag;
+        std::array<int, 3> result = nlohmann::detail::from_json_make_array(j, tag, std::true_type{});
+        std::cout << "from_json_make_array result: " << result[0] << ", " << result[1] << ", " << result[2] << std::endl;
+    } catch (const std::exception& e) {
+        std::cout << "Exception: " << e.what() << std::endl;
+    }
+    return 0;
+}
+```
+
+## gen_25.cpp (detect)
+Intent: Directly exercise from_json_make_array with std::false_type using a non-trivial element array identity_tag.
+DETECTION REWRITE. The program fails to compile against the OLD library because the API or type it uses is not accepted there; it compiles against the NEW one. Rewrite it so it compiles against both. Check whether the expression is well-formed with the detection idiom (std::void_t or requires), print that result, and use the expression ONLY inside a function template that depends on the types involved, guarded by `if constexpr`. This matters: `if constexpr` in a plain function such as main() does NOT discard the other branch, so the old library would still fail to compile. Call that function template from main. When the expression is supported, exercise it fully (print every result, wrap throwing calls in try/catch). Keep the same types and inputs. Skeleton:
+```cpp
+template <class J, class K, class = void> struct can_use : std::false_type {};
+template <class J, class K>
+struct can_use<J, K, std::void_t<decltype(std::declval<J&>()[std::declval<K>()])>> : std::true_type {};
+template <class J, class K> void probe(J& j, K&& k) {
+    std::cout << "supported: " << can_use<J, K>::value << "\n";
+    if constexpr (can_use<J, K>::value) { /* use j[k] here, print results */ }
+}
+```
+(Replace the decltype expression with the one under test.)
+Compiler errors:
+```
+gen_25.cpp:27:67: error: ‘from_json_make_array’ is not a member of ‘nlohmann::json_abi_v3_12_0::detail’
+```
+Source:
+```cpp
+#include <nlohmann/json.hpp>
+#include <iostream>
+#include <array>
+
+struct DummyNonTrivial {
+    DummyNonTrivial() : n(0) {}
+    DummyNonTrivial(const DummyNonTrivial& o) : n(o.n) {}
+    ~DummyNonTrivial() {}
+    int n;
+};
+
+namespace nlohmann {
+template <>
+struct adl_serializer<DummyNonTrivial> {
+    static void from_json(const json& j, DummyNonTrivial& d) {
+        d.n = j.get<int>();
+    }
+};
+}
+
+int main() {
+    try {
+        nlohmann::json j = nlohmann::json::array({5, 6});
+        nlohmann::detail::identity_tag<std::array<DummyNonTrivial, 2>> tag;
+        std::array<DummyNonTrivial, 2> result = nlohmann::detail::from_json_make_array(j, tag, std::false_type{});
+        std::cout << "from_json_make_array false_type result: " << result[0].n << ", " << result[1].n << std::endl;
+    } catch (const std::exception& e) {
+        std::cout << "Exception: " << e.what() << std::endl;
+    }
+    return 0;
+}
+```
+
+# Task
+Return JSON with a "fixes" array: one item per program above, with "file" (exactly as given) and "code" (the complete repaired program, standalone, with its own int main). Do not return programs you cannot repair.

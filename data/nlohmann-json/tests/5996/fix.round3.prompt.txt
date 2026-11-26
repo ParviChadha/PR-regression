@@ -1,0 +1,449 @@
+[system]
+You write test programs that probe a C++ library for behavioral changes made by one pull request.
+Each program is compiled and run twice, once against the library before the change and once after, and the two
+outputs are compared. Your job is to produce programs whose output reveals whether the change altered behavior,
+including side effects the author did not intend.
+
+Rules for every program:
+- It is standalone: one file with its own int main(), compiled as C++17, printing results to stdout.
+- Use only the library's documented public API. Never include internal headers or use detail/impl namespaces,
+  private members or undocumented macros.
+- Do not judge results (no assert, no expected-value comparisons): just print what the library returns. Print
+  enough to make differences visible, one fact per line.
+- Output must be deterministic. Never print pointers or addresses, uninitialized data, the order of
+  hash-based containers, timings, thread ids, random values, file paths or environment data. Print floating point
+  values with an explicit precision. No input, files, network, threads, clocks or randomness.
+- Wrap calls that may throw in try/catch and print the exception's type and message, so an exception is an
+  observable result. Do not crash on purpose.
+- Aim at the code the diff changes. Prefer calls that compile against both the old and the new library; one or two
+  programs may use an API the PR adds. Cover ordinary inputs and edge cases (empty, minimum and maximum values,
+  boundaries, special values, nesting, unusual types) and also neighbouring behavior the change could disturb.
+- When the diff changes which types or inputs an API accepts or rejects (constraints, overloads, traits,
+  conversions), test it with the detection idiom (std::void_t or requires) and `if constexpr`, so the program
+  compiles against both versions, prints whether the expression is well-formed, and exercises it when it is.
+  Accepting an input is not enough: also use it through every entry point that should follow (const and
+  non-const, read, write, insert, erase, lookup, nested use), because a change that admits new inputs can leave
+  later code unable to handle them.
+- If the changed code is internal (a detail, impl or internal namespace, a trait, a helper), do not name it in the
+  program. Reach it through the public API that depends on it, using detection (as above) where needed.
+- Use the exact types and values the diff is about (the new trait's argument types, the new overload's
+  parameters), not stand-ins.
+- Spread the programs over distinct public entry points and overloads, one main idea per program. Do not write
+  several programs that only rename a type or change a literal.
+- Make the programs differ from each other: different inputs, different entry points, different features.
+
+Rules specific to this library:
+- Include the library with #include <nlohmann/json.hpp>. The public API is nlohmann::json (nlohmann::basic_json), nlohmann::ordered_json, json_pointer, json patch/merge_patch and the documented SAX and conversion interfaces. Never use the detail namespace.
+- It is a header-only library: nothing to link. Programs are compiled as C++17.
+- Print JSON values with dump() (compact) or dump(2). Keys of nlohmann::json objects print in sorted order, so output is deterministic; do not depend on insertion order except with ordered_json.
+
+[user]
+# Pull request #5996: insert(): strong guarantee for single elements, basic guarantee for the rest
+
+## Description
+Fixes #5986.
+
+The docs for `insert()` promised the strong exception guarantee for every overload, but a failed copy of a new element could leave the value changed. With `JSON_DIAGNOSTICS`, the value was even left invalid: stale parent pointers made the next `assert_invariant()` abort. After the [discussion](https://github.com/nlohmann/json/pull/5996#issuecomment-6571792055) of what the standard containers guarantee, this PR no longer builds a rollback on top of `array_t`/`object_t`. Instead it documents the guarantees that `insert()` actually gives, and fixes the two places where it fell short of them.
+
+### Changes (`basic_json::insert`)
+
+- **`insert(pos, const basic_json&)`:** at `end()`, forwards as before (`std::vector` has no effects there). Anywhere else, copies the value first and inserts it by move, as libstdc++ does internally. libc++ shifts the tail before copying, so a failed copy left an extra `null` behind.
+- **Parents:** `insert_iterator()` and the object `insert(first, last)` set the parents in a scope guard, which also runs when an exception is thrown. A failed insertion now leaves a valid value with `JSON_DIAGNOSTICS` as well. Without `JSON_DIAGNOSTICS` the guard does nothing.
+- **Docs (`insert.md`):** strong guarantee for (1); basic guarantee for (2)–(5): if copying the new elements throws, the value may be partially modified but stays a valid array or object. The argument checks throw before anything changes. This matches what `std::vector::insert` ([vector.modifiers]) and `std::map::insert` ([associative.reqmts.except]) promise when copying `T` allocates, and what `update()` already documents.
+
+### Tests
+
+`unit-allocator.cpp`, "insert() provides its documented exception guarantees (#5986)": fails every allocation in turn for all overloads, with `json` and `ordered_json`, with and without spare capacity, inserting in the middle and at the end. For (1) it checks that `dump()` is unchanged. For (2)–(5) it checks that the value keeps its type, that every child names its parent, and that a copy succeeds.
+
+Mutation checks: dropping the copy-first step fails the strong check on libc++, and dropping the guard aborts in `assert_invariant()` with `JSON_DIAGNOSTICS`. With the fix, the test passes on Apple clang (ASan+UBSan) and on GCC 16 (libstdc++, `-Wall -Wextra`, no warnings), with and without `JSON_DIAGNOSTICS`. The full `ctest` with ASan+UBSan passes 182/182. A program that calls every overload compiles and runs with `-fno-exceptions -DJSON_NOEXCEPTION`.
+
+### Performance
+
+Mac instruction counts from the A/B harness, develop → this PR. Each repetition copies a 100-element array or a 16-member object, then makes one insert (8-element sources):
+
+| row | json | ordered_json |
+|---|---|---|
+| single int, middle / end | 1.007 / 1.005 | 1.007 / 1.006 |
+| single string, middle / end | 1.008 / 1.005 | 1.006 / 1.005 |
+| single array, middle | 0.998 | 1.006 |
+| count int, middle / end | 1.000 / 0.991 | 1.000 / 1.000 |
+| count string, middle | 1.000 | 0.995 |
+| range int, middle / end | 1.000 / 1.000 | 1.000 / 1.000 |
+| range string, middle / end | 0.995 / 0.995 | 1.000 / 1.000 |
+| object range, 16 new / 3 new / 16 existing keys | 0.998 / 0.996 / 1.005 | 1.000 / 1.000 / 0.990 |
+
+Every row is within 1 %. The single-element inserts pay about 40–60 instructions for the end check and the extra move. On the same workload, the previous version of this PR (rotate and rollback) cost +6–12 % on count and range inserts in the middle, and +2–5 % on object inserts into non-empty objects.
+
+### Public API
+
+No source or ABI changes. The documented exception guarantee of `insert()` overloads (2)–(5) is now basic instead of strong. This only documents what every 3.x release has done: the strong wording for these overloads arrived with the API docs in 3.10.0 and the code never provided it. Overload (1) now actually provides its strong guarantee.
+
+🤖 Generated with [Claude Code](https://claude.com/claude-code)
+
+## Commit message
+* Make basic_json::insert() provide its documented strong exception guarantee (#5986)
+
+A failed allocation while the new elements were copied left the value
+changed, and with JSON_DIAGNOSTICS stale parent pointers behind. The
+extra work now happens almost only on the failure path:
+
+- Array insert(pos, cnt, val) and insert(pos, first, last) append the
+  copies at the end and rotate them into place. If a copy throws, the
+  appended elements are erased again (noexcept) and the parents are set.
+  Moving a basic_json cannot throw, so reallocation is safe. This is no
+  slower than vector::insert (faster for numbers), needs no temporary
+  array, and keeps the elements that libstdc++ lost on reallocation.
+- Array insert(pos, val) copies a non-scalar value first and inserts it
+  by move, except at the end, where vector::insert is strong. Scalars
+  keep the direct path.
+- The object range insert(first, last) into an empty object uses the
+  container's own range insertion and clears the object on an exception.
+  Into a non-empty object it inserts member by member and logs one bit
+  per source member (a new member is detected by the size change; no
+  allocation for the first 256 members); on an exception the members
+  added are erased by walking the source range. No assumption that
+  key_type is string_t.
+- The parents are set when a failed insertion is undone.
+
+The regression test fails every allocation of every insert() overload in
+turn, for json and ordered_json, and checks the value and its parents.
+
+Signed-off-by: Niels Lohmann <mail@nlohmann.me>
+
+* Fix clang-tidy and -Wnrvo findings in insert rollback helpers
+
+Declare the rollback helpers non-movable, replace the nested conditional
+and C array in object_insert_rollback, silence the intentional copy in the
+allocator test, and avoid the missed NRVO in the test factory lambda.
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+Claude-Session: https://claude.ai/code/session_01N5NasAgbDGG28MqXjQvLqp
+Signed-off-by: Claude
+[... truncated, 1669 more characters]
+
+## Linked issue #5986: insert() does not provide its documented strong exception guarantee; a failed insert leaves stale parent pointers with JSON_DIAGNOSTICS
+### Description
+
+[`insert()`](https://json.nlohmann.me/api/basic_json/insert/#exception-safety) documents for all five overloads: *"Strong exception safety: if an exception occurs, the original value stays intact."* That does not hold when an allocation fails while the elements are copied: the value is modified, and with `JSON_DIAGNOSTICS` the parent pointers of the surviving elements are left stale, so the next operation that checks the invariant aborts. Three related symptoms:
+
+**(1) Object range insert keeps the members inserted before the throw.** `insert(first, last)` for objects calls `m_data.m_value.object->insert(first, last)` directly ([json.hpp#L5087](https://github.com/nlohmann/json/blob/ddc34f546a652cd098dd78225d80f1909b921871/include/nlohmann/json.hpp#L5087)); `std::map::insert(first, last)` and `ordered_map::insert` only give the basic guarantee. With `{"a":1}` and a three-member source, a `bad_alloc` on the 4th allocation leaves `{"a":1,"m":"xxx…"}` (libc++ and libstdc++; `ordered_json` at k = 8).
+
+**(2) Array inserts with a throwing element copy modify the array.** `insert(pos, const basic_json&)`, `insert(pos, cnt, val)` and `insert(pos, first, last)` forward to `std::vector::insert` in `insert_iterator()` ([json.hpp#L4921-L4927](https://github.com/nlohmann/json/blob/ddc34f546a652cd098dd78225d80f1909b921871/include/nlohmann/json.hpp#L4921-L4927)). The standard gives `vector::insert` the "no effects" guarantee only for a single element at the end when the element's copy constructor throws, and `basic_json`'s copy constructor allocates for strings and containers. Observed:
+
+| overload | capacity | libc++ (Apple clang 21) | libstdc++ (GCC 16) |
+|---|---|---|---|
+| `insert(pos, val)` in the middle | spare (as after any `erase()`) | `[1,2,3]` → `[1,null,2,3]` | intact |
+| `insert(pos, 3, val)` in the middle | spare | three `null`s inserted | three `null`s inserted |
+| `insert(pos, first, last)` in the middle | spare | `null`s inserted | `null`s inserted 
+[... truncated, 7396 more characters]
+
+## Discussion before merge
+- nlohmann: I don't like this solution as it is so verbose. Easier solutions have worse performance. Another idea would be to drop the strong exception guarantee which would not be a breaking change as it was apparently never properly working.
+
+I'm looking forward to hearing your opinions.
+- nlohmann: I compared the strong guarantee that `insert()` documents with what the standard containers underneath promise. Short answer: for most overloads, we promise more than `std::vector` and `std::map` give us, and on develop `insert()` just forwards to them.
+
+### What the standard promises
+
+**`std::vector::insert`**, [[vector.modifiers]](https://eel.is/c++draft/vector.modifiers) (C++11: [23.3.6.5/1](https://timsong-cpp.github.io/cppwp/n3337/vector.modifiers#1)):
+
+> If an exception is thrown other than by the copy constructor, move constructor, assignment operator, or move assignment operator of `T` or by any `InputIterator` operation, there are no effects. If an exception is thrown while inserting a single element at the end and `T` is *Cpp17CopyInsertable* or `is_nothrow_move_constructible_v<T>` is `true`, there are no effects.
+
+So the vector rolls back only when the allocator fails, or for a single element inserted at the end. (C++11 has only the first sentence.) If `T`'s copy throws during an insert in the middle, a count insert or a range insert, all you get is the basic guarantee.
+
+**`std::map` / `std::unordered_map`**, [[associative.reqmts.except]](https://eel.is/c++draft/associat
+[... truncated, 4415 more characters]
+- gregmarr: Combine 2 through 5 into a single statement?
+- nlohmann: Good point, the four statements only differed in array/object. Fixed in 6adc89c58d: the section now has one statement for overload (1) (strong guarantee) and one for overloads (2) to (5) (basic guarantee), with the object case in parentheses. They are written as plain paragraphs, because `check_structure.py` expects every overload number as a list item as soon as the section has numbered items.
+
+*(Written by Claude Code on behalf of @nlohmann.)*
+- gregmarr: > elements (overload (5): the members)
+> array (overload (5): object)
+
+That's a bit more formal than is probably needed for prose like this.
+
+"the elements or members", "array or object".
+- nlohmann: Right, the overload labels in parentheses were more than this sentence needs. Fixed in f91fc51c84: it now reads "the elements or members" and "a valid array or object".
+
+*(Written by Claude Code on behalf of @nlohmann.)*
+
+## Changed functions (from changes.py)
+- nlohmann::basic_json::set_parents_on_exit (private); reached from the public API through: nlohmann::basic_json::insert(const_iterator, const_iterator), nlohmann::basic_json::insert_iterator(const_iterator, Args &&...)
+- nlohmann::basic_json::set_parents_on_exit::~set_parents_on_exit() (private); reached from the public API through: nlohmann::basic_json::insert(const_iterator, const_iterator), nlohmann::basic_json::insert_iterator(const_iterator, Args &&...)
+- nlohmann::basic_json::set_parents_on_exit::m_value (private); reached from the public API through: nlohmann::basic_json::insert(const_iterator, const_iterator), nlohmann::basic_json::insert_iterator(const_iterator, Args &&...)
+- nlohmann::basic_json::set_parents_on_exit::operator=(const set_parents_on_exit &) (private); reached from the public API through: nlohmann::basic_json::insert(const_iterator, const_iterator), nlohmann::basic_json::insert_iterator(const_iterator, Args &&...)
+- nlohmann::basic_json::set_parents_on_exit::operator=(set_parents_on_exit &&) (private); reached from the public API through: nlohmann::basic_json::insert(const_iterator, const_iterator), nlohmann::basic_json::insert_iterator(const_iterator, Args &&...)
+- nlohmann::basic_json::set_parents_on_exit::set_parents_on_exit(basic_json<...> *) (private); reached from the public API through: nlohmann::basic_json::insert(const_iterator, const_iterator), nlohmann::basic_json::insert_iterator(const_iterator, Args &&...)
+- nlohmann::basic_json::set_parents_on_exit::set_parents_on_exit(const set_parents_on_exit &) (private); reached from the public API through: nlohmann::basic_json::insert(const_iterator, const_iterator), nlohmann::basic_json::insert_iterator(const_iterator, Args &&...)
+- nlohmann::basic_json::set_parents_on_exit::set_parents_on_exit(set_parents_on_exit &&) (private); reached from the public API through: nlohmann::basic_json::insert(const_iterator, const_iterator), nlohmann::basic_json::insert_iterator(const_iterator, Args &&...)
+- nlohmann::basic_json::insert(const_iterator, const basic_json<...> &) (public)
+- nlohmann::basic_json (public)
+- nlohmann::basic_json::insert(const_iterator, const_iterator) (public)
+- nlohmann::basic_json::insert_iterator(const_iterator, Args &&...) (public)
+
+## Diff of the library source (before -> after)
+```diff
+diff --git a/include/nlohmann/json.hpp b/include/nlohmann/json.hpp
+index 8b8d3dbed..28cad76ba 100644
+--- a/include/nlohmann/json.hpp
++++ b/include/nlohmann/json.hpp
+@@ -4917,6 +4917,30 @@ public:
+         return {it, res.second};
+     }
+ 
++  private:
++    /// Sets the parents of a value when it goes out of scope, also when an
++    /// exception is thrown: a container insertion that throws may already
++    /// have added elements, whose parents must be set for the value to stay
++    /// valid (basic exception guarantee). Does nothing without JSON_DIAGNOSTICS.
++    class set_parents_on_exit
++    {
++      public:
++        explicit set_parents_on_exit(basic_json* v) noexcept : m_value(v) {}
++        set_parents_on_exit(const set_parents_on_exit&) = delete;
++        set_parents_on_exit& operator=(const set_parents_on_exit&) = delete;
++        set_parents_on_exit(set_parents_on_exit&&) = delete;
++        set_parents_on_exit& operator=(set_parents_on_exit&&) = delete;
++
++        ~set_parents_on_exit()
++        {
++            m_value->set_parents();
++        }
++
++      private:
++        basic_json* m_value;
++    };
++
++  public:
+     /// Helper for insertion of an iterator
+     /// @note: This uses std::distance to support GCC 4.8,
+     ///        see https://github.com/nlohmann/json/pull/1257
+@@ -4926,6 +4950,7 @@ public:
+         iterator result(this);
+         JSON_ASSERT(m_data.m_value.array != nullptr);
+ 
++        const set_parents_on_exit parents(this);
+         auto insert_pos = std::distance(m_data.m_value.array->begin(), pos.m_it.array_iterator);
+         m_data.m_value.array->insert(pos.m_it.array_iterator, std::forward<Args>(args)...);
+         result.m_it.array_iterator = m_data.m_value.array->begin() + insert_pos;
+@@ -4934,7 +4959,6 @@ public:
+         // result.m_it.array_iterator = m_data.m_value.array->insert(pos.m_it.array_iterator, cnt, val);
+         // but the return value of insert is missing in GCC 4.8, so it is written this way instead.
+ 
+-        set_parents();
+         return result;
+     }
+ 
+@@ -4954,8 +4978,16 @@ public:
+             throw_iterator_from_other_value(this);
+         }
+ 
+-        // insert to array and return iterator
+-        return insert_iterator(pos, val);
++        // vector::insert has no effects if copying a single element to the
++        // end throws; elsewhere, it may already have shifted the elements, so
++        // copy first and insert by move, which cannot throw but by allocating
++        if (pos.m_it.array_iterator == m_data.m_value.array->end())
++        {
++            return insert_iterator(pos, val);
++        }
++
++        basic_json tmp(val);
++        return insert_iterator(pos, std::move(tmp));
+     }
+ 
+     /// @brief inserts element into array
+@@ -5087,8 +5119,8 @@ public:
+             detail::throw_literal<invalid_iterator>(detail::exception_id::iterator_from_other_value, "iterators first and last must point to objects", this);
+         }
+ 
++        const set_parents_on_exit parents(this);
+         m_data.m_value.object->insert(first.m_it.object_iterator, last.m_it.object_iterator);
+-        set_parents();
+     }
+ 
+     /// @brief updates a JSON object from another object, overwriting existing keys
+```
+
+## Existing upstream tests that call the changed code (for style and API usage)
+// Upstream tests at the PR's parent commit bdc737db6 that use the changed code.
+// Names searched (test lines using each): insert (297), basic_json (54), insert_iterator (0), set_parents_on_exit (0), m_value (122)
+
+// ---- tests/src/unit-json_view_edit.cpp:907-923  (uses: basic_json, insert)
+    SECTION("objects in moved arrays and in new values")
+    {
+        json_editable_document d = json_editable_document::parse(R"([{"a": 1, "a": 2}, {"a": 3, "b": 0, "a": 4}])");
+        check_first_wins(d.root()[0], 1);
+        check_first_wins(d.root()[1], 3);
+        d.insert(d.root(), 0, json::parse(R"({"a": 0})"));
+        d.push_back(d.root(), json::parse(R"({"a": 5, "a": 6})")); // (a basic_json value has one member)
+        check_first_wins(d.root()[1], 1);
+        check_first_wins(d.root()[2], 3);
+        CHECK(d.root()[3]["a"].get<int>() == 6);
+        d.set(d.root()[1], "a", 8);
+        check_first_wins(d.root()[1], 8);
+        CHECK(d.root()[1].dump() == R"({"a":8})");
+        d.erase(d.root(), 0);
+        check_first_wins(d.root()[1], 3);
+        CHECK(d.root().dump() == R"([{"a":8},{"a":3,"b":0,"a":4},{"a":6}])");
+    }
+
+// ---- tests/src/fuzzer-parse_json_view.cpp:1-24  (uses: basic_json)
+//     __ _____ _____ _____
+//  __|  |   __|     |   | |  JSON for Modern C++ (supporting code)
+// |  |  |__   |  |  | | | |  version 3.12.0
+// |_____|_____|_____|_|___|  https://github.com/nlohmann/json
+//
+// SPDX-FileCopyrightText: 2013-2026 Niels Lohmann <https://nlohmann.me>
+// SPDX-License-Identifier: MIT
+
+/*
+This file implements a parser test suitable for fuzz testing. It checks that
+json_document (the zero-copy, read-only view of a parsed JSON text declared in
+json_view.hpp) agrees with basic_json on every input, for the parse options
+selected by the low bits of the first input byte (bit 0: ignore_comments, bit 1:
+ignore_trailing_commas; the byte stays part of the text):
+
+- json_document::accept(data) must equal json::accept(data)
+- if the input is accepted, json_document::parse(data).root().materialize()
+  must equal json::parse(data)
+- if the input is rejected, json_document::parse(data) (with exceptions
+  enabled) must throw a json::parse_error or json::out_of_range whose what()
+  is identical to the one json::parse(data) throws
+
+This is checked for two kinds of input: a std::string, which the document
+borrows and which ends in the NUL the parser uses as sentinel, and an
+
+// ---- tests/src/unit-allocator.cpp:176-188  (uses: basic_json)
+    SECTION("class basic_json")
+    {
+        SECTION("basic_json(const CompatibleObjectType&)")
+        {
+            next_construct_fails = false;
+            const std::map<std::string, std::string> v {{"foo", "bar"}};
+            CHECK_NOTHROW(my_json(v));
+            next_construct_fails = true;
+            CHECK_THROWS_AS(my_json(v), std::bad_alloc&);
+            next_construct_fails = false;
+        }
+
+        SECTION("basic_json(const CompatibleArrayType&)")
+
+// ---- tests/src/unit-allocator.cpp:198-205  (uses: basic_json)
+        SECTION("basic_json(const typename string_t::value_type*)")
+        {
+            next_construct_fails = false;
+            CHECK_NOTHROW(my_json("foo"));
+            next_construct_fails = true;
+            CHECK_THROWS_AS(my_json("foo"), std::bad_alloc&);
+            next_construct_fails = false;
+        }
+
+// ---- tests/src/unit-alt-string.cpp:436-469  (uses: basic_json)
+    SECTION("conversion between basic_json specializations (#2649)")
+    {
+        // explicit conversions are always possible
+        CHECK(std::is_constructible<nlohmann::json, alt_json>::value);
+        CHECK(std::is_constructible<alt_json, nlohmann::json>::value);
+        CHECK(std::is_constructible<nlohmann::json, nlohmann::ordered_json>::value);
+        CHECK(std::is_constructible<nlohmann::ordered_json, nlohmann::json>::value);
+
+        // specializations with the same string type are implicitly convertible
+        CHECK(std::is_convertible<nlohmann::ordered_json, nlohmann::json>::value);
+        CHECK(std::is_convertible<nlohmann::json, nlohmann::ordered_json>::value);
+
+        // specializations with different string types are only implicitly convertible
+        // if implicit conversions are enabled
+#if JSON_USE_IMPLICIT_CONVERSIONS
+        CHECK(std::is_convertible<alt_json, nlohmann::json>::value);
+        CHECK(std::is_convertible<nlohmann::json, alt_json>::value);
+#else
+        CHECK_FALSE(std::is_convertible<alt_json, nlohmann::json>::value);
+        CHECK_FALSE(std::is_convertible<nlohmann::json, alt_json>::value);
+#endif
+
+        // get<BasicJsonType>() works in either case
+        const nlohmann::json j = {{"foo", 1}, {"bar", true}};
+        CHECK(j.get<nlohmann::ordered_json>() == nlohmann::ordered_json(j));
+        // (only a number is converted here, as objects and strings are affected by #3425)
+        CHECK(nlohmann::json(42).get<alt_json>() == 42);
+        CHECK(alt_json(nlohmann::json(42)) == 42);
+
+        // get_to() also works in either case
+        alt_json a;
+        nlohmann::json(42).get_to(a);
+        CHECK(a == 42);
+    }
+
+// ---- tests/src/unit-assert_macro.cpp:30-43  (uses: basic_json)
+    SECTION("basic_json(first, second)")
+    {
+        assert_counter = 0;
+        CHECK(assert_counter == 0);
+
+        const json::iterator it{};
+        json j;
+
+        // in case assertions do not abort execution, an exception is thrown
+        CHECK_THROWS_WITH_AS(json(it, j.end()), "[json.exception.invalid_iterator.201] iterators are not compatible", json::invalid_iterator);
+
+        // check that assertion actually happened
+        CHECK(assert_counter == 1);
+    }
+
+// ---- tests/src/unit-binary_utf8_error_handler.cpp:95-119  (uses: basic_json)
+template<typename Key, typename Value, typename Compare, typename Allocator>
+class converting_key_object : public std::map<converting_key, Value, std::less<converting_key>, // NOLINT(modernize-use-transparent-functors)
+    typename std::allocator_traits<Allocator>::template rebind_alloc<std::pair<const converting_key, Value>>>
+{
+    using base_type = std::map<converting_key, Value, std::less<converting_key>, // NOLINT(modernize-use-transparent-functors)
+                               typename std::allocator_traits<Allocator>::template rebind_alloc<std::pair<const converting_key, Value>>>;
+
+                             public:
+                               using base_type::base_type;
+                               using base_type::operator=;
+};
+
+using converting_key_json = nlohmann::basic_json<converting_key_object>;
+
+} // namespace
+
+TEST_CASE("UTF-8 error_handler for the binary readers and writers")
+{
+    SECTION("writers: string value")
+    {
+        for (const auto& c : ill_formed_cases())
+        {
+            CAPTURE(c.name)
+            const json jval = c.bytes;
+
+# Programs to repair
+
+## gen_25.cpp (compile)
+Intent: Exercises the insert_iterator path with an empty initializer list or direct iterator insertion.
+COMPILE ERROR. The program fails to compile, the same way against the old and the new library. Fix the error (wrong or missing include, typo, misuse of the public API) and keep the intent: the call under test must stay. Include only headers that exist; if you are unsure a header exists, use the library's main header.
+Compiler errors:
+```
+gen_25.cpp:11:17: error: no matching function for call to ‘nlohmann::json_abi_v3_12_0::basic_json<>::insert(nlohmann::json_abi_v3_12_0::basic_json<>::iterator, std::vector<nlohmann::json_abi_v3_12_0::basic_json<>, std::allocator<nlohmann::json_abi_v3_12_0::basic_json<> > >::iterator, std::vector<nlo
+```
+Source:
+```cpp
+#include <nlohmann/json.hpp>
+#include <iostream>
+#include <vector>
+
+int main() {
+    try {
+        nlohmann::json j = nlohmann::json::array({10, 20});
+        std::vector<nlohmann::json> values = {30, 40};
+        j.insert(j.end(), values.begin(), values.end());
+        std::cout << j.dump() << std::endl;
+    } catch (const std::exception& e) {
+        std::cout << "Exception: " << e.what() << std::endl;
+    }
+    return 0;
+}
+```
+
+# Task
+Return JSON with a "fixes" array: one item per program above, with "file" (exactly as given) and "code" (the complete repaired program, standalone, with its own int main). Do not return programs you cannot repair.

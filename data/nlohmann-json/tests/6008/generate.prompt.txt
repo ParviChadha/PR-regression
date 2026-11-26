@@ -1,0 +1,219 @@
+[system]
+You write test programs that probe a C++ library for behavioral changes made by one pull request.
+Each program is compiled and run twice, once against the library before the change and once after, and the two
+outputs are compared. Your job is to produce programs whose output reveals whether the change altered behavior,
+including side effects the author did not intend.
+
+Rules for every program:
+- It is standalone: one file with its own int main(), compiled as C++17, printing results to stdout.
+- Use only the library's documented public API. Never include internal headers or use detail/impl namespaces,
+  private members or undocumented macros.
+- Do not judge results (no assert, no expected-value comparisons): just print what the library returns. Print
+  enough to make differences visible, one fact per line.
+- Output must be deterministic. Never print pointers or addresses, uninitialized data, the order of
+  hash-based containers, timings, thread ids, random values, file paths or environment data. Print floating point
+  values with an explicit precision. No input, files, network, threads, clocks or randomness.
+- Wrap calls that may throw in try/catch and print the exception's type and message, so an exception is an
+  observable result. Do not crash on purpose.
+- Aim at the code the diff changes. Prefer calls that compile against both the old and the new library; one or two
+  programs may use an API the PR adds. Cover ordinary inputs and edge cases (empty, minimum and maximum values,
+  boundaries, special values, nesting, unusual types) and also neighbouring behavior the change could disturb.
+- When the diff changes which types or inputs an API accepts or rejects (constraints, overloads, traits,
+  conversions), test it with the detection idiom (std::void_t or requires) and `if constexpr`, so the program
+  compiles against both versions, prints whether the expression is well-formed, and exercises it when it is.
+  Accepting an input is not enough: also use it through every entry point that should follow (const and
+  non-const, read, write, insert, erase, lookup, nested use), because a change that admits new inputs can leave
+  later code unable to handle them.
+- If the changed code is internal (a detail, impl or internal namespace, a trait, a helper), do not name it in the
+  program. Reach it through the public API that depends on it, using detection (as above) where needed.
+- Use the exact types and values the diff is about (the new trait's argument types, the new overload's
+  parameters), not stand-ins.
+- Spread the programs over distinct public entry points and overloads, one main idea per program. Do not write
+  several programs that only rename a type or change a literal.
+- Make the programs differ from each other: different inputs, different entry points, different features.
+
+Rules specific to this library:
+- Include the library with #include <nlohmann/json.hpp>. The public API is nlohmann::json (nlohmann::basic_json), nlohmann::ordered_json, json_pointer, json patch/merge_patch and the documented SAX and conversion interfaces. Never use the detail namespace.
+- It is a header-only library: nothing to link. Programs are compiled as C++17.
+- Print JSON values with dump() (compact) or dump(2). Keys of nlohmann::json objects print in sorted order, so output is deterministic; do not depend on insertion order except with ordered_json.
+
+[user]
+# Pull request #6008: CBOR/MessagePack readers: leave one-element arrays to the general path
+
+## Description
+## What
+
+`enter_cbor_array` and `enter_msgpack_array` now enter the scalar run (#5975, #5980) only for arrays of **two or more** elements. Before, they entered it for every non-empty array: `len == 0` is now `len <= 1`.
+
+```cpp
+return enter_array(len) && (len <= 1 || parse_cbor_scalar_run(std::integral_constant<bool, bulk_scan> {}));
+```
+
+It is the same comparison, with no extra instruction and no extra branch, so arrays of two or more elements run exactly the same code as before.
+
+## Why: the nested-array regression came back
+
+The scalar run is `JSON_HEDLEY_NEVER_INLINE`, so that `parse_cbor_value` / `parse_msgpack_value` stay small enough to inline. Entering it is a real call: the prologue saves the callee-saved registers the loop needs, the loop tests the remaining count and length, the switch finds a head it does not handle, and the epilogue restores the registers. For an array whose first element is an object, an array or a string, all of that reads nothing.
+
+On most documents this costs nothing measurable, because it happens once per array, not once per element. It matters when the arrays themselves are the work, i.e. many small arrays whose element is a container. The benchmark `FromBinaryShape/nested` is the extreme case: 1,000 arrays nested in each other, each with exactly one element.
+
+This was already found and fixed once, inside #5975:
+
+1. *address review of the scalar-run reader* removed the first pre-check, `cbor_scalar_follows()`.
+2. *enter the scalar run only when a scalar follows* added it back, because "on nested data (arrays of objects) that call made reading slower than before the run reader". The MessagePack PR #5980 got the same pre-check.
+3. *drop the scalar pre-check before the run* removed it again in both PRs. The measurements in that commit cover canada and the nativejson files, not the nested shape, so the regression from step 2 returned without anyone seeing it.
+
+The suite run for the 3.13.0 blog post on 11-02 caught it. `FromBinaryShape/nested` got 4.6 % (CBOR) and 2.5 % (MessagePack) slower than a build that still had the pre-check. Compared with no scalar run at all, nested arrays cost:
+
+| | CBOR | MessagePack |
+|---|---|---|
+| GCC 13, instructions (callgrind) | +3.7 % | +4.3 % |
+| Apple clang, time (blog A/B) | +6 to +8 % | +6 to +8 % |
+
+## Why `len <= 1` and not the pre-check again
+
+The pre-check cost exactly what the third commit said: one inline test of the remaining length and the head byte on every array that does enter the run. canada's `[x, y]` pairs and the `[1, 2]` arrays of `FromBinaryShape/containers` pay it 100,000 times.
+
+The element count is already in a register, and the comparison against 0 is already there. Testing `<= 1` instead of `== 0` is free. It catches the shape that actually hurts, because each level of a chain of nested arrays holds one element. The same holds for the single ring of a GeoJSON `Polygon` (`[[[x, y], ...]]`) and for one-element arrays of objects.
+
+What it gives up is arrays of **one scalar**, such as `[7]`. The run reads a lone scalar faster than the general path does, so those get slower (see below). They are rare in real documents:
+
+| Arrays in the document | citm_catalog | twitter | canada |
+|---|---|---|---|
+| all arrays | 10,451 | 1,050 | 56,045 |
+| one element, a container (helped) | 124 | 139 | 1 |
+| one element, a scalar (slower) | **1** | **0** | **0** |
+| ≥ 2 elements, first a container (still one call) | 1,270 | 9 | 481 |
+
+## Measurements
+
+All with ab-harness: develop (b2674a4a2f) and this branch compiled into one binary, renamed namespaces, both link orders.
+
+- **GCC 13 on x86-64:** callgrind instruction counts. These are exact, with no noise.
+- **Mac (M1 Max, Apple clang 21):** instructions retired, minimum of 3 runs, plus timings over 4 layouts × 25 alternating pairs.
+
+Each workload is one `from_cbor` / `from_msgpack` of a value, B/A = this PR / develop:
+
+- `nested`: 1,000 arrays nested in each other.
+- `singles`: 100,000 arrays `[i]`.
+- `co
+[... truncated, 5036 more characters]
+
+## Commit message
+enter_cbor_array and enter_msgpack_array called the out-of-line scalar
+run for every non-empty array. When the array's element is an object or
+an array, as on every level of [[...]] or the single ring of a GeoJSON
+polygon, the call reads nothing; it made 1,000 arrays nested in each
+other cost 4 % more instructions (GCC 13) and up to 8 % more time (Apple
+clang) than without the run. #5975 had fixed that with an inline
+pre-check, which was later dropped after measuring canada only.
+
+The run is now entered only for arrays of two or more elements: the same
+comparison as before, so no other row changes. Arrays of one scalar,
+which the run read faster, now take the general path; they are rare in
+documents (one in citm_catalog, none in twitter or canada). The new
+benchmark FromBinaryShape/singles measures them, next to
+FromBinaryShape/nested.
+
+Instructions per repetition, new/old, GCC 13 callgrind: nested arrays
+0.973 (CBOR) and 0.971 (MessagePack), arrays of one scalar 1.037 and
+1.021, every other row within 0.15 %.
+
+Signed-off-by: Niels Lohmann <mail@nlohmann.me>
+
+## Changed functions (from changes.py)
+- nlohmann::detail::binary_reader (private); reached from the public API through: nlohmann::basic_json::sax_parse(detail::span_input_adapter &&, SAX *, input_format_t, const bool, const bool, const bool, const cbor_tag_handler_t), nlohmann::basic_json::sax_parse(InputType &&, SAX *, input_format_t, const bool, const bool, const bool, const cbor_tag_handler_t), nlohmann::basic_json::sax_parse(IteratorType, SentinelType, SAX *, input_format_t, const bool, const bool, const bool, const cbor_tag_handler_t), nlohmann::basic_json::from_bson(detail::span_input_adapter &&, const bool, const bool), nlohmann::basic_json::from_cbor(detail::span_input_adapter &&, const bool, const bool, const cbor_tag_handler_t), nlohmann::basic_json::from_msgpack(detail::span_input_adapter &&, const bool, const bool), nlohmann::basic_json::from_ubjson(detail::span_input_adapter &&, const bool, const bool), nlohmann::basic_json::from_bjdata(InputType &&, const bool, const bool, const error_handler_t), nlohmann::basic_json::from_bon8(InputType &&, const bool, const bool), nlohmann::basic_json::from_bson(InputType &&, const bool, const bool, const error_handler_t)
+- nlohmann::detail::binary_reader::enter_cbor_array(const std::size_t) (private); reached from the public API through: nlohmann::basic_json::sax_parse(detail::span_input_adapter &&, SAX *, input_format_t, const bool, const bool, const bool, const cbor_tag_handler_t), nlohmann::basic_json::sax_parse(InputType &&, SAX *, input_format_t, const bool, const bool, const bool, const cbor_tag_handler_t), nlohmann::basic_json::sax_parse(IteratorType, SentinelType, SAX *, input_format_t, const bool, const bool, const bool, const cbor_tag_handler_t), nlohmann::basic_json::from_bson(detail::span_input_adapter &&, const bool, const bool), nlohmann::basic_json::from_cbor(detail::span_input_adapter &&, const bool, const bool, const cbor_tag_handler_t), nlohmann::basic_json::from_msgpack(detail::span_input_adapter &&, const bool, const bool), nlohmann::basic_json::from_ubjson(detail::span_input_adapter &&, const bool, const bool), nlohmann::basic_json::from_bjdata(InputType &&, const bool, const bool, const error_handler_t), nlohmann::basic_json::from_bon8(InputType &&, const bool, const bool), nlohmann::basic_json::from_bson(InputType &&, const bool, const bool, const error_handler_t)
+- nlohmann::detail::binary_reader::enter_msgpack_array(const std::size_t) (private); reached from the public API through: nlohmann::basic_json::sax_parse(detail::span_input_adapter &&, SAX *, input_format_t, const bool, const bool, const bool, const cbor_tag_handler_t), nlohmann::basic_json::sax_parse(InputType &&, SAX *, input_format_t, const bool, const bool, const bool, const cbor_tag_handler_t), nlohmann::basic_json::sax_parse(IteratorType, SentinelType, SAX *, input_format_t, const bool, const bool, const bool, const cbor_tag_handler_t), nlohmann::basic_json::from_bson(detail::span_input_adapter &&, const bool, const bool), nlohmann::basic_json::from_cbor(detail::span_input_adapter &&, const bool, const bool, const cbor_tag_handler_t), nlohmann::basic_json::from_msgpack(detail::span_input_adapter &&, const bool, const bool), nlohmann::basic_json::from_ubjson(detail::span_input_adapter &&, const bool, const bool), nlohmann::basic_json::from_bjdata(InputType &&, const bool, const bool, const error_handler_t), nlohmann::basic_json::from_bon8(InputType &&, const bool, const bool), nlohmann::basic_json::from_bson(InputType &&, const bool, const bool, const error_handler_t)
+
+## Diff of the library source (before -> after)
+```diff
+diff --git a/include/nlohmann/detail/input/binary_reader.hpp b/include/nlohmann/detail/input/binary_reader.hpp
+index 8a6a0a6d5..8edc53ae9 100644
+--- a/include/nlohmann/detail/input/binary_reader.hpp
++++ b/include/nlohmann/detail/input/binary_reader.hpp
+@@ -1856,14 +1856,18 @@ class binary_reader
+ 
+     Only the start of an array is tried, which covers arrays of numbers
+     (e.g. coordinates) but costs arrays of other values only one call, not one
+-    per element.
++    per element. An array of one element is not tried at all: that element is
++    mostly an object or an array (`[[...]]`, the single ring of a GeoJSON
++    polygon), for which the call would find no scalar, while a single scalar,
++    which the run would read faster, is rare. The benchmarks
++    `FromBinaryShape/nested` and `FromBinaryShape/singles` show both sides.
+ 
+     @param[in] len  the number of elements
+     @return whether the SAX parser accepted the array and the values read
+     */
+     bool enter_cbor_array(const std::size_t len)
+     {
+-        return enter_array(len) && (len == 0 || parse_cbor_scalar_run(std::integral_constant<bool, bulk_scan> {}));
++        return enter_array(len) && (len <= 1 || parse_cbor_scalar_run(std::integral_constant<bool, bulk_scan> {}));
+     }
+ 
+     /// input that is not contiguous: every value is read by parse_cbor_value
+@@ -2764,12 +2768,16 @@ class binary_reader
+     /*!
+     @brief open a MessagePack array and read the scalars it begins with (see
+            @ref parse_msgpack_scalar_run)
++
++    An array of one element is not tried, for the reason given at
++    @ref enter_cbor_array.
++
+     @param[in] len  the number of elements
+     @return whether the SAX parser accepted the array and the values read
+     */
+     bool enter_msgpack_array(const std::size_t len)
+     {
+-        return enter_array(len) && (len == 0 || parse_msgpack_scalar_run(std::integral_constant<bool, bulk_scan> {}));
++        return enter_array(len) && (len <= 1 || parse_msgpack_scalar_run(std::integral_constant<bool, bulk_scan> {}));
+     }
+ 
+     /// input that is not contiguous: every value is read by parse_msgpack_value
+```
+
+## Existing upstream tests that call the changed code (for style and API usage)
+// Upstream tests at the PR's parent commit 590b622d4 that use the changed code.
+// Names searched (test lines using each): sax_parse (0), from_bson (0), from_cbor (0), from_msgpack (0), from_ubjson (0), from_bjdata (0), from_bon8 (0), binary_reader (2), enter_cbor_array (0), enter_msgpack_array (0)
+
+// ---- tests/src/unit-bjdata.cpp:79-114  (uses: binary_reader)
+    SECTION("binary_reader BJData lookup tables")
+    {
+        // both lookups are static member functions
+        std::vector<std::uint8_t> const data;
+        using reader_t = nlohmann::detail::binary_reader<json, decltype(nlohmann::detail::input_adapter(data))>;
+
+        // the excluded optimized-type markers must match binary_writer's
+        // is_bjdata_excluded_type_marker(), which encodes the same 8 markers
+        for (const char marker :
+                {'[', '{', 'S', 'H', 'T', 'F', 'N', 'Z'
+                })
+        {
+            CHECK(reader_t::is_bjd_excluded_optimized_type(static_cast<unsigned char>(marker)));
+        }
+        for (const char marker :
+                {'U', 'i', 'u', 'I', 'm', 'l', 'M', 'L', 'd', 'D', 'C', 'B', 'x'
+                })
+        {
+            CHECK(!reader_t::is_bjd_excluded_optimized_type(static_cast<unsigned char>(marker)));
+        }
+
+        // every dtype marker must round-trip to its ND-array type name
+        const std::vector<std::pair<char, std::string>> types
+        {
+            {'B', "byte"}, {'C', "char"}, {'D', "double"}, {'I', "int16"},
+            {'L', "int64"}, {'M', "uint64"}, {'U', "uint8"}, {'d', "single"},
+            {'i', "int8"}, {'l', "int32"}, {'m', "uint32"}, {'u', "uint16"}
+        };
+        for (const auto& type : types)
+        {
+            const char* name = reader_t::bjd_type_name(static_cast<unsigned char>(type.first));
+            REQUIRE(name != nullptr);
+            CHECK(std::string(name) == type.second);
+        }
+        CHECK(reader_t::bjd_type_name(static_cast<unsigned char>('x')) == nullptr);
+    }
+
+# Task
+Write 20 test programs for this pull request. Return JSON with a "tests" array; each item has "name" (short snake_case), "intent" (one sentence: what behavior it probes) and "code" (the complete C++ program).

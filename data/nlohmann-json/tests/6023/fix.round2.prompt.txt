@@ -1,0 +1,473 @@
+[system]
+You write test programs that probe a C++ library for behavioral changes made by one pull request.
+Each program is compiled and run twice, once against the library before the change and once after, and the two
+outputs are compared. Your job is to produce programs whose output reveals whether the change altered behavior,
+including side effects the author did not intend.
+
+Rules for every program:
+- It is standalone: one file with its own int main(), compiled as C++17, printing results to stdout.
+- Use only the library's documented public API. Never include internal headers or use detail/impl namespaces,
+  private members or undocumented macros.
+- Do not judge results (no assert, no expected-value comparisons): just print what the library returns. Print
+  enough to make differences visible, one fact per line.
+- Output must be deterministic. Never print pointers or addresses, uninitialized data, the order of
+  hash-based containers, timings, thread ids, random values, file paths or environment data. Print floating point
+  values with an explicit precision. No input, files, network, threads, clocks or randomness.
+- Wrap calls that may throw in try/catch and print the exception's type and message, so an exception is an
+  observable result. Do not crash on purpose.
+- Aim at the code the diff changes. Prefer calls that compile against both the old and the new library; one or two
+  programs may use an API the PR adds. Cover ordinary inputs and edge cases (empty, minimum and maximum values,
+  boundaries, special values, nesting, unusual types) and also neighbouring behavior the change could disturb.
+- When the diff changes which types or inputs an API accepts or rejects (constraints, overloads, traits,
+  conversions), test it with the detection idiom (std::void_t or requires) and `if constexpr`, so the program
+  compiles against both versions, prints whether the expression is well-formed, and exercises it when it is.
+  Accepting an input is not enough: also use it through every entry point that should follow (const and
+  non-const, read, write, insert, erase, lookup, nested use), because a change that admits new inputs can leave
+  later code unable to handle them.
+- If the changed code is internal (a detail, impl or internal namespace, a trait, a helper), do not name it in the
+  program. Reach it through the public API that depends on it, using detection (as above) where needed.
+- Use the exact types and values the diff is about (the new trait's argument types, the new overload's
+  parameters), not stand-ins.
+- Spread the programs over distinct public entry points and overloads, one main idea per program. Do not write
+  several programs that only rename a type or change a literal.
+- Make the programs differ from each other: different inputs, different entry points, different features.
+
+Rules specific to this library:
+- Include the library with #include <nlohmann/json.hpp>. The public API is nlohmann::json (nlohmann::basic_json), nlohmann::ordered_json, json_pointer, json patch/merge_patch and the documented SAX and conversion interfaces. Never use the detail namespace.
+- It is a header-only library: nothing to link. Programs are compiled as C++17.
+- Print JSON values with dump() (compact) or dump(2). Keys of nlohmann::json objects print in sorted order, so output is deterministic; do not depend on insertion order except with ordered_json.
+
+[user]
+# Pull request #6023: Fix leak and crash when an allocation throws during parsing
+
+## Description
+I asked Claude code to find memory leaks. This is what I got.
+
+- json_sax_dom_parser::insert_key_with_index: own the new object_key_index in a unique_ptr before key_indexes may reallocate; a throwing reallocation leaked it.
+- basic_json::data(value_t): set m_type only after m_value is constructed. set_member() constructs a value in place over a null member; if allocating the object threw, the member was left as an object with a null pointer, which the enclosing object's destructor dereferenced.
+
+- [x] The changes are described in detail, both the what and why.
+- [ ] If applicable, an [existing issue](https://github.com/nlohmann/json/issues) is referenced.
+- [ ] If applicable, a fixed [OSS-Fuzz](https://issues.oss-fuzz.com) issue is referenced as `OSS-Fuzz: <id>` (see [fuzz testing](https://github.com/nlohmann/json/blob/develop/tests/fuzzing.md#handling-oss-fuzz-reports)).
+- [ ] The [Code coverage](https://coveralls.io/github/nlohmann/json) remained at 100%. A test case for every new line of code.
+- [ ] If applicable, the [documentation](https://json.nlohmann.me) is updated.
+- [x] The source code is amalgamated by running `make amalgamate`.
+
+## Commit message
+json_sax_dom_parser::insert_key_with_index: own the new object_key_index
+in a unique_ptr before key_indexes may reallocate; a throwing reallocation
+leaked it.
+
+Signed-off-by: Christoph Grüninger <foss@grueninger.de>
+
+## Discussion before merge
+- gruenich: Thanks for the feedback. Adjusted the commit.
+
+## Changed functions (from changes.py)
+- nlohmann::detail::json_sax_dom_parser::insert_key_with_index(frame &, string_t &&) (private); reached from the public API through: nlohmann::basic_json_view::materialize(), nlohmann::basic_json::accept(detail::span_input_adapter &&, const bool, const bool), nlohmann::basic_json::accept(InputType &&, const bool, const bool), nlohmann::basic_json::accept(IteratorType, SentinelType, const bool, const bool), nlohmann::operator>>(std::istream &, basic_json<...> &), nlohmann::basic_json::parse(detail::span_input_adapter &&, parser_callback_t, const bool, const bool, const bool), nlohmann::basic_json::parse(InputType &&, parser_callback_t, const bool, const bool, const bool), nlohmann::basic_json::parse(IteratorType, SentinelType, parser_callback_t, const bool, const bool, const bool), nlohmann::basic_json::sax_parse(detail::span_input_adapter &&, SAX *, input_format_t, const bool, const bool, const bool, const cbor_tag_handler_t), nlohmann::basic_json::sax_parse(InputType &&, SAX *, input_format_t, const bool, const bool, const bool, const cbor_tag_handler_t)
+
+## Diff of the library source (before -> after)
+```diff
+diff --git a/include/nlohmann/detail/input/json_sax.hpp b/include/nlohmann/detail/input/json_sax.hpp
+index 80850ab92..fc9e9b774 100644
+--- a/include/nlohmann/detail/input/json_sax.hpp
++++ b/include/nlohmann/detail/input/json_sax.hpp
+@@ -904,7 +904,8 @@ class json_sax_dom_parser : public json_sax_dom_error_state
+             {
+                 hashes.push_back(hasher(element.first));
+             }
+-            ordered_data.key_indexes.emplace_back(new object_key_index(std::move(hashes)));
++            std::unique_ptr<object_key_index> index(new object_key_index(std::move(hashes))); // NOLINT(cppcoreguidelines-owning-memory,modernize-make-unique): std::make_unique is C++14
++            ordered_data.key_indexes.push_back(std::move(index));
+             f.ordered.index = ordered_data.key_indexes.back().get();
+         }
+```
+
+## Existing upstream tests that call the changed code (for style and API usage)
+// Upstream tests at the PR's parent commit a49242f08 that use the changed code.
+// Names searched (test lines using each): materialize (188), accept (12), parse (11), sax_parse (0), operator>> (105), insert_key_with_index (0)
+
+// ---- tests/src/unit-class_parser.cpp:47-71  (uses: parse)
+using utils::SaxEventLogger;
+
+namespace
+{
+json parser_helper(const std::string& s);
+bool accept_helper(const std::string& s);
+void comments_helper(const std::string& s);
+void trailing_comma_helper(const std::string& s);
+
+json parser_helper(const std::string& s)
+{
+    json j;
+    json::parser(nlohmann::detail::input_adapter(s)).parse(true, j);
+
+    // if this line was reached, no exception occurred
+    // -> check if result is the same without exceptions
+    json j_nothrow;
+    CHECK_NOTHROW(json::parser(nlohmann::detail::input_adapter(s), nullptr, false).parse(true, j_nothrow));
+    CHECK(j_nothrow == j);
+
+    json j_sax;
+    nlohmann::detail::json_sax_dom_parser<json, nlohmann::detail::string_input_adapter_type> sdp(j_sax);
+    json::sax_parse(s, &sdp);
+    CHECK(j_sax == j);
+
+
+// ---- tests/src/unit-class_parser.cpp:73-97  (uses: parse)
+
+    trailing_comma_helper(s);
+
+    return j;
+}
+
+bool accept_helper(const std::string& s)
+{
+    CAPTURE(s)
+
+    // 1. parse s without exceptions
+    json j;
+    CHECK_NOTHROW(json::parser(nlohmann::detail::input_adapter(s), nullptr, false).parse(true, j));
+    const bool ok_noexcept = !j.is_discarded();
+
+    // 2. accept s
+    const bool ok_accept = json::parser(nlohmann::detail::input_adapter(s)).accept(true);
+
+    // 3. check if both approaches come to the same result
+    CHECK(ok_noexcept == ok_accept);
+
+    // 4. parse with SAX (compare with relaxed accept result)
+    SaxEventLogger el;
+    CHECK_NOTHROW(json::sax_parse(s, &el, json::input_format_t::json, false));
+    CHECK(json::parser(nlohmann::detail::input_adapter(s)).accept(false) == !el.errored);
+
+// ---- tests/src/unit-deserialization.cpp:97-109  (uses: operator>>)
+TEST_CASE("deserialization")
+{
+    SECTION("successful deserialization")
+    {
+        SECTION("stream")
+        {
+            std::stringstream ss1;
+            std::stringstream ss2;
+            std::stringstream ss3;
+            ss1 << R"(["foo",1,2,3,false,{"one":1}])";
+            ss2 << R"(["foo",1,2,3,false,{"one":1}])";
+            ss3 << R"(["foo",1,2,3,false,{"one":1}])";
+            const json j = json::parse(ss1);
+
+// ---- tests/src/unit-deserialization.cpp:174-181  (uses: operator>>)
+        SECTION("operator>>")
+        {
+            std::stringstream ss;
+            ss << R"(["foo",1,2,3,false,{"one":1}])";
+            json j;
+            ss >> j;
+            CHECK(j == json({"foo", 1, 2, 3, false, {{"one", 1}}}));
+        }
+
+// ---- tests/src/unit-precise-stream-position.cpp:123-135  (uses: operator>>)
+TEST_CASE("JSON_PRECISE_STREAM_POSITION")
+{
+    SECTION("the macro is part of the ABI tag")
+    {
+        const std::string ns = STRINGIZE(NLOHMANN_JSON_NAMESPACE);
+        // other tags may come before it, e.g. json_abi_diag_psp
+        CHECK(ns.find("_psp") != std::string::npos);
+    }
+
+    SECTION("a number does not consume the character that terminates it")
+    {
+        // a number is only terminated by the character following it; that
+        // character must be given back so the stream is positioned right
+
+// ---- tests/src/unit-precise-stream-position.cpp:181-193  (uses: operator>>)
+    SECTION("a number at the end of the input leaves nothing behind")
+    {
+        for (const std::string s :
+                {"1", "12", "-3.5e2", " 7 "
+                })
+        {
+            CAPTURE(s)
+            std::istringstream ss(s);
+            json j;
+            ss >> j;
+            CHECK(remaining(ss).find_first_not_of(" \t\n\r") == std::string::npos);
+        }
+    }
+
+// ---- tests/src/unit-stream-bulk-scan.cpp:225-237  (uses: operator>>)
+TEST_CASE("parsing from a std::istream scans the get area in bulk")
+{
+#if !defined(JSON_NOEXCEPTION)
+    SECTION("results do not depend on the get area")
+    {
+        const std::vector<read_mode> read_modes = {read_mode::extract, read_mode::parse, read_mode::parse_lenient};
+        for (const auto& input : corpus())
+        {
+            for (const read_mode mode : read_modes)
+            {
+                // no get area: the character-at-a-time path
+                const std::string expected = observe(input, 0, mode);
+                for (const std::size_t chunk_size : chunk_sizes())
+
+// ---- tests/src/unit-stream-bulk-scan.cpp:349-380  (uses: operator>>)
+    SECTION("many values from one stream")
+    {
+        std::string input;
+        for (int i = 0; i < 200; ++i)
+        {
+            input += R"({"id":)" + std::to_string(i) + R"(,"name":"user)" + std::to_string(i) + R"(","score":)" + std::to_string(i) + ".5}\n";
+            input += std::to_string(i * 7919) + "\n";
+        }
+
+        for (const std::size_t chunk_size : chunk_sizes())
+        {
+            CAPTURE(chunk_size)
+            chunked_streambuf buf(input, chunk_size);
+            std::istream is(&buf);
+            json j;
+            int count = 0;
+            while (!(is >> std::ws).eof())
+            {
+                is >> j;
+                if (count % 2 == 0)
+                {
+                    CHECK(j["id"] == count / 2);
+                }
+                else
+                {
+                    CHECK(j == (count / 2) * 7919);
+                }
+                ++count;
+            }
+            CHECK(count == 400);
+        }
+    }
+
+// ---- tests/src/unit-std-format.cpp:105-126  (uses: parse)
+    SECTION("a format spec may run to the end of the parse context")
+    {
+        // std::format always hands parse() a range that still holds the closing
+        // '}', but a parse context may also end right after the spec
+        const auto parse = [](const char* spec)
+        {
+            std::format_parse_context ctx(spec);
+            std::formatter<json> f;
+            CHECK(f.parse(ctx) == ctx.end());
+            return f;
+        };
+
+        CHECK(parse("").indent == -1);
+        CHECK(parse(">").indent == -1);
+        CHECK(parse("#").indent == 4);
+        CHECK(parse("3").indent == 3);
+        CHECK(parse("#12").indent == 12);
+
+        const auto f = parse(".>");
+        CHECK(f.indent == -1);
+        CHECK(f.indent_char == '.');
+    }
+
+// ---- tests/src/unit-bjdata.cpp:3883-3892  (uses: operator>>)
+TEST_CASE("BJData input that cannot be read is discarded by every overload")
+{
+    std::vector<std::uint8_t> input = json::to_bjdata(json({{"a", {1, 2}}}));
+    input.pop_back();
+
+    json _;
+    CHECK_THROWS_AS(_ = json::from_bjdata(input.begin(), input.end()), json::parse_error&);
+    CHECK(json::from_bjdata(input, true, false).is_discarded());
+    CHECK(json::from_bjdata(input.begin(), input.end(), true, false).is_discarded());
+}
+
+# Programs to repair
+
+## gen_09.cpp (compile)
+Intent: Probes parser strict vs non-strict parsing settings.
+COMPILE ERROR. The program fails to compile, the same way against the old and the new library. Fix the error (wrong or missing include, typo, misuse of the public API) and keep the intent: the call under test must stay. Include only headers that exist; if you are unsure a header exists, use the library's main header.
+Compiler errors:
+```
+gen_09.cpp:11:45: error: ‘static nlohmann::json_abi_v3_12_0::detail::parser<nlohmann::json_abi_v3_12_0::basic_json<ObjectType, ArrayType, StringType, BooleanType, NumberIntegerType, NumberUnsignedType, NumberFloatType, AllocatorType, JSONSerializer, BinaryType, CustomBaseClass>, InputAdapterType> nl
+```
+Source:
+```cpp
+#include <nlohmann/json.hpp>
+#include <iostream>
+#include <string>
+
+int main() {
+    try {
+        std::string input = "{\"a\": 1}";
+        nlohmann::json j;
+        auto parser = nlohmann::json::parser(nlohmann::detail::input_adapter(input));
+        parser.parse(true, j);
+        std::cout << "Strict parsed dump: " << j.dump() << std::endl;
+    } catch (const std::exception& e) {
+        std::cout << "Exception: " << e.what() << std::endl;
+    }
+    return 0;
+}
+```
+
+## gen_16.cpp (compile)
+Intent: Probes parse exception formatting and catching when encountering invalid syntax.
+COMPILE ERROR. The program fails to compile, the same way against the old and the new library. Fix the error (wrong or missing include, typo, misuse of the public API) and keep the intent: the call under test must stay. Include only headers that exist; if you are unsure a header exists, use the library's main header.
+Compiler errors:
+```
+gen_16.cpp:9:44: error: missing terminating " character
+gen_16.cpp:10:9: error: expected ‘,’ or ‘;’ before ‘nlohmann’
+```
+Source:
+```cpp
+#include <nlohmann/json.hpp>
+#include <iostream>
+#include <string>
+
+int main() {
+    try {
+        std::string input = "{\"bad_syntax"";
+        nlohmann::json j = nlohmann::json::parse(input);
+    } catch (const nlohmann::json::parse_error& e) {
+        std::cout << "Caught parse_error: id=" << e.id << std::endl;
+    } catch (const std::exception& e) {
+        std::cout << "Exception: " << e.what() << std::endl;
+    }
+    return 0;
+}
+```
+
+## gen_17.cpp (compile)
+Intent: Probes key indexes vector reallocation behavior by inserting enough keys to force multiple vector resizes.
+COMPILE ERROR. The program fails to compile, the same way against the old and the new library. Fix the error (wrong or missing include, typo, misuse of the public API) and keep the intent: the call under test must stay. Include only headers that exist; if you are unsure a header exists, use the library's main header.
+Compiler errors:
+```
+gen_17.cpp:11:22: error: missing terminating " character
+gen_17.cpp:11:21: error: expected primary-expression at end of input
+gen_17.cpp:11:21: error: expected ‘}’ at end of input
+gen_17.cpp:11:21: error: expected ‘}’ at end of input
+gen_17.cpp:11:21: error: expected ‘catch’ at end of input
+gen_17.cpp:11:21: error: expected ‘(’ at end of input
+```
+Source:
+```cpp
+#include <nlohmann/json.hpp>
+#include <iostream>
+#include <string>
+
+int main() {
+    try {
+        std::string input = "{";
+        for (int i = 0; i < 1000; ++i) {
+            input += "\"key_
+```
+
+## gen_19.cpp (compile)
+Intent: Exercise ordered_json parsing with many keys to trigger vector reallocations in key_indexes during insert_key_with_index.
+COMPILE ERROR. The program fails to compile, the same way against the old and the new library. Fix the error (wrong or missing include, typo, misuse of the public API) and keep the intent: the call under test must stay. Include only headers that exist; if you are unsure a header exists, use the library's main header.
+Compiler errors:
+```
+gen_19.cpp:12:42: error: no match for ‘operator+’ (operand types are ‘std::__cxx11::basic_string<char>’ and ‘int’)
+```
+Source:
+```cpp
+#include <nlohmann/json.hpp>
+#include <iostream>
+#include <string>
+
+int main() {
+    try {
+        std::string s = "{";
+        for (int i = 0; i < 200; ++i) {
+            if (i > 0) s += ",";
+            s += '"' + std::to_string(i) + '":' + std::to_string(i);
+        }
+        s += "}";
+        auto j = nlohmann::ordered_json::parse(s);
+        std::cout << "parsed keys count: " << j.size() << std::endl;
+        std::cout << "key 50: " << j["50"] << std::endl;
+    } catch (const std::exception& e) {
+        std::cout << "exception: " << e.what() << std::endl;
+    }
+    return 0;
+}
+```
+
+## gen_20.cpp (compile)
+Intent: Exercise ordered_json sax_parse using an ordered_json sax dom parser directly to invoke insert_key_with_index with reallocations.
+COMPILE ERROR. The program fails to compile, the same way against the old and the new library. Fix the error (wrong or missing include, typo, misuse of the public API) and keep the intent: the call under test must stay. Include only headers that exist; if you are unsure a header exists, use the library's main header.
+Compiler errors:
+```
+gen_20.cpp:16:69: error: wrong number of template arguments (1, should be at least 2)
+497 | class json_sax_dom_parser : public json_sax_dom_error_state
+is_sax.hpp:88:66: error: static assertion failed: invalid function: bool null()
+is_sax.hpp:90:69: error: static assertion failed: invalid function: bool boolean(bool)
+is_sax.hpp:94:28: error: static assertion failed: invalid function: bool number_integer(number_integer_t)
+is_sax.hpp:98:29: error: static assertion failed: invalid function: bool number_unsigned(number_unsigned_t)
+```
+Source:
+```cpp
+#include <nlohmann/json.hpp>
+#include <iostream>
+#include <sstream>
+
+int main() {
+    try {
+        std::string s = "{";
+        for (int i = 0; i < 150; ++i) {
+            if (i > 0) s += ",";
+            s += "\"k" + std::to_string(i) + "\":\"v" + std::to_string(i) + "\"";
+        }
+        s += "}";
+        nlohmann::ordered_json j;
+        nlohmann::detail::json_sax_dom_parser<nlohmann::ordered_json> sdp(j);
+        nlohmann::ordered_json::sax_parse(s, &sdp);
+        std::cout << "sax_parse success, size: " << j.size() << std::endl;
+        std::cout << "k100: " << j["k100"] << std::endl;
+    } catch (const std::exception& e) {
+        std::cout << "exception: " << e.what() << std::endl;
+    }
+    return 0;
+}
+```
+
+## gen_23.cpp (compile)
+Intent: Exercise ordered_json parsing using basic_json materialize view path or span_input_adapter with key index generation.
+COMPILE ERROR. The program fails to compile, the same way against the old and the new library. Fix the error (wrong or missing include, typo, misuse of the public API) and keep the intent: the call under test must stay. Include only headers that exist; if you are unsure a header exists, use the library's main header.
+Compiler errors:
+```
+input_adapters.hpp:1388:11: error: no matching function for call to ‘nlohmann::json_abi_v3_12_0::detail::iterator_input_adapter<const char*, const char*>::iterator_input_adapter(nlohmann::json_abi_v3_12_0::detail::iterator_input_adapter_factory<char*, char*, void>::a
+json.hpp:6065:48: error: no matching function for call to ‘input_adapter(nlohmann::json_abi_v3_12_0::detail::span_input_adapter&)’
+input_adapters.hpp:1263:109: error: no type named ‘adapter_type’ in ‘struct nlohmann::json_abi_v3_12_0::detail::container_input_adapter_factory_impl::container_input_adapter_factory<nlohmann::json_abi_v3_12_0::detail::span_input_adapter&, void>’
+input_adapters.hpp:1278:86: error: no type named ‘type’ in ‘struct std::enable_if<false, int>’
+input_adapters.hpp:1323:30: error: no type named ‘type’ in ‘struct std::enable_if<false, int>’
+```
+Source:
+```cpp
+#include <nlohmann/json.hpp>
+#include <iostream>
+#include <vector>
+
+int main() {
+    try {
+        std::string s = "{";
+        for (int i = 0; i < 100; ++i) {
+            if (i > 0) s += ",";
+            s += "\"field" + std::to_string(i) + "\":true";
+        }
+        s += "}";
+        std::vector<char> v(s.begin(), s.end());
+        nlohmann::detail::span_input_adapter sia(v.data(), v.data() + v.size());
+        nlohmann::ordered_json j;
+        j = nlohmann::ordered_json::parse(sia);
+        std::cout << "span_input_adapter ordered_json size: " << j.size() << std::endl;
+        std::cout << "field50: " << j["field50"] << std::endl;
+    } catch (const std::exception& e) {
+        std::cout << "exception: " << e.what() << std::endl;
+    }
+    return 0;
+}
+```
+
+# Task
+Return JSON with a "fixes" array: one item per program above, with "file" (exactly as given) and "code" (the complete repaired program, standalone, with its own int main). Do not return programs you cannot repair.

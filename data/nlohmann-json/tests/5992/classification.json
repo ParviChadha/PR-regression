@@ -1,0 +1,102 @@
+{
+  "target": "nlohmann-json",
+  "pr": 5992,
+  "model": "gemini-3.5-flash-lite",
+  "prompt_sha256": "dff79171d084672a3fd2e232acb7bdd13ba1a3ba16a6be07c987a86fc07ac1a9",
+  "results_sha256": "bd2e2b92f5795da70e183ba76571f90e5d32021342478d4ca947313db9a688ba",
+  "clusters": [
+    {
+      "id": "C1",
+      "status": "output_diff",
+      "failed_on": null,
+      "programs": [
+        "gen_01.cpp",
+        "gen_02.cpp",
+        "gen_03.cpp",
+        "gen_13.cpp"
+      ],
+      "verdict": "intended",
+      "confidence": "high",
+      "reason": "The PR specifically changes json_view::get<T>() of a boolean to throw type_error.302 for number_integer_t and number_unsigned_t, matching basic_json behavior."
+    },
+    {
+      "id": "C2",
+      "status": "output_diff",
+      "failed_on": null,
+      "programs": [
+        "gen_07.cpp"
+      ],
+      "verdict": "intended",
+      "confidence": "high",
+      "reason": "get_to() goes through get<T>() and is explicitly mentioned in the PR description as adopting the same exception behavior for number types."
+    },
+    {
+      "id": "C3",
+      "status": "compile_diff",
+      "failed_on": "both",
+      "programs": [
+        "gen_23.cpp"
+      ],
+      "verdict": "unclear",
+      "confidence": "high",
+      "reason": "The test program calls private library details (boolean_as) and non-public members (*doc.data()), which makes it invalid regarding public API behavior."
+    },
+    {
+      "id": "C4",
+      "status": "output_diff",
+      "failed_on": null,
+      "programs": [
+        "gen_26.cpp"
+      ],
+      "verdict": "intended",
+      "confidence": "high",
+      "reason": "Accessing a boolean node via a view path and calling get<std::int64_t>() now correctly throws type_error.302 to match basic_json parity."
+    },
+    {
+      "id": "C5",
+      "status": "output_diff",
+      "failed_on": null,
+      "programs": [
+        "gen_29.cpp"
+      ],
+      "verdict": "intended",
+      "confidence": "high",
+      "reason": "Getting a boolean as number_unsigned_t via json_view now correctly throws an exception instead of returning 0, aligning with basic_json."
+    },
+    {
+      "id": "C6",
+      "status": "output_diff",
+      "failed_on": null,
+      "programs": [
+        "gen_30.cpp"
+      ],
+      "verdict": "intended",
+      "confidence": "high",
+      "reason": "Getting a boolean as number_float_t via json_view now correctly throws an exception instead of returning 1, aligning with basic_json."
+    }
+  ],
+  "clusters_not_shown": 0,
+  "counts": {
+    "same": 16,
+    "invalid": 0,
+    "flaky": 0,
+    "superseded": 5,
+    "missing": 0
+  },
+  "pr_verdict": {
+    "regression_candidate": false,
+    "unintended_clusters": []
+  },
+  "usage": {
+    "promptTokenCount": 9201,
+    "candidatesTokenCount": 442,
+    "totalTokenCount": 9643,
+    "promptTokensDetails": [
+      {
+        "modality": "TEXT",
+        "tokenCount": 9201
+      }
+    ],
+    "serviceTier": "standard"
+  }
+}

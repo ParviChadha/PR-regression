@@ -1,0 +1,212 @@
+{
+  "target": "nlohmann-json",
+  "pr": 5837,
+  "model": "gemini-3.5-flash-lite",
+  "prompt_sha256": "89ce0394340f380e9365e792fd54ebe8e28f69a390bdbbe7c89d36cfb64c8044",
+  "n_requested": 20,
+  "dropped": 0,
+  "usage": {
+    "promptTokenCount": 5094,
+    "candidatesTokenCount": 3697,
+    "totalTokenCount": 8791,
+    "promptTokensDetails": [
+      {
+        "modality": "TEXT",
+        "tokenCount": 5094
+      }
+    ],
+    "serviceTier": "standard"
+  },
+  "tests": [
+    {
+      "file": "gen_01.cpp",
+      "name": "rvalue_vector_string_moves",
+      "intent": "Verify that converting an rvalue vector of strings to JSON moves the string elements, leaving them empty in the source.",
+      "round": 0
+    },
+    {
+      "file": "gen_02.cpp",
+      "name": "lvalue_vector_string_copies",
+      "intent": "Verify that converting an lvalue vector of strings to JSON copies the elements, leaving the source intact.",
+      "round": 0
+    },
+    {
+      "file": "gen_03.cpp",
+      "name": "const_rvalue_vector_string_copies",
+      "intent": "Verify that converting a const rvalue vector of strings copies the elements and does not mutate the source.",
+      "round": 0
+    },
+    {
+      "file": "gen_04.cpp",
+      "name": "rvalue_map_string_string_moves",
+      "intent": "Verify that converting an rvalue map to JSON moves its values while keeping keys copied.",
+      "round": 0,
+      "superseded_by": "gen_26.cpp"
+    },
+    {
+      "file": "gen_05.cpp",
+      "name": "rvalue_list_moves",
+      "intent": "Verify that rvalue std::list elements are moved when converted to a JSON array.",
+      "round": 0
+    },
+    {
+      "file": "gen_06.cpp",
+      "name": "rvalue_deque_moves",
+      "intent": "Verify that rvalue std::deque elements are moved when converted to a JSON array.",
+      "round": 0
+    },
+    {
+      "file": "gen_07.cpp",
+      "name": "rvalue_forward_list_moves",
+      "intent": "Verify that rvalue std::forward_list elements are moved when converted to a JSON array.",
+      "round": 0
+    },
+    {
+      "file": "gen_08.cpp",
+      "name": "rvalue_vector_bool_excluded",
+      "intent": "Verify that std::vector<bool> rvalue conversion uses its dedicated overload correctly.",
+      "round": 0
+    },
+    {
+      "file": "gen_09.cpp",
+      "name": "rvalue_valarray_excluded",
+      "intent": "Verify that std::valarray rvalue conversion still copies and is untouched by the new rvalue overloads.",
+      "round": 0
+    },
+    {
+      "file": "gen_10.cpp",
+      "name": "rvalue_array_type_excluded",
+      "intent": "Verify that basic_json::array_t rvalues use their own existing overloads instead of the generic container one.",
+      "round": 0
+    },
+    {
+      "file": "gen_11.cpp",
+      "name": "rvalue_object_type_excluded",
+      "intent": "Verify that basic_json::object_t rvalues use their own existing overloads instead of the generic container one.",
+      "round": 0
+    },
+    {
+      "file": "gen_12.cpp",
+      "name": "nested_rvalue_containers",
+      "intent": "Verify that nested rvalue containers correctly move elements recursively into a JSON structure.",
+      "round": 0
+    },
+    {
+      "file": "gen_13.cpp",
+      "name": "rvalue_set_moves",
+      "intent": "Verify that rvalue std::set elements are successfully moved during conversion to a JSON array.",
+      "round": 0
+    },
+    {
+      "file": "gen_14.cpp",
+      "name": "rvalue_unordered_set_moves",
+      "intent": "Verify that rvalue std::unordered_set can be converted via rvalue overloads.",
+      "round": 0
+    },
+    {
+      "file": "gen_15.cpp",
+      "name": "rvalue_multimap_object",
+      "intent": "Verify that rvalue multimap works with object-like rvalue conversion.",
+      "round": 0
+    },
+    {
+      "file": "gen_16.cpp",
+      "name": "std_array_rvalue_moves",
+      "intent": "Verify that rvalue std::array moves its elements when converted to JSON.",
+      "round": 0
+    },
+    {
+      "file": "gen_17.cpp",
+      "name": "vector_int_rvalue_unchanged",
+      "intent": "Verify that primitive-type rvalue vector conversion functions correctly and produces expected JSON.",
+      "round": 0
+    },
+    {
+      "file": "gen_18.cpp",
+      "name": "rvalue_unordered_map_moves",
+      "intent": "Verify that rvalue std::unordered_map converts to an object with moved values.",
+      "round": 0,
+      "superseded_by": "gen_27.cpp"
+    },
+    {
+      "file": "gen_19.cpp",
+      "name": "rvalue_initializer_list_behavior",
+      "intent": "Verify behavior of rvalue initializer lists with container to_json overloads.",
+      "round": 0
+    },
+    {
+      "file": "gen_20.cpp",
+      "name": "vector_json_rvalue_moves",
+      "intent": "Verify that an rvalue vector of json objects moves elements properly during conversion.",
+      "round": 0
+    },
+    {
+      "file": "gen_21.cpp",
+      "name": "gen_21",
+      "intent": "Test rvalue conversion of std::filesystem::path (if available) or check has_dedicated_to_json behavior on dedicated types to ensure they bypass generic container moving.",
+      "round": 1
+    },
+    {
+      "file": "gen_22.cpp",
+      "name": "gen_22",
+      "intent": "Test rvalue conversion of std::u8string (if available) to exercise dedicated string traits and has_dedicated_to_json.",
+      "round": 1
+    },
+    {
+      "file": "gen_23.cpp",
+      "name": "gen_23",
+      "intent": "Test range view conversion traits by checking if range views (like std::views::all or similar if supported, or via is_range_view_type trait integration) are properly handled or excluded from generic movable container rvalues.",
+      "round": 1
+    },
+    {
+      "file": "gen_24.cpp",
+      "name": "gen_24",
+      "intent": "Test enum-keyed map type trait handling by converting an rvalue map with enum keys (if supported) or verifying object-like rvalue conversion constraints using is_rvalue_object_to_json.",
+      "round": 1
+    },
+    {
+      "file": "gen_25.cpp",
+      "name": "gen_25",
+      "intent": "Directly instantiate and invoke external_constructor<value_t::array>::construct_moving and external_constructor<value_t::object>::construct_moving via rvalue container forwarding to ensure full coverage of construct_moving lines and begin/end ADL lookups.",
+      "round": 1,
+      "superseded_by": "gen_28.cpp"
+    },
+    {
+      "file": "gen_26.cpp",
+      "name": "rvalue_map_string_string_moves_fixed",
+      "intent": "Verify that converting an rvalue map to JSON moves its values while keeping keys copied.",
+      "round": 2,
+      "fixes": "gen_04.cpp",
+      "kind": "compile"
+    },
+    {
+      "file": "gen_27.cpp",
+      "name": "rvalue_unordered_map_moves_fixed",
+      "intent": "Verify that rvalue std::unordered_map converts to an object with moved values.",
+      "round": 2,
+      "fixes": "gen_18.cpp",
+      "kind": "compile"
+    },
+    {
+      "file": "gen_28.cpp",
+      "name": "gen_25_fixed",
+      "intent": "Directly instantiate and invoke external_constructor<value_t::array>::construct_moving and external_constructor<value_t::object>::construct_moving via rvalue container forwarding to ensure full coverage of construct_moving lines and begin/end ADL lookups.",
+      "round": 2,
+      "fixes": "gen_25.cpp",
+      "kind": "detect",
+      "superseded_by": "gen_29.cpp"
+    },
+    {
+      "file": "gen_29.cpp",
+      "name": "gen_25_fixed_fixed",
+      "intent": "Directly instantiate and invoke external_constructor<value_t::array>::construct_moving and external_constructor<value_t::object>::construct_moving via rvalue container forwarding to ensure full coverage of construct_moving lines and begin/end ADL lookups.",
+      "round": 3,
+      "fixes": "gen_28.cpp",
+      "kind": "detect"
+    }
+  ],
+  "fix": {
+    "rounds_max": 2,
+    "model": "gemini-3.5-flash-lite"
+  }
+}

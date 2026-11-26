@@ -1,0 +1,596 @@
+[system]
+You write test programs that probe a C++ library for behavioral changes made by one pull request.
+Each program is compiled and run twice, once against the library before the change and once after, and the two
+outputs are compared. Your job is to produce programs whose output reveals whether the change altered behavior,
+including side effects the author did not intend.
+
+Rules for every program:
+- It is standalone: one file with its own int main(), compiled as C++17, printing results to stdout.
+- Use only the library's documented public API. Never include internal headers or use detail/impl namespaces,
+  private members or undocumented macros.
+- Do not judge results (no assert, no expected-value comparisons): just print what the library returns. Print
+  enough to make differences visible, one fact per line.
+- Output must be deterministic. Never print pointers or addresses, uninitialized data, the order of
+  hash-based containers, timings, thread ids, random values, file paths or environment data. Print floating point
+  values with an explicit precision. No input, files, network, threads, clocks or randomness.
+- Wrap calls that may throw in try/catch and print the exception's type and message, so an exception is an
+  observable result. Do not crash on purpose.
+- Aim at the code the diff changes. Prefer calls that compile against both the old and the new library; one or two
+  programs may use an API the PR adds. Cover ordinary inputs and edge cases (empty, minimum and maximum values,
+  boundaries, special values, nesting, unusual types) and also neighbouring behavior the change could disturb.
+- When the diff changes which types or inputs an API accepts or rejects (constraints, overloads, traits,
+  conversions), test it with the detection idiom (std::void_t or requires) and `if constexpr`, so the program
+  compiles against both versions, prints whether the expression is well-formed, and exercises it when it is.
+  Accepting an input is not enough: also use it through every entry point that should follow (const and
+  non-const, read, write, insert, erase, lookup, nested use), because a change that admits new inputs can leave
+  later code unable to handle them.
+- If the changed code is internal (a detail, impl or internal namespace, a trait, a helper), do not name it in the
+  program. Reach it through the public API that depends on it, using detection (as above) where needed.
+- Use the exact types and values the diff is about (the new trait's argument types, the new overload's
+  parameters), not stand-ins.
+- Spread the programs over distinct public entry points and overloads, one main idea per program. Do not write
+  several programs that only rename a type or change a literal.
+- Make the programs differ from each other: different inputs, different entry points, different features.
+
+Rules specific to this library:
+- Include the library with #include <nlohmann/json.hpp>. The public API is nlohmann::json (nlohmann::basic_json), nlohmann::ordered_json, json_pointer, json patch/merge_patch and the documented SAX and conversion interfaces. Never use the detail namespace.
+- It is a header-only library: nothing to link. Programs are compiled as C++17.
+- Print JSON values with dump() (compact) or dump(2). Keys of nlohmann::json objects print in sorted order, so output is deterministic; do not depend on insertion order except with ordered_json.
+
+[user]
+# Pull request #5851: Accumulate number digits while scanning them
+
+## Description
+## Summary
+
+Parsing numbers from contiguous input scanned every digit twice. `scan_number_bulk_contiguous()` validated the token one byte at a time and copied it into `token_buffer`. The conversion then went through two out-of-line functions that read the digits again:
+
+- `parse_float_native()` called `parse_float_significand()`, which returned its result through memory and called `std::any_of` twice per number (GCC does not inline it).
+- `parse_integer_signed()` divided by ten on every digit for its overflow check.
+
+This PR accumulates the value while the digits are validated:
+
+- Digits are taken **eight at a time** where at least eight bytes remain: `is_eight_digits()` tests them and `parse_eight_digits()` converts them, as in fast_float.
+- **Floats with at most 19 digits** go straight to `decimal_to_float()` (Clinger's fast path or Eisel–Lemire), so the float fast path has no calls left.
+- **Integers with at most 18 digits** are stored without an overflow check. A narrower `number_integer_t`/`number_unsigned_t` still rejects values that do not round-trip, as before.
+- **Longer tokens, and float formats other than binary32/binary64** (e.g. x87 `long double`), take the existing path. It is unchanged, except that `has_nonzero_digit()` is now a plain loop and `parse_float_significand()` is always inlined.
+
+The stream windows of #5828 are handled like the existing fast path: a number that reaches the end of a window falls back to `scan_number()`, and the terminator is read and ungotten.
+
+This is the first of five stacked PRs from an assembly review of the number and string parsing; the stack is based on #5828.
+
+## Performance
+
+Change of the best-of-runs time against the previous PR (the first: against #5828), negative is faster. *accept* is `json::accept()` (no allocations), *parse* is `json::parse()`. Apple M1 Max: Apple Clang 21 and Homebrew GCC 16; x86-64 (Haswell VM): GCC 13, and Clang 18 with `-falign-loops=64 -falign-functions=64` on both sides (without it, code placement alone moves Clang's numbers by up to ±5 % between builds). Improvements of 3 % or more are bold.
+
+| file | M1 Clang accept | M1 Clang parse | M1 GCC 16 accept | M1 GCC 16 parse | x86 GCC accept | x86 Clang accept |
+|---|--:|--:|--:|--:|--:|--:|
+| `canada.json` | **−18.8 %** | **−9.8 %** | **−17.2 %** | **−9.3 %** | **−11.5 %** | **−20.7 %** |
+| `citm_catalog.json` | **−6.8 %** | **−3.0 %** | **−8.3 %** | −1.9 % | −1.3 % | +3.1 % |
+| `twitter.json` | −0.3 % | −0.3 % | −1.0 % | +0.1 % | +4.7 % | +0.8 % |
+| `numbers.json` | **−25.1 %** | **−22.7 %** | **−20.4 %** | **−20.1 %** | **−18.4 %** | **−24.7 %** |
+| `long_strings.json` | −0.2 % | +1.6 % | −1.9 % | −1.6 % | −1.4 % | +0.7 % |
+| `twitterescaped.json` | −0.7 % | +0.1 % | −0.9 % | −0.3 % | +6.4 % | +1.0 % |
+| `mesh.json` | **−18.6 %** | **−13.5 %** | **−14.9 %** | **−12.4 %** | **−13.7 %** | **−16.1 %** |
+
+This PR does not touch the string code; the x86-64 GCC rows for twitter.json and twitterescaped.json (+5 to +6 %) come from code placement and from the shared machine, which was under load during this run (the M1 rows for these files are within ±1 %).
+
+## Tests
+
+- **New section "digits accumulated while scanning"** in `unit-class_lexer.cpp`:
+  - covers every digit count from 1 to 25, in the integer and the fraction part, with and without sign and exponent, with leading zeros, and with exponents beyond every range;
+  - compares each case with the byte path. The reference input is a `std::list<char>`: since #5828, a `std::stringstream` takes the bulk path as well, so it is no longer an independent reference.
+- **New section for narrower number types:** a `basic_json` with 32-bit integers checks the round-trip check.
+- **Mutation check:** raising either digit limit by one makes these tests fail.
+- **Differential check against #5828's head:** identical DOM output, error messages, `accept()` results and SAX events (including the float text), for 737 files of json_test_data and 500k generated inputs. Each in
+[... truncated, 442 more characters]
+
+## Commit message
+* Accumulate number digits while scanning them
+
+The contiguous number fast path validated a token byte by byte, copied it
+into token_buffer, and then converted it in out-of-line functions that
+scanned the digits a second time: parse_float_native() called
+parse_float_significand(), which returned its result through memory and
+called std::any_of (out of line with GCC) twice per number, and
+parse_integer_signed() divided by ten on every digit for its overflow check.
+
+scan_number_bulk_contiguous() now accumulates the significand while it
+validates the digits, eight at a time where at least eight bytes remain
+(is_eight_digits() and parse_eight_digits(), after fast_float). Floats with
+at most 19 digits go straight to decimal_to_float(); integers with at most
+18 digits are stored without an overflow check (a narrower number type
+still rejects values that do not round-trip). Longer tokens take the
+existing path. has_nonzero_digit() is a plain loop and
+parse_float_significand() is always inlined, which helps that path.
+
+Signed-off-by: Niels Lohmann <mail@nlohmann.me>
+
+* Skip the digit accumulation checks without exceptions
+
+The section compares error messages from both lexer paths and parses
+out-of-range numbers, so it does not compile (the caught exception does not
+exist) and would abort with JSON_NOEXCEPTION.
+
+Signed-off-by: Niels Lohmann <mail@nlohmann.me>
+
+* Share the significant-digit loop of the integer part and the fraction
+
+Signed-off-by: Niels Lohmann <mail@nlohmann.me>
+
+---------
+
+Signed-off-by: Niels Lohmann <mail@nlohmann.me>
+
+## Discussion before merge
+- gregmarr: Is this repeated code that could use a helper?
+- nlohmann: Yes, though not quite this loop: the integer part and the fraction in `parse_float_significand()` ran the same eight-digits-then-one-digit loop. In 2dfda27f2 they share `accumulate_significant_digits()`, and clang -O2 emits the same code as before. `accumulate_digits()` stays separate because it checks each byte for a digit and has no 19-digit cap, so a shared helper would need both as parameters.
+
+— posted by Claude Code on behalf of @nlohmann
+
+## Changed functions (from changes.py)
+- nlohmann::detail::lexer::scan_number_bulk_contiguous() (private); reached from the public API through: nlohmann::basic_json::sax_parse(detail::span_input_adapter &&, SAX *, input_format_t, const bool, const bool, const bool, const cbor_tag_handler_t), nlohmann::basic_json::sax_parse(InputType &&, SAX *, input_format_t, const bool, const bool, const bool, const cbor_tag_handler_t), nlohmann::basic_json::sax_parse(IteratorType, SentinelType, SAX *, input_format_t, const bool, const bool, const bool, const cbor_tag_handler_t), nlohmann::basic_json::from_bson(detail::span_input_adapter &&, const bool, const bool), nlohmann::basic_json::from_cbor(detail::span_input_adapter &&, const bool, const bool, const cbor_tag_handler_t), nlohmann::basic_json::from_msgpack(detail::span_input_adapter &&, const bool, const bool), nlohmann::basic_json::from_ubjson(detail::span_input_adapter &&, const bool, const bool), nlohmann::basic_json::from_bjdata(InputType &&, const bool, const bool, const error_handler_t), nlohmann::basic_json::from_bon8(InputType &&, const bool, const bool), nlohmann::basic_json::from_bson(InputType &&, const bool, const bool, const error_handler_t)
+- nlohmann::detail::parse_float_significand(const char *, const char *, std::size_t, std::size_t) (private); reached from the public API through: nlohmann::basic_json_view::materialize(), nlohmann::basic_json_view::get(), nlohmann::basic_json_view::dump(const int, const char, const bool, const number_format), nlohmann::basic_json_document::load(std::vector<std::uint8_t> &&, const image_check), nlohmann::basic_json_document::load(const std::uint8_t *, std::size_t, const image_check), nlohmann::basic_json::sax_parse(detail::span_input_adapter &&, SAX *, input_format_t, const bool, const bool, const bool, const cbor_tag_handler_t), nlohmann::basic_json::sax_parse(InputType &&, SAX *, input_format_t, const bool, const bool, const bool, const cbor_tag_handler_t), nlohmann::basic_json::sax_parse(IteratorType, SentinelType, SAX *, input_format_t, const bool, const bool, const bool, const cbor_tag_handler_t), nlohmann::basic_json::from_bson(detail::span_input_adapter &&, const bool, const bool), nlohmann::basic_json::from_cbor(detail::span_input_adapter &&, const bool, const bool, const cbor_tag_handler_t)
+- nlohmann::detail::has_nonzero_digit(const char *, const char *) (private); reached from the public API through: nlohmann::basic_json_view::materialize(), nlohmann::basic_json_view::get(), nlohmann::basic_json_view::dump(const int, const char, const bool, const number_format), nlohmann::basic_json_document::load(std::vector<std::uint8_t> &&, const image_check), nlohmann::basic_json_document::load(const std::uint8_t *, std::size_t, const image_check), nlohmann::basic_json::sax_parse(detail::span_input_adapter &&, SAX *, input_format_t, const bool, const bool, const bool, const cbor_tag_handler_t), nlohmann::basic_json::sax_parse(InputType &&, SAX *, input_format_t, const bool, const bool, const bool, const cbor_tag_handler_t), nlohmann::basic_json::sax_parse(IteratorType, SentinelType, SAX *, input_format_t, const bool, const bool, const bool, const cbor_tag_handler_t), nlohmann::basic_json::from_bson(detail::span_input_adapter &&, const bool, const bool), nlohmann::basic_json::from_cbor(detail::span_input_adapter &&, const bool, const bool, const cbor_tag_handler_t)
+- nlohmann::detail::lexer (private); reached from the public API through: nlohmann::basic_json::sax_parse(detail::span_input_adapter &&, SAX *, input_format_t, const bool, const bool, const bool, const cbor_tag_handler_t), nlohmann::basic_json::sax_parse(InputType &&, SAX *, input_format_t, const bool, const bool, const bool, const cbor_tag_handler_t), nlohmann::basic_json::sax_parse(IteratorType, SentinelType, SAX *, input_format_t, const bool, const bool, const bool, const cbor_tag_handler_t), nlohmann::basic_json::from_bson(detail::span_input_adapter &&, const bool, const bool), nlohmann::basic_json::from_cbor(detail::span_input_adapter &&, const bool, const bool, const cbor_tag_handler_t), nlohmann::basic_json::from_msgpack(detail::span_input_adapter &&, const bool, const bool), nlohmann::basic_json::from_ubjson(detail::span_input_adapter &&, const bool, const bool), nlohmann::basic_json::from_bjdata(InputType &&, const bool, const bool, const error_handler_t), nlohmann::basic_json::from_bon8(InputType &&, const bool, const bool), nlohmann::basic_json::from_bson(InputType &&, const bool, const bool, const error_handler_t)
+- nlohmann::detail::accumulate_digits(const char *, std::size_t, std::size_t, std::uint64_t &) (private); reached from the public API through: nlohmann::basic_json::sax_parse(detail::span_input_adapter &&, SAX *, input_format_t, const bool, const bool, const bool, const cbor_tag_handler_t), nlohmann::basic_json::sax_parse(InputType &&, SAX *, input_format_t, const bool, const bool, const bool, const cbor_tag_handler_t), nlohmann::basic_json::sax_parse(IteratorType, SentinelType, SAX *, input_format_t, const bool, const bool, const bool, const cbor_tag_handler_t), nlohmann::basic_json::from_bson(detail::span_input_adapter &&, const bool, const bool), nlohmann::basic_json::from_cbor(detail::span_input_adapter &&, const bool, const bool, const cbor_tag_handler_t), nlohmann::basic_json::from_msgpack(detail::span_input_adapter &&, const bool, const bool), nlohmann::basic_json::from_ubjson(detail::span_input_adapter &&, const bool, const bool), nlohmann::basic_json::from_bjdata(InputType &&, const bool, const bool, const error_handler_t), nlohmann::basic_json::from_bon8(InputType &&, const bool, const bool), nlohmann::basic_json::from_bson(InputType &&, const bool, const bool, const error_handler_t)
+- nlohmann::detail::accumulate_significant_digits(const char *, const char *, int &, std::uint64_t &) (private); reached from the public API through: nlohmann::basic_json_view::materialize(), nlohmann::basic_json_view::get(), nlohmann::basic_json_view::dump(const int, const char, const bool, const number_format), nlohmann::basic_json_document::load(std::vector<std::uint8_t> &&, const image_check), nlohmann::basic_json_document::load(const std::uint8_t *, std::size_t, const image_check), nlohmann::basic_json::sax_parse(detail::span_input_adapter &&, SAX *, input_format_t, const bool, const bool, const bool, const cbor_tag_handler_t), nlohmann::basic_json::sax_parse(InputType &&, SAX *, input_format_t, const bool, const bool, const bool, const cbor_tag_handler_t), nlohmann::basic_json::sax_parse(IteratorType, SentinelType, SAX *, input_format_t, const bool, const bool, const bool, const cbor_tag_handler_t), nlohmann::basic_json::from_bson(detail::span_input_adapter &&, const bool, const bool), nlohmann::basic_json::from_cbor(detail::span_input_adapter &&, const bool, const bool, const cbor_tag_handler_t)
+- nlohmann::detail::lexer::store_integer(token_type, std::uint64_t) (private); reached from the public API through: nlohmann::basic_json::sax_parse(detail::span_input_adapter &&, SAX *, input_format_t, const bool, const bool, const bool, const cbor_tag_handler_t), nlohmann::basic_json::sax_parse(InputType &&, SAX *, input_format_t, const bool, const bool, const bool, const cbor_tag_handler_t), nlohmann::basic_json::sax_parse(IteratorType, SentinelType, SAX *, input_format_t, const bool, const bool, const bool, const cbor_tag_handler_t), nlohmann::basic_json::from_bson(detail::span_input_adapter &&, const bool, const bool), nlohmann::basic_json::from_cbor(detail::span_input_adapter &&, const bool, const bool, const cbor_tag_handler_t), nlohmann::basic_json::from_msgpack(detail::span_input_adapter &&, const bool, const bool), nlohmann::basic_json::from_ubjson(detail::span_input_adapter &&, const bool, const bool), nlohmann::basic_json::from_bjdata(InputType &&, const bool, const bool, const error_handler_t), nlohmann::basic_json::from_bon8(InputType &&, const bool, const bool), nlohmann::basic_json::from_bson(InputType &&, const bool, const bool, const error_handler_t)
+- nlohmann::detail::lexer::convert_accumulated_float(const float_significand &, std::true_type) (private); reached from the public API through: nlohmann::basic_json::sax_parse(detail::span_input_adapter &&, SAX *, input_format_t, const bool, const bool, const bool, const cbor_tag_handler_t), nlohmann::basic_json::sax_parse(InputType &&, SAX *, input_format_t, const bool, const bool, const bool, const cbor_tag_handler_t), nlohmann::basic_json::sax_parse(IteratorType, SentinelType, SAX *, input_format_t, const bool, const bool, const bool, const cbor_tag_handler_t), nlohmann::basic_json::from_bson(detail::span_input_adapter &&, const bool, const bool), nlohmann::basic_json::from_cbor(detail::span_input_adapter &&, const bool, const bool, const cbor_tag_handler_t), nlohmann::basic_json::from_msgpack(detail::span_input_adapter &&, const bool, const bool), nlohmann::basic_json::from_ubjson(detail::span_input_adapter &&, const bool, const bool), nlohmann::basic_json::from_bjdata(InputType &&, const bool, const bool, const error_handler_t), nlohmann::basic_json::from_bon8(InputType &&, const bool, const bool), nlohmann::basic_json::from_bson(InputType &&, const bool, const bool, const error_handler_t)
+- nlohmann::detail::lexer::convert_accumulated_float(const float_significand &, std::false_type) (private); reached from the public API through: nlohmann::basic_json::sax_parse(detail::span_input_adapter &&, SAX *, input_format_t, const bool, const bool, const bool, const cbor_tag_handler_t), nlohmann::basic_json::sax_parse(InputType &&, SAX *, input_format_t, const bool, const bool, const bool, const cbor_tag_handler_t), nlohmann::basic_json::sax_parse(IteratorType, SentinelType, SAX *, input_format_t, const bool, const bool, const bool, const cbor_tag_handler_t), nlohmann::basic_json::from_bson(detail::span_input_adapter &&, const bool, const bool), nlohmann::basic_json::from_cbor(detail::span_input_adapter &&, const bool, const bool, const cbor_tag_handler_t), nlohmann::basic_json::from_msgpack(detail::span_input_adapter &&, const bool, const bool), nlohmann::basic_json::from_ubjson(detail::span_input_adapter &&, const bool, const bool), nlohmann::basic_json::from_bjdata(InputType &&, const bool, const bool, const error_handler_t), nlohmann::basic_json::from_bon8(InputType &&, const bool, const bool), nlohmann::basic_json::from_bson(InputType &&, const bool, const bool, const error_handler_t)
+- nlohmann::detail::is_eight_digits(std::uint64_t) (private); reached from the public API through: nlohmann::basic_json::sax_parse(detail::span_input_adapter &&, SAX *, input_format_t, const bool, const bool, const bool, const cbor_tag_handler_t), nlohmann::basic_json::sax_parse(InputType &&, SAX *, input_format_t, const bool, const bool, const bool, const cbor_tag_handler_t), nlohmann::basic_json::sax_parse(IteratorType, SentinelType, SAX *, input_format_t, const bool, const bool, const bool, const cbor_tag_handler_t), nlohmann::basic_json::from_bson(detail::span_input_adapter &&, const bool, const bool), nlohmann::basic_json::from_cbor(detail::span_input_adapter &&, const bool, const bool, const cbor_tag_handler_t), nlohmann::basic_json::from_msgpack(detail::span_input_adapter &&, const bool, const bool), nlohmann::basic_json::from_ubjson(detail::span_input_adapter &&, const bool, const bool), nlohmann::basic_json::from_bjdata(InputType &&, const bool, const bool, const error_handler_t), nlohmann::basic_json::from_bon8(InputType &&, const bool, const bool), nlohmann::basic_json::from_bson(InputType &&, const bool, const bool, const error_handler_t)
+
+## Diff of the library source (before -> after)
+```diff
+diff --git a/include/nlohmann/detail/input/lexer.hpp b/include/nlohmann/detail/input/lexer.hpp
+index 9bc20cdd5..0f10af759 100644
+--- a/include/nlohmann/detail/input/lexer.hpp
++++ b/include/nlohmann/detail/input/lexer.hpp
+@@ -1625,9 +1625,12 @@ scan_number_done:
+         const std::size_t avail = rem + 1;
+ 
+         // validate + classify the number extent (mirrors scan_number()'s grammar)
++        // and accumulate the mantissa digits on the way, so that tokens with up
++        // to 19 digits need no second pass for their value
+         std::size_t i = 0;
+         std::size_t dot_index = std::string::npos;
+         token_type number_type = token_type::value_unsigned;
++        std::uint64_t w = 0;
+         if (data[0] == '-')
+         {
+             number_type = token_type::value_integer;
+@@ -1637,22 +1640,21 @@ scan_number_done:
+                 return token_type::uninitialized;
+             }
+         }
++        const std::size_t integer_begin = i;
+         if (data[i] == '0')
+         {
+             ++i;
+         }
+         else if (data[i] >= '1' && data[i] <= '9')
+         {
+-            ++i;
+-            while (i < avail && data[i] >= '0' && data[i] <= '9')
+-            {
+-                ++i;
+-            }
++            i = accumulate_digits(data, i, avail, w);
+         }
+         else
+         {
+             return token_type::uninitialized;
+         }
++        std::size_t digit_count = i - integer_begin;
++        std::size_t fraction_digits = 0;
+         if (i < avail && data[i] == '.')
+         {
+             number_type = token_type::value_float;
+@@ -1662,29 +1664,39 @@ scan_number_done:
+             {
+                 return token_type::uninitialized;
+             }
+-            while (i < avail && data[i] >= '0' && data[i] <= '9')
+-            {
+-                ++i;
+-            }
++            const std::size_t fraction_begin = i;
++            i = accumulate_digits(data, i, avail, w);
++            fraction_digits = i - fraction_begin;
++            digit_count += fraction_digits;
+         }
+         // the mantissa ends here, whether or not an exponent part follows
+         const std::size_t mantissa_end = i;
++        std::int64_t exponent = 0;
+         if (i < avail && (data[i] == 'e' || data[i] == 'E'))
+         {
+             number_type = token_type::value_float;
+             ++i;
++            bool negative_exponent = false;
+             if (i < avail && (data[i] == '+' || data[i] == '-'))
+             {
++                negative_exponent = data[i] == '-';
+                 ++i;
+             }
+             if (i >= avail || !(data[i] >= '0' && data[i] <= '9'))
+             {
+                 return token_type::uninitialized;
+             }
++            // saturated far beyond every range, see parse_float_exponent()
++            constexpr std::int64_t saturation = 100000000000000000; // 10^17
+             while (i < avail && data[i] >= '0' && data[i] <= '9')
+             {
++                if (exponent < saturation)
++                {
++                    exponent = (exponent * 10) + (data[i] - '0');
++                }
+                 ++i;
+             }
++            exponent = negative_exponent ? -exponent : exponent;
+         }
+         const std::size_t len = i;
+         if (number_may_continue(len == avail, std::integral_constant<bool, bulk_window> {}))
+@@ -1705,7 +1717,10 @@ scan_number_done:
+ #if !JSON_DIAGNOSTIC_POSITIONS
+         if (number_type != token_type::value_float)
+         {
+-            const token_type integer_result = convert_integer(number_type, data, data + len);
++            // up to 18 digits always fit into std::uint64_t and std::int64_t
++            const token_type integer_result = (digit_count <= 18)
++                                              ? store_integer(number_type, w)
++                                              : convert_integer(number_type, data, data + len);
+             if (JSON_HEDLEY_LIKELY(integer_result != token_type::uninitialized))
+             {
+                 bulk_consume(data + 1, len - 1);
+@@ -1728,6 +1743,20 @@ scan_number_done:
+         bulk_consume(data + 1, len - 1);
+         read_number_terminator(std::integral_constant<bool, bulk_window> {});
+ 
++        // a float whose digits all fit into w converts from the accumulated
++        // value; longer ones (and other float formats) take the general path
++        if (number_type == token_type::value_float && digit_count <= 19)
++        {
++            float_significand s;
++            s.w = w;
++            s.exponent = exponent - static_cast<std::int64_t>(fraction_digits);
++            s.negative = data[0] == '-';
++            if (convert_accumulated_float(s, std::integral_constant<bool, has_native_float_format<number_float_t>::value> {}))
++            {
++                return token_type::value_float;
++            }
++        }
++
+         return convert_number(number_type, mantissa_end);
+     }
+ 
+@@ -1756,6 +1785,35 @@ scan_number_done:
+     /// the input is not handed back, so the terminator can stay unread
+     void read_number_terminator(std::false_type /*window*/) const noexcept {}
+ 
++    /// binary32/binary64: the value of a float token from its accumulated
++    /// significand (see scan_number_bulk_contiguous())
++    bool convert_accumulated_float(const float_significand& s, std::true_type /*native*/) noexcept
++    {
++        value_float = decimal_to_float<number_float_t>(s);
++        return true;
++    }
++
++    /// other formats (e.g. x87 long double): not instantiated for them, as
++    /// decimal_to_float() only supports binary32/binary64
++    static bool convert_accumulated_float(const float_significand& /*s*/, std::false_type /*native*/) noexcept
++    {
++        return false;
++    }
++
++    /// the value of an integer token with at most 18 digits, accumulated in @a w
++    token_type store_integer(token_type number_type, std::uint64_t w) noexcept
++    {
++        if (number_type == token_type::value_unsigned)
++        {
++            value_unsigned = static_cast<number_unsigned_t>(w);
++            // reject values that do not round-trip into a narrower type
++            return (static_cast<std::uint64_t>(value_unsigned) == w) ? token_type::value_unsigned : token_type::uninitialized;
++        }
++        const std::int64_t x = -static_cast<std::int64_t>(w);
++        value_integer = static_cast<number_integer_t>(x);
++        return (static_cast<std::int64_t>(value_integer) == x) ? token_type::value_integer : token_type::uninitialized;
++    }
++
+     /// contiguous input: try the number fast path, else the byte-path scanner
+     token_type scan_number_dispatch(std::true_type /*bulk*/)
+     {
+diff --git a/include/nlohmann/detail/input/number_parse.hpp b/include/nlohmann/detail/input/number_parse.hpp
+index 3baeb60b0..8a9a9f30a 100644
+--- a/include/nlohmann/detail/input/number_parse.hpp
++++ b/include/nlohmann/detail/input/number_parse.hpp
+@@ -275,13 +275,77 @@ JSON_HEDLEY_ALWAYS_INLINE std::uint32_t parse_eight_digits(std::uint64_t v) noex
+     return static_cast<std::uint32_t>(((v & 0x0000FFFF0000FFFFu) * 42949672960001u) >> 32u);
+ }
+ 
+-/// whether [first, last) contains a digit other than '0'
+-inline bool has_nonzero_digit(const char* first, const char* last) noexcept
++/// whether the eight bytes in @a v (see read_eight_bytes()) are all ASCII
++/// digits (after fast_float)
++JSON_HEDLEY_ALWAYS_INLINE bool is_eight_digits(std::uint64_t v) noexcept
+ {
+-    return std::any_of(first, last, [](char c) noexcept
++    return ((v & 0xF0F0F0F0F0F0F0F0u) | (((v + 0x0606060606060606u) & 0xF0F0F0F0F0F0F0F0u) >> 4u)) == 0x3333333333333333u;
++}
++
++/*!
++@brief skip the ASCII digits starting at data[i] and accumulate their value
++
++Eight digits are taken at a time while at least eight bytes remain. @a w wraps
++around after 19 digits; the caller only uses it for shorter digit runs.
++
++@return the index of the first byte at or after @a i that is not a digit
++*/
++JSON_HEDLEY_ALWAYS_INLINE std::size_t accumulate_digits(const char* data, std::size_t i, std::size_t avail, std::uint64_t& w) noexcept
++{
++    while (avail - i >= 8)
++    {
++        const std::uint64_t v = read_eight_bytes(data + i);
++        if (!is_eight_digits(v))
++        {
++            break;
++        }
++        w = (w * 100000000u) + parse_eight_digits(v);
++        i += 8;
++    }
++    while (i < avail && data[i] >= '0' && data[i] <= '9')
++    {
++        w = (w * 10u) + static_cast<std::uint64_t>(data[i] - '0');
++        ++i;
++    }
++    return i;
++}
++
++/// whether [first, last) contains a digit other than '0'; a plain loop, as
++/// GCC calls std::any_of out of line even for the usual empty range
++JSON_HEDLEY_ALWAYS_INLINE bool has_nonzero_digit(const char* first, const char* last) noexcept
++{
++    for (; first != last; ++first)
++    {
++        if (*first != '0')
++        {
++            return true;
++        }
++    }
++    return false;
++}
++
++/*!
++@brief accumulate the validated digits [p, last) into @a w, as long as
++       @a remaining digits still fit into it
++
++Eight digits are taken at a time while at least eight remain, and @a remaining
++is decreased by the number of digits taken.
++
++@return a pointer past the last digit taken
++*/
++JSON_HEDLEY_ALWAYS_INLINE const char* accumulate_significant_digits(const char* p, const char* last, int& remaining, std::uint64_t& w) noexcept
++{
++    while (remaining >= 8 && last - p >= 8)
++    {
++        w = (w * 100000000u) + parse_eight_digits(read_eight_bytes(p));
++        p += 8;
++        remaining -= 8;
++    }
++    for (; remaining > 0 && p != last; ++p, --remaining)
+     {
+-        return c != '0';
+-    });
++        w = (w * 10u) + static_cast<std::uint64_t>(*p - '0');
++    }
++    return p;
+ }
+ 
+ /// the value of the validated exponent digits [+-]?[0-9]+ in [first, last),
+@@ -327,7 +391,7 @@ truncated is set.
+                                    std::string::npos if there is none
+ @param[in] mantissa_end            index of the 'e'/'E', or the token length
+ */
+-inline float_significand parse_float_significand(const char* first, const char* last,
++JSON_HEDLEY_ALWAYS_INLINE float_significand parse_float_significand(const char* first, const char* last,
+         std::size_t decimal_point_position, std::size_t mantissa_end) noexcept
+ {
+     float_significand s;
+@@ -342,16 +406,7 @@ inline float_significand parse_float_significand(const char* first, const char*
+     int remaining = 19; // digits that still fit into w
+     if (*p != '0') // the integer part is "0" or [1-9][0-9]*
+     {
+-        while (remaining >= 8 && integer_last - p >= 8)
+-        {
+-            w = (w * 100000000u) + parse_eight_digits(read_eight_bytes(p));
+-            p += 8;
+-            remaining -= 8;
+-        }
+-        for (; remaining > 0 && p != integer_last; ++p, --remaining)
+-        {
+-            w = (w * 10u) + static_cast<std::uint64_t>(*p - '0');
+-        }
++        p = accumulate_significant_digits(p, integer_last, remaining, w);
+         s.exponent = integer_last - p;
+         s.truncated = has_nonzero_digit(p, integer_last);
+     }
+@@ -370,16 +425,7 @@ inline float_significand parse_float_significand(const char* first, const char*
+             s.exponent -= p - zeros;
+         }
+         const char* const digits = p;
+-        while (remaining >= 8 && mantissa_last - p >= 8)
+-        {
+-            w = (w * 100000000u) + parse_eight_digits(read_eight_bytes(p));
+-            p += 8;
+-            remaining -= 8;
+-        }
+-        for (; remaining > 0 && p != mantissa_last; ++p, --remaining)
+-        {
+-            w = (w * 10u) + static_cast<std::uint64_t>(*p - '0');
+-        }
++        p = accumulate_significant_digits(p, mantissa_last, remaining, w);
+         s.exponent -= p - digits;
+         s.truncated = s.truncated || has_nonzero_digit(p, mantissa_last);
+     }
+```
+
+## Existing upstream tests that call the changed code (for style and API usage)
+// Upstream tests at the PR's parent commit 898e6ee81 that use the changed code.
+// Names searched (test lines using each): sax_parse (0), from_bson (0), from_cbor (0), from_msgpack (0), from_ubjson (0), from_bjdata (0), from_bon8 (0), materialize (135), get (680), dump (658), load (0), scan_number_bulk_contiguous (0), parse_float_significand (0), has_nonzero_digit (0), lexer (96), accumulate_digits (0), accumulate_significant_digits (0), store_integer (0), convert_accumulated_float (0), is_eight_digits (0)
+
+// ---- tests/src/unit-class_lexer.cpp:1615-1624  (uses: get, lexer)
+    SECTION("used by the lexer")
+    {
+        // 17 significant digits: beyond Clinger's fast path
+        CHECK(bits_of(json::parse("-65.613616999999977").get<double>()) == bits_of(-65.613616999999977));
+        CHECK(bits_of(json::parse("2.2250738585072011e-308").get<double>()) == 0x000FFFFFFFFFFFFFu);
+        CHECK(bits_of(json::parse("4.9406564584124654e-324").get<double>()) == 1u);
+        json _;
+        CHECK_THROWS_WITH_AS(_ = json::parse("1.7976931348623159e308"),
+                             "[json.exception.out_of_range.406] number overflow parsing '1.7976931348623159e308'", json::out_of_range&);
+    }
+
+// ---- tests/src/unit-json_view_dump.cpp:41-74  (uses: dump, materialize)
+    SECTION("the output of ordered_json::dump()")
+    {
+        generator g;
+        for (int i = 0; i < 2000; ++i)
+        {
+            std::string text;
+            g.value(text, 0);
+            const ordered_json_document d = ordered_json_document::parse(text);
+            if (has_duplicate_keys(d.root()))
+            {
+                continue;
+            }
+            CAPTURE(text)
+            const ordered_json j = ordered_json::parse(text);
+            for (const int indent :
+                    {
+                        -1, 0, 2
+                    })
+            {
+                for (const bool ensure_ascii :
+                        {
+                            false, true
+                        })
+                {
+                    CHECK(d.root().dump(indent, i % 2 == 0 ? ' ' : '\t', ensure_ascii) == j.dump(indent, i % 2 == 0 ? ' ' : '\t', ensure_ascii));
+                }
+            }
+            // also of each element
+            for (const ordered_json_view e : d.root())
+            {
+                CHECK(e.dump() == e.materialize().dump());
+            }
+        }
+    }
+
+// ---- tests/src/unit-class_lexer.cpp:21-45  (uses: lexer)
+#include <map> // map
+#include <random> // mt19937
+#include <sstream> // stringstream
+#include <string> // string
+#include <utility> // pair
+#include <vector> // vector
+
+#include "float_hard_cases.hpp"
+
+namespace
+{
+// shortcut to scan a string literal
+json::lexer::token_type scan_string(const char* s, bool ignore_comments = false);
+json::lexer::token_type scan_string(const char* s, const bool ignore_comments)
+{
+    auto ia = nlohmann::detail::input_adapter(s);
+    return nlohmann::detail::lexer<json, decltype(ia)>(std::move(ia), ignore_comments).scan(); // NOLINT(hicpp-move-const-arg,performance-move-const-arg)
+}
+} // namespace
+
+std::string get_error_message(const char* s, bool ignore_comments = false); // NOLINT(misc-use-internal-linkage)
+std::string get_error_message(const char* s, const bool ignore_comments)
+{
+    auto ia = nlohmann::detail::input_adapter(s);
+    auto lexer = nlohmann::detail::lexer<json, decltype(ia)>(std::move(ia), ignore_comments); // NOLINT(hicpp-move-const-arg,performance-move-const-arg)
+
+// ---- tests/src/unit-json_view.cpp:792-838  (uses: dump, get, materialize)
+    SECTION("duplicate keys: lookups find the first member, iteration all")
+    {
+        const json_document d = json_document::parse(R"({"a":1,"b":2,"a":3})");
+        const json_view v = d.root();
+        CHECK(v.size() == 3);
+        CHECK(v["a"].materialize() == 1);
+        CHECK(v.at("a").materialize() == 1);
+        CHECK(v.find("a") == v.begin());
+        CHECK(v.find("a").value().materialize() == 1);
+        CHECK(v.find("b") == std::next(v.begin()));
+        CHECK(v.count("a") == 2); // every member, unlike materialize()
+        CHECK(v.count("b") == 1);
+        CHECK(v.contains("a"));
+        CHECK(v.value("a", 0) == 1);
+        CHECK(v.materialize()["a"] == 3); // materialize() keeps the last value, unlike the lookups
+        // JSON pointers resolve to the first member at every level
+        const json_document dp = json_document::parse(R"({"a":{"b":1},"a":{"b":2,"b":3}})");
+        CHECK(dp.root()[json::json_pointer("/a/b")].materialize() == 1);
+        CHECK(dp.root().at(json::json_pointer("/a/b")).materialize() == 1);
+        CHECK(dp.root().value(json::json_pointer("/a/b"), 0) == 1);
+        CHECK(dp.root().materialize()[json::json_pointer("/a/b")] == 3);
+        // get<map> keeps the last value, as materialize()
+        CHECK((v.get<std::map<std::string, int>>() == std::map<std::string, int> {{"a", 3}, {"b", 2}}));
+        // keys of every length class (the 16-byte short compare and memcmp)
+        for (const std::size_t n :
+                {
+                    0u, 1u, 3u, 7u, 8u, 15u, 16u, 17u, 40u
+                })
+        {
+            const std::string key(n, 'k');
+            const json_document dk = json_document::parse("{\"" + key + "\":1,\"" + key + "x\":2,\"" + key + "\":3,\"" + key + "\":4}"); // NOLINT(performance-inefficient-string-concatenation)
+            CAPTURE(n)
+            CHECK(dk.root()[key].materialize() == 1);
+            CHECK(dk.root().at(key).materialize() == 1);
+            CHECK(dk.root().find(key) == dk.root().begin());
+            CHECK(dk.root().value(key, 0) == 1);
+            CHECK(dk.root()[key + "x"].materialize() == 2);
+        }
+        std::string order;
+        for (auto it = v.begin(); it != v.end(); ++it)
+        {
+            order += std::string(it.key().data(), it.key().size()) + it->materialize().dump();
+        }
+        CHECK(order == "a1b2a3");
+        CHECK(v.back().materialize() == 3);
+        CHECK(v.materialize() == json::parse(R"({"a":1,"b":2,"a":3})")); // the last value, as parse()
+    }
+
+// ---- tests/src/unit-regression1.cpp:230-250  (uses: get, lexer)
+    SECTION("issue #82 - lexer::get_number return NAN")
+    {
+        const auto* const content = R"(
+        {
+            "Test":"Test1",
+            "Number":100,
+            "Foo":42.42
+        })";
+
+        std::stringstream ss;
+        ss << content;
+        json j;
+        ss >> j;
+
+        auto test = j["Test"].get<std::string>();
+        CHECK(test == "Test1");
+        const int number{j["Number"]};
+        CHECK(number == 100);
+        const float foo{j["Foo"]};
+        CHECK(static_cast<double>(foo) == Approx(42.42));
+    }
+
+// ---- tests/src/unit-alt-string.cpp:262-267  (uses: dump)
+    SECTION("parse")
+    {
+        auto doc = alt_json::parse(R"({"foo": "bar"})");
+        const alt_string dump = doc.dump();
+        CHECK(dump == R"({"foo":"bar"})");
+    }
+
+# Task
+Write 20 test programs for this pull request. Return JSON with a "tests" array; each item has "name" (short snake_case), "intent" (one sentence: what behavior it probes) and "code" (the complete C++ program).

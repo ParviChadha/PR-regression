@@ -1,0 +1,390 @@
+[system]
+You write test programs that probe a C++ library for behavioral changes made by one pull request.
+Each program is compiled and run twice, once against the library before the change and once after, and the two
+outputs are compared. Your job is to produce programs whose output reveals whether the change altered behavior,
+including side effects the author did not intend.
+
+Rules for every program:
+- It is standalone: one file with its own int main(), compiled as C++17, printing results to stdout.
+- Use only the library's documented public API. Never include internal headers or use detail/impl namespaces,
+  private members or undocumented macros.
+- Do not judge results (no assert, no expected-value comparisons): just print what the library returns. Print
+  enough to make differences visible, one fact per line.
+- Output must be deterministic. Never print pointers or addresses, uninitialized data, the order of
+  hash-based containers, timings, thread ids, random values, file paths or environment data. Print floating point
+  values with an explicit precision. No input, files, network, threads, clocks or randomness.
+- Wrap calls that may throw in try/catch and print the exception's type and message, so an exception is an
+  observable result. Do not crash on purpose.
+- Aim at the code the diff changes. Prefer calls that compile against both the old and the new library; one or two
+  programs may use an API the PR adds. Cover ordinary inputs and edge cases (empty, minimum and maximum values,
+  boundaries, special values, nesting, unusual types) and also neighbouring behavior the change could disturb.
+- When the diff changes which types or inputs an API accepts or rejects (constraints, overloads, traits,
+  conversions), test it with the detection idiom (std::void_t or requires) and `if constexpr`, so the program
+  compiles against both versions, prints whether the expression is well-formed, and exercises it when it is.
+  Accepting an input is not enough: also use it through every entry point that should follow (const and
+  non-const, read, write, insert, erase, lookup, nested use), because a change that admits new inputs can leave
+  later code unable to handle them.
+- If the changed code is internal (a detail, impl or internal namespace, a trait, a helper), do not name it in the
+  program. Reach it through the public API that depends on it, using detection (as above) where needed.
+- Use the exact types and values the diff is about (the new trait's argument types, the new overload's
+  parameters), not stand-ins.
+- Spread the programs over distinct public entry points and overloads, one main idea per program. Do not write
+  several programs that only rename a type or change a literal.
+- Make the programs differ from each other: different inputs, different entry points, different features.
+
+Rules specific to this library:
+- Include the library with #include <nlohmann/json.hpp>. The public API is nlohmann::json (nlohmann::basic_json), nlohmann::ordered_json, json_pointer, json patch/merge_patch and the documented SAX and conversion interfaces. Never use the detail namespace.
+- It is a header-only library: nothing to link. Programs are compiled as C++17.
+- Print JSON values with dump() (compact) or dump(2). Keys of nlohmann::json objects print in sorted order, so output is deterministic; do not depend on insertion order except with ordered_json.
+
+[user]
+# Pull request #5930: Fix BSON binary subtype 0x02 and check the declared document size earlier
+
+## Description
+## Summary
+- **Subtype 0x02 ("binary (old)")**: `to_bson` wrote it without the inner int32 length that the specification requires (`int32 byte*`); pymongo and libbson reject those bytes. The writer now emits outer length = size + 4, subtype `0x02`, inner int32 = size, payload. `from_bson` validates the inner length (= outer − 4, else `parse_error.112`, matching the bson-corpus decode errors) and returns only the payload, so the round trip holds. Cross-checked with pymongo (both directions) and the mongodb bson-corpus `binary.json`.
+- **Document size** is now checked against the content earlier (size ≥ 5, embedded documents end before their parent, element headers fit), not only at the terminator. Same error id `parse_error.112`; `strict=false` still does not skip it.
+- UUID/MD5 payload lengths are documented as not checked (not rejected). Docs also gain the lenient-read list (duplicate keys, embedded NUL, trailing bytes), the corrected key-validation statement, a BSON example for `out_of_range.415`, and the member order on write.
+
+## Breaking changes
+No API or ABI change; behaviour changes without an opt-in macro (the old subtype 0x02 output was a bug that other decoders reject):
+1. `to_bson` output for binaries with subtype 2 is 4 bytes longer; all other subtypes are byte-identical.
+2. `from_bson` now rejects subtype 2 input without the inner length, with a mismatched one, or with an outer length below 4 (`parse_error.112`). BSON written by this library with subtype 2 until now is not readable any more (it would otherwise be misread) and must be written again.
+3. Document-size errors are reported earlier: error id unchanged, but message, byte position and the number of SAX events for already invalid input change. A differential fuzz (old vs. new, ~44,000 mutated documents, DOM and SAX, strict and non-strict) found no input accepted before and rejected now other than old-format subtype 2, and none rejected before and accepted now.
+
+## Stack
+This PR is part of a stack of six PRs from a review of the binary formats against their specifications and other implementations (CBOR → MessagePack → UBJSON → BSON → BJData → BON8). Please merge in that order.
+
+🤖 Generated with [Claude Code](https://claude.com/claude-code)
+
+## Commit message
+* Write and read the inner length of BSON binary subtype 0x02
+
+The BSON specification defines the payload of the "binary (old)" subtype
+0x02 as an int32 followed by that many bytes. to_bson wrote the plain
+payload instead, so decoders such as pymongo and libbson-based readers
+rejected the bytes, and from_bson returned the inner length as part of the
+payload (documented as lenient behavior in gh-5333).
+
+The writer now emits the outer length (payload + 4), the subtype, the inner
+int32 holding the payload size, and the payload. The reader requires an
+outer length of at least 4 and an inner length equal to the outer length
+minus 4 (the cases the bson-corpus lists as decode errors), reports parse
+error 112 otherwise, and returns only the payload. Both directions change
+together so that the round trip keeps working.
+
+The single-reservation fast path for scalar entries declines subtype 0x02
+because it has no room for the inner length.
+
+This is a deliberate exception to the opt-in rule for behavior changes:
+the previous output was invalid BSON.
+
+Signed-off-by: Niels Lohmann <mail@nlohmann.me>
+
+* Check the declared BSON document size before reading its content
+
+The BSON reader compared a document's declared size with the number of bytes
+read only when it reached the terminator. The declared size never bounded
+the reads, so a SAX handler saw the keys and values of a document whose size
+was too small before parse error 112 was reported.
+
+The container frame now stores the position where the document ends
+according to its declared size. open_bson_document rejects a size below 5
+(size prefix plus terminator) and an embedded document that does not end
+before the terminator of its enclosing document; the element loop rejects an
+element whose type byte leaves no room for the name terminator and the
+document terminator. The terminator check stays and still catches a declared
+size that is too large. No input that was accepted before is rejected now;
+documents with a wrong size are re
+[... truncated, 2564 more characters]
+
+## Changed functions (from changes.py)
+- nlohmann::detail::binary_reader::open_bson_document(const bool) (private); reached from the public API through: nlohmann::basic_json::sax_parse(detail::span_input_adapter &&, SAX *, input_format_t, const bool, const bool, const bool, const cbor_tag_handler_t), nlohmann::basic_json::sax_parse(InputType &&, SAX *, input_format_t, const bool, const bool, const bool, const cbor_tag_handler_t), nlohmann::basic_json::sax_parse(IteratorType, SentinelType, SAX *, input_format_t, const bool, const bool, const bool, const cbor_tag_handler_t), nlohmann::basic_json::from_bson(detail::span_input_adapter &&, const bool, const bool), nlohmann::basic_json::from_cbor(detail::span_input_adapter &&, const bool, const bool, const cbor_tag_handler_t), nlohmann::basic_json::from_msgpack(detail::span_input_adapter &&, const bool, const bool), nlohmann::basic_json::from_ubjson(detail::span_input_adapter &&, const bool, const bool), nlohmann::basic_json::from_bjdata(InputType &&, const bool, const bool, const error_handler_t), nlohmann::basic_json::from_bon8(InputType &&, const bool, const bool), nlohmann::basic_json::from_bson(InputType &&, const bool, const bool, const error_handler_t)
+- nlohmann::detail::binary_reader (private); reached from the public API through: nlohmann::basic_json::sax_parse(detail::span_input_adapter &&, SAX *, input_format_t, const bool, const bool, const bool, const cbor_tag_handler_t), nlohmann::basic_json::sax_parse(InputType &&, SAX *, input_format_t, const bool, const bool, const bool, const cbor_tag_handler_t), nlohmann::basic_json::sax_parse(IteratorType, SentinelType, SAX *, input_format_t, const bool, const bool, const bool, const cbor_tag_handler_t), nlohmann::basic_json::from_bson(detail::span_input_adapter &&, const bool, const bool), nlohmann::basic_json::from_cbor(detail::span_input_adapter &&, const bool, const bool, const cbor_tag_handler_t), nlohmann::basic_json::from_msgpack(detail::span_input_adapter &&, const bool, const bool), nlohmann::basic_json::from_ubjson(detail::span_input_adapter &&, const bool, const bool), nlohmann::basic_json::from_bjdata(InputType &&, const bool, const bool, const error_handler_t), nlohmann::basic_json::from_bon8(InputType &&, const bool, const bool), nlohmann::basic_json::from_bson(InputType &&, const bool, const bool, const error_handler_t)
+- nlohmann::detail::binary_writer::write_bson_binary(const string_t &, const binary_t &) (private); reached from the public API through: nlohmann::basic_json::to_bjdata(const basic_json<...> &, detail::output_adapter<char>, const bool, const bool, const bjdata_version_t, const error_handler_t), nlohmann::basic_json::to_bjdata(const basic_json<...> &, detail::output_adapter<std::uint8_t>, const bool, const bool, const bjdata_version_t, const error_handler_t), nlohmann::basic_json::to_bon8(const basic_json<...> &, detail::output_adapter<char>), nlohmann::basic_json::to_bon8(const basic_json<...> &, detail::output_adapter<std::uint8_t>), nlohmann::basic_json::to_bson(const basic_json<...> &, detail::output_adapter<char>, const error_handler_t), nlohmann::basic_json::to_bson(const basic_json<...> &, detail::output_adapter<std::uint8_t>, const error_handler_t), nlohmann::basic_json::to_cbor(const basic_json<...> &, detail::output_adapter<char>, const error_handler_t), nlohmann::basic_json::to_cbor(const basic_json<...> &, detail::output_adapter<std::uint8_t>, const error_handler_t), nlohmann::basic_json::to_msgpack(const basic_json<...> &, detail::output_adapter<char>, const error_handler_t), nlohmann::basic_json::to_msgpack(const basic_json<...> &, detail::output_adapter<std::uint8_t>, const error_handler_t)
+- nlohmann::detail::binary_reader::get_bson_binary(const NumberType, binary_t &) (private); reached from the public API through: nlohmann::basic_json::sax_parse(detail::span_input_adapter &&, SAX *, input_format_t, const bool, const bool, const bool, const cbor_tag_handler_t), nlohmann::basic_json::sax_parse(InputType &&, SAX *, input_format_t, const bool, const bool, const bool, const cbor_tag_handler_t), nlohmann::basic_json::sax_parse(IteratorType, SentinelType, SAX *, input_format_t, const bool, const bool, const bool, const cbor_tag_handler_t), nlohmann::basic_json::from_bson(detail::span_input_adapter &&, const bool, const bool), nlohmann::basic_json::from_cbor(detail::span_input_adapter &&, const bool, const bool, const cbor_tag_handler_t), nlohmann::basic_json::from_msgpack(detail::span_input_adapter &&, const bool, const bool), nlohmann::basic_json::from_ubjson(detail::span_input_adapter &&, const bool, const bool), nlohmann::basic_json::from_bjdata(InputType &&, const bool, const bool, const error_handler_t), nlohmann::basic_json::from_bon8(InputType &&, const bool, const bool), nlohmann::basic_json::from_bson(InputType &&, const bool, const bool, const error_handler_t)
+- nlohmann::detail::binary_reader::parse_bson_internal() (private); reached from the public API through: nlohmann::basic_json::sax_parse(detail::span_input_adapter &&, SAX *, input_format_t, const bool, const bool, const bool, const cbor_tag_handler_t), nlohmann::basic_json::sax_parse(InputType &&, SAX *, input_format_t, const bool, const bool, const bool, const cbor_tag_handler_t), nlohmann::basic_json::sax_parse(IteratorType, SentinelType, SAX *, input_format_t, const bool, const bool, const bool, const cbor_tag_handler_t), nlohmann::basic_json::from_bson(detail::span_input_adapter &&, const bool, const bool), nlohmann::basic_json::from_cbor(detail::span_input_adapter &&, const bool, const bool, const cbor_tag_handler_t), nlohmann::basic_json::from_msgpack(detail::span_input_adapter &&, const bool, const bool), nlohmann::basic_json::from_ubjson(detail::span_input_adapter &&, const bool, const bool), nlohmann::basic_json::from_bjdata(InputType &&, const bool, const bool, const error_handler_t), nlohmann::basic_json::from_bon8(InputType &&, const bool, const bool), nlohmann::basic_json::from_bson(InputType &&, const bool, const bool, const error_handler_t)
+- nlohmann::detail::binary_writer (private); reached from the public API through: nlohmann::basic_json::to_bjdata(const basic_json<...> &, detail::output_adapter<char>, const bool, const bool, const bjdata_version_t, const error_handler_t), nlohmann::basic_json::to_bjdata(const basic_json<...> &, detail::output_adapter<std::uint8_t>, const bool, const bool, const bjdata_version_t, const error_handler_t), nlohmann::basic_json::to_bon8(const basic_json<...> &, detail::output_adapter<char>), nlohmann::basic_json::to_bon8(const basic_json<...> &, detail::output_adapter<std::uint8_t>), nlohmann::basic_json::to_bson(const basic_json<...> &, detail::output_adapter<char>, const error_handler_t), nlohmann::basic_json::to_bson(const basic_json<...> &, detail::output_adapter<std::uint8_t>, const error_handler_t), nlohmann::basic_json::to_cbor(const basic_json<...> &, detail::output_adapter<char>, const error_handler_t), nlohmann::basic_json::to_cbor(const basic_json<...> &, detail::output_adapter<std::uint8_t>, const error_handler_t), nlohmann::basic_json::to_msgpack(const basic_json<...> &, detail::output_adapter<char>, const error_handler_t), nlohmann::basic_json::to_msgpack(const basic_json<...> &, detail::output_adapter<std::uint8_t>, const error_handler_t)
+- nlohmann::detail::binary_writer::calc_bson_binary_size(const BasicJsonType &) (private); reached from the public API through: nlohmann::basic_json::to_bjdata(const basic_json<...> &, detail::output_adapter<char>, const bool, const bool, const bjdata_version_t, const error_handler_t), nlohmann::basic_json::to_bjdata(const basic_json<...> &, detail::output_adapter<std::uint8_t>, const bool, const bool, const bjdata_version_t, const error_handler_t), nlohmann::basic_json::to_bon8(const basic_json<...> &, detail::output_adapter<char>), nlohmann::basic_json::to_bon8(const basic_json<...> &, detail::output_adapter<std::uint8_t>), nlohmann::basic_json::to_bson(const basic_json<...> &, detail::output_adapter<char>, const error_handler_t), nlohmann::basic_json::to_bson(const basic_json<...> &, detail::output_adapter<std::uint8_t>, const error_handler_t), nlohmann::basic_json::to_cbor(const basic_json<...> &, detail::output_adapter<char>, const error_handler_t), nlohmann::basic_json::to_cbor(const basic_json<...> &, detail::output_adapter<std::uint8_t>, const error_handler_t), nlohmann::basic_json::to_msgpack(const basic_json<...> &, detail::output_adapter<char>, const error_handler_t), nlohmann::basic_json::to_msgpack(const basic_json<...> &, detail::output_adapter<std::uint8_t>, const error_handler_t)
+- nlohmann::detail::binary_writer::write_bson_scalar(const string_t &, const BasicJsonType &) (private); reached from the public API through: nlohmann::basic_json::to_bjdata(const basic_json<...> &, detail::output_adapter<char>, const bool, const bool, const bjdata_version_t, const error_handler_t), nlohmann::basic_json::to_bjdata(const basic_json<...> &, detail::output_adapter<std::uint8_t>, const bool, const bool, const bjdata_version_t, const error_handler_t), nlohmann::basic_json::to_bon8(const basic_json<...> &, detail::output_adapter<char>), nlohmann::basic_json::to_bon8(const basic_json<...> &, detail::output_adapter<std::uint8_t>), nlohmann::basic_json::to_bson(const basic_json<...> &, detail::output_adapter<char>, const error_handler_t), nlohmann::basic_json::to_bson(const basic_json<...> &, detail::output_adapter<std::uint8_t>, const error_handler_t), nlohmann::basic_json::to_cbor(const basic_json<...> &, detail::output_adapter<char>, const error_handler_t), nlohmann::basic_json::to_cbor(const basic_json<...> &, detail::output_adapter<std::uint8_t>, const error_handler_t), nlohmann::basic_json::to_msgpack(const basic_json<...> &, detail::output_adapter<char>, const error_handler_t), nlohmann::basic_json::to_msgpack(const basic_json<...> &, detail::output_adapter<std::uint8_t>, const error_handler_t)
+- nlohmann::detail::binary_reader::get_bson_old_binary(const NumberType, binary_t &) (private); reached from the public API through: nlohmann::basic_json::sax_parse(detail::span_input_adapter &&, SAX *, input_format_t, const bool, const bool, const bool, const cbor_tag_handler_t), nlohmann::basic_json::sax_parse(InputType &&, SAX *, input_format_t, const bool, const bool, const bool, const cbor_tag_handler_t), nlohmann::basic_json::sax_parse(IteratorType, SentinelType, SAX *, input_format_t, const bool, const bool, const bool, const cbor_tag_handler_t), nlohmann::basic_json::from_bson(detail::span_input_adapter &&, const bool, const bool), nlohmann::basic_json::from_cbor(detail::span_input_adapter &&, const bool, const bool, const cbor_tag_handler_t), nlohmann::basic_json::from_msgpack(detail::span_input_adapter &&, const bool, const bool), nlohmann::basic_json::from_ubjson(detail::span_input_adapter &&, const bool, const bool), nlohmann::basic_json::from_bjdata(InputType &&, const bool, const bool, const error_handler_t), nlohmann::basic_json::from_bon8(InputType &&, const bool, const bool), nlohmann::basic_json::from_bson(InputType &&, const bool, const bool, const error_handler_t)
+- nlohmann::detail::binary_reader::bson_document_size_error(const char *, const std::int32_t, const char *) (private); reached from the public API through: nlohmann::basic_json::sax_parse(detail::span_input_adapter &&, SAX *, input_format_t, const bool, const bool, const bool, const cbor_tag_handler_t), nlohmann::basic_json::sax_parse(InputType &&, SAX *, input_format_t, const bool, const bool, const bool, const cbor_tag_handler_t), nlohmann::basic_json::sax_parse(IteratorType, SentinelType, SAX *, input_format_t, const bool, const bool, const bool, const cbor_tag_handler_t), nlohmann::basic_json::from_bson(detail::span_input_adapter &&, const bool, const bool), nlohmann::basic_json::from_cbor(detail::span_input_adapter &&, const bool, const bool, const cbor_tag_handler_t), nlohmann::basic_json::from_msgpack(detail::span_input_adapter &&, const bool, const bool), nlohmann::basic_json::from_ubjson(detail::span_input_adapter &&, const bool, const bool), nlohmann::basic_json::from_bjdata(InputType &&, const bool, const bool, const error_handler_t), nlohmann::basic_json::from_bon8(InputType &&, const bool, const bool), nlohmann::basic_json::from_bson(InputType &&, const bool, const bool, const error_handler_t)
+- nlohmann::detail::binary_writer::is_bson_old_binary(const binary_t &) (private); reached from the public API through: nlohmann::basic_json::to_bjdata(const basic_json<...> &, detail::output_adapter<char>, const bool, const bool, const bjdata_version_t, const error_handler_t), nlohmann::basic_json::to_bjdata(const basic_json<...> &, detail::output_adapter<std::uint8_t>, const bool, const bool, const bjdata_version_t, const error_handler_t), nlohmann::basic_json::to_bon8(const basic_json<...> &, detail::output_adapter<char>), nlohmann::basic_json::to_bon8(const basic_json<...> &, detail::output_adapter<std::uint8_t>), nlohmann::basic_json::to_bson(const basic_json<...> &, detail::output_adapter<char>, const error_handler_t), nlohmann::basic_json::to_bson(const basic_json<...> &, detail::output_adapter<std::uint8_t>, const error_handler_t), nlohmann::basic_json::to_cbor(const basic_json<...> &, detail::output_adapter<char>, const error_handler_t), nlohmann::basic_json::to_cbor(const basic_json<...> &, detail::output_adapter<std::uint8_t>, const error_handler_t), nlohmann::basic_json::to_msgpack(const basic_json<...> &, detail::output_adapter<char>, const error_handler_t), nlohmann::basic_json::to_msgpack(const basic_json<...> &, detail::output_adapter<std::uint8_t>, const error_handler_t)
+- nlohmann::detail::binary_reader::container_frame (private); reached from the public API through: nlohmann::basic_json::sax_parse(detail::span_input_adapter &&, SAX *, input_format_t, const bool, const bool, const bool, const cbor_tag_handler_t), nlohmann::basic_json::sax_parse(InputType &&, SAX *, input_format_t, const bool, const bool, const bool, const cbor_tag_handler_t), nlohmann::basic_json::sax_parse(IteratorType, SentinelType, SAX *, input_format_t, const bool, const bool, const bool, const cbor_tag_handler_t), nlohmann::basic_json::from_bson(detail::span_input_adapter &&, const bool, const bool), nlohmann::basic_json::from_cbor(detail::span_input_adapter &&, const bool, const bool, const cbor_tag_handler_t), nlohmann::basic_json::from_msgpack(detail::span_input_adapter &&, const bool, const bool), nlohmann::basic_json::from_ubjson(detail::span_input_adapter &&, const bool, const bool), nlohmann::basic_json::from_bjdata(InputType &&, const bool, const bool, const error_handler_t), nlohmann::basic_json::from_bon8(InputType &&, const bool, const bool), nlohmann::basic_json::from_bson(InputType &&, const bool, const bool, const error_handler_t)
+- nlohmann::detail::binary_reader::container_frame::end_position (private)
+- nlohmann::detail::binary_reader::container_frame::type_marker (private); reached from the public API through: nlohmann::basic_json::sax_parse(detail::span_input_adapter &&, SAX *, input_format_t, const bool, const bool, const bool, const cbor_tag_handler_t), nlohmann::basic_json::sax_parse(InputType &&, SAX *, input_format_t, const bool, const bool, const bool, const cbor_tag_handler_t), nlohmann::basic_json::sax_parse(IteratorType, SentinelType, SAX *, input_format_t, const bool, const bool, const bool, const cbor_tag_handler_t), nlohmann::basic_json::from_bson(detail::span_input_adapter &&, const bool, const bool), nlohmann::basic_json::from_cbor(detail::span_input_adapter &&, const bool, const bool, const cbor_tag_handler_t), nlohmann::basic_json::from_msgpack(detail::span_input_adapter &&, const bool, const bool), nlohmann::basic_json::from_ubjson(detail::span_input_adapter &&, const bool, const bool), nlohmann::basic_json::from_bjdata(InputType &&, const bool, const bool, const error_handler_t), nlohmann::basic_json::from_bon8(InputType &&, const bool, const bool), nlohmann::basic_json::from_bson(InputType &&, const bool, const bool, const error_handler_t)
+
+## Diff of the library source (before -> after)
+```diff
+diff --git a/include/nlohmann/detail/input/binary_reader.hpp b/include/nlohmann/detail/input/binary_reader.hpp
+index 4c8d6ed0f..b44fd868c 100644
+--- a/include/nlohmann/detail/input/binary_reader.hpp
++++ b/include/nlohmann/detail/input/binary_reader.hpp
+@@ -235,6 +235,9 @@ class binary_reader
+         /// UBJSON/BJData: the type marker of an optimized container, so that
+         /// its elements are read without one of their own; 0 otherwise
+         char_int_type type_marker;
++        /// BSON: the position right after this document, according to the
++        /// size it declares
++        std::size_t end_position = 0;
+         /// BSON: the size this document declares, in bytes
+         std::int32_t declared_size = 0;
+         /// whether to close this container with end_object() or end_array()
+@@ -371,6 +374,23 @@ class binary_reader
+             return false;
+         }
+ 
++        // the smallest document is the size prefix and the terminator
++        if (JSON_HEDLEY_UNLIKELY(document_size < 5))
++        {
++            return bson_document_size_error("document size ", document_size, " is less than 5");
++        }
++
++        // the declared size bounds where the document ends: an embedded
++        // document must end before the terminator of the document that contains it
++        const auto unsigned_size = static_cast<std::size_t>(document_size);
++        const std::size_t document_end = unsigned_size > (std::numeric_limits<std::size_t>::max)() - document_start
++                                         ? (std::numeric_limits<std::size_t>::max)()
++                                         : document_start + unsigned_size;
++        if (JSON_HEDLEY_UNLIKELY(!container_stack.empty() && document_end >= container_stack.back().end_position))
++        {
++            return bson_document_size_error("document size ", document_size, " exceeds the size of the enclosing document");
++        }
++
+         if (JSON_HEDLEY_UNLIKELY(!enter_container(is_object, detail::unknown_size())))
+         {
+             return false;
+@@ -378,6 +398,7 @@ class binary_reader
+ 
+         container_frame& frame = container_stack.back();
+         frame.start_position = document_start;
++        frame.end_position = document_end;
+         frame.declared_size = document_size;
+         return true;
+     }
+@@ -436,6 +457,13 @@ class binary_reader
+                 return false;
+             }
+ 
++            // an element needs at least its name's terminator, and the
++            // document its own terminator, within the declared size
++            if (JSON_HEDLEY_UNLIKELY(chars_read + 2 > container_stack.back().end_position))
++            {
++                return bson_document_size_error("document size ", container_stack.back().declared_size, " is too small for its content");
++            }
++
+             const std::size_t element_type_parse_position = chars_read;
+             key.clear();
+             if (JSON_HEDLEY_UNLIKELY(!get_bson_cstr(key)))
+@@ -584,9 +612,46 @@ class binary_reader
+         }
+         result.set_subtype(subtype);
+ 
++        // the "old binary" subtype 0x02 starts with an int32 that repeats the
++        // size of the payload following it; the payload does not include it
++        if (subtype == 0x02)
++        {
++            return get_bson_old_binary(len, result);
++        }
++
+         return get_binary(len, result);
+     }
+ 
++    /*!
++    @brief Parses the payload of a BSON binary value with subtype 0x02.
++    @param[in] len  The length of the binary value, including the inner int32.
++    @param[in,out] result  A reference to the binary variable where the payload
++                           (without the inner int32) is to be stored.
++    @pre len >= 0
++    @return `true` if the inner length was present and matches @a len
++    */
++    template<typename NumberType>
++    bool get_bson_old_binary(const NumberType len, binary_t& result)
++    {
++        if (JSON_HEDLEY_UNLIKELY(len < 4))
++        {
++            return bson_length_error("length of binary subtype 0x02 must be at least 4, is ", len, "binary");
++        }
++
++        std::int32_t inner_length{};
++        if (JSON_HEDLEY_UNLIKELY((!get_number<std::int32_t, true>(inner_length))))
++        {
++            return false;
++        }
++
++        if (JSON_HEDLEY_UNLIKELY(static_cast<std::int64_t>(inner_length) != static_cast<std::int64_t>(len) - 4))
++        {
++            return bson_length_error("inner length of binary subtype 0x02 does not match the payload size; inner length is ", inner_length, "binary");
++        }
++
++        return get_binary(inner_length, result);
++    }
++
+     /*!
+     @brief Read a BSON document element of the given @a element_type.
+     @param[in] element_type The BSON element type, c.f. http://bsonspec.org/spec.html
+@@ -4399,6 +4464,12 @@ class binary_reader
+         return last_byte_error(exception_id::unexpected_byte, concat("document size ", std::to_string(document_size), " does not match the number of bytes read (", std::to_string(bytes_read), ")"), "document");
+     }
+ 
++    JSON_HEDLEY_NEVER_INLINE
++    bool bson_document_size_error(const char* prefix, const std::int32_t document_size, const char* suffix) const
++    {
++        return last_byte_error(exception_id::unexpected_byte, concat(prefix, std::to_string(document_size), suffix), "document");
++    }
++
+     JSON_HEDLEY_NEVER_INLINE
+     bool bson_unsupported_type_error(const std::size_t position, const char_int_type element_type) const
+     {
+diff --git a/include/nlohmann/detail/output/binary_writer.hpp b/include/nlohmann/detail/output/binary_writer.hpp
+index 7ff828074..d8b3e7162 100644
+--- a/include/nlohmann/detail/output/binary_writer.hpp
++++ b/include/nlohmann/detail/output/binary_writer.hpp
+@@ -1684,7 +1684,15 @@ class binary_writer
+             throw_subtype_out_of_range(value.subtype(), "the BSON binary subtype", j);
+         }
+ 
+-        return sizeof(std::int32_t) + value.size() + 1ul;
++        // the "old binary" subtype 0x02 repeats the payload size in an inner
++        // int32 in front of the payload
++        return sizeof(std::int32_t) + (is_bson_old_binary(value) ? sizeof(std::int32_t) : 0ul) + value.size() + 1ul;
++    }
++
++    /// @return whether @a value has the BSON subtype 0x02 ("binary (old)")
++    static bool is_bson_old_binary(const binary_t& value) noexcept
++    {
++        return value.has_subtype() && value.subtype() == 0x02;
+     }
+ 
+     /*!
+@@ -1697,10 +1705,18 @@ class binary_writer
+     {
+         write_bson_entry_header(name, 0x05);
+ 
+-        write_number<std::int32_t>(to_bson_length(value.size()), true);
++        const bool old_binary = is_bson_old_binary(value);
++
++        // the length field counts the inner int32 of the old binary subtype
++        write_number<std::int32_t>(to_bson_length(value.size() + (old_binary ? sizeof(std::int32_t) : 0ul)), true);
+ 
+         write_number(value.has_subtype() ? static_cast<std::uint8_t>(value.subtype()) : static_cast<std::uint8_t>(0x00));
+ 
++        if (old_binary)
++        {
++            write_number<std::int32_t>(to_bson_length(value.size()), true);
++        }
++
+         write_bytes(value.data(), value.size());
+     }
+ 
+@@ -1860,7 +1876,8 @@ class binary_writer
+            (or the header of a string or binary value) in one reservation
+     @return whether the entry was written; false for a discarded value, a
+             string or binary value whose length does not fit the length
+-            field, in which case nothing was written
++            field, or a binary value with subtype 0x02, in which case nothing
++            was written
+     @pre    @a name is at most bson_scalar_max_name_size characters long and is
+             not changed by the error handler
+     */
+@@ -1921,7 +1938,9 @@ class binary_writer
+         if (j.is_binary())
+         {
+             const binary_t& value = *j.m_data.m_value.binary;
+-            if (JSON_HEDLEY_UNLIKELY(!value_in_range_of<std::int32_t>(value.size())))
++            // the old binary subtype 0x02 has an inner length that the single
++            // reservation has no room for; write_bson_binary writes it
++            if (JSON_HEDLEY_UNLIKELY(!value_in_range_of<std::int32_t>(value.size()) || is_bson_old_binary(value)))
+             {
+                 return false;
+             }
+```
+
+## Existing upstream tests that call the changed code (for style and API usage)
+// Upstream tests at the PR's parent commit 0c3570d44 that use the changed code.
+// Names searched (test lines using each): sax_parse (0), from_bson (0), from_cbor (0), from_msgpack (0), from_ubjson (0), from_bjdata (0), from_bon8 (0), to_bjdata (0), to_bon8 (0), to_bson (0), to_cbor (0), to_msgpack (0), open_bson_document (0), binary_reader (2), write_bson_binary (0), get_bson_binary (0), parse_bson_internal (0), binary_writer (0), calc_bson_binary_size (0), write_bson_scalar (0), get_bson_old_binary (0), bson_document_size_error (0), is_bson_old_binary (0), container_frame (0), end_position (0), type_marker (0)
+
+// ---- tests/src/unit-bjdata.cpp:76-111  (uses: binary_reader)
+    SECTION("binary_reader BJData lookup tables")
+    {
+        // both lookups are static member functions
+        std::vector<std::uint8_t> const data;
+        using reader_t = nlohmann::detail::binary_reader<json, decltype(nlohmann::detail::input_adapter(data))>;
+
+        // the excluded optimized-type markers must match binary_writer's
+        // is_bjdata_excluded_type_marker(), which encodes the same 8 markers
+        for (const char marker :
+                {'[', '{', 'S', 'H', 'T', 'F', 'N', 'Z'
+                })
+        {
+            CHECK(reader_t::is_bjd_excluded_optimized_type(static_cast<unsigned char>(marker)));
+        }
+        for (const char marker :
+                {'U', 'i', 'u', 'I', 'm', 'l', 'M', 'L', 'd', 'D', 'C', 'B', 'x'
+                })
+        {
+            CHECK(!reader_t::is_bjd_excluded_optimized_type(static_cast<unsigned char>(marker)));
+        }
+
+        // every dtype marker must round-trip to its ND-array type name
+        const std::vector<std::pair<char, std::string>> types
+        {
+            {'B', "byte"}, {'C', "char"}, {'D', "double"}, {'I', "int16"},
+            {'L', "int64"}, {'M', "uint64"}, {'U', "uint8"}, {'d', "single"},
+            {'i', "int8"}, {'l', "int32"}, {'m', "uint32"}, {'u', "uint16"}
+        };
+        for (const auto& type : types)
+        {
+            const char* name = reader_t::bjd_type_name(static_cast<unsigned char>(type.first));
+            REQUIRE(name != nullptr);
+            CHECK(std::string(name) == type.second);
+        }
+        CHECK(reader_t::bjd_type_name(static_cast<unsigned char>('x')) == nullptr);
+    }
+
+# Programs to repair
+
+## gen_26.cpp (compile)
+Intent: Directly invoke bson_document_size_error via custom SAX parser parsing an invalidly sized BSON document (executing line 4468).
+COMPILE ERROR. The program fails to compile, the same way against the old and the new library. Fix the error (wrong or missing include, typo, misuse of the public API) and keep the intent: the call under test must stay. Include only headers that exist; if you are unsure a header exists, use the library's main header.
+Compiler errors:
+```
+gen_26.cpp:28:14: error: cannot declare variable ‘sax’ to be of abstract type ‘DummySAX’
+gen_26.cpp:29:62: error: ‘nlohmann::json_abi_v3_12_0::json::detail’ has not been declared
+```
+Source:
+```cpp
+#include <nlohmann/json.hpp>
+#include <iostream>
+#include <vector>
+#include <cstdint>
+
+struct DummySAX : public nlohmann::json::json_sax_t {
+    bool null() override { return true; }
+    bool boolean(bool) override { return true; }
+    bool number_integer(number_integer_t) override { return true; }
+    bool number_unsigned(number_unsigned_t) override { return true; }
+    bool number_float(number_float_t, const string_t&) override { return true; }
+    bool string(string_t&) override { return true; }
+    bool binary(binary_t&) override { return true; }
+    bool start_object(std::size_t) override { return true; }
+    bool end_object() override { return true; }
+    bool start_array(std::size_t) override { return true; }
+    bool end_array() override { return true; }
+    bool parse_error(std::size_t, const std::string&, const nlohmann::json::exception& e) override {
+        std::cout << e.what() << std::endl;
+        return false;
+    }
+};
+
+int main() {
+    std::vector<std::uint8_t> bson = { 4, 0, 0, 0 };
+    DummySAX sax;
+    bool success = nlohmann::json::sax_parse(nlohmann::json::detail::span_input_adapter(bson.data(), bson.data() + bson.size()), &sax, nlohmann::json::input_format_t::bson);
+    std::cout << success << std::endl;
+    return 0;
+}
+```
+
+# Task
+Return JSON with a "fixes" array: one item per program above, with "file" (exactly as given) and "code" (the complete repaired program, standalone, with its own int main). Do not return programs you cannot repair.

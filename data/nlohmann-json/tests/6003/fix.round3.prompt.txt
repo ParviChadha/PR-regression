@@ -1,0 +1,271 @@
+[system]
+You write test programs that probe a C++ library for behavioral changes made by one pull request.
+Each program is compiled and run twice, once against the library before the change and once after, and the two
+outputs are compared. Your job is to produce programs whose output reveals whether the change altered behavior,
+including side effects the author did not intend.
+
+Rules for every program:
+- It is standalone: one file with its own int main(), compiled as C++17, printing results to stdout.
+- Use only the library's documented public API. Never include internal headers or use detail/impl namespaces,
+  private members or undocumented macros.
+- Do not judge results (no assert, no expected-value comparisons): just print what the library returns. Print
+  enough to make differences visible, one fact per line.
+- Output must be deterministic. Never print pointers or addresses, uninitialized data, the order of
+  hash-based containers, timings, thread ids, random values, file paths or environment data. Print floating point
+  values with an explicit precision. No input, files, network, threads, clocks or randomness.
+- Wrap calls that may throw in try/catch and print the exception's type and message, so an exception is an
+  observable result. Do not crash on purpose.
+- Aim at the code the diff changes. Prefer calls that compile against both the old and the new library; one or two
+  programs may use an API the PR adds. Cover ordinary inputs and edge cases (empty, minimum and maximum values,
+  boundaries, special values, nesting, unusual types) and also neighbouring behavior the change could disturb.
+- When the diff changes which types or inputs an API accepts or rejects (constraints, overloads, traits,
+  conversions), test it with the detection idiom (std::void_t or requires) and `if constexpr`, so the program
+  compiles against both versions, prints whether the expression is well-formed, and exercises it when it is.
+  Accepting an input is not enough: also use it through every entry point that should follow (const and
+  non-const, read, write, insert, erase, lookup, nested use), because a change that admits new inputs can leave
+  later code unable to handle them.
+- If the changed code is internal (a detail, impl or internal namespace, a trait, a helper), do not name it in the
+  program. Reach it through the public API that depends on it, using detection (as above) where needed.
+- Use the exact types and values the diff is about (the new trait's argument types, the new overload's
+  parameters), not stand-ins.
+- Spread the programs over distinct public entry points and overloads, one main idea per program. Do not write
+  several programs that only rename a type or change a literal.
+- Make the programs differ from each other: different inputs, different entry points, different features.
+
+Rules specific to this library:
+- Include the library with #include <nlohmann/json.hpp>. The public API is nlohmann::json (nlohmann::basic_json), nlohmann::ordered_json, json_pointer, json patch/merge_patch and the documented SAX and conversion interfaces. Never use the detail namespace.
+- It is a header-only library: nothing to link. Programs are compiled as C++17.
+- Print JSON values with dump() (compact) or dump(2). Keys of nlohmann::json objects print in sorted order, so output is deterministic; do not depend on insertion order except with ordered_json.
+
+[user]
+# Pull request #6003: JSON_DIAGNOSTIC_POSITIONS: comparing a value-initialized iterator throws instead of crashing
+
+## Description
+## Summary
+
+With `JSON_DIAGNOSTIC_POSITIONS=1`, comparing a value-initialized iterator (one without a container) with another iterator crashed instead of throwing `invalid_iterator.212`:
+
+```cpp
+json j = {1, 2};
+json::iterator it{};
+it == j.begin(); // UBSan: member call on null pointer in exception::get_byte_positions(), then SEGV
+```
+
+`check_same_container()` builds the exception from `m_object`, which is null for such an iterator, and `exception::get_byte_positions()` dereferenced it to read the byte range. Every other configuration throws `invalid_iterator.212` ("cannot compare iterators of different containers"). The `JSON_DIAGNOSTICS` path (`exception::diagnostics()`) already guards against a null value.
+
+`get_byte_positions()` now returns no positions for a null value, so the comparison throws `invalid_iterator.212` with the same message as without the macro.
+
+Tests: a new test case in `unit-diagnostic-positions.cpp` compares a value-initialized iterator with a real one in both directions and with `<`.
+
+Found by a review of runtime checks in the iterator code (the null `m_object` tests in `iter_impl` turned out to be live only without `JSON_DIAGNOSTIC_POSITIONS`).
+
+## Breaking changes
+
+No breaking changes. The only observable difference is that a crash (undefined behaviour) became the documented `invalid_iterator.212` exception.
+
+🤖 Generated with [Claude Code](https://claude.com/claude-code)
+
+## Commit message
+* JSON_DIAGNOSTIC_POSITIONS: comparing a value-initialized iterator throws instead of crashing
+
+With JSON_DIAGNOSTIC_POSITIONS, comparing a value-initialized iterator
+(which has no container) with another iterator built the
+invalid_iterator.212 message from the byte positions of the iterator's
+value, which is a null pointer: UBSan reports "member call on null
+pointer" in exception::get_byte_positions(), then the process crashes.
+Every other configuration throws invalid_iterator.212.
+
+get_byte_positions() now returns no positions for a null value, as the
+JSON_DIAGNOSTICS path already does.
+
+Signed-off-by: Niels Lohmann <mail@nlohmann.me>
+
+* Declare the value-initialized iterator in the test const
+
+clang-tidy (misc-const-correctness) flags it, as it is only compared.
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+Claude-Session: https://claude.ai/code/session_01N5NasAgbDGG28MqXjQvLqp
+Signed-off-by: Claude <noreply@anthropic.com>
+
+---------
+
+Signed-off-by: Niels Lohmann <mail@nlohmann.me>
+Signed-off-by: Claude <noreply@anthropic.com>
+Co-authored-by: Claude <noreply@anthropic.com>
+
+## Changed functions (from changes.py)
+- nlohmann::detail::exception (private); reached from the public API through: nlohmann::json_sax::parse_error(std::size_t, const std::string &, const detail::exception &), nlohmann::operator<<(std::ostream &, const basic_json<...> &), nlohmann::operator<<(basic_json<...> &, std::istream &), nlohmann::operator>>(std::istream &, basic_json<...> &), nlohmann::operator>>(const basic_json<...> &, std::ostream &), nlohmann::format_as(const basic_json<...> &), nlohmann::to_string(const basic_json<...> &), nlohmann::operator!=(const_reference, ScalarType), nlohmann::operator!=(ScalarType, const_reference), nlohmann::operator<(const_reference, ScalarType)
+
+## Diff of the library source (before -> after)
+```diff
+diff --git a/include/nlohmann/detail/exceptions.hpp b/include/nlohmann/detail/exceptions.hpp
+index 144bb770c..098d70495 100644
+--- a/include/nlohmann/detail/exceptions.hpp
++++ b/include/nlohmann/detail/exceptions.hpp
+@@ -222,7 +222,8 @@ class exception : public std::exception
+     template<typename BasicJsonType>
+     static std::string get_byte_positions(const BasicJsonType* leaf_element)
+     {
+-        if ((leaf_element->start_pos() != std::string::npos) && (leaf_element->end_pos() != std::string::npos))
++        // a value-initialized iterator has no value (invalid_iterator.212)
++        if (leaf_element != nullptr && leaf_element->start_pos() != std::string::npos && leaf_element->end_pos() != std::string::npos)
+         {
+             return concat("(bytes ", std::to_string(leaf_element->start_pos()), "-", std::to_string(leaf_element->end_pos()), ") ");
+         }
+```
+
+## Existing upstream tests that call the changed code (for style and API usage)
+// Upstream tests at the PR's parent commit 76dbe8f9c that use the changed code.
+// Names searched (test lines using each): parse_error (0), format_as (23), to_string (178), operator<< (99), operator>> (98), operator!= (65), operator< (217), exception (1838)
+
+// ---- tests/src/unit-deserialization.cpp:1271-1316  (uses: exception, operator<<, operator>>, to_string)
+TEST_CASE("parse error positions are the same for contiguous and stream input")
+{
+    // contiguous input derives the position from the input on error, stream
+    // input counts it while reading (see lexer::lazy_position); the cases
+    // cover newlines before the error, ungetting a newline after a number,
+    // newlines inside a string, a comment, and reads at the end of input
+    struct test_case
+    {
+        std::string input;
+        std::size_t byte;
+        std::string message;
+    };
+    const std::vector<test_case> cases =
+    {
+        {"[\n  1,\n  2\n", 12, "[json.exception.parse_error.101] parse error at line 4, column 1: syntax error while parsing array - unexpected end of input; expected ']'"},
+        {"[1\n,2,\n]", 8, "[json.exception.parse_error.101] parse error at line 3, column 1: syntax error while parsing value - unexpected ']'; expected '[', '{', or a literal"},
+        {"[1\n x]", 5, "[json.exception.parse_error.101] parse error at line 2, column 2: syntax error while parsing array - invalid literal; last read: '1<U+000A> x'; expected ']'"},
+        {"1\n2", 3, "[json.exception.parse_error.101] parse error at line 2, column 1: syntax error while parsing value - unexpected number literal; expected end of input"},
+        {
+            "{\"a\":\n\"b\nc\"}", 9, R"([json.exception.parse_error.101] parse error at line 3, column 0: syntax error while parsing value - invalid string: control character U+000A (LF) must be escaped to \u000A or \n; last read: '"b<U+000A>')"
+        },
+        {"/* a\n b */\n x", 13, "[json.exception.parse_error.101] parse error at line 3, column 2: syntax error while parsing value - invalid literal; last read: '/* a<U+000A> b */<U+000A> x'"},
+        {"\n\n", 3, "[json.exception.parse_error.101] parse error at line 3, column 1: syntax error while parsing value - unexpected end of input; expected '[', '{', or a literal"},
+        {"[\"a\",\n 1e\n]", 10, "[json.exception.parse_error.101] parse error at line 3, column 0: syntax error while parsing value - invalid number; expected '+', '-', or digit after exponent; last read: '1e<U+000A>'"},
+        {"[tru\n]", 5, "[json.exception.parse_error.101] parse error at line 2, column 0: syntax error while parsing value - invalid literal; last read: '[tru<U+000A>'"},
+    };
+
+    for (const auto& c : cases)
+    {
+        CAPTURE(c.input)
+        const std::string expected = std::to_string(c.byte) + " " + c.message;
+
+        SaxErrorRecorder string_sax;
+        CHECK_FALSE(json::sax_parse(c.input, &string_sax, json::input_format_t::json, true, true));
+        CHECK(string_sax.error == expected);
+
+        SaxErrorRecorder pointer_sax;
+        CHECK_FALSE(json::sax_parse(c.input.data(), c.input.data() + c.input.size(), &pointer_sax, json::input_format_t::json, true, true));
+        CHECK(pointer_sax.error == expected);
+
+        std::istringstream is(c.input);
+        SaxErrorRecorder stream_sax;
+        CHECK_FALSE(json::sax_parse(is, &stream_sax, json::input_format_t::json, true, true));
+        CHECK(stream_sax.error == expected);
+    }
+}
+
+// ---- tests/src/unit-deserialization.cpp:208-237  (uses: exception, operator<<, operator>>)
+        SECTION("stream")
+        {
+            std::stringstream ss1;
+            std::stringstream ss3;
+            std::stringstream ss4;
+            std::stringstream ss5;
+            ss1 << R"(["foo",1,2,3,false,{"one":1})";
+            ss3 << R"(["foo",1,2,3,false,{"one":1})";
+            ss4 << R"(["foo",1,2,3,false,{"one":1})";
+            ss5 << R"(["foo",1,2,3,false,{"one":1})";
+
+            json _;
+            CHECK_THROWS_WITH_AS(_ = json::parse(ss1), "[json.exception.parse_error.101] parse error at line 1, column 29: syntax error while parsing array - unexpected end of input; expected ']'", json::parse_error&);
+            CHECK(!json::accept(ss3));
+
+            json j_error;
+            CHECK_NOTHROW(j_error = json::parse(ss4, nullptr, false));
+            CHECK(j_error.is_discarded());
+
+            SaxEventLogger l;
+            CHECK(!json::sax_parse(ss5, &l));
+            CHECK(l.events.size() == 11);
+            CHECK(l.events == std::vector<std::string>(
+            {
+                "start_array()", "string(foo)", "number_unsigned(1)",
+                "number_unsigned(2)", "number_unsigned(3)", "boolean(false)",
+                "start_object()", "key(one)", "number_unsigned(1)",
+                "end_object()", "parse_error(29)"
+            }));
+        }
+
+// ---- tests/src/unit-precise-stream-position.cpp:273-291  (uses: exception, operator<<, operator>>)
+    SECTION("stream with eofbit in its exception mask (issue #5646)")
+    {
+        // with JSON_PRECISE_STREAM_POSITION, get_character() peeks via
+        // sb->sgetc() rather than consuming via sb->sbumpc(), but it still
+        // calls std::istream::clear() to record eofbit once the streambuf is
+        // exhausted; with eofbit in the exception mask, that clear() itself
+        // throws std::ios_base::failure, which must propagate to the caller
+        // instead of ~input_stream_adapter() throwing a second exception
+        // while the first is still unwinding (which would call std::terminate)
+        json _;
+
+        std::istringstream is1("1");
+        is1.exceptions(std::ios::eofbit);
+        CHECK_THROWS_AS(_ = json::parse(is1), std::ios_base::failure&);
+
+        std::istringstream is2("1");
+        is2.exceptions(std::ios::failbit | std::ios::badbit | std::ios::eofbit);
+        CHECK_THROWS_AS(_ = json::parse(is2), std::ios_base::failure&);
+    }
+
+// ---- tests/src/unit-precise-stream-position.cpp:293-300  (uses: exception, operator<<, operator>>)
+    SECTION("stream without a streambuf (issue #5646)")
+    {
+        // std::istream(nullptr) has badbit set and rdbuf() == nullptr;
+        // get_character() must not dereference that null streambuf
+        std::istream is(nullptr);
+        json _;
+        CHECK_THROWS_WITH_AS(_ = json::parse(is), "[json.exception.parse_error.101] parse error: attempting to parse an empty input; check that your input string or stream contains the expected JSON", json::parse_error&);
+    }
+
+// ---- tests/src/unit-comparison.cpp:1297-1305  (uses: operator!=, operator<)
+    SECTION("structured values still compare")
+    {
+        CHECK(json({1, 2}) == json({1, 2}));
+        CHECK(json({1, 2}) < json({1, 3}));
+        CHECK(json({{"a", 1}}) == json({{"a", 1}}));
+        CHECK(json::binary({1, 2}) == json::binary({1, 2}));
+        CHECK(json(1) < json::array());
+        CHECK(json::object() < json::array());
+    }
+
+# Programs to repair
+
+## gen_29.cpp (compile)
+Intent: Probes JSON pointer evaluation exception handling that includes diagnostic byte positions from the leaf element.
+COMPILE ERROR. The program fails to compile, the same way against the old and the new library. Fix the error (wrong or missing include, typo, misuse of the public API) and keep the intent: the call under test must stay. Include only headers that exist; if you are unsure a header exists, use the library's main header.
+Compiler errors:
+```
+gen_29.cpp:8:52: error: class template argument deduction failed:
+gen_29.cpp:8:52: error: no matching function for call to ‘json_pointer(const char [3])’
+```
+Source:
+```cpp
+#include <nlohmann/json.hpp>
+#include <iostream>
+int main() {
+    try {
+        nlohmann::json j = {{"a", 1}};
+        auto val = j.at(nlohmann::json_pointer("/b"));
+        (void)val;
+    } catch (const nlohmann::json::out_of_range& e) {
+        std::cout << e.what() << std::endl;
+    }
+    return 0;
+}
+```
+
+# Task
+Return JSON with a "fixes" array: one item per program above, with "file" (exactly as given) and "code" (the complete repaired program, standalone, with its own int main). Do not return programs you cannot repair.

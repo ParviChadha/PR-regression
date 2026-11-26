@@ -1,0 +1,654 @@
+[system]
+You write test programs that probe a C++ library for behavioral changes made by one pull request.
+Each program is compiled and run twice, once against the library before the change and once after, and the two
+outputs are compared. Your job is to produce programs whose output reveals whether the change altered behavior,
+including side effects the author did not intend.
+
+Rules for every program:
+- It is standalone: one file with its own int main(), compiled as C++17, printing results to stdout.
+- Use only the library's documented public API. Never include internal headers or use detail/impl namespaces,
+  private members or undocumented macros.
+- Do not judge results (no assert, no expected-value comparisons): just print what the library returns. Print
+  enough to make differences visible, one fact per line.
+- Output must be deterministic. Never print pointers or addresses, uninitialized data, the order of
+  hash-based containers, timings, thread ids, random values, file paths or environment data. Print floating point
+  values with an explicit precision. No input, files, network, threads, clocks or randomness.
+- Wrap calls that may throw in try/catch and print the exception's type and message, so an exception is an
+  observable result. Do not crash on purpose.
+- Aim at the code the diff changes. Prefer calls that compile against both the old and the new library; one or two
+  programs may use an API the PR adds. Cover ordinary inputs and edge cases (empty, minimum and maximum values,
+  boundaries, special values, nesting, unusual types) and also neighbouring behavior the change could disturb.
+- When the diff changes which types or inputs an API accepts or rejects (constraints, overloads, traits,
+  conversions), test it with the detection idiom (std::void_t or requires) and `if constexpr`, so the program
+  compiles against both versions, prints whether the expression is well-formed, and exercises it when it is.
+  Accepting an input is not enough: also use it through every entry point that should follow (const and
+  non-const, read, write, insert, erase, lookup, nested use), because a change that admits new inputs can leave
+  later code unable to handle them.
+- If the changed code is internal (a detail, impl or internal namespace, a trait, a helper), do not name it in the
+  program. Reach it through the public API that depends on it, using detection (as above) where needed.
+- Use the exact types and values the diff is about (the new trait's argument types, the new overload's
+  parameters), not stand-ins.
+- Spread the programs over distinct public entry points and overloads, one main idea per program. Do not write
+  several programs that only rename a type or change a literal.
+- Make the programs differ from each other: different inputs, different entry points, different features.
+
+Rules specific to this library:
+- Include the library with #include <nlohmann/json.hpp>. The public API is nlohmann::json (nlohmann::basic_json), nlohmann::ordered_json, json_pointer, json patch/merge_patch and the documented SAX and conversion interfaces. Never use the detail namespace.
+- It is a header-only library: nothing to link. Programs are compiled as C++17.
+- Print JSON values with dump() (compact) or dump(2). Keys of nlohmann::json objects print in sorted order, so output is deterministic; do not depend on insertion order except with ordered_json.
+
+[user]
+# Pull request #4965: support JSON Merge Patch (RFC 7396) diff creation
+
+## Description
+The JSON merge patch document format describes the set of modifications to a resource's content, that more closely mimics the syntax of the resource being modified.
+
+However, and in contrast to JSON Patch (RFC 6902), a JSON Merge Patch cannot express certain modifications, e.g., changing an array element at a specific index, or setting a specific object value to null. The null value in a JSON Merge Patch is used to remove the key from the object.
+
+The diff algorithm is not part of the RFC 7396, but it was tested against all examples provided, plus additional cases on how null values are handled.
+
+JSON Merge Patch PR: https://github.com/nlohmann/json/pull/876
+PR discussing the diff: https://github.com/nlohmann/json/issues/2018
+
+If the content is approved, please let me know if/what documentation needs to be updated.
+
+[Describe your pull request here. Please read the text below the line and make sure you follow the checklist.]
+
+- [x] The changes are described in detail, both the what and why.
+- [x] If applicable, an [existing issue](https://github.com/nlohmann/json/issues) is referenced.
+- [ ] The [Code coverage](https://coveralls.io/github/nlohmann/json) remained at 100%. A test case for every new line of code.
+- [x] If applicable, the [documentation](https://json.nlohmann.me) is updated.
+- [x] The source code is amalgamated by running `make amalgamate`.
+
+Read the [Contribution Guidelines](https://github.com/nlohmann/json/blob/develop/.github/CONTRIBUTING.md) for detailed information.
+
+## Commit message
+* support JSON Merge Patch (RFC 7396) diff creation
+
+The JSON merge patch document format describes the set of modifications
+to a resource's content, that more closely mimics the syntax of the
+resource being modified.
+
+However, and in contrast to JSON Patch (RFC 6902), a JSON Merge Patch
+cannot express certain modifications, e.g., changing an array element
+at a specific index, or setting a specific object value to null.
+The null value in a JSON Merge Patch is used to remove the key from the
+object.
+
+The diff algorithm is not part of the RFC 7396, but it was tested
+against all examples provided, plus additional cases on how null values
+are handled.
+
+Signed-off-by: Luís Murta <luis@murta.dev>
+
+* improve algorithm efficiency
+
+Signed-off-by: Luís Murta <luis@murta.dev>
+
+* fix inconsistent nulls and empty arrays
+
+Also add CHECKs for the patch, documentation and run `make amalgamate`.
+
+Signed-off-by: Luís Murta <luis@murta.dev>
+
+* documentation cleanups
+
+Signed-off-by: Luís Murta <luis@murta.dev>
+
+* add an iterative fallback to merge_diff
+
+Bound the recursion depth like diff() and merge_patch(), and test values
+nested past the bound.
+
+Signed-off-by: Luís Murta <luis@murta.dev>
+
+* address the remaining review comments
+
+Signed-off-by: Luís Murta <luis@murta.dev>
+
+* move multi-line raw strings out of CHECK macros
+
+GCC 4.8/5, ICPC and NVHPC mis-tokenize multi-line raw string literals
+inside macro arguments, breaking the build or the parsed JSON.
+
+Signed-off-by: Luís Murta <luis@murta.dev>
+
+---------
+
+Signed-off-by: Luís Murta <luis@murta.dev>
+
+## Discussion before merge
+- github-actions[bot]: ## 🔴 Amalgamation check failed! 🔴
+The source code has not been amalgamated. @satelliteprogrammer
+ Please read and follow the [Contribution Guidelines](https://github.com/nlohmann/json/blob/develop/.github/CONTRIBUTING.md#files-to-change).
+- coveralls: [![Coverage Status](https://coveralls.io/builds/76146257/badge)](https://coveralls.io/builds/76146257)
+
+coverage: 99.194% (+0.003%) from 99.191%
+when pulling **d32edb3d51156579ba8a7e635bb59ab64c3b7c4d on satelliteprogrammer:develop**
+into **29913ca760c663e1b1df3512f125c247681905e8 on nlohmann:develop**.
+- nlohmann: I am not sure if this feature would be widely used, so I'm opening a discussion.
+- satelliteprogrammer: We had a (somewhat niche) need for this at work, that's why I've contributed here.
+
+It's essentially a combination of 2 things:
+
+1. we log all our data structures in JSON, this makes it easier to parse the logs and pretty-format large data structures;
+2. we have a container that only notifies listeners on data changes.
+
+For very large data structures, reading through a log line to find the one variable that did change is a pain. Not only that, but on some interfaces only a small amount of member variables on the entire structure are actually changing.
+Given that we are already serializing in JSON, on those containers that track differences, we thought why not log only those differences using one of the available JSON patch methods. So here we are.
+- github-actions[bot]: This pull request has been marked as stale because it has had no activity for 30 days. While we won’t close it automatically, we encourage you to update or comment if it is still relevant. Keeping pull requests active and up-to-date helps us review and merge changes more efficiently. Thank you for your contributions!
+- cschreib-ibex: > [..] we thought why not log only those differences using one of the available JSON patch methods. So here we are.
+
+We had this exact need as well: logging changes in simple JSON structures without all the noise of the formal JSON Patch syntax. Would have been convenient to have this capability built in.
+
+## Changed functions (from changes.py)
+- nlohmann::basic_json::merge_diff_iteratively(const basic_json<...> &, const basic_json<...> &) (private); reached from the public API through: nlohmann::basic_json::merge_diff(const basic_json<...> &, const basic_json<...> &)
+- nlohmann::basic_json::merge_diff_recursively(const basic_json<...> &, const basic_json<...> &, const std::size_t) (private); reached from the public API through: nlohmann::basic_json::merge_diff(const basic_json<...> &, const basic_json<...> &)
+- nlohmann::basic_json::merge_diff_added_members(basic_json<...> &, const basic_json<...> &, const basic_json<...> &) (private); reached from the public API through: nlohmann::basic_json::merge_diff(const basic_json<...> &, const basic_json<...> &)
+- nlohmann::basic_json::merge_diff_frame (private); reached from the public API through: nlohmann::basic_json::merge_diff(const basic_json<...> &, const basic_json<...> &)
+- nlohmann::basic_json::merge_diff_frame::merge_diff_frame(const basic_json<...> *, const basic_json<...> *) (private); reached from the public API through: nlohmann::basic_json::merge_diff(const basic_json<...> &, const basic_json<...> &)
+- nlohmann::basic_json::merge_diff_frame::member (private); reached from the public API through: nlohmann::basic_json::merge_diff(const basic_json<...> &, const basic_json<...> &)
+- nlohmann::basic_json::merge_diff_frame::merge_diff_frame(const merge_diff_frame &) (private); reached from the public API through: nlohmann::basic_json::merge_diff(const basic_json<...> &, const basic_json<...> &)
+- nlohmann::basic_json::merge_diff_frame::merge_diff_frame(merge_diff_frame &&) (private); reached from the public API through: nlohmann::basic_json::merge_diff(const basic_json<...> &, const basic_json<...> &)
+- nlohmann::basic_json::merge_diff_frame::operator=(const merge_diff_frame &) (private); reached from the public API through: nlohmann::basic_json::merge_diff(const basic_json<...> &, const basic_json<...> &)
+- nlohmann::basic_json::merge_diff_frame::operator=(merge_diff_frame &&) (private); reached from the public API through: nlohmann::basic_json::merge_diff(const basic_json<...> &, const basic_json<...> &)
+- nlohmann::basic_json::merge_diff_frame::patch (private); reached from the public API through: nlohmann::basic_json::merge_diff(const basic_json<...> &, const basic_json<...> &)
+- nlohmann::basic_json::merge_diff_frame::source (private); reached from the public API through: nlohmann::basic_json::merge_diff(const basic_json<...> &, const basic_json<...> &)
+- nlohmann::basic_json::merge_diff_frame::target (private); reached from the public API through: nlohmann::basic_json::merge_diff(const basic_json<...> &, const basic_json<...> &)
+- nlohmann::basic_json::merge_diff_frame::~merge_diff_frame() (private); reached from the public API through: nlohmann::basic_json::merge_diff(const basic_json<...> &, const basic_json<...> &)
+- nlohmann::basic_json (public)
+- nlohmann::basic_json::merge_diff(const basic_json<...> &, const basic_json<...> &) (public)
+
+## Diff of the library source (before -> after)
+```diff
+diff --git a/include/nlohmann/json.hpp b/include/nlohmann/json.hpp
+index b91fa3e27..fae89829a 100644
+--- a/include/nlohmann/json.hpp
++++ b/include/nlohmann/json.hpp
+@@ -7449,6 +7449,176 @@ public:
+     }
+ 
+   public:
++    /// @brief creates a diff as a JSON Merge Patch
++    /// @sa https://json.nlohmann.me/api/basic_json/merge_diff/
++    JSON_HEDLEY_WARN_UNUSED_RESULT
++    static basic_json merge_diff(const basic_json& source, const basic_json& target)
++    {
++        // unless both are objects, the patch is the target itself
++        if (!source.is_object() || !target.is_object())
++        {
++            return target;
++        }
++
++        return merge_diff_recursively(source, target, 0);
++    }
++
++  private:
++    /// @brief two objects @ref merge_diff_iteratively is diffing
++    struct merge_diff_frame
++    {
++        merge_diff_frame(const basic_json* source_, const basic_json* target_)
++            : source(source_), target(target_), member(source_->cbegin()), patch(value_t::object)
++        {}
++
++        // declared for GCC's -Weffc++, as in diff_frame
++        merge_diff_frame(const merge_diff_frame&) = default;
++        merge_diff_frame(merge_diff_frame&&) = default;
++        merge_diff_frame& operator=(const merge_diff_frame&) = default;
++        merge_diff_frame& operator=(merge_diff_frame&&) = default;
++        ~merge_diff_frame() = default;
++
++        /// the objects being diffed
++        const basic_json* source;
++        const basic_json* target;
++        /// the member of source being diffed; advanced once it is done
++        const_iterator member;
++        /// the patch for the members of source diffed so far
++        basic_json patch;
++    };
++
++    /// @brief add the members of object @a target that @a source does not
++    ///        have to the merge patch @a result
++    static void merge_diff_added_members(basic_json& result, const basic_json& source, const basic_json& target)
++    {
++        for (auto it = target.begin(); it != target.end(); ++it)
++        {
++            auto itf = source.find(it.key());
++            if (itf == source.end())
++            {
++                result[it.key()] = it.value();
++            }
++        }
++    }
++
++    /*!
++    @brief @ref merge_diff of two objects at nesting level @a depth
++
++    Diffing two nested objects calls this function again, once per nesting
++    level, so values nested deeply enough would exhaust the call stack and
++    terminate the process. The descent is bounded here: once @ref
++    detail::recursion_depth_limit levels have been entered, @ref
++    merge_diff_iteratively diffs what is left without the call stack.
++    */
++    static basic_json merge_diff_recursively(const basic_json& source, const basic_json& target, const std::size_t depth)
++    {
++        JSON_ASSERT(source.is_object() && target.is_object());
++
++        if (JSON_HEDLEY_UNLIKELY(depth >= detail::recursion_depth_limit()))
++        {
++            return merge_diff_iteratively(source, target);
++        }
++
++        basic_json result(value_t::object);
++
++        for (auto it = source.begin(); it != source.end(); ++it)
++        {
++            auto itf = target.find(it.key());
++            if (itf != target.end())
++            {
++                if (it.value().is_object() && itf.value().is_object())
++                {
++                    auto diff = merge_diff_recursively(it.value(), itf.value(), depth + 1);
++                    if (!diff.empty())
++                    {
++                        result[it.key()] = std::move(diff);
++                    }
++                }
++                else if (it.value() != itf.value())
++                {
++                    result[it.key()] = itf.value();
++                }
++            }
++            else
++            {
++                result[it.key()] = value_t::null;
++            }
++        }
++
++        merge_diff_added_members(result, source, target);
++        return result;
++    }
++
++    /*!
++    @brief @ref merge_diff of two objects without the call stack
++
++    Produces the same patch as @ref merge_diff_recursively, keeping the objects
++    being diffed on an explicit stack instead of descending into them. Two
++    nested objects are still diffed completely before the next member, so the
++    patch has its members in the same order as in the recursive version. Only
++    reached for objects nested more deeply than @ref
++    detail::recursion_depth_limit.
++    */
++    static basic_json merge_diff_iteratively(const basic_json& source, const basic_json& target)
++    {
++        // the patch of source and target, set once their frame is popped
++        basic_json result;
++        std::vector<merge_diff_frame> stack;
++        stack.emplace_back(&source, &target);
++        while (!stack.empty())
++        {
++            // the frame's members are copied out and it is changed through
++            // stack.back(): pushing a frame for nested objects or popping
++            // this one would invalidate a reference to it
++            const basic_json* const s = stack.back().source;
++            const basic_json* const t = stack.back().target;
++            const const_iterator it = stack.back().member;
++
++            if (it != s->cend())
++            {
++                const const_iterator itf = t->find(it.key());
++                if (itf != t->cend())
++                {
++                    if (it.value().is_object() && itf.value().is_object())
++                    {
++                        // member is advanced once their patch is under its key
++                        stack.emplace_back(&it.value(), &itf.value());
++                        continue;
++                    }
++                    if (it.value() != itf.value())
++                    {
++                        stack.back().patch[it.key()] = itf.value();
++                    }
++                }
++                else
++                {
++                    stack.back().patch[it.key()] = value_t::null;
++                }
++                ++stack.back().member;
++                continue;
++            }
++
++            merge_diff_added_members(stack.back().patch, *s, *t);
++
++            // these objects are done: continue with the ones they are in
++            basic_json patch = std::move(stack.back().patch);
++            stack.pop_back();
++            if (stack.empty())
++            {
++                result = std::move(patch);
++            }
++            else
++            {
++                if (!patch.empty())
++                {
++                    stack.back().patch[stack.back().member.key()] = std::move(patch);
++                }
++                ++stack.back().member;
++            }
++        }
++        return result;
++    }
++
+     /// @}
+ };
+```
+
+## Existing upstream tests that call the changed code (for style and API usage)
+// Upstream tests at the PR's parent commit e8b747e4b that use the changed code.
+// Names searched (test lines using each): basic_json (30), merge_diff (0), merge_diff_iteratively (0), merge_diff_recursively (0), merge_diff_added_members (0), merge_diff_frame (0), member (147), patch (396), source (94), target (106)
+
+// ---- tests/src/unit-json_patch.cpp:688-729  (uses: patch, source, target)
+        SECTION("documentation GIF")
+        {
+            {
+                // a JSON patch
+                json const p1 = R"(
+                     [{"op": "add", "path": "/GB", "value": "London"}]
+                    )"_json;
+
+                // a JSON value
+                json const source = R"(
+                      {"D": "Berlin", "F": "Paris"}
+                    )"_json;
+
+                // apply the patch
+                const json target = source.patch(p1);
+                // target = { "D": "Berlin", "F": "Paris", "GB": "London" }
+                CHECK(target == R"({ "D": "Berlin", "F": "Paris", "GB": "London" })"_json);
+
+                // create a diff from two JSONs
+                const json p2 = json::diff(target, source); // NOLINT(readability-suspicious-call-argument)
+                // p2 = [{"op": "delete", "path": "/GB"}]
+                CHECK(p2 == R"([{"op":"remove","path":"/GB"}])"_json);
+            }
+            {
+                // a JSON value
+                json j = {"good", "bad", "ugly"};
+
+                // a JSON pointer
+                auto ptr = json::json_pointer("/2");
+
+                // use to access elements
+                j[ptr] = {{"it", "cattivo"}};
+                CHECK(j == R"(["good","bad",{"it":"cattivo"}])"_json);
+
+                // use user-defined string literal
+                j["/2/en"_json_pointer] = "ugly";
+                CHECK(j == R"(["good","bad",{"en":"ugly","it":"cattivo"}])"_json);
+
+                const json flat = j.flatten();
+                CHECK(flat == R"({"/0":"good","/1":"bad","/2/en":"ugly","/2/it":"cattivo"})"_json);
+            }
+        }
+
+// ---- tests/src/unit-json_patch.cpp:1748-1767  (uses: patch, source, target)
+    SECTION("array shrunk to empty")
+    {
+        json const source = {0, 1, 2, 3, 4};
+        json const target = json::array();
+
+        json const patch = json::diff(source, target);
+
+        json const expected = R"(
+            [
+                {"op": "remove", "path": "/4"},
+                {"op": "remove", "path": "/3"},
+                {"op": "remove", "path": "/2"},
+                {"op": "remove", "path": "/1"},
+                {"op": "remove", "path": "/0"}
+            ]
+        )"_json;
+
+        CHECK(patch == expected);
+        CHECK(source.patch(patch) == target);
+    }
+
+// ---- tests/src/unit-regression2.cpp:628-634  (uses: patch, source, target)
+    SECTION("issue #1983 - JSON patch diff for op=add formation is not as per standard (RFC 6902)")
+    {
+        const auto source = R"({ "foo": [ "1", "2" ] })"_json;
+        const auto target = R"({"foo": [ "1", "2", "3" ]})"_json;
+        const auto result = json::diff(source, target);
+        CHECK(result.dump() == R"([{"op":"add","path":"/foo/-","value":"3"}])");
+    }
+
+// ---- tests/src/unit-merge_patch.cpp:11-35  (uses: patch, target)
+#include <nlohmann/json.hpp>
+using nlohmann::json;
+#ifdef JSON_TEST_NO_GLOBAL_UDLS
+    using namespace nlohmann::literals; // NOLINT(google-build-using-namespace)
+#endif
+
+#include <string>
+
+namespace
+{
+// RFC 7396's MergePatch, written recursively as in the RFC; only usable on
+// values nested a few hundred levels deep
+void reference_merge_patch(json& target, const json& patch)
+{
+    if (!patch.is_object())
+    {
+        target = patch;
+        return;
+    }
+    if (!target.is_object())
+    {
+        target = json::object();
+    }
+    for (auto it = patch.begin(); it != patch.end(); ++it)
+    {
+
+// ---- tests/src/unit-regression1.cpp:569-578  (uses: basic_json, source)
+    SECTION("issue #233 - Can't use basic_json::iterator as a base iterator for std::move_iterator")
+    {
+        json source = {"a", "b", "c"};
+        json expected = {"a", "b"};
+        json dest;
+
+        std::copy_n(std::make_move_iterator(source.begin()), 2, std::back_inserter(dest));
+
+        CHECK(dest == expected);
+    }
+
+// ---- tests/src/unit-modifiers.cpp:8-32  (uses: source, target)
+
+#include "doctest_compatibility.h"
+
+#include <nlohmann/json.hpp>
+using nlohmann::json;
+
+#include <string>
+
+namespace
+{
+// update(source, true) as documented, written recursively; only usable on
+// values nested a few hundred levels deep
+void reference_update(json& target, const json& source)
+{
+    for (auto it = source.begin(); it != source.end(); ++it)
+    {
+        const auto existing = target.find(it.key());
+        if (it.value().is_object() && existing != target.end() && existing->is_object())
+        {
+            reference_update(*existing, it.value());
+        }
+        else
+        {
+            target[it.key()] = it.value();
+        }
+
+// ---- tests/src/unit-diagnostic-positions.cpp:196-209  (uses: patch, target)
+    SECTION("JSON patch add to primitive parent (#4292)")
+    {
+        // the JSON Patch "add" target /foo/bar/baz has a string parent
+        // (/foo/bar); the position of that parent is reported in the message
+        const json doc = json::parse(R"({"foo":{"bar":"a string"}})");
+        const json patch = json::parse(R"([{"op":"add","path":"/foo/bar/baz","value":1}])");
+#if JSON_DIAGNOSTICS
+        CHECK_THROWS_WITH_AS(doc.patch(patch),
+                             "[json.exception.out_of_range.411] (/foo/bar) (bytes 14-24) cannot add value: the JSON Patch 'add' target's parent is of type string, but must be an object or array", json::out_of_range);
+#else
+        CHECK_THROWS_WITH_AS(doc.patch(patch),
+                             "[json.exception.out_of_range.411] (bytes 14-24) cannot add value: the JSON Patch 'add' target's parent is of type string, but must be an object or array", json::out_of_range);
+#endif
+    }
+
+// ---- tests/src/unit-diagnostics.cpp:590-603  (uses: patch, target)
+    SECTION("update()")
+    {
+        json j = target;
+        j.update(patch, true);
+
+        // walk down through const references, which leave m_parent alone
+        const json* p = &j;
+        for (std::size_t i = 0; i < depth; ++i)
+        {
+            p = &p->at("a");
+        }
+        CHECK_THROWS_WITH_AS(p->at("x").at(0), expected_x.c_str(), json::type_error);
+        CHECK_THROWS_WITH_AS(p->at("y").at(0), expected_y.c_str(), json::type_error);
+    }
+
+// ---- tests/src/unit-ordered_json2.cpp:466-470  (uses: patch, target)
+    SECTION("patch")
+    {
+        const ordered_json patched = original.patch(patch);
+        CHECK(patched == target);
+    }
+
+# Programs to repair
+
+## gen_06.cpp (detect)
+Intent: Probes merge_diff with nested objects requiring recursive diffing and checking non-empty nested diffs.
+DETECTION REWRITE. The program fails to compile against the OLD library because the API or type it uses is not accepted there; it compiles against the NEW one. Rewrite it so it compiles against both. Check whether the expression is well-formed with the detection idiom (std::void_t or requires), print that result, and use the expression ONLY inside a function template that depends on the types involved, guarded by `if constexpr`. This matters: `if constexpr` in a plain function such as main() does NOT discard the other branch, so the old library would still fail to compile. Call that function template from main. When the expression is supported, exercise it fully (print every result, wrap throwing calls in try/catch). Keep the same types and inputs. Skeleton:
+```cpp
+template <class J, class K, class = void> struct can_use : std::false_type {};
+template <class J, class K>
+struct can_use<J, K, std::void_t<decltype(std::declval<J&>()[std::declval<K>()])>> : std::true_type {};
+template <class J, class K> void probe(J& j, K&& k) {
+    std::cout << "supported: " << can_use<J, K>::value << "\n";
+    if constexpr (can_use<J, K>::value) { /* use j[k] here, print results */ }
+}
+```
+(Replace the decltype expression with the one under test.)
+Compiler errors:
+```
+gen_06.cpp:9:43: error: ‘merge_diff’ is not a member of ‘nlohmann::json_abi_v3_12_0::json’ {aka ‘nlohmann::json_abi_v3_12_0::basic_json<>’}
+```
+Source:
+```cpp
+#include <nlohmann/json.hpp>
+#include <iostream>
+
+int main() {
+    nlohmann::json source = R"({"nested": {"x": 10, "y": 20}})"_json;
+    nlohmann::json target = R"({"nested": {"x": 15, "y": 20}})"_json;
+    nlohmann::json diff = nlohmann::json::merge_diff(source, target);
+    std::cout << diff.dump() << std::endl;
+    return 0;
+}
+```
+
+## gen_07.cpp (detect)
+Intent: Probes merge_diff with deeply nested objects exceeding recursion depth to trigger merge_diff_iteratively.
+DETECTION REWRITE. The program fails to compile against the OLD library because the API or type it uses is not accepted there; it compiles against the NEW one. Rewrite it so it compiles against both. Check whether the expression is well-formed with the detection idiom (std::void_t or requires), print that result, and use the expression ONLY inside a function template that depends on the types involved, guarded by `if constexpr`. This matters: `if constexpr` in a plain function such as main() does NOT discard the other branch, so the old library would still fail to compile. Call that function template from main. When the expression is supported, exercise it fully (print every result, wrap throwing calls in try/catch). Keep the same types and inputs. Skeleton:
+```cpp
+template <class J, class K, class = void> struct can_use : std::false_type {};
+template <class J, class K>
+struct can_use<J, K, std::void_t<decltype(std::declval<J&>()[std::declval<K>()])>> : std::true_type {};
+template <class J, class K> void probe(J& j, K&& k) {
+    std::cout << "supported: " << can_use<J, K>::value << "\n";
+    if constexpr (can_use<J, K>::value) { /* use j[k] here, print results */ }
+}
+```
+(Replace the decltype expression with the one under test.)
+Compiler errors:
+```
+gen_07.cpp:20:47: error: ‘merge_diff’ is not a member of ‘nlohmann::json_abi_v3_12_0::json’ {aka ‘nlohmann::json_abi_v3_12_0::basic_json<>’}
+```
+Source:
+```cpp
+#include <nlohmann/json.hpp>
+#include <iostream>
+
+int main() {
+    nlohmann::json source;
+    nlohmann::json target;
+    nlohmann::json* s_ptr = &source;
+    nlohmann::json* t_ptr = &target;
+    for (int i = 0; i < 400; ++i) {
+        *s_ptr = nlohmann::json::object();
+        (*s_ptr)["a"] = 1;
+        *t_ptr = nlohmann::json::object();
+        (*t_ptr)["a"] = 2;
+        s_ptr = &((*s_ptr)["a"]);
+        t_ptr = &((*t_ptr)["a"]);
+    }
+    try {
+        nlohmann::json diff = nlohmann::json::merge_diff(source, target);
+        std::cout << "Success" << std::endl;
+    } catch (const std::exception& e) {
+        std::cout << e.what() << std::endl;
+    }
+    return 0;
+}
+```
+
+## gen_08.cpp (detect)
+Intent: Probes merge_diff where nested objects have added members within the iterative fallback path.
+DETECTION REWRITE. The program fails to compile against the OLD library because the API or type it uses is not accepted there; it compiles against the NEW one. Rewrite it so it compiles against both. Check whether the expression is well-formed with the detection idiom (std::void_t or requires), print that result, and use the expression ONLY inside a function template that depends on the types involved, guarded by `if constexpr`. This matters: `if constexpr` in a plain function such as main() does NOT discard the other branch, so the old library would still fail to compile. Call that function template from main. When the expression is supported, exercise it fully (print every result, wrap throwing calls in try/catch). Keep the same types and inputs. Skeleton:
+```cpp
+template <class J, class K, class = void> struct can_use : std::false_type {};
+template <class J, class K>
+struct can_use<J, K, std::void_t<decltype(std::declval<J&>()[std::declval<K>()])>> : std::true_type {};
+template <class J, class K> void probe(J& j, K&& k) {
+    std::cout << "supported: " << can_use<J, K>::value << "\n";
+    if constexpr (can_use<J, K>::value) { /* use j[k] here, print results */ }
+}
+```
+(Replace the decltype expression with the one under test.)
+Compiler errors:
+```
+gen_08.cpp:20:47: error: ‘merge_diff’ is not a member of ‘nlohmann::json_abi_v3_12_0::json’ {aka ‘nlohmann::json_abi_v3_12_0::basic_json<>’}
+```
+Source:
+```cpp
+#include <nlohmann/json.hpp>
+#include <iostream>
+
+int main() {
+    nlohmann::json source;
+    nlohmann::json target;
+    nlohmann::json* s_ptr = &source;
+    nlohmann::json* t_ptr = &target;
+    for (int i = 0; i < 400; ++i) {
+        *s_ptr = nlohmann::json::object();
+        *t_ptr = nlohmann::json::object();
+        s_ptr = &((*s_ptr)["next"]);
+        t_ptr = &((*t_ptr)["next"]);
+    }
+    *s_ptr = R"({"k1": 1})"_json;
+    *t_ptr = R"({"k1": 1, "k2": 2})"_json;
+    try {
+        nlohmann::json diff = nlohmann::json::merge_diff(source, target);
+        std::cout << diff.dump() << std::endl;
+    } catch (const std::exception& e) {
+        std::cout << e.what() << std::endl;
+    }
+    return 0;
+}
+```
+
+# Task
+Return JSON with a "fixes" array: one item per program above, with "file" (exactly as given) and "code" (the complete repaired program, standalone, with its own int main). Do not return programs you cannot repair.

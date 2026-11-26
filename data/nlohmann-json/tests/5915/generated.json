@@ -1,0 +1,185 @@
+{
+  "target": "nlohmann-json",
+  "pr": 5915,
+  "model": "gemini-3.5-flash-lite",
+  "prompt_sha256": "7b90df42dfb18d78ad5bc38a0f84ff73ea1ae5ee3f0e5a8ed71d17b05d65106f",
+  "n_requested": 20,
+  "dropped": 0,
+  "usage": {
+    "promptTokenCount": 6176,
+    "candidatesTokenCount": 5468,
+    "totalTokenCount": 11644,
+    "promptTokensDetails": [
+      {
+        "modality": "TEXT",
+        "tokenCount": 6176
+      }
+    ],
+    "serviceTier": "standard"
+  },
+  "tests": [
+    {
+      "file": "gen_01.cpp",
+      "name": "json_view_string_escape_growth_small",
+      "intent": "Probes string arena growth buffer sizing for a small input containing escapes.",
+      "round": 0
+    },
+    {
+      "file": "gen_02.cpp",
+      "name": "json_view_string_escape_growth_medium",
+      "intent": "Probes decoded string buffer allocation sizing when parsing a document around the quarter-input boundary.",
+      "round": 0
+    },
+    {
+      "file": "gen_03.cpp",
+      "name": "json_view_inline_node_limit_below",
+      "intent": "Probes inline node allocation behavior for documents with node counts slightly below the new 1024 threshold.",
+      "round": 0
+    },
+    {
+      "file": "gen_04.cpp",
+      "name": "json_view_inline_node_limit_at_boundary",
+      "intent": "Probes document parsing and node indexing exactly at the new max_inline_nodes boundary of 1024.",
+      "round": 0
+    },
+    {
+      "file": "gen_05.cpp",
+      "name": "json_view_inline_node_limit_above",
+      "intent": "Probes node indexing and memory usage when node count exceeds the 1024 inline nodes threshold.",
+      "round": 0
+    },
+    {
+      "file": "gen_06.cpp",
+      "name": "json_view_dense_numeric_arrays",
+      "intent": "Probes memory usage and parsing of dense numeric arrays where the estimate is too low.",
+      "round": 0
+    },
+    {
+      "file": "gen_07.cpp",
+      "name": "json_view_reuse_document_buffer",
+      "intent": "Probes document buffer reuse via read() with mixed escaped and non-escaped strings.",
+      "round": 0
+    },
+    {
+      "file": "gen_08.cpp",
+      "name": "json_view_large_doc_single_escape",
+      "intent": "Probes memory sizing and capping on a large document containing a single escape character.",
+      "round": 0
+    },
+    {
+      "file": "gen_09.cpp",
+      "name": "json_view_editable_document_push_back",
+      "intent": "Probes json_editable_document memory changes and node behavior during push_back operations.",
+      "round": 0
+    },
+    {
+      "file": "gen_10.cpp",
+      "name": "json_view_image_save_load",
+      "intent": "Probes saving and loading binary image representations of parsed json documents.",
+      "round": 0
+    },
+    {
+      "file": "gen_11.cpp",
+      "name": "json_view_shrink_to_fit_empty",
+      "intent": "Probes shrink_to_fit behavior on an empty json_document instance.",
+      "round": 0
+    },
+    {
+      "file": "gen_12.cpp",
+      "name": "json_view_accept_validation",
+      "intent": "Probes input validation via accept() method before parsing with potential string escapes.",
+      "round": 0
+    },
+    {
+      "file": "gen_13.cpp",
+      "name": "json_view_nested_objects_escapes",
+      "intent": "Probes complex nested object structures with multiple escaped string fields.",
+      "round": 0
+    },
+    {
+      "file": "gen_14.cpp",
+      "name": "json_view_materialize_comparison",
+      "intent": "Probes correctness of materializing json_view into standard basic_json after initial sizing optimizations.",
+      "round": 0
+    },
+    {
+      "file": "gen_15.cpp",
+      "name": "json_view_move_construction",
+      "intent": "Probes move construction of json_document holding inline or separate node index allocations.",
+      "round": 0
+    },
+    {
+      "file": "gen_16.cpp",
+      "name": "json_view_copy_construction",
+      "intent": "Probes copy construction of json_document with string escapes and node index structures.",
+      "round": 0,
+      "superseded_by": "gen_26.cpp"
+    },
+    {
+      "file": "gen_17.cpp",
+      "name": "json_view_assignment_operators",
+      "intent": "Probes move and copy assignment operators for json_document instances.",
+      "round": 0
+    },
+    {
+      "file": "gen_18.cpp",
+      "name": "json_view_owns_source_check",
+      "intent": "Probes owns_source status and source buffer access after document parsing and loading.",
+      "round": 0
+    },
+    {
+      "file": "gen_19.cpp",
+      "name": "json_view_dump_formatting",
+      "intent": "Probes custom formatting and indentation options when dumping from a json_view structure.",
+      "round": 0
+    },
+    {
+      "file": "gen_20.cpp",
+      "name": "json_view_count_and_accessors",
+      "intent": "Probes lookup, count, and access functions (at, back) on views created from parsed documents.",
+      "round": 0
+    },
+    {
+      "file": "gen_21.cpp",
+      "name": "gen_21",
+      "intent": "Access max_inline_nodes static constexpr member via json_document parsing with exactly 1024 nodes to ensure instantiation and check memory layout behavior.",
+      "round": 1
+    },
+    {
+      "file": "gen_22.cpp",
+      "name": "gen_22",
+      "intent": "Exceed max_inline_nodes with 1025 nodes to instantiate document creation routing beyond the inline allocation threshold.",
+      "round": 1
+    },
+    {
+      "file": "gen_23.cpp",
+      "name": "gen_23",
+      "intent": "Invoke document loading via vector of uint8_t with node count precisely around max_inline_nodes boundary to exercise header node storage paths.",
+      "round": 1
+    },
+    {
+      "file": "gen_24.cpp",
+      "name": "gen_24",
+      "intent": "Test shrink_to_fit on a document loaded via binary pointer interface near max_inline_nodes capacity.",
+      "round": 1
+    },
+    {
+      "file": "gen_25.cpp",
+      "name": "gen_25",
+      "intent": "Exercise serialization and document saving capabilities following parse routines to ensure consistency with header allocation structures.",
+      "round": 1
+    },
+    {
+      "file": "gen_26.cpp",
+      "name": "json_view_copy_construction_fixed",
+      "intent": "Probes copy construction of json_document with string escapes and node index structures.",
+      "round": 2,
+      "fixes": "gen_16.cpp",
+      "kind": "compile"
+    }
+  ],
+  "fix": {
+    "rounds_max": 2,
+    "model": "gemini-3.5-flash-lite"
+  }
+}

@@ -1,0 +1,323 @@
+[system]
+You write test programs that probe a C++ library for behavioral changes made by one pull request.
+Each program is compiled and run twice, once against the library before the change and once after, and the two
+outputs are compared. Your job is to produce programs whose output reveals whether the change altered behavior,
+including side effects the author did not intend.
+
+Rules for every program:
+- It is standalone: one file with its own int main(), compiled as C++17, printing results to stdout.
+- Use only the library's documented public API. Never include internal headers or use detail/impl namespaces,
+  private members or undocumented macros.
+- Do not judge results (no assert, no expected-value comparisons): just print what the library returns. Print
+  enough to make differences visible, one fact per line.
+- Output must be deterministic. Never print pointers or addresses, uninitialized data, the order of
+  hash-based containers, timings, thread ids, random values, file paths or environment data. Print floating point
+  values with an explicit precision. No input, files, network, threads, clocks or randomness.
+- Wrap calls that may throw in try/catch and print the exception's type and message, so an exception is an
+  observable result. Do not crash on purpose.
+- Aim at the code the diff changes. Prefer calls that compile against both the old and the new library; one or two
+  programs may use an API the PR adds. Cover ordinary inputs and edge cases (empty, minimum and maximum values,
+  boundaries, special values, nesting, unusual types) and also neighbouring behavior the change could disturb.
+- When the diff changes which types or inputs an API accepts or rejects (constraints, overloads, traits,
+  conversions), test it with the detection idiom (std::void_t or requires) and `if constexpr`, so the program
+  compiles against both versions, prints whether the expression is well-formed, and exercises it when it is.
+  Accepting an input is not enough: also use it through every entry point that should follow (const and
+  non-const, read, write, insert, erase, lookup, nested use), because a change that admits new inputs can leave
+  later code unable to handle them.
+- If the changed code is internal (a detail, impl or internal namespace, a trait, a helper), do not name it in the
+  program. Reach it through the public API that depends on it, using detection (as above) where needed.
+- Use the exact types and values the diff is about (the new trait's argument types, the new overload's
+  parameters), not stand-ins.
+- Spread the programs over distinct public entry points and overloads, one main idea per program. Do not write
+  several programs that only rename a type or change a literal.
+- Make the programs differ from each other: different inputs, different entry points, different features.
+
+Rules specific to this library:
+- Include the library with #include <nlohmann/json.hpp>. The public API is nlohmann::json (nlohmann::basic_json), nlohmann::ordered_json, json_pointer, json patch/merge_patch and the documented SAX and conversion interfaces. Never use the detail namespace.
+- It is a header-only library: nothing to link. Programs are compiled as C++17.
+- Print JSON values with dump() (compact) or dump(2). Keys of nlohmann::json objects print in sorted order, so output is deterministic; do not depend on insertion order except with ordered_json.
+
+[user]
+# Pull request #5810: Skip the indentation after a newline 8 bytes at a time
+
+## Description
+Stacked on #5809, which derives the lexer position lazily for seekable input. Only the top commit belongs to this PR.
+
+## What
+
+Pretty-printed JSON indents every line with a run of spaces, and `skip_whitespace()` read them one character at a time. For contiguous input (`bulk_scan`: pointers, `std::string`, `std::vector<char>` and similar), the lexer now skips the spaces after a newline in 8-byte steps, directly in the input buffer. `lexer::skip_indentation()` loads 8 bytes, XORs them with `0x2020…20` and skips whole words of spaces. On the first word that is not all spaces, it also skips that word's leading spaces using a count of trailing zeros. Tabs, `\r`, the last 7 bytes of the input and anything that is not a space go through the existing byte loop.
+
+The skip bypasses `get()`. That is safe because `bulk_scan` implies `lazy_position` from #5809: the position comes from the adapter, so nothing has to be counted per character. Streams, files, wide strings and user-defined adapters are unchanged.
+
+The idea comes from Glaze's `skip_matching_ws`, which compares against the previous line's indentation. Comparing against spaces is simpler (no state) and handles any indent width.
+
+Changes:
+- `detail/input/lexer.hpp`: adds `skip_indentation()`, called after `'\n'` in `skip_whitespace()`.
+- `detail/bit_ops.hpp`: adds `count_trailing_zeros()`, using `__builtin_ctzll` or a portable fallback (the fallback was checked against the builtin for 640k values).
+- `docs/home/architecture.md`: one sentence about the bulk-scan interface.
+
+## Performance
+
+Medians of 60 runs, in µs. "Lazy" is #5809 and "this" is this PR. The x86 machine is a VPS with some background load, so differences under about 4% are noise there.
+
+| file | | GCC 13 x86-64<br>lazy → this | clang 18 x86-64<br>lazy → this | Apple clang 21 arm64<br>lazy → this |
+|---|---|---|---|---|
+| twitter, indent 2 | parse | 5151 → 5032 (−2%) | 5150 → 5145 (0%) | 1863 → 1758 (−6%) |
+| | accept | 1334 → 1261 (−5%) | 1253 → 1253 (0%) | 661 → 580 (−12%) |
+| twitter, indent 4 | parse | 5270 → 5001 (−5%) | 5455 → 4930 (−10%) | 1915 → 1790 (−7%) |
+| | accept | 1567 → 1297 (−17%) | 1486 → 1201 (−19%) | 770 → 602 (−22%) |
+| citm_catalog, indent 2 | parse | 7795 → 7585 (−3%) | 7900 → 7240 (−8%) | 3157 → 3008 (−5%) |
+| | accept | 2438 → 2126 (−13%) | 2185 → 1928 (−12%) | 1189 → 993 (−16%) |
+| citm_catalog, indent 4 | parse | 8360 → 7726 (−8%) | 8234 → 7159 (−13%) | 3470 → 3068 (−12%) |
+| | accept | 3106 → 2164 (−30%) | 2533 → 1985 (−22%) | 1424 → 1041 (−27%) |
+| twitter, minified | parse | 4767 → 4851 | 4786 → 4702 | 1726 → 1719 |
+| | accept | 1160 → 1123 | 1041 → 1130 | 564 → 563 |
+| citm_catalog, minified | parse | 7226 → 7101 | 6763 → 6734 | 2860 → 2943 |
+| | accept | 1835 → 1699 | 1554 → 1533 | 915 → 903 |
+
+Minified input never reaches the new code and is unchanged within noise. On x86, the minified accept cells varied by 4–8% between sweeps.
+
+I also measured a version that skips only whole 8-byte words. It was 5–12% slower on `accept` and gave nothing on 2-space indentation, where runs are often shorter than a word. That is why the partial word is finished with the trailing-zero count.
+
+## Tests
+
+- New test case in `unit-deserialization.cpp`. For indentation runs of 0 to 33 spaces, it checks that contiguous and stream input give the same result, byte offset and message in seven layouts: a value after the indent, an error after it, the run ending at the end of the input, tab/CR mixed in, a comment after the indent, and an unexpected second value. Two cases also have fixed expected messages. Mutants that skip one byte too many or start one byte late fail this test.
+- `count_trailing_zeros()` gets checks next to the existing `count_leading_zeros()` test in `unit-class_lexer.cpp`.
+- Differential check against #5809, run locally and not committed. It covered 89k inputs and found byte-identical results, error messages, SAX events and positions, and diagnostic positions:
+  - 742 corpus files, also re-in
+[... truncated, 647 more characters]
+
+## Commit message
+Pretty-printed JSON indents every line with a run of spaces, which
+skip_whitespace() read one character at a time. For contiguous input
+(bulk_scan) the lexer now skips the spaces after a newline 8 bytes at a
+time directly in the input buffer, including the leading spaces of the
+last, partial word. This bypasses get(), which is safe because
+bulk_scan implies the lazy position from the previous commit: nothing
+is counted per character.
+
+Compared to lazy positions alone, pretty-printed input (twitter,
+citm_catalog with indent 2 and 4) parses up to 13% faster and accept()
+gets up to 30% faster (GCC 13 and clang 18 on x86-64, Apple clang 21 on
+arm64). Minified input is unchanged within noise.
+
+Signed-off-by: Niels Lohmann <mail@nlohmann.me>
+
+## Changed functions (from changes.py)
+- nlohmann::detail::lexer (private); reached from the public API through: nlohmann::basic_json::sax_parse(detail::span_input_adapter &&, SAX *, input_format_t, const bool, const bool, const bool, const cbor_tag_handler_t), nlohmann::basic_json::sax_parse(InputType &&, SAX *, input_format_t, const bool, const bool, const bool, const cbor_tag_handler_t), nlohmann::basic_json::sax_parse(IteratorType, SentinelType, SAX *, input_format_t, const bool, const bool, const bool, const cbor_tag_handler_t), nlohmann::basic_json::from_bson(detail::span_input_adapter &&, const bool, const bool), nlohmann::basic_json::from_cbor(detail::span_input_adapter &&, const bool, const bool, const cbor_tag_handler_t), nlohmann::basic_json::from_msgpack(detail::span_input_adapter &&, const bool, const bool), nlohmann::basic_json::from_ubjson(detail::span_input_adapter &&, const bool, const bool), nlohmann::basic_json::from_bjdata(InputType &&, const bool, const bool, const error_handler_t), nlohmann::basic_json::from_bon8(InputType &&, const bool, const bool), nlohmann::basic_json::from_bson(InputType &&, const bool, const bool, const error_handler_t)
+- nlohmann::detail::lexer::skip_whitespace() (private); reached from the public API through: nlohmann::basic_json::sax_parse(detail::span_input_adapter &&, SAX *, input_format_t, const bool, const bool, const bool, const cbor_tag_handler_t), nlohmann::basic_json::sax_parse(InputType &&, SAX *, input_format_t, const bool, const bool, const bool, const cbor_tag_handler_t), nlohmann::basic_json::sax_parse(IteratorType, SentinelType, SAX *, input_format_t, const bool, const bool, const bool, const cbor_tag_handler_t), nlohmann::basic_json::from_bson(detail::span_input_adapter &&, const bool, const bool), nlohmann::basic_json::from_cbor(detail::span_input_adapter &&, const bool, const bool, const cbor_tag_handler_t), nlohmann::basic_json::from_msgpack(detail::span_input_adapter &&, const bool, const bool), nlohmann::basic_json::from_ubjson(detail::span_input_adapter &&, const bool, const bool), nlohmann::basic_json::from_bjdata(InputType &&, const bool, const bool, const error_handler_t), nlohmann::basic_json::from_bon8(InputType &&, const bool, const bool), nlohmann::basic_json::from_bson(InputType &&, const bool, const bool, const error_handler_t)
+- nlohmann::detail::lexer::skip_indentation(std::true_type) (private); reached from the public API through: nlohmann::basic_json::sax_parse(detail::span_input_adapter &&, SAX *, input_format_t, const bool, const bool, const bool, const cbor_tag_handler_t), nlohmann::basic_json::sax_parse(InputType &&, SAX *, input_format_t, const bool, const bool, const bool, const cbor_tag_handler_t), nlohmann::basic_json::sax_parse(IteratorType, SentinelType, SAX *, input_format_t, const bool, const bool, const bool, const cbor_tag_handler_t), nlohmann::basic_json::from_bson(detail::span_input_adapter &&, const bool, const bool), nlohmann::basic_json::from_cbor(detail::span_input_adapter &&, const bool, const bool, const cbor_tag_handler_t), nlohmann::basic_json::from_msgpack(detail::span_input_adapter &&, const bool, const bool), nlohmann::basic_json::from_ubjson(detail::span_input_adapter &&, const bool, const bool), nlohmann::basic_json::from_bjdata(InputType &&, const bool, const bool, const error_handler_t), nlohmann::basic_json::from_bon8(InputType &&, const bool, const bool), nlohmann::basic_json::from_bson(InputType &&, const bool, const bool, const error_handler_t)
+- nlohmann::detail::count_trailing_zeros(std::uint64_t) (private); reached from the public API through: nlohmann::basic_json::sax_parse(detail::span_input_adapter &&, SAX *, input_format_t, const bool, const bool, const bool, const cbor_tag_handler_t), nlohmann::basic_json::sax_parse(InputType &&, SAX *, input_format_t, const bool, const bool, const bool, const cbor_tag_handler_t), nlohmann::basic_json::sax_parse(IteratorType, SentinelType, SAX *, input_format_t, const bool, const bool, const bool, const cbor_tag_handler_t), nlohmann::basic_json::from_bson(detail::span_input_adapter &&, const bool, const bool), nlohmann::basic_json::from_cbor(detail::span_input_adapter &&, const bool, const bool, const cbor_tag_handler_t), nlohmann::basic_json::from_msgpack(detail::span_input_adapter &&, const bool, const bool), nlohmann::basic_json::from_ubjson(detail::span_input_adapter &&, const bool, const bool), nlohmann::basic_json::from_bjdata(InputType &&, const bool, const bool, const error_handler_t), nlohmann::basic_json::from_bon8(InputType &&, const bool, const bool), nlohmann::basic_json::from_bson(InputType &&, const bool, const bool, const error_handler_t)
+- nlohmann::detail::lexer::skip_indentation(std::false_type) (private); reached from the public API through: nlohmann::basic_json::sax_parse(detail::span_input_adapter &&, SAX *, input_format_t, const bool, const bool, const bool, const cbor_tag_handler_t), nlohmann::basic_json::sax_parse(InputType &&, SAX *, input_format_t, const bool, const bool, const bool, const cbor_tag_handler_t), nlohmann::basic_json::sax_parse(IteratorType, SentinelType, SAX *, input_format_t, const bool, const bool, const bool, const cbor_tag_handler_t), nlohmann::basic_json::from_bson(detail::span_input_adapter &&, const bool, const bool), nlohmann::basic_json::from_cbor(detail::span_input_adapter &&, const bool, const bool, const cbor_tag_handler_t), nlohmann::basic_json::from_msgpack(detail::span_input_adapter &&, const bool, const bool), nlohmann::basic_json::from_ubjson(detail::span_input_adapter &&, const bool, const bool), nlohmann::basic_json::from_bjdata(InputType &&, const bool, const bool, const error_handler_t), nlohmann::basic_json::from_bon8(InputType &&, const bool, const bool), nlohmann::basic_json::from_bson(InputType &&, const bool, const bool, const error_handler_t)
+
+## Diff of the library source (before -> after)
+```diff
+diff --git a/include/nlohmann/detail/bit_ops.hpp b/include/nlohmann/detail/bit_ops.hpp
+index 9ccb82c66..8752dd74a 100644
+--- a/include/nlohmann/detail/bit_ops.hpp
++++ b/include/nlohmann/detail/bit_ops.hpp
+@@ -42,6 +42,25 @@ inline int count_leading_zeros(std::uint64_t x) noexcept
+ #endif
+ }
+ 
++/// number of trailing zero bits of x (x != 0)
++inline int count_trailing_zeros(std::uint64_t x) noexcept
++{
++#if defined(__GNUC__) || defined(__clang__)
++    return __builtin_ctzll(x);
++#else
++    int n = 0;
++    for (int shift = 32; shift != 0; shift >>= 1)
++    {
++        if ((x << (64 - shift)) == 0)
++        {
++            n += shift;
++            x >>= shift;
++        }
++    }
++    return n;
++#endif
++}
++
+ /// the 128-bit product of two 64-bit numbers
+ struct uint128_parts
+ {
+diff --git a/include/nlohmann/detail/input/lexer.hpp b/include/nlohmann/detail/input/lexer.hpp
+index af5907d78..55f09c3cc 100644
+--- a/include/nlohmann/detail/input/lexer.hpp
++++ b/include/nlohmann/detail/input/lexer.hpp
+@@ -17,6 +17,7 @@
+ #include <utility> // move
+ #include <vector> // vector
+ 
++#include <nlohmann/detail/bit_ops.hpp>
+ #include <nlohmann/detail/input/input_adapters.hpp>
+ #include <nlohmann/detail/input/number_parse.hpp>
+ #include <nlohmann/detail/input/position_t.hpp>
+@@ -2079,11 +2080,53 @@ scan_number_done:
+         // into one that reloads the pointer from memory every character
+         do
+         {
++            if (current == '\n')
++            {
++                skip_indentation(std::integral_constant<bool, bulk_scan> {});
++            }
+             get_ignoring_pending_unget();
+         }
+         while (current_is_whitespace());
+     }
+ 
++    /*!
++    @brief contiguous input: skip the space indentation that follows a newline
++           8 bytes at a time
++
++    Pretty-printed JSON indents every line with a run of spaces, which the loop
++    in skip_whitespace() would otherwise read one character at a time. The
++    spaces are skipped 8 bytes at a time; the last 7 bytes of the input and any
++    other whitespace are left to that loop. Skipping bypasses get(), which is
++    fine because bulk_scan implies lazy_position: the position is derived from
++    the adapter, not counted per character.
++    */
++    void skip_indentation(std::true_type /*bulk*/)
++    {
++        JSON_ASSERT(!next_unget);
++        const std::size_t remaining = ia.bulk_remaining();
++        if (remaining < 8)
++        {
++            return;
++        }
++        const char* const data = reinterpret_cast<const char*>(ia.bulk_data());
++        std::size_t pos = 0;
++        for (; pos + 8 <= remaining; pos += 8)
++        {
++            // little-endian, so the first byte is the lowest
++            const std::uint64_t non_space = read_eight_bytes(data + pos) ^ 0x2020202020202020ull;
++            if (non_space != 0)
++            {
++                // skip the spaces before the first other byte of this word
++                pos += static_cast<std::size_t>(count_trailing_zeros(non_space)) / 8;
++                break;
++            }
++        }
++        ia.bulk_skip(pos);
++    }
++
++    /// streaming input: no bulk fast path
++    void skip_indentation(std::false_type /*bulk*/) const noexcept {}
++
+     token_type scan()
+     {
+         // initially, skip the BOM
+```
+
+## Existing upstream tests that call the changed code (for style and API usage)
+// Upstream tests at the PR's parent commit f23830b65 that use the changed code.
+// Names searched (test lines using each): sax_parse (0), from_bson (0), from_cbor (0), from_msgpack (0), from_ubjson (0), from_bjdata (0), from_bon8 (0), lexer (94), skip_whitespace (0), skip_indentation (0), count_trailing_zeros (0)
+
+// ---- tests/src/unit-class_lexer.cpp:17-41  (uses: lexer)
+#include <cstdint> // uint32_t, uint64_t
+#include <cstdlib> // strtod
+#include <cstring> // memcpy
+#include <limits> // numeric_limits
+#include <sstream> // stringstream
+#include <string> // string
+#include <utility> // pair
+#include <vector> // vector
+
+namespace
+{
+// shortcut to scan a string literal
+json::lexer::token_type scan_string(const char* s, bool ignore_comments = false);
+json::lexer::token_type scan_string(const char* s, const bool ignore_comments)
+{
+    auto ia = nlohmann::detail::input_adapter(s);
+    return nlohmann::detail::lexer<json, decltype(ia)>(std::move(ia), ignore_comments).scan(); // NOLINT(hicpp-move-const-arg,performance-move-const-arg)
+}
+} // namespace
+
+std::string get_error_message(const char* s, bool ignore_comments = false); // NOLINT(misc-use-internal-linkage)
+std::string get_error_message(const char* s, const bool ignore_comments)
+{
+    auto ia = nlohmann::detail::input_adapter(s);
+    auto lexer = nlohmann::detail::lexer<json, decltype(ia)>(std::move(ia), ignore_comments); // NOLINT(hicpp-move-const-arg,performance-move-const-arg)
+
+// ---- tests/src/unit-class_lexer.cpp:46-58  (uses: lexer)
+TEST_CASE("lexer class")
+{
+    SECTION("scan")
+    {
+        SECTION("structural characters")
+        {
+            CHECK((scan_string("[") == json::lexer::token_type::begin_array));
+            CHECK((scan_string("]") == json::lexer::token_type::end_array));
+            CHECK((scan_string("{") == json::lexer::token_type::begin_object));
+            CHECK((scan_string("}") == json::lexer::token_type::end_object));
+            CHECK((scan_string(",") == json::lexer::token_type::value_separator));
+            CHECK((scan_string(":") == json::lexer::token_type::name_separator));
+        }
+
+// ---- tests/src/unit-class_parser.cpp:2825-2847  (uses: lexer)
+    SECTION("user-driven SAX consumers with no lexer report npos")
+    {
+        // json::parse() internally wires up its json_sax_dom_parser with a
+        // pointer to its own lexer (see parser.hpp), which is how positions
+        // get set at all. A user who constructs a json_sax_dom_parser
+        // directly (e.g. to drive it via json::sax_parse()) and does not
+        // supply a lexer pointer gets a consumer with m_lexer_ref == nullptr;
+        // every "if (m_lexer_ref)" guard in json_sax.hpp is then skipped, so
+        // every value it produces keeps its default, unset position (npos).
+        // This was previously true but silently unasserted (operator==
+        // ignores positions), see #5420.
+        json result;
+        nlohmann::detail::json_sax_dom_parser<json, nlohmann::detail::string_input_adapter_type> sdp(result);
+        const std::string s = R"({"a":1,"b":[1,2,3]})";
+        CHECK(json::sax_parse(s, &sdp));
+
+        CHECK(result.start_pos() == std::string::npos);
+        CHECK(result.end_pos() == std::string::npos);
+        CHECK(result["a"].start_pos() == std::string::npos);
+        CHECK(result["a"].end_pos() == std::string::npos);
+        CHECK(result["b"][0].start_pos() == std::string::npos);
+        CHECK(result["b"][0].end_pos() == std::string::npos);
+    }
+
+// ---- tests/src/unit-locale-cpp.cpp:261-273  (uses: lexer)
+TEST_CASE("locale changes between lexer construction and number conversion (#5198)")
+{
+    // The numbers are chosen so that the conversion also takes the strtod
+    // fallback, which honors the locale that is current at conversion time:
+    // too many significant digits for Clinger's fast path, an underflow that
+    // std::from_chars rejects, and a plain value.
+    const std::vector<std::string> numbers = {"3.14159265358979323846", "1.5e-400", "12.34", "-0.000123456789012345678"};
+    std::string text = "[";
+    for (const auto& n : numbers)
+    {
+        text += (text.size() == 1 ? "" : ",") + n;
+    }
+    text += "]";
+
+// ---- tests/src/unit-regression1.cpp:230-250  (uses: lexer)
+    SECTION("issue #82 - lexer::get_number return NAN")
+    {
+        const auto* const content = R"(
+        {
+            "Test":"Test1",
+            "Number":100,
+            "Foo":42.42
+        })";
+
+        std::stringstream ss;
+        ss << content;
+        json j;
+        ss >> j;
+
+        auto test = j["Test"].get<std::string>();
+        CHECK(test == "Test1");
+        const int number{j["Number"]};
+        CHECK(number == 100);
+        const float foo{j["Foo"]};
+        CHECK(static_cast<double>(foo) == Approx(42.42));
+    }
+
+# Task
+Write 20 test programs for this pull request. Return JSON with a "tests" array; each item has "name" (short snake_case), "intent" (one sentence: what behavior it probes) and "code" (the complete C++ program).

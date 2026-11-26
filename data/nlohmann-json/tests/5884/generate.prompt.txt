@@ -1,0 +1,660 @@
+[system]
+You write test programs that probe a C++ library for behavioral changes made by one pull request.
+Each program is compiled and run twice, once against the library before the change and once after, and the two
+outputs are compared. Your job is to produce programs whose output reveals whether the change altered behavior,
+including side effects the author did not intend.
+
+Rules for every program:
+- It is standalone: one file with its own int main(), compiled as C++17, printing results to stdout.
+- Use only the library's documented public API. Never include internal headers or use detail/impl namespaces,
+  private members or undocumented macros.
+- Do not judge results (no assert, no expected-value comparisons): just print what the library returns. Print
+  enough to make differences visible, one fact per line.
+- Output must be deterministic. Never print pointers or addresses, uninitialized data, the order of
+  hash-based containers, timings, thread ids, random values, file paths or environment data. Print floating point
+  values with an explicit precision. No input, files, network, threads, clocks or randomness.
+- Wrap calls that may throw in try/catch and print the exception's type and message, so an exception is an
+  observable result. Do not crash on purpose.
+- Aim at the code the diff changes. Prefer calls that compile against both the old and the new library; one or two
+  programs may use an API the PR adds. Cover ordinary inputs and edge cases (empty, minimum and maximum values,
+  boundaries, special values, nesting, unusual types) and also neighbouring behavior the change could disturb.
+- When the diff changes which types or inputs an API accepts or rejects (constraints, overloads, traits,
+  conversions), test it with the detection idiom (std::void_t or requires) and `if constexpr`, so the program
+  compiles against both versions, prints whether the expression is well-formed, and exercises it when it is.
+  Accepting an input is not enough: also use it through every entry point that should follow (const and
+  non-const, read, write, insert, erase, lookup, nested use), because a change that admits new inputs can leave
+  later code unable to handle them.
+- If the changed code is internal (a detail, impl or internal namespace, a trait, a helper), do not name it in the
+  program. Reach it through the public API that depends on it, using detection (as above) where needed.
+- Use the exact types and values the diff is about (the new trait's argument types, the new overload's
+  parameters), not stand-ins.
+- Spread the programs over distinct public entry points and overloads, one main idea per program. Do not write
+  several programs that only rename a type or change a literal.
+- Make the programs differ from each other: different inputs, different entry points, different features.
+
+Rules specific to this library:
+- Include the library with #include <nlohmann/json.hpp>. The public API is nlohmann::json (nlohmann::basic_json), nlohmann::ordered_json, json_pointer, json patch/merge_patch and the documented SAX and conversion interfaces. Never use the detail namespace.
+- It is a header-only library: nothing to link. Programs are compiled as C++17.
+- Print JSON values with dump() (compact) or dump(2). Keys of nlohmann::json objects print in sorted order, so output is deterministic; do not depend on insertion order except with ordered_json.
+
+[user]
+# Pull request #5884: Faster std::istream input: inline get-area path, binary reads, unbuffered streambufs
+
+## Description
+Three changes to the `std::istream` input adapter:
+
+1. **Step over a character in the get area without leaving `get_character()`.**
+   - ifstream citm -5 %, `accept()` citm -8 % (macOS instructions).
+   - Linux citm 89.0 / 122.1 -> 84.6 / 118.7 M Ir.
+2. **Copy small binary reads straight from the streambuf get area.**
+   - CBOR, MessagePack and UBJSON from an ifstream: -4 ... -7 % (macOS).
+   - UBJSON citm -10 % (Linux).
+3. **Read a streambuf without a get area with a shorter path.**
+   - Unbuffered streambufs vs develop: -16 ... -20 % (macOS), -8 ... -11 % (GCC), -20 ... -23 % (Clang).
+
+## Numbers
+
+macOS timing, develop -> this PR:
+
+| case | ratio |
+|---|---|
+| ifstream twitter | 0.91 |
+| `accept()` twitter | 0.90 |
+| CBOR twitter | 0.83 |
+| MessagePack citm | 0.87 |
+| unbuffered citm | 0.73 |
+
+`FILE*` input is unchanged (equal instructions).
+
+## Validation
+
+- Differential check against develop: 746,523 cases, 0 differences.
+  - Inputs:
+    - 1,228 corpus files, plus binary, truncated and NDJSON variants;
+    - custom streambufs with get areas of 0 to 4096 bytes, and a get area that only appears later;
+    - `FILE*` and pipes.
+  - Compared: value, exception text, `rdstate()`, `tellg()` and the bytes left in the stream.
+  - Builds: default, `JSON_DISABLE_STREAM_BULK_SCAN`, `JSON_PRECISE_STREAM_POSITION` and `JSON_DISABLE_UNLOCKED_FILE_IO`.
+- 13 unit test files with ASan/UBSan, in C++11 and C++20.
+- All commits build on their own, and each commit's `single_include` is a fresh `make amalgamate`.
+
+## Public API
+
+No breaking changes: the stream state, position and the bytes left in the stream are unchanged.
+
+Written by Claude Code on behalf of @nlohmann.
+
+🤖 Generated with [Claude Code](https://claude.com/claude-code)
+
+## Commit message
+Signed-off-by: Niels Lohmann <mail@nlohmann.me>
+
+## Discussion before merge
+- github-advanced-security[bot]: ## Flawfinder / Does not check for buffer overflows when copying to destination (CWE-120).
+
+buffer/memcpy:Does not check for buffer overflows when copying to destination (CWE-120).
+
+[Show more details](https://github.com/nlohmann/json/security/code-scanning/906)
+- github-advanced-security[bot]: ## Flawfinder / Does not check for buffer overflows when copying to destination (CWE-120).
+
+buffer/memcpy:Does not check for buffer overflows when copying to destination (CWE-120).
+
+[Show more details](https://github.com/nlohmann/json/security/code-scanning/907)
+- github-advanced-security[bot]: ## Flawfinder / Does not check for buffer overflows when copying to destination (CWE-120).
+
+buffer/memcpy:Does not check for buffer overflows when copying to destination (CWE-120).
+
+[Show more details](https://github.com/nlohmann/json/security/code-scanning/908)
+- github-advanced-security[bot]: ## Flawfinder / Does not check for buffer overflows when copying to destination (CWE-120).
+
+buffer/memcpy:Does not check for buffer overflows when copying to destination (CWE-120).
+
+[Show more details](https://github.com/nlohmann/json/security/code-scanning/909)
+- github-advanced-security[bot]: ## Flawfinder / Does not check for buffer overflows when copying to destination (CWE-120).
+
+buffer/memcpy:Does not check for buffer overflows when copying to destination (CWE-120).
+
+[Show more details](https://github.com/nlohmann/json/security/code-scanning/910)
+- github-advanced-security[bot]: ## Flawfinder / Does not check for buffer overflows when copying to destination (CWE-120).
+
+buffer/memcpy:Does not check for buffer overflows when copying to destination (CWE-120).
+
+[Show more details](https://github.com/nlohmann/json/security/code-scanning/911)
+
+## Changed functions (from changes.py)
+- nlohmann::detail::input_stream_adapter::get_character() (private); reached from the public API through: nlohmann::operator>>(std::istream &, basic_json<...> &), nlohmann::basic_json::accept(InputType &&, const bool, const bool), nlohmann::basic_json::from_bjdata(InputType &&, const bool, const bool, const error_handler_t), nlohmann::basic_json::from_bon8(InputType &&, const bool, const bool), nlohmann::basic_json::from_bson(InputType &&, const bool, const bool, const error_handler_t), nlohmann::basic_json::from_cbor(InputType &&, const bool, const bool, const cbor_tag_handler_t, const error_handler_t), nlohmann::basic_json::from_msgpack(InputType &&, const bool, const bool, const error_handler_t), nlohmann::basic_json::from_ubjson(InputType &&, const bool, const bool, const error_handler_t), nlohmann::basic_json::parse(InputType &&, parser_callback_t, const bool, const bool, const bool), nlohmann::basic_json::sax_parse(InputType &&, SAX *, input_format_t, const bool, const bool, const bool, const cbor_tag_handler_t)
+- nlohmann::detail::input_stream_adapter (private); reached from the public API through: nlohmann::operator>>(std::istream &, basic_json<...> &), nlohmann::basic_json::accept(InputType &&, const bool, const bool), nlohmann::basic_json::from_bjdata(InputType &&, const bool, const bool, const error_handler_t), nlohmann::basic_json::from_bon8(InputType &&, const bool, const bool), nlohmann::basic_json::from_bson(InputType &&, const bool, const bool, const error_handler_t), nlohmann::basic_json::from_cbor(InputType &&, const bool, const bool, const cbor_tag_handler_t, const error_handler_t), nlohmann::basic_json::from_msgpack(InputType &&, const bool, const bool, const error_handler_t), nlohmann::basic_json::from_ubjson(InputType &&, const bool, const bool, const error_handler_t), nlohmann::basic_json::parse(InputType &&, parser_callback_t, const bool, const bool, const bool), nlohmann::basic_json::sax_parse(InputType &&, SAX *, input_format_t, const bool, const bool, const bool, const cbor_tag_handler_t)
+- nlohmann::detail::input_stream_adapter::get_elements(T *, std::size_t) (private); reached from the public API through: nlohmann::operator>>(std::istream &, basic_json<...> &), nlohmann::basic_json::accept(InputType &&, const bool, const bool), nlohmann::basic_json::from_bjdata(InputType &&, const bool, const bool, const error_handler_t), nlohmann::basic_json::from_bon8(InputType &&, const bool, const bool), nlohmann::basic_json::from_bson(InputType &&, const bool, const bool, const error_handler_t), nlohmann::basic_json::from_cbor(InputType &&, const bool, const bool, const cbor_tag_handler_t, const error_handler_t), nlohmann::basic_json::from_msgpack(InputType &&, const bool, const bool, const error_handler_t), nlohmann::basic_json::from_ubjson(InputType &&, const bool, const bool, const error_handler_t), nlohmann::basic_json::parse(InputType &&, parser_callback_t, const bool, const bool, const bool), nlohmann::basic_json::sax_parse(InputType &&, SAX *, input_format_t, const bool, const bool, const bool, const cbor_tag_handler_t)
+- nlohmann::detail::input_stream_adapter::after_refill(std::char_traits<char>::int_type, bool) (private); reached from the public API through: nlohmann::operator>>(std::istream &, basic_json<...> &), nlohmann::basic_json::accept(InputType &&, const bool, const bool), nlohmann::basic_json::from_bjdata(InputType &&, const bool, const bool, const error_handler_t), nlohmann::basic_json::from_bon8(InputType &&, const bool, const bool), nlohmann::basic_json::from_bson(InputType &&, const bool, const bool, const error_handler_t), nlohmann::basic_json::from_cbor(InputType &&, const bool, const bool, const cbor_tag_handler_t, const error_handler_t), nlohmann::basic_json::from_msgpack(InputType &&, const bool, const bool, const error_handler_t), nlohmann::basic_json::from_ubjson(InputType &&, const bool, const bool, const error_handler_t), nlohmann::basic_json::parse(InputType &&, parser_callback_t, const bool, const bool, const bool), nlohmann::basic_json::sax_parse(InputType &&, SAX *, input_format_t, const bool, const bool, const bool, const cbor_tag_handler_t)
+- nlohmann::detail::input_stream_adapter::copy_token(std::vector<char> &, bool) (private); reached from the public API through: nlohmann::operator>>(std::istream &, basic_json<...> &), nlohmann::basic_json::accept(InputType &&, const bool, const bool), nlohmann::basic_json::from_bjdata(InputType &&, const bool, const bool, const error_handler_t), nlohmann::basic_json::from_bon8(InputType &&, const bool, const bool), nlohmann::basic_json::from_bson(InputType &&, const bool, const bool, const error_handler_t), nlohmann::basic_json::from_cbor(InputType &&, const bool, const bool, const cbor_tag_handler_t, const error_handler_t), nlohmann::basic_json::from_msgpack(InputType &&, const bool, const bool, const error_handler_t), nlohmann::basic_json::from_ubjson(InputType &&, const bool, const bool, const error_handler_t), nlohmann::basic_json::parse(InputType &&, parser_callback_t, const bool, const bool, const bool), nlohmann::basic_json::sax_parse(InputType &&, SAX *, input_format_t, const bool, const bool, const bool, const cbor_tag_handler_t)
+- nlohmann::detail::input_stream_adapter::input_stream_adapter(input_stream_adapter &&) (private); reached from the public API through: nlohmann::operator>>(std::istream &, basic_json<...> &), nlohmann::basic_json::accept(InputType &&, const bool, const bool), nlohmann::basic_json::from_bjdata(InputType &&, const bool, const bool, const error_handler_t), nlohmann::basic_json::from_bon8(InputType &&, const bool, const bool), nlohmann::basic_json::from_bson(InputType &&, const bool, const bool, const error_handler_t), nlohmann::basic_json::from_cbor(InputType &&, const bool, const bool, const cbor_tag_handler_t, const error_handler_t), nlohmann::basic_json::from_msgpack(InputType &&, const bool, const bool, const error_handler_t), nlohmann::basic_json::from_ubjson(InputType &&, const bool, const bool, const error_handler_t), nlohmann::basic_json::parse(InputType &&, parser_callback_t, const bool, const bool, const bool), nlohmann::basic_json::sax_parse(InputType &&, SAX *, input_format_t, const bool, const bool, const bool, const cbor_tag_handler_t)
+- nlohmann::detail::input_stream_adapter::save_token_segment() (private); reached from the public API through: nlohmann::operator>>(std::istream &, basic_json<...> &), nlohmann::basic_json::accept(InputType &&, const bool, const bool), nlohmann::basic_json::from_bjdata(InputType &&, const bool, const bool, const error_handler_t), nlohmann::basic_json::from_bon8(InputType &&, const bool, const bool), nlohmann::basic_json::from_bson(InputType &&, const bool, const bool, const error_handler_t), nlohmann::basic_json::from_cbor(InputType &&, const bool, const bool, const cbor_tag_handler_t, const error_handler_t), nlohmann::basic_json::from_msgpack(InputType &&, const bool, const bool, const error_handler_t), nlohmann::basic_json::from_ubjson(InputType &&, const bool, const bool, const error_handler_t), nlohmann::basic_json::parse(InputType &&, parser_callback_t, const bool, const bool, const bool), nlohmann::basic_json::sax_parse(InputType &&, SAX *, input_format_t, const bool, const bool, const bool, const cbor_tag_handler_t)
+- nlohmann::detail::input_stream_adapter::token_carry (private); reached from the public API through: nlohmann::operator>>(std::istream &, basic_json<...> &), nlohmann::basic_json::accept(InputType &&, const bool, const bool), nlohmann::basic_json::from_bjdata(InputType &&, const bool, const bool, const error_handler_t), nlohmann::basic_json::from_bon8(InputType &&, const bool, const bool), nlohmann::basic_json::from_bson(InputType &&, const bool, const bool, const error_handler_t), nlohmann::basic_json::from_cbor(InputType &&, const bool, const bool, const cbor_tag_handler_t, const error_handler_t), nlohmann::basic_json::from_msgpack(InputType &&, const bool, const bool, const error_handler_t), nlohmann::basic_json::from_ubjson(InputType &&, const bool, const bool, const error_handler_t), nlohmann::basic_json::parse(InputType &&, parser_callback_t, const bool, const bool, const bool), nlohmann::basic_json::sax_parse(InputType &&, SAX *, input_format_t, const bool, const bool, const bool, const cbor_tag_handler_t)
+- nlohmann::detail::input_stream_adapter::get_character_slow() (private); reached from the public API through: nlohmann::operator>>(std::istream &, basic_json<...> &), nlohmann::basic_json::accept(InputType &&, const bool, const bool), nlohmann::basic_json::from_bjdata(InputType &&, const bool, const bool, const error_handler_t), nlohmann::basic_json::from_bon8(InputType &&, const bool, const bool), nlohmann::basic_json::from_bson(InputType &&, const bool, const bool, const error_handler_t), nlohmann::basic_json::from_cbor(InputType &&, const bool, const bool, const cbor_tag_handler_t, const error_handler_t), nlohmann::basic_json::from_msgpack(InputType &&, const bool, const bool, const error_handler_t), nlohmann::basic_json::from_ubjson(InputType &&, const bool, const bool, const error_handler_t), nlohmann::basic_json::parse(InputType &&, parser_callback_t, const bool, const bool, const bool), nlohmann::basic_json::sax_parse(InputType &&, SAX *, input_format_t, const bool, const bool, const bool, const cbor_tag_handler_t)
+- nlohmann::detail::input_stream_adapter::get_character_no_get_area() (private); reached from the public API through: nlohmann::operator>>(std::istream &, basic_json<...> &), nlohmann::basic_json::accept(InputType &&, const bool, const bool), nlohmann::basic_json::from_bjdata(InputType &&, const bool, const bool, const error_handler_t), nlohmann::basic_json::from_bon8(InputType &&, const bool, const bool), nlohmann::basic_json::from_bson(InputType &&, const bool, const bool, const error_handler_t), nlohmann::basic_json::from_cbor(InputType &&, const bool, const bool, const cbor_tag_handler_t, const error_handler_t), nlohmann::basic_json::from_msgpack(InputType &&, const bool, const bool, const error_handler_t), nlohmann::basic_json::from_ubjson(InputType &&, const bool, const bool, const error_handler_t), nlohmann::basic_json::parse(InputType &&, parser_callback_t, const bool, const bool, const bool), nlohmann::basic_json::sax_parse(InputType &&, SAX *, input_format_t, const bool, const bool, const bool, const cbor_tag_handler_t)
+- nlohmann::detail::token_carry_buffer::append(const char *, const char *) (private); reached from the public API through: nlohmann::operator>>(std::istream &, basic_json<...> &), nlohmann::basic_json::accept(InputType &&, const bool, const bool), nlohmann::basic_json::from_bjdata(InputType &&, const bool, const bool, const error_handler_t), nlohmann::basic_json::from_bon8(InputType &&, const bool, const bool), nlohmann::basic_json::from_bson(InputType &&, const bool, const bool, const error_handler_t), nlohmann::basic_json::from_cbor(InputType &&, const bool, const bool, const cbor_tag_handler_t, const error_handler_t), nlohmann::basic_json::from_msgpack(InputType &&, const bool, const bool, const error_handler_t), nlohmann::basic_json::from_ubjson(InputType &&, const bool, const bool, const error_handler_t), nlohmann::basic_json::parse(InputType &&, parser_callback_t, const bool, const bool, const bool), nlohmann::basic_json::sax_parse(InputType &&, SAX *, input_format_t, const bool, const bool, const bool, const cbor_tag_handler_t)
+- nlohmann::detail::token_carry_buffer::grow(std::size_t) (private); reached from the public API through: nlohmann::operator>>(std::istream &, basic_json<...> &), nlohmann::basic_json::accept(InputType &&, const bool, const bool), nlohmann::basic_json::from_bjdata(InputType &&, const bool, const bool, const error_handler_t), nlohmann::basic_json::from_bon8(InputType &&, const bool, const bool), nlohmann::basic_json::from_bson(InputType &&, const bool, const bool, const error_handler_t), nlohmann::basic_json::from_cbor(InputType &&, const bool, const bool, const cbor_tag_handler_t, const error_handler_t), nlohmann::basic_json::from_msgpack(InputType &&, const bool, const bool, const error_handler_t), nlohmann::basic_json::from_ubjson(InputType &&, const bool, const bool, const error_handler_t), nlohmann::basic_json::parse(InputType &&, parser_callback_t, const bool, const bool, const bool), nlohmann::basic_json::sax_parse(InputType &&, SAX *, input_format_t, const bool, const bool, const bool, const cbor_tag_handler_t)
+- nlohmann::detail::token_carry_buffer (private); reached from the public API through: nlohmann::operator>>(std::istream &, basic_json<...> &), nlohmann::basic_json::accept(InputType &&, const bool, const bool), nlohmann::basic_json::from_bjdata(InputType &&, const bool, const bool, const error_handler_t), nlohmann::basic_json::from_bon8(InputType &&, const bool, const bool), nlohmann::basic_json::from_bson(InputType &&, const bool, const bool, const error_handler_t), nlohmann::basic_json::from_cbor(InputType &&, const bool, const bool, const cbor_tag_handler_t, const error_handler_t), nlohmann::basic_json::from_msgpack(InputType &&, const bool, const bool, const error_handler_t), nlohmann::basic_json::from_ubjson(InputType &&, const bool, const bool, const error_handler_t), nlohmann::basic_json::parse(InputType &&, parser_callback_t, const bool, const bool, const bool), nlohmann::basic_json::sax_parse(InputType &&, SAX *, input_format_t, const bool, const bool, const bool, const cbor_tag_handler_t)
+- nlohmann::detail::input_stream_adapter::get_character_no_get_area_other(std::char_traits<char>::int_type) (private); reached from the public API through: nlohmann::operator>>(std::istream &, basic_json<...> &), nlohmann::basic_json::accept(InputType &&, const bool, const bool), nlohmann::basic_json::from_bjdata(InputType &&, const bool, const bool, const error_handler_t), nlohmann::basic_json::from_bon8(InputType &&, const bool, const bool), nlohmann::basic_json::from_bson(InputType &&, const bool, const bool, const error_handler_t), nlohmann::basic_json::from_cbor(InputType &&, const bool, const bool, const cbor_tag_handler_t, const error_handler_t), nlohmann::basic_json::from_msgpack(InputType &&, const bool, const bool, const error_handler_t), nlohmann::basic_json::from_ubjson(InputType &&, const bool, const bool, const error_handler_t), nlohmann::basic_json::parse(InputType &&, parser_callback_t, const bool, const bool, const bool), nlohmann::basic_json::sax_parse(InputType &&, SAX *, input_format_t, const bool, const bool, const bool, const cbor_tag_handler_t)
+- nlohmann::detail::token_carry_buffer::push_back(char) (private); reached from the public API through: nlohmann::operator>>(std::istream &, basic_json<...> &), nlohmann::basic_json::accept(InputType &&, const bool, const bool), nlohmann::basic_json::from_bjdata(InputType &&, const bool, const bool, const error_handler_t), nlohmann::basic_json::from_bon8(InputType &&, const bool, const bool), nlohmann::basic_json::from_bson(InputType &&, const bool, const bool, const error_handler_t), nlohmann::basic_json::from_cbor(InputType &&, const bool, const bool, const cbor_tag_handler_t, const error_handler_t), nlohmann::basic_json::from_msgpack(InputType &&, const bool, const bool, const error_handler_t), nlohmann::basic_json::from_ubjson(InputType &&, const bool, const bool, const error_handler_t), nlohmann::basic_json::parse(InputType &&, parser_callback_t, const bool, const bool, const bool), nlohmann::basic_json::sax_parse(InputType &&, SAX *, input_format_t, const bool, const bool, const bool, const cbor_tag_handler_t)
+- nlohmann::detail::token_carry_buffer::token_carry_buffer(token_carry_buffer &&) (private); reached from the public API through: nlohmann::operator>>(std::istream &, basic_json<...> &), nlohmann::basic_json::accept(InputType &&, const bool, const bool), nlohmann::basic_json::from_bjdata(InputType &&, const bool, const bool, const error_handler_t), nlohmann::basic_json::from_bon8(InputType &&, const bool, const bool), nlohmann::basic_json::from_bson(InputType &&, const bool, const bool, const error_handler_t), nlohmann::basic_json::from_cbor(InputType &&, const bool, const bool, const cbor_tag_handler_t, const error_handler_t), nlohmann::basic_json::from_msgpack(InputType &&, const bool, const bool, const error_handler_t), nlohmann::basic_json::from_ubjson(InputType &&, const bool, const bool, const error_handler_t), nlohmann::basic_json::parse(InputType &&, parser_callback_t, const bool, const bool, const bool), nlohmann::basic_json::sax_parse(InputType &&, SAX *, input_format_t, const bool, const bool, const bool, const cbor_tag_handler_t)
+- nlohmann::detail::input_stream_adapter::streambuf_access::next_character(std::streambuf *) (private); reached from the public API through: nlohmann::operator>>(std::istream &, basic_json<...> &), nlohmann::basic_json::accept(InputType &&, const bool, const bool), nlohmann::basic_json::from_bjdata(InputType &&, const bool, const bool, const error_handler_t), nlohmann::basic_json::from_bon8(InputType &&, const bool, const bool), nlohmann::basic_json::from_bson(InputType &&, const bool, const bool, const error_handler_t), nlohmann::basic_json::from_cbor(InputType &&, const bool, const bool, const cbor_tag_handler_t, const error_handler_t), nlohmann::basic_json::from_msgpack(InputType &&, const bool, const bool, const error_handler_t), nlohmann::basic_json::from_ubjson(InputType &&, const bool, const bool, const error_handler_t), nlohmann::basic_json::parse(InputType &&, parser_callback_t, const bool, const bool, const bool), nlohmann::basic_json::sax_parse(InputType &&, SAX *, input_format_t, const bool, const bool, const bool, const cbor_tag_handler_t)
+- nlohmann::detail::token_carry_buffer::clear() (private); reached from the public API through: nlohmann::operator>>(std::istream &, basic_json<...> &), nlohmann::basic_json::accept(InputType &&, const bool, const bool), nlohmann::basic_json::from_bjdata(InputType &&, const bool, const bool, const error_handler_t), nlohmann::basic_json::from_bon8(InputType &&, const bool, const bool), nlohmann::basic_json::from_bson(InputType &&, const bool, const bool, const error_handler_t), nlohmann::basic_json::from_cbor(InputType &&, const bool, const bool, const cbor_tag_handler_t, const error_handler_t), nlohmann::basic_json::from_msgpack(InputType &&, const bool, const bool, const error_handler_t), nlohmann::basic_json::from_ubjson(InputType &&, const bool, const bool, const error_handler_t), nlohmann::basic_json::parse(InputType &&, parser_callback_t, const bool, const bool, const bool), nlohmann::basic_json::sax_parse(InputType &&, SAX *, input_format_t, const bool, const bool, const bool, const cbor_tag_handler_t)
+- nlohmann::detail::token_carry_buffer::copy_to(std::vector<char> &) (private); reached from the public API through: nlohmann::operator>>(std::istream &, basic_json<...> &), nlohmann::basic_json::accept(InputType &&, const bool, const bool), nlohmann::basic_json::from_bjdata(InputType &&, const bool, const bool, const error_handler_t), nlohmann::basic_json::from_bon8(InputType &&, const bool, const bool), nlohmann::basic_json::from_bson(InputType &&, const bool, const bool, const error_handler_t), nlohmann::basic_json::from_cbor(InputType &&, const bool, const bool, const cbor_tag_handler_t, const error_handler_t), nlohmann::basic_json::from_msgpack(InputType &&, const bool, const bool, const error_handler_t), nlohmann::basic_json::from_ubjson(InputType &&, const bool, const bool, const error_handler_t), nlohmann::basic_json::parse(InputType &&, parser_callback_t, const bool, const bool, const bool), nlohmann::basic_json::sax_parse(InputType &&, SAX *, input_format_t, const bool, const bool, const bool, const cbor_tag_handler_t)
+- nlohmann::detail::input_stream_adapter::no_get_area (private); reached from the public API through: nlohmann::operator>>(std::istream &, basic_json<...> &), nlohmann::basic_json::accept(InputType &&, const bool, const bool), nlohmann::basic_json::from_bjdata(InputType &&, const bool, const bool, const error_handler_t), nlohmann::basic_json::from_bon8(InputType &&, const bool, const bool), nlohmann::basic_json::from_bson(InputType &&, const bool, const bool, const error_handler_t), nlohmann::basic_json::from_cbor(InputType &&, const bool, const bool, const cbor_tag_handler_t, const error_handler_t), nlohmann::basic_json::from_msgpack(InputType &&, const bool, const bool, const error_handler_t), nlohmann::basic_json::from_ubjson(InputType &&, const bool, const bool, const error_handler_t), nlohmann::basic_json::parse(InputType &&, parser_callback_t, const bool, const bool, const bool), nlohmann::basic_json::sax_parse(InputType &&, SAX *, input_format_t, const bool, const bool, const bool, const cbor_tag_handler_t)
+- nlohmann::detail::input_stream_adapter::streambuf_access (private); reached from the public API through: nlohmann::operator>>(std::istream &, basic_json<...> &), nlohmann::basic_json::accept(InputType &&, const bool, const bool), nlohmann::basic_json::from_bjdata(InputType &&, const bool, const bool, const error_handler_t), nlohmann::basic_json::from_bon8(InputType &&, const bool, const bool), nlohmann::basic_json::from_bson(InputType &&, const bool, const bool, const error_handler_t), nlohmann::basic_json::from_cbor(InputType &&, const bool, const bool, const cbor_tag_handler_t, const error_handler_t), nlohmann::basic_json::from_msgpack(InputType &&, const bool, const bool, const error_handler_t), nlohmann::basic_json::from_ubjson(InputType &&, const bool, const bool, const error_handler_t), nlohmann::basic_json::parse(InputType &&, parser_callback_t, const bool, const bool, const bool), nlohmann::basic_json::sax_parse(InputType &&, SAX *, input_format_t, const bool, const bool, const bool, const cbor_tag_handler_t)
+- nlohmann::detail::token_carry_buffer::m_capacity_end (private); reached from the public API through: nlohmann::operator>>(std::istream &, basic_json<...> &), nlohmann::basic_json::accept(InputType &&, const bool, const bool), nlohmann::basic_json::from_bjdata(InputType &&, const bool, const bool, const error_handler_t), nlohmann::basic_json::from_bon8(InputType &&, const bool, const bool), nlohmann::basic_json::from_bson(InputType &&, const bool, const bool, const error_handler_t), nlohmann::basic_json::from_cbor(InputType &&, const bool, const bool, const cbor_tag_handler_t, const error_handler_t), nlohmann::basic_json::from_msgpack(InputType &&, const bool, const bool, const error_handler_t), nlohmann::basic_json::from_ubjson(InputType &&, const bool, const bool, const error_handler_t), nlohmann::basic_json::parse(InputType &&, parser_callback_t, const bool, const bool, const bool), nlohmann::basic_json::sax_parse(InputType &&, SAX *, input_format_t, const bool, const bool, const bool, const cbor_tag_handler_t)
+- nlohmann::detail::token_carry_buffer::m_data (private); reached from the public API through: nlohmann::operator>>(std::istream &, basic_json<...> &), nlohmann::basic_json::accept(InputType &&, const bool, const bool), nlohmann::basic_json::from_bjdata(InputType &&, const bool, const bool, const error_handler_t), nlohmann::basic_json::from_bon8(InputType &&, const bool, const bool), nlohmann::basic_json::from_bson(InputType &&, const bool, const bool, const error_handler_t), nlohmann::basic_json::from_cbor(InputType &&, const bool, const bool, const cbor_tag_handler_t, const error_handler_t), nlohmann::basic_json::from_msgpack(InputType &&, const bool, const bool, const error_handler_t), nlohmann::basic_json::from_ubjson(InputType &&, const bool, const bool, const error_handler_t), nlohmann::basic_json::parse(InputType &&, parser_callback_t, const bool, const bool, const bool), nlohmann::basic_json::sax_parse(InputType &&, SAX *, input_format_t, const bool, const bool, const bool, const cbor_tag_handler_t)
+- nlohmann::detail::token_carry_buffer::m_end (private); reached from the public API through: nlohmann::operator>>(std::istream &, basic_json<...> &), nlohmann::basic_json::accept(InputType &&, const bool, const bool), nlohmann::basic_json::from_bjdata(InputType &&, const bool, const bool, const error_handler_t), nlohmann::basic_json::from_bon8(InputType &&, const bool, const bool), nlohmann::basic_json::from_bson(InputType &&, const bool, const bool, const error_handler_t), nlohmann::basic_json::from_cbor(InputType &&, const bool, const bool, const cbor_tag_handler_t, const error_handler_t), nlohmann::basic_json::from_msgpack(InputType &&, const bool, const bool, const error_handler_t), nlohmann::basic_json::from_ubjson(InputType &&, const bool, const bool, const error_handler_t), nlohmann::basic_json::parse(InputType &&, parser_callback_t, const bool, const bool, const bool), nlohmann::basic_json::sax_parse(InputType &&, SAX *, input_format_t, const bool, const bool, const bool, const cbor_tag_handler_t)
+- nlohmann::detail::token_carry_buffer::operator=(const token_carry_buffer &) (private); reached from the public API through: nlohmann::operator>>(std::istream &, basic_json<...> &), nlohmann::basic_json::accept(InputType &&, const bool, const bool), nlohmann::basic_json::from_bjdata(InputType &&, const bool, const bool, const error_handler_t), nlohmann::basic_json::from_bon8(InputType &&, const bool, const bool), nlohmann::basic_json::from_bson(InputType &&, const bool, const bool, const error_handler_t), nlohmann::basic_json::from_cbor(InputType &&, const bool, const bool, const cbor_tag_handler_t, const error_handler_t), nlohmann::basic_json::from_msgpack(InputType &&, const bool, const bool, const error_handler_t), nlohmann::basic_json::from_ubjson(InputType &&, const bool, const bool, const error_handler_t), nlohmann::basic_json::parse(InputType &&, parser_callback_t, const bool, const bool, const bool), nlohmann::basic_json::sax_parse(InputType &&, SAX *, input_format_t, const bool, const bool, const bool, const cbor_tag_handler_t)
+- nlohmann::detail::token_carry_buffer::operator=(token_carry_buffer &&) (private); reached from the public API through: nlohmann::operator>>(std::istream &, basic_json<...> &), nlohmann::basic_json::accept(InputType &&, const bool, const bool), nlohmann::basic_json::from_bjdata(InputType &&, const bool, const bool, const error_handler_t), nlohmann::basic_json::from_bon8(InputType &&, const bool, const bool), nlohmann::basic_json::from_bson(InputType &&, const bool, const bool, const error_handler_t), nlohmann::basic_json::from_cbor(InputType &&, const bool, const bool, const cbor_tag_handler_t, const error_handler_t), nlohmann::basic_json::from_msgpack(InputType &&, const bool, const bool, const error_handler_t), nlohmann::basic_json::from_ubjson(InputType &&, const bool, const bool, const error_handler_t), nlohmann::basic_json::parse(InputType &&, parser_callback_t, const bool, const bool, const bool), nlohmann::basic_json::sax_parse(InputType &&, SAX *, input_format_t, const bool, const bool, const bool, const cbor_tag_handler_t)
+- nlohmann::detail::token_carry_buffer::token_carry_buffer() (private); reached from the public API through: nlohmann::operator>>(std::istream &, basic_json<...> &), nlohmann::basic_json::accept(InputType &&, const bool, const bool), nlohmann::basic_json::from_bjdata(InputType &&, const bool, const bool, const error_handler_t), nlohmann::basic_json::from_bon8(InputType &&, const bool, const bool), nlohmann::basic_json::from_bson(InputType &&, const bool, const bool, const error_handler_t), nlohmann::basic_json::from_cbor(InputType &&, const bool, const bool, const cbor_tag_handler_t, const error_handler_t), nlohmann::basic_json::from_msgpack(InputType &&, const bool, const bool, const error_handler_t), nlohmann::basic_json::from_ubjson(InputType &&, const bool, const bool, const error_handler_t), nlohmann::basic_json::parse(InputType &&, parser_callback_t, const bool, const bool, const bool), nlohmann::basic_json::sax_parse(InputType &&, SAX *, input_format_t, const bool, const bool, const bool, const cbor_tag_handler_t)
+- nlohmann::detail::token_carry_buffer::token_carry_buffer(const token_carry_buffer &) (private); reached from the public API through: nlohmann::operator>>(std::istream &, basic_json<...> &), nlohmann::basic_json::accept(InputType &&, const bool, const bool), nlohmann::basic_json::from_bjdata(InputType &&, const bool, const bool, const error_handler_t), nlohmann::basic_json::from_bon8(InputType &&, const bool, const bool), nlohmann::basic_json::from_bson(InputType &&, const bool, const bool, const error_handler_t), nlohmann::basic_json::from_cbor(InputType &&, const bool, const bool, const cbor_tag_handler_t, const error_handler_t), nlohmann::basic_json::from_msgpack(InputType &&, const bool, const bool, const error_handler_t), nlohmann::basic_json::from_ubjson(InputType &&, const bool, const bool, const error_handler_t), nlohmann::basic_json::parse(InputType &&, parser_callback_t, const bool, const bool, const bool), nlohmann::basic_json::sax_parse(InputType &&, SAX *, input_format_t, const bool, const bool, const bool, const cbor_tag_handler_t)
+- nlohmann::detail::token_carry_buffer::~token_carry_buffer() (private); reached from the public API through: nlohmann::operator>>(std::istream &, basic_json<...> &), nlohmann::basic_json::accept(InputType &&, const bool, const bool), nlohmann::basic_json::from_bjdata(InputType &&, const bool, const bool, const error_handler_t), nlohmann::basic_json::from_bon8(InputType &&, const bool, const bool), nlohmann::basic_json::from_bson(InputType &&, const bool, const bool, const error_handler_t), nlohmann::basic_json::from_cbor(InputType &&, const bool, const bool, const cbor_tag_handler_t, const error_handler_t), nlohmann::basic_json::from_msgpack(InputType &&, const bool, const bool, const error_handler_t), nlohmann::basic_json::from_ubjson(InputType &&, const bool, const bool, const error_handler_t), nlohmann::basic_json::parse(InputType &&, parser_callback_t, const bool, const bool, const bool), nlohmann::basic_json::sax_parse(InputType &&, SAX *, input_format_t, const bool, const bool, const bool, const cbor_tag_handler_t)
+- nlohmann::detail::input_stream_adapter::streambuf_access::bump(std::streambuf *, int) (private); reached from the public API through: nlohmann::operator>>(std::istream &, basic_json<...> &), nlohmann::basic_json::accept(InputType &&, const bool, const bool), nlohmann::basic_json::from_bjdata(InputType &&, const bool, const bool, const error_handler_t), nlohmann::basic_json::from_bon8(InputType &&, const bool, const bool), nlohmann::basic_json::from_bson(InputType &&, const bool, const bool, const error_handler_t), nlohmann::basic_json::from_cbor(InputType &&, const bool, const bool, const cbor_tag_handler_t, const error_handler_t), nlohmann::basic_json::from_msgpack(InputType &&, const bool, const bool, const error_handler_t), nlohmann::basic_json::from_ubjson(InputType &&, const bool, const bool, const error_handler_t), nlohmann::basic_json::parse(InputType &&, parser_callback_t, const bool, const bool, const bool), nlohmann::basic_json::sax_parse(InputType &&, SAX *, input_format_t, const bool, const bool, const bool, const cbor_tag_handler_t)
+- nlohmann::detail::input_stream_adapter::tracking_token (private); reached from the public API through: nlohmann::operator>>(std::istream &, basic_json<...> &), nlohmann::basic_json::accept(InputType &&, const bool, const bool), nlohmann::basic_json::from_bjdata(InputType &&, const bool, const bool, const error_handler_t), nlohmann::basic_json::from_bon8(InputType &&, const bool, const bool), nlohmann::basic_json::from_bson(InputType &&, const bool, const bool, const error_handler_t), nlohmann::basic_json::from_cbor(InputType &&, const bool, const bool, const cbor_tag_handler_t, const error_handler_t), nlohmann::basic_json::from_msgpack(InputType &&, const bool, const bool, const error_handler_t), nlohmann::basic_json::from_ubjson(InputType &&, const bool, const bool, const error_handler_t), nlohmann::basic_json::parse(InputType &&, parser_callback_t, const bool, const bool, const bool), nlohmann::basic_json::sax_parse(InputType &&, SAX *, input_format_t, const bool, const bool, const bool, const cbor_tag_handler_t)
+
+## Diff of the library source (before -> after)
+```diff
+diff --git a/include/nlohmann/detail/input/input_adapters.hpp b/include/nlohmann/detail/input/input_adapters.hpp
+index 77a1b45c5..05fd4c816 100644
+--- a/include/nlohmann/detail/input/input_adapters.hpp
++++ b/include/nlohmann/detail/input/input_adapters.hpp
+@@ -8,17 +8,18 @@
+ 
+ #pragma once
+ 
+-#include <algorithm> // count, find, min
++#include <algorithm> // count, find, max, min
+ #include <array> // array
+ #include <cstddef> // size_t
+ #include <cstdint> // uint32_t
+ #include <cstring> // strlen
+ #include <iterator> // begin, end, iterator_traits, random_access_iterator_tag, distance, next, reverse_iterator
+ #include <limits> // numeric_limits
++#include <memory> // unique_ptr
+ #include <streambuf> // streambuf
+ #include <string> // string, char_traits
+ #include <type_traits> // enable_if, is_base_of, is_pointer, is_integral, remove_pointer
+-#include <utility> // pair, declval
++#include <utility> // declval, move, pair
+ #include <vector> // vector
+ 
+ #ifndef JSON_NO_IO
+@@ -72,6 +73,82 @@ enum class input_format_t { json, cbor, msgpack, ubjson, bson, bjdata, bon8 };
+ 
+ #ifndef JSON_NO_IO
+ /*!
++A growable array of characters for the part of a token that an input adapter
++copied out of its window: unlike std::vector<char>::push_back(), appending a
++character takes no reference to a local, and is a few instructions when there
++is room.
++*/
++class token_carry_buffer
++{
++  public:
++    token_carry_buffer() = default;
++    token_carry_buffer(const token_carry_buffer&) = delete;
++    token_carry_buffer& operator=(const token_carry_buffer&) = delete;
++    token_carry_buffer(token_carry_buffer&& rhs) noexcept
++        : m_data(std::move(rhs.m_data)), m_end(rhs.m_end), m_capacity_end(rhs.m_capacity_end)
++    {
++        rhs.m_end = rhs.m_capacity_end = nullptr;
++    }
++    token_carry_buffer& operator=(token_carry_buffer&&) = delete;
++    ~token_carry_buffer() = default;
++
++    void clear() noexcept
++    {
++        m_end = m_data.get();
++    }
++
++    void push_back(char c)
++    {
++        if (JSON_HEDLEY_UNLIKELY(m_end == m_capacity_end))
++        {
++            grow(1);
++        }
++        *m_end++ = c;
++    }
++
++    void append(const char* first, const char* last)
++    {
++        const auto n = static_cast<std::size_t>(last - first);
++        const auto room = static_cast<std::size_t>(m_capacity_end - m_end);
++        if (n > room)
++        {
++            grow(n);
++        }
++        if (n != 0)
++        {
++            std::memcpy(m_end, first, n);
++        }
++        m_end += n;
++    }
++
++    /// replace the contents of @a out
++    void copy_to(std::vector<char>& out) const
++    {
++        out.assign(m_data.get(), m_end);
++    }
++
++  private:
++    /// make room for @a extra more characters
++    JSON_HEDLEY_NEVER_INLINE void grow(std::size_t extra)
++    {
++        const auto size = static_cast<std::size_t>(m_end - m_data.get());
++        const auto capacity = static_cast<std::size_t>(m_capacity_end - m_data.get());
++        const std::size_t new_capacity = (std::max)(capacity < 32 ? static_cast<std::size_t>(32) : 2 * capacity, size + extra);
++        std::unique_ptr<char[]> data(new char[new_capacity]); // NOLINT(cppcoreguidelines-avoid-c-arrays,hicpp-avoid-c-arrays,modernize-avoid-c-arrays)
++        if (size != 0)
++        {
++            std::memcpy(data.get(), m_data.get(), size);
++        }
++        m_data = std::move(data);
++        m_end = m_data.get() + size;
++        m_capacity_end = m_data.get() + new_capacity;
++    }
++
++    std::unique_ptr<char[]> m_data{}; // NOLINT(cppcoreguidelines-avoid-c-arrays,hicpp-avoid-c-arrays,modernize-avoid-c-arrays,readability-redundant-member-init)
++    char* m_end = nullptr;
++    char* m_capacity_end = nullptr;
++};
++/*!
+ Input adapter for stdio file access. This adapter read only 1 byte and do not use any
+  buffer. This adapter is a very low level adapter.
+ */
+@@ -209,6 +286,7 @@ class input_stream_adapter
+         , token_segment(rhs.token_segment)
+         , current_in_get_area(rhs.current_in_get_area)
+         , tracking_token(rhs.tracking_token)
++        , no_get_area(rhs.no_get_area)
+ #endif
+     {
+         rhs.is = nullptr;
+@@ -295,37 +373,20 @@ class input_stream_adapter
+     std::char_traits<char>::int_type get_character()
+     {
+ #if !JSON_DISABLE_STREAM_BULK_SCAN
+-        // sbumpc() refills the get area if it is exhausted
+-        const bool refill = streambuf_access::get_ptr(sb) == streambuf_access::get_end(sb);
+-        if (JSON_HEDLEY_UNLIKELY(refill))
+-        {
+-            save_token_segment();
+-        }
+-#endif
+-
+-        auto res = sb->sbumpc();
+-        // set eof manually, as we don't use the istream interface.
+-        if (JSON_HEDLEY_UNLIKELY(res == std::char_traits<char>::eof()))
+-        {
+-#if !JSON_DISABLE_STREAM_BULK_SCAN
+-            current_in_get_area = false;
+-#endif
+-            is->clear(is->rdstate() | std::ios::eofbit);
+-        }
+-#if !JSON_DISABLE_STREAM_BULK_SCAN
+-        else if (JSON_HEDLEY_UNLIKELY(refill))
++        // the character is in the get area: step over it, as sbumpc() does
++        const char* const next = streambuf_access::get_ptr(sb);
++        if (JSON_HEDLEY_LIKELY(next != streambuf_access::get_end(sb)))
+         {
+-            // the consumed character is at gptr() - 1, unless the streambuf
+-            // has no get area and returned it from uflow()
+-            const char* const next = streambuf_access::get_ptr(sb);
+-            after_refill(res, next != nullptr && next != streambuf_access::get_begin(sb));
++            current_in_get_area = true;
++            streambuf_access::bump(sb, 1);
++            return std::char_traits<char>::to_int_type(*next);
+         }
+-        else
++        if (no_get_area)
+         {
+-            current_in_get_area = true;
++            return get_character_no_get_area();
+         }
+ #endif
+-        return res;
++        return get_character_slow();
+     }
+ #endif
+ 
+@@ -334,6 +395,18 @@ class input_stream_adapter
+     {
+ #if JSON_PRECISE_STREAM_POSITION
+         commit_lookahead();
++#endif
++#if !JSON_DISABLE_STREAM_BULK_SCAN
++        // the elements are in the get area: copy them, as sgetn() does, but
++        // without the virtual call
++        const char* const first = streambuf_access::get_ptr(sb);
++        const auto available = static_cast<std::size_t>(streambuf_access::get_end(sb) - first);
++        if (JSON_HEDLEY_LIKELY(count * sizeof(T) <= available && count * sizeof(T) <= static_cast<std::size_t>((std::numeric_limits<int>::max)())))
++        {
++            std::memcpy(dest, first, count * sizeof(T));
++            streambuf_access::bump(sb, static_cast<int>(count * sizeof(T)));
++            return count * sizeof(T);
++        }
+ #endif
+         auto res = static_cast<std::size_t>(sb->sgetn(reinterpret_cast<char*>(dest), static_cast<std::streamsize>(count * sizeof(T))));
+         if (JSON_HEDLEY_UNLIKELY(res < count * sizeof(T)))
+@@ -421,7 +494,7 @@ class input_stream_adapter
+     // last one if @a drop_last.
+     void copy_token(std::vector<char>& out, bool drop_last) const
+     {
+-        out = token_carry;
++        token_carry.copy_to(out);
+         if (token_segment != nullptr)
+         {
+             out.insert(out.end(), token_segment, current_end());
+@@ -434,6 +507,47 @@ class input_stream_adapter
+ #endif
+ 
+   private:
++#if !JSON_PRECISE_STREAM_POSITION
++    // the get area is exhausted, or there is none
++#if !JSON_DISABLE_STREAM_BULK_SCAN
++    JSON_HEDLEY_NEVER_INLINE
++#endif
++    std::char_traits<char>::int_type get_character_slow()
++    {
++#if !JSON_DISABLE_STREAM_BULK_SCAN
++        // sbumpc() refills the get area if it is exhausted
++        const bool refill = streambuf_access::get_ptr(sb) == streambuf_access::get_end(sb);
++        if (JSON_HEDLEY_UNLIKELY(refill))
++        {
++            save_token_segment();
++        }
++#endif
++
++        auto res = sb->sbumpc();
++        // set eof manually, as we don't use the istream interface.
++        if (JSON_HEDLEY_UNLIKELY(res == std::char_traits<char>::eof()))
++        {
++#if !JSON_DISABLE_STREAM_BULK_SCAN
++            current_in_get_area = false;
++#endif
++            is->clear(is->rdstate() | std::ios::eofbit);
++        }
++#if !JSON_DISABLE_STREAM_BULK_SCAN
++        else if (JSON_HEDLEY_UNLIKELY(refill))
++        {
++            // the consumed character is at gptr() - 1, unless the streambuf
++            // has no get area and returned it from uflow()
++            const char* const next = streambuf_access::get_ptr(sb);
++            after_refill(res, next != nullptr && next != streambuf_access::get_begin(sb));
++        }
++        else
++        {
++            current_in_get_area = true;
++        }
++#endif
++        return res;
++    }
++#endif
+ #if !JSON_DISABLE_STREAM_BULK_SCAN
+     // Reads the protected get-area pointers of any std::streambuf. Naming the
+     // members through a derived class makes forming the member pointers
+@@ -457,6 +571,11 @@ class input_stream_adapter
+         {
+             (s->*(&streambuf_access::gbump))(n);
+         }
++        // sbumpc() for an exhausted get area
++        static std::streambuf::int_type next_character(std::streambuf* s)
++        {
++            return (s->*(&streambuf_access::uflow))();
++        }
+     };
+ 
+     // one past the character last returned by get_character(), if that is in
+@@ -477,16 +596,53 @@ class input_stream_adapter
+     {
+         if (token_segment != nullptr)
+         {
+-            token_carry.insert(token_carry.end(), token_segment, streambuf_access::get_end(sb));
++            token_carry.append(token_segment, streambuf_access::get_end(sb));
+             token_segment = nullptr;
+         }
+     }
+ 
++#if !JSON_PRECISE_STREAM_POSITION
++    // The streambuf has no get area (e.g., std::cin synchronized with stdio):
++    // every character comes from uflow(), and the token is kept by value.
++    JSON_HEDLEY_NEVER_INLINE std::char_traits<char>::int_type get_character_no_get_area()
++    {
++        // the get area is exhausted, so this is what sbumpc() does
++        const auto res = streambuf_access::next_character(sb);
++        if (JSON_HEDLEY_UNLIKELY(res == std::char_traits<char>::eof() || streambuf_access::get_end(sb) != nullptr))
++        {
++            return get_character_no_get_area_other(res);
++        }
++        // current_in_get_area is false: only the first character of a get
++        // area, or the end of the input, is read here
++        if (tracking_token)
++        {
++            token_carry.push_back(std::char_traits<char>::to_char_type(res));
++        }
++        return res;
++    }
++
++    // @a res came from uflow() of a streambuf without a get area: it is the
++    // end of the input, or the streambuf has a get area now
++    JSON_HEDLEY_NEVER_INLINE std::char_traits<char>::int_type get_character_no_get_area_other(std::char_traits<char>::int_type res)
++    {
++        if (res == std::char_traits<char>::eof())
++        {
++            current_in_get_area = false;
++            is->clear(is->rdstate() | std::ios::eofbit);
++            return res;
++        }
++        // the consumed character is at gptr() - 1
++        after_refill(res, streambuf_access::get_ptr(sb) != streambuf_access::get_begin(sb));
++        return res;
++    }
++#endif
++
+     // character @a c was just read into a new get area (@a in_get_area) or
+     // returned without one
+     void after_refill(std::char_traits<char>::int_type c, bool in_get_area)
+     {
+         current_in_get_area = in_get_area;
++        no_get_area = !in_get_area;
+         if (!tracking_token)
+         {
+             return;
+@@ -525,13 +681,16 @@ class input_stream_adapter
+ #endif
+ #if !JSON_DISABLE_STREAM_BULK_SCAN
+     /// the part of the current token that was in earlier get areas
+-    std::vector<char> token_carry{}; // NOLINT(readability-redundant-member-init)
++    token_carry_buffer token_carry{}; // NOLINT(readability-redundant-member-init)
+     /// start of the current token's part in the get area, or nullptr
+     const char* token_segment = nullptr;
+     /// whether the character last returned by get_character() is in the get area
+     bool current_in_get_area = false;
+     /// whether a token is tracked at all; the binary readers never start one
+     bool tracking_token = false;
++    /// whether the streambuf had no get area when it was last asked for a
++    /// character
++    bool no_get_area = false;
+ #endif
+ };
+ #endif  // JSON_NO_IO
+```
+
+## Existing upstream tests that call the changed code (for style and API usage)
+// Upstream tests at the PR's parent commit ace103010 that use the changed code.
+// Names searched (test lines using each): accept (12), from_bjdata (0), from_bon8 (0), from_bson (0), from_cbor (0), from_msgpack (0), from_ubjson (0), parse (11), sax_parse (0), operator>> (94), get_character (1), input_stream_adapter (2), get_elements (0), after_refill (0), copy_token (1), save_token_segment (0), token_carry (0), get_character_slow (0), get_character_no_get_area (0), append (30), grow (0), token_carry_buffer (0), get_character_no_get_area_other (0), push_back (439), next_character (0), clear (31), copy_to (0), no_get_area (0), streambuf_access (0), m_capacity_end (0), m_data (123), m_end (0), bump (0), tracking_token (0)
+
+// ---- tests/src/unit-stream-bulk-scan.cpp:392-407  (uses: copy_token, get_character, input_stream_adapter)
+    SECTION("the adapter keeps no token unless the lexer starts one")
+    {
+        // the binary readers read through the same adapter, but never start a
+        // token; refilling the get area must then not collect the input
+        chunked_streambuf buf(std::string(1000, 'x'), 7);
+        std::istream is(&buf);
+        nlohmann::detail::input_stream_adapter ia(is);
+        for (int i = 0; i < 1000; ++i)
+        {
+            CHECK(ia.get_character() == 'x');
+        }
+
+        std::vector<char> token;
+        ia.copy_token(token, false);
+        CHECK(token.empty());
+    }
+
+// ---- tests/src/unit-precise-stream-position.cpp:240-248  (uses: input_stream_adapter)
+    SECTION("sax_parse with strict == false")
+    {
+        std::istringstream ss("1true");
+        json j;
+        nlohmann::detail::json_sax_dom_parser<json, nlohmann::detail::input_stream_adapter> sdp(j, true);
+        CHECK(json::sax_parse(ss, &sdp, nlohmann::detail::input_format_t::json, false));
+        CHECK(j == 1);
+        CHECK(remaining(ss) == "true");
+    }
+
+// ---- tests/src/unit-deserialization.cpp:183-198  (uses: operator>>, push_back)
+        SECTION("operator>> with a NUL byte after the value (issue #5530)")
+        {
+            // operator>> parses non-strictly (it does not require the whole
+            // stream to be consumed), so a NUL byte following a complete
+            // value is simply left unread on the stream and never reaches
+            // the "expected end of input" check that JSON_STRICT_NUL_HANDLING
+            // affects; this holds regardless of the macro (verified below for
+            // the opt-in state as well)
+            std::string data = "123";
+            data.push_back('\0');
+            std::istringstream ss(data);
+            json j;
+            ss >> j;
+            CHECK(j == json(123));
+            CHECK(ss.good());
+        }
+
+// ---- tests/src/unit-large_json_binary_writers.cpp:129-162  (uses: append, push_back)
+    SECTION("byte-exact across the switch-over")
+    {
+        // nested one-element arrays around the recursion bound: the exact
+        // bytes a writer produces do not depend on whether it stayed on the
+        // call stack or moved to the heap one partway through
+        for (const std::size_t depth :
+                {
+                    nlohmann::detail::recursion_depth_limit() - 1, nlohmann::detail::recursion_depth_limit(),
+                    nlohmann::detail::recursion_depth_limit() + 1, nlohmann::detail::recursion_depth_limit() + 2
+                })
+        {
+            CAPTURE(depth)
+            const json array = nested_array(depth, json(0));
+
+            std::vector<std::uint8_t> expected_cbor(depth, 0x81);
+            expected_cbor.push_back(0x00);
+            CHECK(json::to_cbor(array) == expected_cbor);
+
+            std::vector<std::uint8_t> expected_msgpack(depth, 0x91);
+            expected_msgpack.push_back(0x00);
+            CHECK(json::to_msgpack(array) == expected_msgpack);
+
+            std::string expected_ubjson(depth, '[');
+            expected_ubjson += "i";
+            expected_ubjson += '\0';
+            expected_ubjson.append(depth, ']');
+            const auto packed_ubjson = json::to_ubjson(array);
+            CHECK(std::string(packed_ubjson.begin(), packed_ubjson.end()) == expected_ubjson);
+
+            std::vector<std::uint8_t> expected_bon8(depth, 0x81);
+            expected_bon8.push_back(0x90);
+            CHECK(json::to_bon8(array) == expected_bon8);
+        }
+    }
+
+// ---- tests/src/unit-iterators1.cpp:1636-1668  (uses: clear, push_back)
+    SECTION("array: -- and rbegin/rend")
+    {
+        Json j = {1, 2, 3, 4};
+
+        const std::vector<int> reversed = {4, 3, 2, 1};
+        auto it = j.end();
+        std::vector<int> seen;
+        while (it != j.begin())
+        {
+            --it;
+            seen.push_back(it->template get<int>());
+        }
+        CHECK(seen == reversed);
+
+        auto it2 = j.end();
+        auto old = it2--;
+        CHECK(old == j.end());
+        CHECK(*it2 == 4);
+
+        seen.clear();
+        for (auto r = j.rbegin(); r != j.rend(); ++r)
+        {
+            seen.push_back(r->template get<int>());
+        }
+        CHECK(seen == reversed);
+
+        seen.clear();
+        for (auto r = j.crbegin(); r != j.crend(); ++r)
+        {
+            seen.push_back(r->template get<int>());
+        }
+        CHECK(seen == reversed);
+    }
+
+// ---- tests/src/unit-iterators1.cpp:1670-1701  (uses: clear, push_back)
+    SECTION("object: -- and rbegin/rend")
+    {
+        Json j = {{"a", 1}, {"b", 2}, {"c", 3}};
+        // order of keys depends on the object type; use the forward order as reference
+        std::vector<std::string> fwd;
+        for (auto it = j.begin(); it != j.end(); ++it)
+        {
+            fwd.push_back(it.key());
+        }
+        std::vector<std::string> rev(fwd.rbegin(), fwd.rend());
+
+        std::vector<std::string> seen;
+        auto it = j.end();
+        while (it != j.begin())
+        {
+            --it;
+            seen.push_back(it.key());
+        }
+        CHECK(seen == rev);
+
+        auto it2 = j.end();
+        auto old = it2--;
+        CHECK(old == j.end());
+        CHECK(it2.key() == rev.front());
+
+        seen.clear();
+        for (auto r = j.rbegin(); r != j.rend(); ++r)
+        {
+            seen.push_back(r.key());
+        }
+        CHECK(seen == rev);
+    }
+
+// ---- tests/src/unit-class_parser.cpp:1973-1979  (uses: parse)
+        SECTION("from std::vector")
+        {
+            std::vector<uint8_t> v = {'t', 'r', 'u', 'e'};
+            json j;
+            json::parser(nlohmann::detail::input_adapter(std::begin(v), std::end(v))).parse(true, j);
+            CHECK(j == json(true));
+        }
+
+// ---- tests/src/unit-class_parser.cpp:2008-2014  (uses: parse)
+        SECTION("from std::string")
+        {
+            std::string v = {'t', 'r', 'u', 'e'};
+            json j;
+            json::parser(nlohmann::detail::input_adapter(std::begin(v), std::end(v))).parse(true, j);
+            CHECK(j == json(true));
+        }
+
+# Task
+Write 20 test programs for this pull request. Return JSON with a "tests" array; each item has "name" (short snake_case), "intent" (one sentence: what behavior it probes) and "code" (the complete C++ program).

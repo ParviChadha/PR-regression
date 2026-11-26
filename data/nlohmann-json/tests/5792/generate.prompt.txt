@@ -1,0 +1,470 @@
+[system]
+You write test programs that probe a C++ library for behavioral changes made by one pull request.
+Each program is compiled and run twice, once against the library before the change and once after, and the two
+outputs are compared. Your job is to produce programs whose output reveals whether the change altered behavior,
+including side effects the author did not intend.
+
+Rules for every program:
+- It is standalone: one file with its own int main(), compiled as C++17, printing results to stdout.
+- Use only the library's documented public API. Never include internal headers or use detail/impl namespaces,
+  private members or undocumented macros.
+- Do not judge results (no assert, no expected-value comparisons): just print what the library returns. Print
+  enough to make differences visible, one fact per line.
+- Output must be deterministic. Never print pointers or addresses, uninitialized data, the order of
+  hash-based containers, timings, thread ids, random values, file paths or environment data. Print floating point
+  values with an explicit precision. No input, files, network, threads, clocks or randomness.
+- Wrap calls that may throw in try/catch and print the exception's type and message, so an exception is an
+  observable result. Do not crash on purpose.
+- Aim at the code the diff changes. Prefer calls that compile against both the old and the new library; one or two
+  programs may use an API the PR adds. Cover ordinary inputs and edge cases (empty, minimum and maximum values,
+  boundaries, special values, nesting, unusual types) and also neighbouring behavior the change could disturb.
+- When the diff changes which types or inputs an API accepts or rejects (constraints, overloads, traits,
+  conversions), test it with the detection idiom (std::void_t or requires) and `if constexpr`, so the program
+  compiles against both versions, prints whether the expression is well-formed, and exercises it when it is.
+  Accepting an input is not enough: also use it through every entry point that should follow (const and
+  non-const, read, write, insert, erase, lookup, nested use), because a change that admits new inputs can leave
+  later code unable to handle them.
+- If the changed code is internal (a detail, impl or internal namespace, a trait, a helper), do not name it in the
+  program. Reach it through the public API that depends on it, using detection (as above) where needed.
+- Use the exact types and values the diff is about (the new trait's argument types, the new overload's
+  parameters), not stand-ins.
+- Spread the programs over distinct public entry points and overloads, one main idea per program. Do not write
+  several programs that only rename a type or change a literal.
+- Make the programs differ from each other: different inputs, different entry points, different features.
+
+Rules specific to this library:
+- Include the library with #include <nlohmann/json.hpp>. The public API is nlohmann::json (nlohmann::basic_json), nlohmann::ordered_json, json_pointer, json patch/merge_patch and the documented SAX and conversion interfaces. Never use the detail namespace.
+- It is a header-only library: nothing to link. Programs are compiled as C++17.
+- Print JSON values with dump() (compact) or dump(2). Keys of nlohmann::json objects print in sorted order, so output is deterministic; do not depend on insertion order except with ordered_json.
+
+[user]
+# Pull request #5792: Flatten deeply nested values without recursing per nesting level
+
+## Description
+Fixes the remaining part of #5393.
+
+#5393 reported three functions that recurse once per nesting level: `diff()`, `merge_patch()` and `flatten()`. #5547 and #5548 fixed the first two, and the issue was closed when #5548 merged. `json_pointer::flatten()` is still recursive on `develop`, so
+
+```cpp
+json::parse(std::string(100000, '[') + "0" + std::string(100000, ']')).flatten();
+```
+
+still crashes with SIGSEGV (exit 139, macOS/arm64, `-O2`).
+
+## Change
+
+`json_pointer::flatten()` now walks the value with an explicit stack of frames. Like `diff_iteratively`, it keeps the path in one buffer that grows and shrinks with the stack. The signature and the output stay the same, including the entry order of an `ordered_json` result.
+
+Unlike `diff` and `merge_patch`, this version doesn't recurse first and switch to the explicit stack at `recursion_depth_limit()`. It has one code path. The old version built a new path string for every child, which costs time quadratic in the depth. Sharing one buffer avoids that, so the iterative version is no slower even on shallow values.
+
+## Benchmark
+
+Best-of-7 time per call to `flatten()`, `-O2`, Apple clang 21, arm64. Old and new produced identical `dump()` output in every case.
+
+| input | type | old | new | new/old |
+|---|---|---|---|---|
+| wide, ~1.2 MB, 80,000 leaves | `json` | 15.20 ms | 14.55 ms | 0.96 |
+| wide | `ordered_json` | 2511 ms | 2514 ms | 1.00 |
+| nested, depth 7, 59,296 leaves | `json` | 15.31 ms | 13.13 ms | 0.86 |
+| nested | `ordered_json` | 3406 ms | 3416 ms | 1.00 |
+| 10,000 nested arrays | `json` | 4.80 ms | 0.183 ms | 0.04 |
+| 10,000 nested objects | `json` | 4.76 ms | 0.177 ms | 0.04 |
+
+## Tests
+
+New `TEST_CASE("flatten of structured values")` in `unit-json_pointer.cpp`:
+- 100,000-level arrays and objects flatten to a single entry with the full path
+- interleaved objects and arrays, with empty containers and keys that need escaping (`~`, `/`), compared with a result written out by hand
+- entry order of an `ordered_json` result
+
+Locally: `test-json_pointer_cpp11`, `test-json_pointer_cpp20` and `test-json_patch_cpp11` pass, and the build shows no warnings.
+
+The round-trip through `unflatten()` is only tested at 500 levels. At 100,000 levels `unflatten()` used about 9.6 GB of memory and was still running after 8 minutes, apparently because it copies pointer prefixes in an amount that grows quadratically with the depth. That's a separate problem and isn't touched here.
+
+## Public API
+
+No breaking changes: `flatten()` keeps its signature and its output, and only the internals of `json_pointer::flatten` change.
+
+🤖 Generated with [Claude Code](https://claude.com/claude-code)
+
+## Commit message
+* Flatten deeply nested values without recursing per nesting level
+
+json_pointer::flatten() called itself once per nesting level, so
+flatten() on a value nested deeply enough exhausted the call stack.
+#5547 and #5548 fixed merge_patch() and diff() from #5393, but flatten()
+was left out.
+
+flatten() now walks the value with an explicit stack and keeps the path
+in one buffer that grows and shrinks with it. It has a single code path
+and no depth limit: the old version built a new path string per child,
+so the iterative one is no slower on shallow values and much faster on
+deep ones. The output, including the order of an ordered_json result,
+is unchanged.
+
+Signed-off-by: Niels Lohmann <mail@nlohmann.me>
+
+* Construct flatten frames in place
+
+Give the frame a constructor so both call sites can use emplace_back, as
+suggested in the review; index starts at 0 for every frame.
+
+Signed-off-by: Niels Lohmann <mail@nlohmann.me>
+
+---------
+
+Signed-off-by: Niels Lohmann <mail@nlohmann.me>
+
+## Discussion before merge
+- gregmarr: emplace_back?
+- gregmarr: emplace_back?
+- nlohmann: Done in e82b29b0e: the frame got a constructor (C++11 can't `emplace_back` an aggregate), and both call sites use `emplace_back` now.
+
+_Written by Claude Code._
+- nlohmann: Done in e82b29b0e: the frame got a constructor (C++11 can't `emplace_back` an aggregate), and both call sites use `emplace_back` now.
+
+_Written by Claude Code._
+
+## Changed functions (from changes.py)
+- nlohmann::json_pointer::flatten(const string_t &, const BasicJsonType &, BasicJsonType &) (private); reached from the public API through: nlohmann::operator/(const json_pointer<RefStringType> &, const json_pointer<RefStringType> &), nlohmann::operator/(const json_pointer<RefStringType> &, string_t), nlohmann::operator/(const json_pointer<RefStringType> &, std::size_t), nlohmann::operator<<(std::ostream &, const json_pointer<RefStringType> &), nlohmann::operator!=(const json_pointer<RefStringTypeLhs> &, const json_pointer<RefStringTypeRhs> &), nlohmann::operator!=(const json_pointer<RefStringTypeLhs> &, const StringType &), nlohmann::operator!=(const StringType &, const json_pointer<RefStringTypeRhs> &), nlohmann::operator<(const json_pointer<RefStringTypeLhs> &, const json_pointer<RefStringTypeRhs> &), nlohmann::operator==(const json_pointer<RefStringTypeLhs> &, const json_pointer<RefStringTypeRhs> &), nlohmann::operator==(const json_pointer<RefStringTypeLhs> &, const StringType &)
+- nlohmann::json_pointer::flatten::frame (private); reached from the public API through: nlohmann::operator/(const json_pointer<RefStringType> &, const json_pointer<RefStringType> &), nlohmann::operator/(const json_pointer<RefStringType> &, string_t), nlohmann::operator/(const json_pointer<RefStringType> &, std::size_t), nlohmann::operator<<(std::ostream &, const json_pointer<RefStringType> &), nlohmann::operator!=(const json_pointer<RefStringTypeLhs> &, const json_pointer<RefStringTypeRhs> &), nlohmann::operator!=(const json_pointer<RefStringTypeLhs> &, const StringType &), nlohmann::operator!=(const StringType &, const json_pointer<RefStringTypeRhs> &), nlohmann::operator<(const json_pointer<RefStringTypeLhs> &, const json_pointer<RefStringTypeRhs> &), nlohmann::operator==(const json_pointer<RefStringTypeLhs> &, const json_pointer<RefStringTypeRhs> &), nlohmann::operator==(const json_pointer<RefStringTypeLhs> &, const StringType &)
+- nlohmann::json_pointer::flatten::frame::frame(const BasicJsonType *, object_const_iterator, const std::size_t) (private); reached from the public API through: nlohmann::operator/(const json_pointer<RefStringType> &, const json_pointer<RefStringType> &), nlohmann::operator/(const json_pointer<RefStringType> &, string_t), nlohmann::operator/(const json_pointer<RefStringType> &, std::size_t), nlohmann::operator<<(std::ostream &, const json_pointer<RefStringType> &), nlohmann::operator!=(const json_pointer<RefStringTypeLhs> &, const json_pointer<RefStringTypeRhs> &), nlohmann::operator!=(const json_pointer<RefStringTypeLhs> &, const StringType &), nlohmann::operator!=(const StringType &, const json_pointer<RefStringTypeRhs> &), nlohmann::operator<(const json_pointer<RefStringTypeLhs> &, const json_pointer<RefStringTypeRhs> &), nlohmann::operator==(const json_pointer<RefStringTypeLhs> &, const json_pointer<RefStringTypeRhs> &), nlohmann::operator==(const json_pointer<RefStringTypeLhs> &, const StringType &)
+- nlohmann::json_pointer::flatten::frame::container (private); reached from the public API through: nlohmann::operator/(const json_pointer<RefStringType> &, const json_pointer<RefStringType> &), nlohmann::operator/(const json_pointer<RefStringType> &, string_t), nlohmann::operator/(const json_pointer<RefStringType> &, std::size_t), nlohmann::operator<<(std::ostream &, const json_pointer<RefStringType> &), nlohmann::operator!=(const json_pointer<RefStringTypeLhs> &, const json_pointer<RefStringTypeRhs> &), nlohmann::operator!=(const json_pointer<RefStringTypeLhs> &, const StringType &), nlohmann::operator!=(const StringType &, const json_pointer<RefStringTypeRhs> &), nlohmann::operator<(const json_pointer<RefStringTypeLhs> &, const json_pointer<RefStringTypeRhs> &), nlohmann::operator==(const json_pointer<RefStringTypeLhs> &, const json_pointer<RefStringTypeRhs> &), nlohmann::operator==(const json_pointer<RefStringTypeLhs> &, const StringType &)
+- nlohmann::json_pointer::flatten::frame::index (private)
+- nlohmann::json_pointer::flatten::frame::member (private); reached from the public API through: nlohmann::operator/(const json_pointer<RefStringType> &, const json_pointer<RefStringType> &), nlohmann::operator/(const json_pointer<RefStringType> &, string_t), nlohmann::operator/(const json_pointer<RefStringType> &, std::size_t), nlohmann::operator<<(std::ostream &, const json_pointer<RefStringType> &), nlohmann::operator!=(const json_pointer<RefStringTypeLhs> &, const json_pointer<RefStringTypeRhs> &), nlohmann::operator!=(const json_pointer<RefStringTypeLhs> &, const StringType &), nlohmann::operator!=(const StringType &, const json_pointer<RefStringTypeRhs> &), nlohmann::operator<(const json_pointer<RefStringTypeLhs> &, const json_pointer<RefStringTypeRhs> &), nlohmann::operator==(const json_pointer<RefStringTypeLhs> &, const json_pointer<RefStringTypeRhs> &), nlohmann::operator==(const json_pointer<RefStringTypeLhs> &, const StringType &)
+- nlohmann::json_pointer::flatten::frame::path_length (private); reached from the public API through: nlohmann::operator/(const json_pointer<RefStringType> &, const json_pointer<RefStringType> &), nlohmann::operator/(const json_pointer<RefStringType> &, string_t), nlohmann::operator/(const json_pointer<RefStringType> &, std::size_t), nlohmann::operator<<(std::ostream &, const json_pointer<RefStringType> &), nlohmann::operator!=(const json_pointer<RefStringTypeLhs> &, const json_pointer<RefStringTypeRhs> &), nlohmann::operator!=(const json_pointer<RefStringTypeLhs> &, const StringType &), nlohmann::operator!=(const StringType &, const json_pointer<RefStringTypeRhs> &), nlohmann::operator<(const json_pointer<RefStringTypeLhs> &, const json_pointer<RefStringTypeRhs> &), nlohmann::operator==(const json_pointer<RefStringTypeLhs> &, const json_pointer<RefStringTypeRhs> &), nlohmann::operator==(const json_pointer<RefStringTypeLhs> &, const StringType &)
+- nlohmann::json_pointer::flatten::object_const_iterator (private); reached from the public API through: nlohmann::operator/(const json_pointer<RefStringType> &, const json_pointer<RefStringType> &), nlohmann::operator/(const json_pointer<RefStringType> &, string_t), nlohmann::operator/(const json_pointer<RefStringType> &, std::size_t), nlohmann::operator<<(std::ostream &, const json_pointer<RefStringType> &), nlohmann::operator!=(const json_pointer<RefStringTypeLhs> &, const json_pointer<RefStringTypeRhs> &), nlohmann::operator!=(const json_pointer<RefStringTypeLhs> &, const StringType &), nlohmann::operator!=(const StringType &, const json_pointer<RefStringTypeRhs> &), nlohmann::operator<(const json_pointer<RefStringTypeLhs> &, const json_pointer<RefStringTypeRhs> &), nlohmann::operator==(const json_pointer<RefStringTypeLhs> &, const json_pointer<RefStringTypeRhs> &), nlohmann::operator==(const json_pointer<RefStringTypeLhs> &, const StringType &)
+- nlohmann::json_pointer (public)
+
+## Diff of the library source (before -> after)
+```diff
+diff --git a/include/nlohmann/detail/json_pointer.hpp b/include/nlohmann/detail/json_pointer.hpp
+index 92f52aedc..0a1c0f43f 100644
+--- a/include/nlohmann/detail/json_pointer.hpp
++++ b/include/nlohmann/detail/json_pointer.hpp
+@@ -878,64 +878,131 @@ class json_pointer
+     @param[in,out] result        the result object to insert values to
+ 
+     @note Empty objects or arrays are flattened to `null`.
++
++    The value is walked with an explicit stack rather than the call stack, so
++    arbitrarily deeply nested values can be flattened.
++
++    @sa https://github.com/nlohmann/json/issues/5393
+     */
+     template<typename BasicJsonType>
+     static void flatten(const string_t& reference_string,
+                         const BasicJsonType& value,
+                         BasicJsonType& result)
+     {
+-        switch (value.type())
++        using object_const_iterator = typename BasicJsonType::object_t::const_iterator;
++
++        // an array or object being walked: the container, the array index or
++        // object iterator of the next child, and the length of the path of the
++        // container itself
++        struct frame
+         {
+-            case detail::value_t::array:
++            frame(const BasicJsonType* container_, object_const_iterator member_, const std::size_t path_length_) noexcept
++                : container(container_), member(std::move(member_)), path_length(path_length_)
++            {}
++
++            const BasicJsonType* container;
++            std::size_t index = 0;
++            object_const_iterator member;
++            std::size_t path_length;
++        };
++
++        // The containers being flattened are kept on an explicit stack, and
++        // every child is flattened completely before the next one, so the
++        // entries come out in the same order as with a recursive walk. The
++        // path of the value being flattened is kept in one buffer that grows
++        // and shrinks with the stack, rather than in a new string per level.
++        std::vector<frame> stack;
++        string_t path = reference_string;
++
++        // flatten `v`, whose path is `path`: primitives and empty containers
++        // are added to the result right away; other containers get a frame
++        const auto enter = [&stack, &path, &result](const BasicJsonType & v)
++        {
++            switch (v.type())
+             {
+-                if (value.m_data.m_value.array->empty())
++                case detail::value_t::array:
+                 {
+-                    // flatten empty array as null
+-                    result[reference_string] = nullptr;
++                    if (v.m_data.m_value.array->empty())
++                    {
++                        // flatten empty array as null
++                        result[path] = nullptr;
++                    }
++                    else
++                    {
++                        stack.emplace_back(&v, object_const_iterator(), path.size());
++                    }
++                    return;
+                 }
+-                else
++
++                case detail::value_t::object:
+                 {
+-                    // iterate array and use index as a reference string
+-                    for (std::size_t i = 0; i < value.m_data.m_value.array->size(); ++i)
++                    if (v.m_data.m_value.object->empty())
+                     {
+-                        flatten(detail::concat<string_t>(reference_string, '/', std::to_string(i)),
+-                                value.m_data.m_value.array->operator[](i), result);
++                        // flatten empty object as null
++                        result[path] = nullptr;
+                     }
++                    else
++                    {
++                        stack.emplace_back(&v, v.m_data.m_value.object->begin(), path.size());
++                    }
++                    return;
++                }
++
++                case detail::value_t::null:
++                case detail::value_t::string:
++                case detail::value_t::boolean:
++                case detail::value_t::number_integer:
++                case detail::value_t::number_unsigned:
++                case detail::value_t::number_float:
++                case detail::value_t::binary:
++                case detail::value_t::discarded:
++                default:
++                {
++                    // add a primitive value with its reference string
++                    result[path] = v;
++                    return;
+                 }
+-                break;
+             }
++        };
++
++        enter(value);
++        while (!stack.empty())
++        {
++            // the frame is changed through stack.back(): enter() may push a
++            // frame, which would invalidate a reference to it
++            const BasicJsonType* const container = stack.back().container;
++
++            // drop the path of the previous child
++            path.resize(stack.back().path_length);
+ 
+-            case detail::value_t::object:
++            if (container->is_array())
+             {
+-                if (value.m_data.m_value.object->empty())
++                const auto& array = *container->m_data.m_value.array;
++                const std::size_t i = stack.back().index;
++                if (i == array.size())
+                 {
+-                    // flatten empty object as null
+-                    result[reference_string] = nullptr;
++                    stack.pop_back();
++                    continue;
+                 }
+-                else
++
++                // iterate array and use index as a reference string
++                ++stack.back().index;
++                detail::concat_into(path, '/', detail::to_string<string_t>(i));
++                enter(array[i]);
++            }
++            else
++            {
++                const object_const_iterator it = stack.back().member;
++                if (it == container->m_data.m_value.object->end())
+                 {
+-                    // iterate object and use keys as reference string
+-                    for (const auto& element : *value.m_data.m_value.object)
+-                    {
+-                        flatten(detail::concat<string_t>(reference_string, '/', detail::escape(element.first)), element.second, result);
+-                    }
++                    stack.pop_back();
++                    continue;
+                 }
+-                break;
+-            }
+ 
+-            case detail::value_t::null:
+-            case detail::value_t::string:
+-            case detail::value_t::boolean:
+-            case detail::value_t::number_integer:
+-            case detail::value_t::number_unsigned:
+-            case detail::value_t::number_float:
+-            case detail::value_t::binary:
+-            case detail::value_t::discarded:
+-            default:
+-            {
+-                // add a primitive value with its reference string
+-                result[reference_string] = value;
+-                break;
++                // iterate object and use keys as reference string
++                ++stack.back().member;
++                detail::concat_into(path, '/', detail::escape(it->first));
++                enter(it->second);
+             }
+         }
+     }
+```
+
+## Existing upstream tests that call the changed code (for style and API usage)
+// Upstream tests at the PR's parent commit 374dfe4f0 that use the changed code.
+// Names searched (test lines using each): json_pointer (158), operator/ (0), operator<< (81), operator!= (52), operator< (186), operator== (57), flatten (14), frame (0), container (72), index (119), member (129), path_length (0), object_const_iterator (0)
+
+// ---- tests/src/unit-json_pointer.cpp:755-804  (uses: json_pointer, operator!=, operator<, operator==)
+    SECTION("equality comparison")
+    {
+        std::string ptr_string{"/foo/bar"};
+        auto ptr1 = json::json_pointer(ptr_string);
+        auto ptr2 = json::json_pointer(ptr_string);
+
+        // build with C++20 to test rewritten candidates
+        // JSON_HAS_CPP_20
+
+        CHECK(ptr1 == ptr2);
+
+        CHECK_FALSE(ptr1 != ptr2);
+
+#ifndef JSON_TEST_DEPRECATED_FUNCTIONS_DELETED
+        const char* ptr_cpstring = "/foo/bar";
+        const char ptr_castring[] = "/foo/bar"; // NOLINT(misc-const-correctness,hicpp-avoid-c-arrays,modernize-avoid-c-arrays,cppcoreguidelines-avoid-c-arrays)
+
+        CHECK(ptr1 == "/foo/bar");
+        CHECK(ptr1 == ptr_cpstring);
+        CHECK(ptr1 == ptr_castring);
+        CHECK(ptr1 == ptr_string);
+
+        CHECK("/foo/bar" == ptr1);
+        CHECK(ptr_cpstring == ptr1);
+        CHECK(ptr_castring == ptr1);
+        CHECK(ptr_string == ptr1);
+
+        CHECK_FALSE(ptr1 != "/foo/bar");
+        CHECK_FALSE(ptr1 != ptr_cpstring);
+        CHECK_FALSE(ptr1 != ptr_castring);
+        CHECK_FALSE(ptr1 != ptr_string);
+
+        CHECK_FALSE("/foo/bar" != ptr1);
+        CHECK_FALSE(ptr_cpstring != ptr1);
+        CHECK_FALSE(ptr_castring != ptr1);
+        CHECK_FALSE(ptr_string != ptr1);
+
+        SECTION("exceptions")
+        {
+            CHECK_THROWS_WITH_AS(ptr1 == "foo",
+                                 "[json.exception.parse_error.107] parse error at byte 1: JSON pointer must be empty or begin with '/' - was: 'foo'", json::parse_error&);
+            CHECK_THROWS_WITH_AS("foo" == ptr1,
+                                 "[json.exception.parse_error.107] parse error at byte 1: JSON pointer must be empty or begin with '/' - was: 'foo'", json::parse_error&);
+            CHECK_THROWS_WITH_AS(ptr1 == "/~~",
+                                 "[json.exception.parse_error.108] parse error: escape character '~' must be followed with '0' or '1'", json::parse_error&);
+            CHECK_THROWS_WITH_AS("/~~" == ptr1,
+                                 "[json.exception.parse_error.108] parse error: escape character '~' must be followed with '0' or '1'", json::parse_error&);
+        }
+#endif
+    }
+
+// ---- tests/src/unit-json_pointer.cpp:806-820  (uses: json_pointer, operator!=, operator<, operator==)
+    SECTION("less-than comparison")
+    {
+        auto ptr1 = json::json_pointer("/foo/a");
+        auto ptr2 = json::json_pointer("/foo/b");
+
+        CHECK(ptr1 < ptr2);
+        CHECK_FALSE(ptr2 < ptr1);
+
+        // build with C++20
+        // JSON_HAS_CPP_20
+#if JSON_HAS_THREE_WAY_COMPARISON
+        CHECK((ptr1 <=> ptr2) == std::strong_ordering::less); // *NOPAD*
+        CHECK(ptr2 > ptr1);
+#endif
+    }
+
+// ---- tests/src/unit-ordered_json2.cpp:434-450  (uses: flatten, operator<)
+TEST_CASE("ordered_json through flatten/unflatten")
+{
+    const ordered_json original = make_rich_ordered_json();
+    const std::vector<std::string> original_keys = collect_keys(original);
+    const std::vector<std::string> original_mango_keys = collect_keys(original["mango"]);
+
+    const ordered_json flat = original.flatten();
+    const ordered_json unflattened = flat.unflatten();
+
+    CHECK(unflattened == original);
+    // flatten() walks the value depth-first in iteration order and
+    // unflatten() re-inserts each flattened key via operator[] in the flat
+    // object's iteration order, so for ordered_json the original key order
+    // (both top-level and nested) is preserved end-to-end.
+    CHECK(collect_keys(unflattened) == original_keys);
+    CHECK(collect_keys(unflattened["mango"]) == original_mango_keys);
+}
+
+// ---- tests/src/unit-comparison.cpp:73-85  (uses: operator!=, operator<, operator==)
+TEST_CASE("lexicographical comparison operators")
+{
+    constexpr auto f_ = false;
+    constexpr auto _t = true;
+    constexpr auto nan = std::numeric_limits<json::number_float_t>::quiet_NaN();
+#if JSON_HAS_THREE_WAY_COMPARISON
+    constexpr auto lt = std::partial_ordering::less;
+    constexpr auto gt = std::partial_ordering::greater;
+    constexpr auto eq = std::partial_ordering::equivalent;
+    constexpr auto un = std::partial_ordering::unordered;
+#endif
+
+#if JSON_HAS_THREE_WAY_COMPARISON
+
+// ---- tests/src/unit-comparison.cpp:127-147  (uses: operator!=, operator<, operator==)
+        SECTION("comparison: less")
+        {
+            REQUIRE(expected_lt.size() == j_types.size());
+            for (size_t i = 0; i < j_types.size(); ++i)
+            {
+                REQUIRE(expected_lt[i].size() == j_types.size());
+                for (size_t j = 0; j < j_types.size(); ++j)
+                {
+                    CAPTURE(i)
+                    CAPTURE(j)
+                    // check precomputed values
+#if JSON_HAS_THREE_WAY_COMPARISON
+                    // JSON_HAS_CPP_20 (do not remove; see note at top of file)
+                    CHECK((j_types[i] < j_types[j]) == expected_lt[i][j]);
+#else
+                    CHECK(operator<(j_types[i], j_types[j]) == expected_lt[i][j]);
+#endif
+                    CHECK(f(j_types[i], j_types[j]) == expected_lt[i][j]);
+                }
+            }
+        }
+
+// ---- tests/src/unit-alt-string.cpp:328-349  (uses: flatten, json_pointer)
+    SECTION("JSON pointer")
+    {
+        // Direct conversion from a json literal to alt_json is not supported due to issue #3425:
+        // alt_json's string_t (alt_string) is not directly constructible from std::string, so the
+        // cross-basic_json conversion falls back to the array-conversion path, incorrectly representing
+        // objects as arrays of [key, value] pairs and strings as arrays of character codes.
+        // See https://github.com/nlohmann/json/issues/3425 for details.
+        // Workaround: use alt_json::parse() instead of implicit conversion.
+        auto j = alt_json::parse(R"({"foo": ["bar", "baz"]})");
+
+        CHECK(j.at(alt_json::json_pointer("/foo/0")) == j["foo"][0]);
+        CHECK(j.at(alt_json::json_pointer("/foo/1")) == j["foo"][1]);
+
+        // RFC 6901 escaping works without string_t::find(str, pos), replace(),
+        // and substr()
+        auto j2 = alt_json::parse(R"({"a/b": 1, "m~n": 2, "~/~~//": 3})");
+        CHECK(j2.at(alt_json::json_pointer("/a~1b")) == 1);
+        CHECK(j2.at(alt_json::json_pointer("/m~0n")) == 2);
+        CHECK(j2.at(alt_json::json_pointer("/~0~1~0~0~1~1")) == 3);
+        CHECK(alt_json::json_pointer("/~0~1~0~0~1~1").to_string() == alt_string("/~0~1~0~0~1~1"));
+        CHECK(j2.flatten().unflatten() == j2);
+    }
+
+# Task
+Write 20 test programs for this pull request. Return JSON with a "tests" array; each item has "name" (short snake_case), "intent" (one sentence: what behavior it probes) and "code" (the complete C++ program).

@@ -1,0 +1,293 @@
+{
+  "target": "nlohmann-json",
+  "pr": 5852,
+  "model": "gemini-3.5-flash-lite",
+  "prompt_sha256": "db7db4c7249601b179d669720b3a6276ec9e399bc2f769b85e7465c62e02a65b",
+  "n_requested": 20,
+  "dropped": 0,
+  "usage": {
+    "promptTokenCount": 13099,
+    "candidatesTokenCount": 5014,
+    "totalTokenCount": 18113,
+    "promptTokensDetails": [
+      {
+        "modality": "TEXT",
+        "tokenCount": 13099
+      }
+    ],
+    "serviceTier": "standard"
+  },
+  "tests": [
+    {
+      "file": "gen_01.cpp",
+      "name": "sax_custom_float_text",
+      "intent": "Verify that a custom SAX handler receives the exact text of float tokens during parsing.",
+      "round": 0,
+      "superseded_by": "gen_26.cpp"
+    },
+    {
+      "file": "gen_02.cpp",
+      "name": "sax_acceptor_float_behavior",
+      "intent": "Verify that json::accept successfully accepts floats without failure or unnecessary evaluation.",
+      "round": 0,
+      "superseded_by": "gen_27.cpp"
+    },
+    {
+      "file": "gen_03.cpp",
+      "name": "sax_dom_parser_floats",
+      "intent": "Verify that standard DOM parsing correctly processes floats and outputs them properly.",
+      "round": 0
+    },
+    {
+      "file": "gen_04.cpp",
+      "name": "stream_window_float_parse",
+      "intent": "Verify that parsing from a std::istream window correctly parses float tokens.",
+      "round": 0,
+      "superseded_by": "gen_28.cpp"
+    },
+    {
+      "file": "gen_05.cpp",
+      "name": "derived_dom_parser_sax",
+      "intent": "Verify that a user-defined SAX handler derived from json_sax_dom_parser functions correctly with floats.",
+      "round": 0
+    },
+    {
+      "file": "gen_06.cpp",
+      "name": "multiple_floats_contiguous",
+      "intent": "Verify parsing of consecutive floating-point numbers in a contiguous input array.",
+      "round": 0
+    },
+    {
+      "file": "gen_07.cpp",
+      "name": "extreme_float_values",
+      "intent": "Verify that edge-case float values like very large or very small exponents parse correctly.",
+      "round": 0
+    },
+    {
+      "file": "gen_08.cpp",
+      "name": "negative_zero_float",
+      "intent": "Verify parsing of negative zero and negative floating-point numbers.",
+      "round": 0
+    },
+    {
+      "file": "gen_09.cpp",
+      "name": "callback_parser_floats",
+      "intent": "Verify that json_sax_dom_callback_parser correctly processes float values with a callback function.",
+      "round": 0
+    },
+    {
+      "file": "gen_10.cpp",
+      "name": "float_in_object_fields",
+      "intent": "Verify parsing of float values mixed with string keys and other object properties.",
+      "round": 0
+    },
+    {
+      "file": "gen_11.cpp",
+      "name": "nested_arrays_floats",
+      "intent": "Verify parsing of floats inside deeply nested arrays.",
+      "round": 0
+    },
+    {
+      "file": "gen_12.cpp",
+      "name": "accept_invalid_float_syntax",
+      "intent": "Verify that invalid float syntax is correctly rejected by json::accept.",
+      "round": 0
+    },
+    {
+      "file": "gen_13.cpp",
+      "name": "sax_parse_iterator_range",
+      "intent": "Verify sax_parse using a pair of iterators over a contiguous string containing floats.",
+      "round": 0,
+      "superseded_by": "gen_29.cpp"
+    },
+    {
+      "file": "gen_14.cpp",
+      "name": "ordered_json_float_parse",
+      "intent": "Verify that ordered_json parses floats correctly preserving insertion order.",
+      "round": 0
+    },
+    {
+      "file": "gen_15.cpp",
+      "name": "parser_class_explicit_instantiation",
+      "intent": "Verify explicit instantiation and usage of nlohmann::detail::parser with a string input adapter.",
+      "round": 0
+    },
+    {
+      "file": "gen_16.cpp",
+      "name": "float_parser_with_exponent",
+      "intent": "Verify parsing of numbers with various scientific notation exponents.",
+      "round": 0
+    },
+    {
+      "file": "gen_17.cpp",
+      "name": "parse_with_exceptions_flag",
+      "intent": "Verify parsing with allow_exceptions = false when encountering malformed floats.",
+      "round": 0
+    },
+    {
+      "file": "gen_18.cpp",
+      "name": "float_token_string_input_adapter",
+      "intent": "Verify direct usage of span_input_adapter with basic_json::parse for floats.",
+      "round": 0,
+      "superseded_by": "gen_30.cpp"
+    },
+    {
+      "file": "gen_19.cpp",
+      "name": "mixed_integers_and_floats",
+      "intent": "Verify correct distinction and parsing of integers versus floats in a mixed array.",
+      "round": 0
+    },
+    {
+      "file": "gen_20.cpp",
+      "name": "accept_stream_input",
+      "intent": "Verify json::accept using a std::istream source containing floats.",
+      "round": 0
+    },
+    {
+      "file": "gen_21.cpp",
+      "name": "gen_01",
+      "intent": "Verify that a custom SAX handler calls get_string() on float tokens, exercising the pending_number_text lazy copy mechanism and number_float_text(std::false_type).",
+      "round": 1,
+      "superseded_by": "gen_31.cpp"
+    },
+    {
+      "file": "gen_22.cpp",
+      "name": "gen_02",
+      "intent": "Verify that parsing floats via a std::istream window exercises the bulk_window true branch where the float text is copied immediately.",
+      "round": 1
+    },
+    {
+      "file": "gen_23.cpp",
+      "name": "gen_03",
+      "intent": "Verify the sax_ignores_number_text trait structure directly using std::integral_constant and is_base_of or explicit template checks for custom handlers vs built-in handlers.",
+      "round": 1,
+      "superseded_by": "gen_32.cpp"
+    },
+    {
+      "file": "gen_24.cpp",
+      "name": "gen_04",
+      "intent": "Verify that scan_number falls back to convert_number when parsing numbers that fail float conversion or take non-float paths, exercising token_buffer.append in scan_number_bulk_contiguous.",
+      "round": 1
+    },
+    {
+      "file": "gen_25.cpp",
+      "name": "gen_05",
+      "intent": "Verify that string tokens (object keys and string values) correctly invoke get_string_token() without any pending number text assertions failing, tested via sax_parse with a custom SAX handler.",
+      "round": 1,
+      "superseded_by": "gen_33.cpp"
+    },
+    {
+      "file": "gen_26.cpp",
+      "name": "sax_custom_float_text_fixed",
+      "intent": "Verify that a custom SAX handler receives the exact text of float tokens during parsing.",
+      "round": 2,
+      "fixes": "gen_01.cpp",
+      "kind": "compile",
+      "superseded_by": "gen_34.cpp"
+    },
+    {
+      "file": "gen_27.cpp",
+      "name": "sax_acceptor_float_behavior_fixed",
+      "intent": "Verify that json::accept successfully accepts floats without failure or unnecessary evaluation.",
+      "round": 2,
+      "fixes": "gen_02.cpp",
+      "kind": "compile"
+    },
+    {
+      "file": "gen_28.cpp",
+      "name": "stream_window_float_parse_fixed",
+      "intent": "Verify that parsing from a std::istream window correctly parses float tokens.",
+      "round": 2,
+      "fixes": "gen_04.cpp",
+      "kind": "compile"
+    },
+    {
+      "file": "gen_29.cpp",
+      "name": "sax_parse_iterator_range_fixed",
+      "intent": "Verify sax_parse using a pair of iterators over a contiguous string containing floats.",
+      "round": 2,
+      "fixes": "gen_13.cpp",
+      "kind": "compile",
+      "superseded_by": "gen_35.cpp"
+    },
+    {
+      "file": "gen_30.cpp",
+      "name": "float_token_string_input_adapter_fixed",
+      "intent": "Verify direct usage of span_input_adapter with basic_json::parse for floats.",
+      "round": 2,
+      "fixes": "gen_18.cpp",
+      "kind": "compile",
+      "superseded_by": "gen_36.cpp"
+    },
+    {
+      "file": "gen_31.cpp",
+      "name": "gen_01_fixed",
+      "intent": "Verify that a custom SAX handler calls get_string() on float tokens, exercising the pending_number_text lazy copy mechanism and number_float_text(std::false_type).",
+      "round": 2,
+      "fixes": "gen_21.cpp",
+      "kind": "compile",
+      "superseded_by": "gen_37.cpp"
+    },
+    {
+      "file": "gen_32.cpp",
+      "name": "gen_03_fixed",
+      "intent": "Verify the sax_ignores_number_text trait structure directly using std::integral_constant and is_base_of or explicit template checks for custom handlers vs built-in handlers.",
+      "round": 2,
+      "fixes": "gen_23.cpp",
+      "kind": "detect"
+    },
+    {
+      "file": "gen_33.cpp",
+      "name": "gen_05_fixed",
+      "intent": "Verify that string tokens (object keys and string values) correctly invoke get_string_token() without any pending number text assertions failing, tested via sax_parse with a custom SAX handler.",
+      "round": 2,
+      "fixes": "gen_25.cpp",
+      "kind": "compile",
+      "superseded_by": "gen_38.cpp"
+    },
+    {
+      "file": "gen_34.cpp",
+      "name": "sax_custom_float_text_fixed_fixed",
+      "intent": "Verify that a custom SAX handler receives the exact text of float tokens during parsing.",
+      "round": 3,
+      "fixes": "gen_26.cpp",
+      "kind": "compile"
+    },
+    {
+      "file": "gen_35.cpp",
+      "name": "sax_parse_iterator_range_fixed_fixed",
+      "intent": "Verify sax_parse using a pair of iterators over a contiguous string containing floats.",
+      "round": 3,
+      "fixes": "gen_29.cpp",
+      "kind": "compile"
+    },
+    {
+      "file": "gen_36.cpp",
+      "name": "float_token_string_input_adapter_fixed_fixed",
+      "intent": "Verify direct usage of span_input_adapter with basic_json::parse for floats.",
+      "round": 3,
+      "fixes": "gen_30.cpp",
+      "kind": "compile"
+    },
+    {
+      "file": "gen_37.cpp",
+      "name": "gen_01_fixed_fixed",
+      "intent": "Verify that a custom SAX handler calls get_string() on float tokens, exercising the pending_number_text lazy copy mechanism and number_float_text(std::false_type).",
+      "round": 3,
+      "fixes": "gen_31.cpp",
+      "kind": "compile"
+    },
+    {
+      "file": "gen_38.cpp",
+      "name": "gen_05_fixed_fixed",
+      "intent": "Verify that string tokens (object keys and string values) correctly invoke get_string_token() without any pending number text assertions failing, tested via sax_parse with a custom SAX handler.",
+      "round": 3,
+      "fixes": "gen_33.cpp",
+      "kind": "compile"
+    }
+  ],
+  "fix": {
+    "rounds_max": 2,
+    "model": "gemini-3.5-flash-lite"
+  }
+}

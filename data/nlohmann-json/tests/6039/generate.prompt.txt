@@ -1,0 +1,360 @@
+[system]
+You write test programs that probe a C++ library for behavioral changes made by one pull request.
+Each program is compiled and run twice, once against the library before the change and once after, and the two
+outputs are compared. Your job is to produce programs whose output reveals whether the change altered behavior,
+including side effects the author did not intend.
+
+Rules for every program:
+- It is standalone: one file with its own int main(), compiled as C++17, printing results to stdout.
+- Use only the library's documented public API. Never include internal headers or use detail/impl namespaces,
+  private members or undocumented macros.
+- Do not judge results (no assert, no expected-value comparisons): just print what the library returns. Print
+  enough to make differences visible, one fact per line.
+- Output must be deterministic. Never print pointers or addresses, uninitialized data, the order of
+  hash-based containers, timings, thread ids, random values, file paths or environment data. Print floating point
+  values with an explicit precision. No input, files, network, threads, clocks or randomness.
+- Wrap calls that may throw in try/catch and print the exception's type and message, so an exception is an
+  observable result. Do not crash on purpose.
+- Aim at the code the diff changes. Prefer calls that compile against both the old and the new library; one or two
+  programs may use an API the PR adds. Cover ordinary inputs and edge cases (empty, minimum and maximum values,
+  boundaries, special values, nesting, unusual types) and also neighbouring behavior the change could disturb.
+- When the diff changes which types or inputs an API accepts or rejects (constraints, overloads, traits,
+  conversions), test it with the detection idiom (std::void_t or requires) and `if constexpr`, so the program
+  compiles against both versions, prints whether the expression is well-formed, and exercises it when it is.
+  Accepting an input is not enough: also use it through every entry point that should follow (const and
+  non-const, read, write, insert, erase, lookup, nested use), because a change that admits new inputs can leave
+  later code unable to handle them.
+- If the changed code is internal (a detail, impl or internal namespace, a trait, a helper), do not name it in the
+  program. Reach it through the public API that depends on it, using detection (as above) where needed.
+- Use the exact types and values the diff is about (the new trait's argument types, the new overload's
+  parameters), not stand-ins.
+- Spread the programs over distinct public entry points and overloads, one main idea per program. Do not write
+  several programs that only rename a type or change a literal.
+- Make the programs differ from each other: different inputs, different entry points, different features.
+
+Rules specific to this library:
+- Include the library with #include <nlohmann/json.hpp>. The public API is nlohmann::json (nlohmann::basic_json), nlohmann::ordered_json, json_pointer, json patch/merge_patch and the documented SAX and conversion interfaces. Never use the detail namespace.
+- It is a header-only library: nothing to link. Programs are compiled as C++17.
+- Print JSON values with dump() (compact) or dump(2). Keys of nlohmann::json objects print in sorted order, so output is deterministic; do not depend on insertion order except with ordered_json.
+
+[user]
+# Pull request #6039: Iterator: test for objects before arrays
+
+## Description
+## What
+
+`iter_impl`'s `operator*`, `operator->`, `operator++`, `operator--` and `operator==` test for an object before an array.
+
+## Why
+
+#5835 replaced the `switch` on the value type in these operators with an `if` chain that tests for an array first. Every step over an object then pays for a failed test and a taken branch. When the compiler inlines the iterator, as it does in a small loop over a document, walking a document of objects got slower than with 3.12.0. The suite didn't show it: in its large translation unit, 3.12.0's iterator calls aren't inlined, so 3.13.0 wins there anyway.
+
+## Numbers
+
+Apple M1 Max, Apple clang 21, `-O3 -flto -DNDEBUG`. Cycles of one walk over every value (the suite's `count_values()` in a small program of its own, the median of 5 processes of 300 walks each, `/usr/bin/time -l`):
+
+| file | 3.12.0 | develop | this PR | vs. 3.12.0 |
+| --- | --: | --: | --: | --: |
+| `citm_catalog.json` | 562k | 580k | 464k | 1.21× |
+| `twitter.json` | 169k | 186k | 163k | 1.04× |
+| `canada.json` | 1,588k | 981k | 1,357k | 1.17× |
+
+`canada.json` holds nothing but arrays and gives back part of the gain of #5835, but it stays faster than 3.12.0. The other orders I tried each left one of the files slower than 3.12.0 (cycles per walk, citm / twitter / canada):
+
+| variant | `citm_catalog.json` | `twitter.json` | `canada.json` |
+| --- | --: | --: | --: |
+| arrays first, no hints | 498k | 175k | 1,530k |
+| objects first, no hints | 515k | 180k | 1,300k |
+| `switch`, as in 3.12.0 | 502k | 169k | 1,523k |
+
+The suite's `Iterate` rows (develop plus #6029, #6031 and #6033, with and without this change; median of 12 runs, speedup over 3.12.0):
+
+| benchmark | without | with |
+| --- | --: | --: |
+| `Iterate/citm_catalog` | 1.61× | 1.92× |
+| `Iterate/twitter` | 1.44× | 1.53× |
+| `Iterate/canada` | 2.80× | 1.98× |
+
+The other rows that iterate or copy (`Copy*`, `DestroyOnly`, `Diff`, `Equal`, `Flatten`) stayed within ±3%.
+
+## Tests
+
+The full unit test suite (189 tests) passes with ASan and UBSan on macOS (Apple clang). The change only reorders branches, so no new tests.
+
+## Breaking changes
+
+None. The public API, the behavior and the ABI are unchanged; only the order of the type tests inside the iterator's operators changed.
+
+🤖 Generated with [Claude Code](https://claude.com/claude-code)
+
+## Commit message
+#5835 replaced the switch on the value type in operator*, operator->,
+operator++, operator-- and operator== of iter_impl with an if chain that
+tests for an array first. Every step over an object then pays for a
+failed test and a taken branch: with the iterator inlined, walking
+twitter.json took 14% more cycles than with 3.12.0, and citm_catalog.json
+3.5% more.
+
+Test for objects first. Walking every value of the three files now
+takes fewer cycles than with 3.12.0 (Apple M1 Max, Apple clang 21):
+citm_catalog.json 1.21x, twitter.json 1.04x, canada.json 1.17x as fast.
+canada.json, which holds only arrays, gives back part of the gain of
+#5835 (develop: 1.62x); the other orders tried (arrays first without
+hints, objects first without hints, a switch) each left one of the
+files slower than 3.12.0.
+
+Signed-off-by: Niels Lohmann <mail@nlohmann.me>
+
+## Changed functions (from changes.py)
+- nlohmann::detail::iter_impl::operator*() (private); reached from the public API through: nlohmann::basic_json::begin(), nlohmann::basic_json::cbegin(), nlohmann::basic_json::cend(), nlohmann::basic_json::end(), nlohmann::basic_json::find(const typename object_t::key_type &), nlohmann::basic_json::insert(const_iterator, basic_json<...> &&), nlohmann::basic_json::insert(const_iterator, const basic_json<...> &), nlohmann::basic_json::insert(const_iterator, initializer_list_t), nlohmann::basic_json::insert(const_iterator, const_iterator), nlohmann::basic_json::insert(const_iterator, const_iterator, const_iterator)
+- nlohmann::detail::iter_impl::operator->() (private); reached from the public API through: nlohmann::basic_json::begin(), nlohmann::basic_json::cbegin(), nlohmann::basic_json::cend(), nlohmann::basic_json::end(), nlohmann::basic_json::find(const typename object_t::key_type &), nlohmann::basic_json::insert(const_iterator, basic_json<...> &&), nlohmann::basic_json::insert(const_iterator, const basic_json<...> &), nlohmann::basic_json::insert(const_iterator, initializer_list_t), nlohmann::basic_json::insert(const_iterator, const_iterator), nlohmann::basic_json::insert(const_iterator, const_iterator, const_iterator)
+- nlohmann::detail::iter_impl::operator++() (private); reached from the public API through: nlohmann::basic_json::begin(), nlohmann::basic_json::cbegin(), nlohmann::basic_json::cend(), nlohmann::basic_json::end(), nlohmann::basic_json::find(const typename object_t::key_type &), nlohmann::basic_json::insert(const_iterator, basic_json<...> &&), nlohmann::basic_json::insert(const_iterator, const basic_json<...> &), nlohmann::basic_json::insert(const_iterator, initializer_list_t), nlohmann::basic_json::insert(const_iterator, const_iterator), nlohmann::basic_json::insert(const_iterator, const_iterator, const_iterator)
+- nlohmann::detail::iter_impl::operator--() (private); reached from the public API through: nlohmann::basic_json::begin(), nlohmann::basic_json::cbegin(), nlohmann::basic_json::cend(), nlohmann::basic_json::end(), nlohmann::basic_json::find(const typename object_t::key_type &), nlohmann::basic_json::insert(const_iterator, basic_json<...> &&), nlohmann::basic_json::insert(const_iterator, const basic_json<...> &), nlohmann::basic_json::insert(const_iterator, initializer_list_t), nlohmann::basic_json::insert(const_iterator, const_iterator), nlohmann::basic_json::insert(const_iterator, const_iterator, const_iterator)
+- nlohmann::detail::iter_impl::operator==(const IterImpl &) (private); reached from the public API through: nlohmann::basic_json::begin(), nlohmann::basic_json::cbegin(), nlohmann::basic_json::cend(), nlohmann::basic_json::end(), nlohmann::basic_json::find(const typename object_t::key_type &), nlohmann::basic_json::insert(const_iterator, basic_json<...> &&), nlohmann::basic_json::insert(const_iterator, const basic_json<...> &), nlohmann::basic_json::insert(const_iterator, initializer_list_t), nlohmann::basic_json::insert(const_iterator, const_iterator), nlohmann::basic_json::insert(const_iterator, const_iterator, const_iterator)
+
+## Diff of the library source (before -> after)
+```diff
+diff --git a/include/nlohmann/detail/iterators/iter_impl.hpp b/include/nlohmann/detail/iterators/iter_impl.hpp
+index 6e6cc0ef6..6a0d2cef5 100644
+--- a/include/nlohmann/detail/iterators/iter_impl.hpp
++++ b/include/nlohmann/detail/iterators/iter_impl.hpp
+@@ -277,18 +277,22 @@ class iter_impl // NOLINT(cppcoreguidelines-special-member-functions,hicpp-speci
+     {
+         JSON_ASSERT(m_object != nullptr);
+ 
+-        if (JSON_HEDLEY_LIKELY(m_object->m_data.m_type == value_t::array))
+-        {
+-            JSON_ASSERT(m_it.array_iterator != m_object->m_data.m_value.array->end());
+-            return *m_it.array_iterator;
+-        }
+-
++        // objects are tested before arrays here and in the other operators:
++        // with arrays first, walking a document of objects such as
++        // twitter.json took 14% more cycles than with 3.12.0's switch; with
++        // objects first, no document walks slower than with 3.12.0
+         if (JSON_HEDLEY_LIKELY(m_object->m_data.m_type == value_t::object))
+         {
+             JSON_ASSERT(m_it.object_iterator != m_object->m_data.m_value.object->end());
+             return m_it.object_iterator->second;
+         }
+ 
++        if (JSON_HEDLEY_LIKELY(m_object->m_data.m_type == value_t::array))
++        {
++            JSON_ASSERT(m_it.array_iterator != m_object->m_data.m_value.array->end());
++            return *m_it.array_iterator;
++        }
++
+         // neither array nor object: a primitive value (null has no value to point to)
+         if (JSON_HEDLEY_LIKELY(m_object->m_data.m_type != value_t::null && m_it.primitive_iterator.is_begin()))
+         {
+@@ -306,18 +310,18 @@ class iter_impl // NOLINT(cppcoreguidelines-special-member-functions,hicpp-speci
+     {
+         JSON_ASSERT(m_object != nullptr);
+ 
+-        if (JSON_HEDLEY_LIKELY(m_object->m_data.m_type == value_t::array))
+-        {
+-            JSON_ASSERT(m_it.array_iterator != m_object->m_data.m_value.array->end());
+-            return &*m_it.array_iterator;
+-        }
+-
+         if (JSON_HEDLEY_LIKELY(m_object->m_data.m_type == value_t::object))
+         {
+             JSON_ASSERT(m_it.object_iterator != m_object->m_data.m_value.object->end());
+             return &(m_it.object_iterator->second);
+         }
+ 
++        if (JSON_HEDLEY_LIKELY(m_object->m_data.m_type == value_t::array))
++        {
++            JSON_ASSERT(m_it.array_iterator != m_object->m_data.m_value.array->end());
++            return &*m_it.array_iterator;
++        }
++
+         // neither array nor object: a primitive value
+         if (JSON_HEDLEY_LIKELY(m_it.primitive_iterator.is_begin()))
+         {
+@@ -346,15 +350,15 @@ class iter_impl // NOLINT(cppcoreguidelines-special-member-functions,hicpp-speci
+     {
+         JSON_ASSERT(m_object != nullptr);
+ 
+-        if (JSON_HEDLEY_LIKELY(m_object->m_data.m_type == value_t::array))
++        if (JSON_HEDLEY_LIKELY(m_object->m_data.m_type == value_t::object))
+         {
+-            ++m_it.array_iterator;
++            std::advance(m_it.object_iterator, 1);
+             return *this;
+         }
+ 
+-        if (JSON_HEDLEY_LIKELY(m_object->m_data.m_type == value_t::object))
++        if (JSON_HEDLEY_LIKELY(m_object->m_data.m_type == value_t::array))
+         {
+-            std::advance(m_it.object_iterator, 1);
++            ++m_it.array_iterator;
+             return *this;
+         }
+ 
+@@ -382,15 +386,15 @@ class iter_impl // NOLINT(cppcoreguidelines-special-member-functions,hicpp-speci
+     {
+         JSON_ASSERT(m_object != nullptr);
+ 
+-        if (JSON_HEDLEY_LIKELY(m_object->m_data.m_type == value_t::array))
++        if (JSON_HEDLEY_LIKELY(m_object->m_data.m_type == value_t::object))
+         {
+-            --m_it.array_iterator;
++            std::advance(m_it.object_iterator, -1);
+             return *this;
+         }
+ 
+-        if (JSON_HEDLEY_LIKELY(m_object->m_data.m_type == value_t::object))
++        if (JSON_HEDLEY_LIKELY(m_object->m_data.m_type == value_t::array))
+         {
+-            std::advance(m_it.object_iterator, -1);
++            --m_it.array_iterator;
+             return *this;
+         }
+ 
+@@ -415,14 +419,14 @@ class iter_impl // NOLINT(cppcoreguidelines-special-member-functions,hicpp-speci
+             return true;
+         }
+ 
+-        if (JSON_HEDLEY_LIKELY(m_object->m_data.m_type == value_t::array))
++        if (JSON_HEDLEY_LIKELY(m_object->m_data.m_type == value_t::object))
+         {
+-            return (m_it.array_iterator == other.m_it.array_iterator);
++            return (m_it.object_iterator == other.m_it.object_iterator);
+         }
+ 
+-        if (JSON_HEDLEY_LIKELY(m_object->m_data.m_type == value_t::object))
++        if (JSON_HEDLEY_LIKELY(m_object->m_data.m_type == value_t::array))
+         {
+-            return (m_it.object_iterator == other.m_it.object_iterator);
++            return (m_it.array_iterator == other.m_it.array_iterator);
+         }
+ 
+         // neither array nor object: a primitive value
+```
+
+## Existing upstream tests that call the changed code (for style and API usage)
+// Upstream tests at the PR's parent commit 2c7474aff that use the changed code.
+// Names searched (test lines using each): begin (845), cbegin (199), cend (129), end (685), find (203), insert (304)
+
+// ---- tests/src/unit-concepts.cpp:129-147  (uses: begin, cbegin, cend, end)
+        SECTION("Swappable")
+        {
+            {
+                json j {1, 2, 3};
+                json::iterator it1 = j.begin();
+                json::iterator it2 = j.end();
+                swap(it1, it2);
+                CHECK(it1 == j.end());
+                CHECK(it2 == j.begin());
+            }
+            {
+                json j {1, 2, 3};
+                json::const_iterator it1 = j.cbegin();
+                json::const_iterator it2 = j.cend();
+                swap(it1, it2);
+                CHECK(it1 == j.end());
+                CHECK(it2 == j.begin());
+            }
+        }
+
+// ---- tests/src/unit-constructor1.cpp:1400-1412  (uses: begin, cbegin, cend, end)
+            SECTION("json(begin(), end())")
+            {
+                {
+                    json jobject = {{"a", "a"}, {"b", 1}, {"c", 17u}};
+                    json const j_new(jobject.begin(), jobject.end());
+                    CHECK(j_new == jobject);
+                }
+                {
+                    json jobject = {{"a", "a"}, {"b", 1}, {"c", 17u}};
+                    json const j_new(jobject.cbegin(), jobject.cend());
+                    CHECK(j_new == jobject);
+                }
+            }
+
+// ---- tests/src/unit-constructor1.cpp:1435-1449  (uses: begin, cbegin, cend, end)
+            SECTION("incompatible iterators")
+            {
+                {
+                    json jobject = {{"a", "a"}, {"b", 1}, {"c", 17u}, {"d", false}, {"e", true}};
+                    json jobject2 = {{"a", "a"}, {"b", 1}, {"c", 17u}};
+                    CHECK_THROWS_WITH_AS(json(jobject.begin(), jobject2.end()), "[json.exception.invalid_iterator.201] iterators are not compatible", json::invalid_iterator&);
+                    CHECK_THROWS_WITH_AS(json(jobject2.begin(), jobject.end()), "[json.exception.invalid_iterator.201] iterators are not compatible", json::invalid_iterator&);
+                }
+                {
+                    json const jobject = {{"a", "a"}, {"b", 1}, {"c", 17u}, {"d", false}, {"e", true}};
+                    json const jobject2 = {{"a", "a"}, {"b", 1}, {"c", 17u}};
+                    CHECK_THROWS_WITH_AS(json(jobject.cbegin(), jobject2.cend()), "[json.exception.invalid_iterator.201] iterators are not compatible", json::invalid_iterator&);
+                    CHECK_THROWS_WITH_AS(json(jobject2.cbegin(), jobject.cend()), "[json.exception.invalid_iterator.201] iterators are not compatible", json::invalid_iterator&);
+                }
+            }
+
+// ---- tests/src/unit-element_access1.cpp:306-320  (uses: begin, cbegin, cend, end)
+                SECTION("erase(begin(), end())")
+                {
+                    {
+                        json jarray = {1, 1u, true, nullptr, "string", 42.23, json::object(), {1, 2, 3}};
+                        const json::iterator it2 = jarray.erase(jarray.begin(), jarray.end());
+                        CHECK(jarray == json::array());
+                        CHECK(it2 == jarray.end());
+                    }
+                    {
+                        json jarray = {1, 1u, true, nullptr, "string", 42.23, json::object(), {1, 2, 3}};
+                        const json::const_iterator it2 = jarray.erase(jarray.cbegin(), jarray.cend());
+                        CHECK(jarray == json::array());
+                        CHECK(it2 == jarray.cend());
+                    }
+                }
+
+// ---- tests/src/unit-element_access1.cpp:372-400  (uses: begin, cbegin, cend, end)
+                SECTION("different arrays")
+                {
+                    {
+                        json jarray = {1, 1u, true, nullptr, "string", 42.23, json::object(), {1, 2, 3}};
+                        json jarray2 = {"foo", "bar"};
+
+                        CHECK_THROWS_WITH_AS(jarray.erase(jarray2.begin()),
+                                             "[json.exception.invalid_iterator.202] iterator does not fit current value", json::invalid_iterator&);
+                        CHECK_THROWS_WITH_AS(jarray.erase(jarray.begin(), jarray2.end()),
+                                             "[json.exception.invalid_iterator.203] iterators do not fit current value", json::invalid_iterator&);
+                        CHECK_THROWS_WITH_AS(jarray.erase(jarray2.begin(), jarray.end()),
+                                             "[json.exception.invalid_iterator.203] iterators do not fit current value", json::invalid_iterator&);
+                        CHECK_THROWS_WITH_AS(jarray.erase(jarray2.begin(), jarray2.end()),
+                                             "[json.exception.invalid_iterator.203] iterators do not fit current value", json::invalid_iterator&);
+                    }
+                    {
+                        json jarray = {1, 1u, true, nullptr, "string", 42.23, json::object(), {1, 2, 3}};
+                        json const jarray2 = {"foo", "bar"};
+
+                        CHECK_THROWS_WITH_AS(jarray.erase(jarray2.cbegin()),
+                                             "[json.exception.invalid_iterator.202] iterator does not fit current value", json::invalid_iterator&);
+                        CHECK_THROWS_WITH_AS(jarray.erase(jarray.cbegin(), jarray2.cend()),
+                                             "[json.exception.invalid_iterator.203] iterators do not fit current value", json::invalid_iterator&);
+                        CHECK_THROWS_WITH_AS(jarray.erase(jarray2.cbegin(), jarray.cend()),
+                                             "[json.exception.invalid_iterator.203] iterators do not fit current value", json::invalid_iterator&);
+                        CHECK_THROWS_WITH_AS(jarray.erase(jarray2.cbegin(), jarray2.cend()),
+                                             "[json.exception.invalid_iterator.203] iterators do not fit current value", json::invalid_iterator&);
+                    }
+                }
+
+// ---- tests/src/unit-ordered_json.cpp:62-77  (uses: cbegin, cend, insert)
+    CHECK(multi_ordered.dump() == "{\"z\":1,\"y\":4}");
+
+    // Ranged insert test.
+    // It seems that values shouldn't be overwritten. Only new values are added
+    json j1 {{"c", 1}, {"b", 2}, {"a", 3}};
+    const json j2 {{"c", 77}, {"d", 42}, {"a", 4}};
+    j1.insert( j2.cbegin(), j2.cend() );
+    CHECK(j1.size() == 4);
+    CHECK(j1.dump() == "{\"a\":3,\"b\":2,\"c\":1,\"d\":42}");
+
+    ordered_json oj1 {{"c", 1}, {"b", 2}, {"a", 3}};
+    const ordered_json oj2 {{"c", 77}, {"d", 42}, {"a", 4}};
+    oj1.insert( oj2.cbegin(), oj2.cend() );
+    CHECK(oj1.size() == 4);
+    CHECK(oj1.dump() == "{\"c\":1,\"b\":2,\"a\":3,\"d\":42}");
+}
+
+# Task
+Write 20 test programs for this pull request. Return JSON with a "tests" array; each item has "name" (short snake_case), "intent" (one sentence: what behavior it probes) and "code" (the complete C++ program).

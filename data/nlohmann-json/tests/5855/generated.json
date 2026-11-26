@@ -1,0 +1,182 @@
+{
+  "target": "nlohmann-json",
+  "pr": 5855,
+  "model": "gemini-3.5-flash-lite",
+  "prompt_sha256": "3d663ab6d2a3a8e3b9d6f23ca0e33d730450775bbcd7c90680567f6ec757c1fd",
+  "n_requested": 20,
+  "dropped": 0,
+  "usage": {
+    "promptTokenCount": 5468,
+    "candidatesTokenCount": 4521,
+    "totalTokenCount": 9989,
+    "promptTokensDetails": [
+      {
+        "modality": "TEXT",
+        "tokenCount": 5468
+      }
+    ],
+    "serviceTier": "standard"
+  },
+  "tests": [
+    {
+      "file": "gen_01.cpp",
+      "name": "short_keys_parse",
+      "intent": "Verify parsing of objects with short keys that fit within SSO buffer.",
+      "round": 0
+    },
+    {
+      "file": "gen_02.cpp",
+      "name": "long_keys_parse",
+      "intent": "Verify parsing of objects with long keys exceeding SSO buffer size to exercise move semantics.",
+      "round": 0
+    },
+    {
+      "file": "gen_03.cpp",
+      "name": "sso_boundary_key_parse",
+      "intent": "Verify parsing of object keys right at the SSO boundary length.",
+      "round": 0
+    },
+    {
+      "file": "gen_04.cpp",
+      "name": "escaped_keys_parse",
+      "intent": "Verify parsing of object keys containing escape sequences.",
+      "round": 0,
+      "superseded_by": "gen_21.cpp"
+    },
+    {
+      "file": "gen_05.cpp",
+      "name": "empty_key_parse",
+      "intent": "Verify parsing of an object containing an empty string key.",
+      "round": 0
+    },
+    {
+      "file": "gen_06.cpp",
+      "name": "duplicate_keys_parse",
+      "intent": "Verify handling and last-one-wins semantics of duplicate keys during parse.",
+      "round": 0
+    },
+    {
+      "file": "gen_07.cpp",
+      "name": "nested_objects_keys",
+      "intent": "Verify key moving across deeply nested objects.",
+      "round": 0
+    },
+    {
+      "file": "gen_08.cpp",
+      "name": "unicode_keys_parse",
+      "intent": "Verify parsing of multibyte UTF-8 characters within object keys.",
+      "round": 0,
+      "superseded_by": "gen_22.cpp"
+    },
+    {
+      "file": "gen_09.cpp",
+      "name": "sax_dom_parser_direct_key",
+      "intent": "Verify direct invocation of json_sax_dom_parser via sax_parse with custom input.",
+      "round": 0,
+      "superseded_by": "gen_23.cpp"
+    },
+    {
+      "file": "gen_10.cpp",
+      "name": "ordered_json_keys_parse",
+      "intent": "Verify key parsing behavior with ordered_json where ordered_map is used instead of std::map.",
+      "round": 0
+    },
+    {
+      "file": "gen_11.cpp",
+      "name": "stream_parsing_keys",
+      "intent": "Verify parsing of object keys using std::istringstream input adapter.",
+      "round": 0
+    },
+    {
+      "file": "gen_12.cpp",
+      "name": "many_keys_parsing",
+      "intent": "Verify object parsing with a large number of keys to stress container insertion and key moving.",
+      "round": 0
+    },
+    {
+      "file": "gen_13.cpp",
+      "name": "json_diagnostics_keys_parse",
+      "intent": "Verify parsing behavior with diagnostics enabled on object keys.",
+      "round": 0
+    },
+    {
+      "file": "gen_14.cpp",
+      "name": "empty_object_keys",
+      "intent": "Verify parsing of an empty object where key method is never invoked.",
+      "round": 0
+    },
+    {
+      "file": "gen_15.cpp",
+      "name": "mixed_type_values_keys",
+      "intent": "Verify parsing keys of objects containing mixed value types.",
+      "round": 0
+    },
+    {
+      "file": "gen_16.cpp",
+      "name": "parser_accept_check",
+      "intent": "Verify json::accept() on valid object strings ensuring lexer and parser states behave properly.",
+      "round": 0
+    },
+    {
+      "file": "gen_17.cpp",
+      "name": "from_cbor_object_key",
+      "intent": "Verify parsing object keys from CBOR binary representation.",
+      "round": 0
+    },
+    {
+      "file": "gen_18.cpp",
+      "name": "from_msgpack_object_key",
+      "intent": "Verify parsing object keys from MessagePack binary representation.",
+      "round": 0
+    },
+    {
+      "file": "gen_19.cpp",
+      "name": "from_ubjson_object_key",
+      "intent": "Verify parsing object keys from UBJSON binary representation.",
+      "round": 0
+    },
+    {
+      "file": "gen_20.cpp",
+      "name": "key_with_null_characters",
+      "intent": "Verify parsing of object keys containing embedded null characters if supported by string representation.",
+      "round": 0
+    },
+    {
+      "file": "gen_21.cpp",
+      "name": "escaped_keys_parse_fixed",
+      "intent": "Verify parsing of object keys containing escape sequences.",
+      "round": 1,
+      "fixes": "gen_04.cpp",
+      "kind": "compile"
+    },
+    {
+      "file": "gen_22.cpp",
+      "name": "unicode_keys_parse_fixed",
+      "intent": "Verify parsing of multibyte UTF-8 characters within object keys.",
+      "round": 1,
+      "fixes": "gen_08.cpp",
+      "kind": "compile"
+    },
+    {
+      "file": "gen_23.cpp",
+      "name": "sax_dom_parser_direct_key_fixed",
+      "intent": "Verify direct invocation of json_sax_dom_parser via sax_parse with custom input.",
+      "round": 1,
+      "fixes": "gen_09.cpp",
+      "kind": "compile",
+      "superseded_by": "gen_24.cpp"
+    },
+    {
+      "file": "gen_24.cpp",
+      "name": "sax_dom_parser_direct_key_fixed_fixed",
+      "intent": "Verify direct invocation of json_sax_dom_parser via sax_parse with custom input.",
+      "round": 2,
+      "fixes": "gen_23.cpp",
+      "kind": "compile"
+    }
+  ],
+  "fix": {
+    "rounds_max": 2,
+    "model": "gemini-3.5-flash-lite"
+  }
+}

@@ -1,0 +1,116 @@
+[system]
+You write test programs that probe a C++ library for behavioral changes made by one pull request.
+Each program is compiled and run twice, once against the library before the change and once after, and the two
+outputs are compared. Your job is to produce programs whose output reveals whether the change altered behavior,
+including side effects the author did not intend.
+
+Rules for every program:
+- It is standalone: one file with its own int main(), compiled as C++17, printing results to stdout.
+- Use only the library's documented public API. Never include internal headers or use detail/impl namespaces,
+  private members or undocumented macros.
+- Do not judge results (no assert, no expected-value comparisons): just print what the library returns. Print
+  enough to make differences visible, one fact per line.
+- Output must be deterministic. Never print pointers or addresses, uninitialized data, the order of
+  hash-based containers, timings, thread ids, random values, file paths or environment data. Print floating point
+  values with an explicit precision. No input, files, network, threads, clocks or randomness.
+- Wrap calls that may throw in try/catch and print the exception's type and message, so an exception is an
+  observable result. Do not crash on purpose.
+- Aim at the code the diff changes. Prefer calls that compile against both the old and the new library; one or two
+  programs may use an API the PR adds. Cover ordinary inputs and edge cases (empty, minimum and maximum values,
+  boundaries, special values, nesting, unusual types) and also neighbouring behavior the change could disturb.
+- When the diff changes which types or inputs an API accepts or rejects (constraints, overloads, traits,
+  conversions), test it with the detection idiom (std::void_t or requires) and `if constexpr`, so the program
+  compiles against both versions, prints whether the expression is well-formed, and exercises it when it is.
+  Accepting an input is not enough: also use it through every entry point that should follow (const and
+  non-const, read, write, insert, erase, lookup, nested use), because a change that admits new inputs can leave
+  later code unable to handle them.
+- If the changed code is internal (a detail, impl or internal namespace, a trait, a helper), do not name it in the
+  program. Reach it through the public API that depends on it, using detection (as above) where needed.
+- Use the exact types and values the diff is about (the new trait's argument types, the new overload's
+  parameters), not stand-ins.
+- Spread the programs over distinct public entry points and overloads, one main idea per program. Do not write
+  several programs that only rename a type or change a literal.
+- Make the programs differ from each other: different inputs, different entry points, different features.
+
+Rules specific to this library:
+- Include the library with #include <nlohmann/json.hpp>. The public API is nlohmann::json (nlohmann::basic_json), nlohmann::ordered_json, json_pointer, json patch/merge_patch and the documented SAX and conversion interfaces. Never use the detail namespace.
+- It is a header-only library: nothing to link. Programs are compiled as C++17.
+- Print JSON values with dump() (compact) or dump(2). Keys of nlohmann::json objects print in sorted order, so output is deterministic; do not depend on insertion order except with ordered_json.
+
+[user]
+# Pull request #5874: Read FILE* input with std::fgetc under MemorySanitizer
+
+## Description
+Since #5828, `file_input_adapter::get_character()` reads with `getc_unlocked` where the C library has it. With glibc and optimization (`-O1` and up), `<stdio.h>` makes `getc_unlocked` an extern inline function that reads the stdio buffer (`fp->_IO_read_ptr`) directly. glibc filled that buffer, and glibc is not instrumented, so MemorySanitizer treats the bytes as uninitialized and reports a false positive when a parser reads from a `FILE*`. The bytes are in fact initialized.
+
+OSS-Fuzz issue 575915982 (`parse_bson_fuzzer`, job `libfuzzer_msan_json`, input `20 20 20 20 20`) hits this through the `fmemopen` leg of `check_input_adapters()` (#5827). `std::fgetc` is an opaque library call, and MemorySanitizer treats its result as initialized.
+
+This PR selects `JSON_UNLOCKED_FILE_IO 0` (plain `std::fgetc`) when `__has_feature(memory_sanitizer)` is true. The docs of `JSON_DISABLE_UNLOCKED_FILE_IO` now say so.
+
+The regression came in with #5828 (merged 2026-10-19) and is not part of any release.
+
+### Testing
+
+- Reproduced with clang 18 and an MSan-instrumented libc++ 18.1.3: without this change the OSS-Fuzz testcase reports `use-of-uninitialized-value` (origin: glibc's `_IO_file_doallocate`); with it the run is clean. Building with `-DJSON_DISABLE_UNLOCKED_FILE_IO=1` is clean as well.
+- All seven parse fuzzers (JSON, CBOR, MessagePack, UBJSON, BJData, BON8, BSON) run clean under MSan on a few small inputs.
+- `unit-file_input` and `unit-deserialization` pass.
+
+### Breaking changes
+
+No breaking changes. Only MemorySanitizer builds change, and only in how a `FILE*` is read (`std::fgetc` instead of `getc_unlocked`): results are identical, and the public API is unchanged. The `_dufio` ABI tag still follows `JSON_DISABLE_UNLOCKED_FILE_IO` only. That does no harm, because MSan objects cannot be linked with non-MSan objects anyway.
+
+Written by Claude Code on behalf of @nlohmann
+
+🤖 Generated with [Claude Code](https://claude.com/claude-code)
+
+## Commit message
+With glibc and optimization, <stdio.h> turns getc_unlocked into an extern
+inline function that reads the stdio buffer (fp->_IO_read_ptr) directly.
+glibc, which is not instrumented, fills that buffer, so MemorySanitizer
+treats the bytes as uninitialized and reports a false positive when the
+parsers read from a FILE* (e.g., the fuzz harness FILE* leg, OSS-Fuzz
+575915982). std::fgetc is an opaque call whose result MemorySanitizer treats
+as initialized.
+
+Select JSON_UNLOCKED_FILE_IO 0 when compiled with MemorySanitizer. This is a
+regression from #5828 and not part of any release.
+
+Signed-off-by: Niels Lohmann <mail@nlohmann.me>
+
+## Diff of the library source (before -> after)
+```diff
+diff --git a/include/nlohmann/detail/input/input_adapters.hpp b/include/nlohmann/detail/input/input_adapters.hpp
+index 70443ab89..77a1b45c5 100644
+--- a/include/nlohmann/detail/input/input_adapters.hpp
++++ b/include/nlohmann/detail/input/input_adapters.hpp
+@@ -38,8 +38,16 @@
+     // 2 = Microsoft CRT _lock_file/_fgetc_nolock, 0 = none (std::fgetc, which
+     // locks the file for every character). Only C libraries known to declare
+     // the functions are listed; the macros are tested after <cstdio>, which
+-    // defines __GLIBC__.
+-    #if JSON_DISABLE_UNLOCKED_FILE_IO
++    // defines __GLIBC__. MemorySanitizer builds always use std::fgetc: glibc's
++    // inline getc_unlocked reads the stdio buffer directly, which glibc (not
++    // instrumented) filled, so MemorySanitizer would report a false positive.
++    #if defined(__has_feature)
++        #if __has_feature(memory_sanitizer)
++            #define JSON_UNLOCKED_FILE_IO_MSAN 1
++        #endif
++    #endif
++
++    #if JSON_DISABLE_UNLOCKED_FILE_IO || defined(JSON_UNLOCKED_FILE_IO_MSAN)
+         #define JSON_UNLOCKED_FILE_IO 0
+     #elif defined(_MSC_VER)
+         #define JSON_UNLOCKED_FILE_IO 2
+@@ -48,6 +56,7 @@
+     #else
+         #define JSON_UNLOCKED_FILE_IO 0
+     #endif
++    #undef JSON_UNLOCKED_FILE_IO_MSAN
+ #endif  // JSON_NO_IO
+ 
+ NLOHMANN_JSON_NAMESPACE_BEGIN
+```
+
+# Task
+Write 20 test programs for this pull request. Return JSON with a "tests" array; each item has "name" (short snake_case), "intent" (one sentence: what behavior it probes) and "code" (the complete C++ program).

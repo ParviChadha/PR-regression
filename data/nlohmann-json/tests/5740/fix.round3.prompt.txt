@@ -1,0 +1,946 @@
+[system]
+You write test programs that probe a C++ library for behavioral changes made by one pull request.
+Each program is compiled and run twice, once against the library before the change and once after, and the two
+outputs are compared. Your job is to produce programs whose output reveals whether the change altered behavior,
+including side effects the author did not intend.
+
+Rules for every program:
+- It is standalone: one file with its own int main(), compiled as C++17, printing results to stdout.
+- Use only the library's documented public API. Never include internal headers or use detail/impl namespaces,
+  private members or undocumented macros.
+- Do not judge results (no assert, no expected-value comparisons): just print what the library returns. Print
+  enough to make differences visible, one fact per line.
+- Output must be deterministic. Never print pointers or addresses, uninitialized data, the order of
+  hash-based containers, timings, thread ids, random values, file paths or environment data. Print floating point
+  values with an explicit precision. No input, files, network, threads, clocks or randomness.
+- Wrap calls that may throw in try/catch and print the exception's type and message, so an exception is an
+  observable result. Do not crash on purpose.
+- Aim at the code the diff changes. Prefer calls that compile against both the old and the new library; one or two
+  programs may use an API the PR adds. Cover ordinary inputs and edge cases (empty, minimum and maximum values,
+  boundaries, special values, nesting, unusual types) and also neighbouring behavior the change could disturb.
+- When the diff changes which types or inputs an API accepts or rejects (constraints, overloads, traits,
+  conversions), test it with the detection idiom (std::void_t or requires) and `if constexpr`, so the program
+  compiles against both versions, prints whether the expression is well-formed, and exercises it when it is.
+  Accepting an input is not enough: also use it through every entry point that should follow (const and
+  non-const, read, write, insert, erase, lookup, nested use), because a change that admits new inputs can leave
+  later code unable to handle them.
+- If the changed code is internal (a detail, impl or internal namespace, a trait, a helper), do not name it in the
+  program. Reach it through the public API that depends on it, using detection (as above) where needed.
+- Use the exact types and values the diff is about (the new trait's argument types, the new overload's
+  parameters), not stand-ins.
+- Spread the programs over distinct public entry points and overloads, one main idea per program. Do not write
+  several programs that only rename a type or change a literal.
+- Make the programs differ from each other: different inputs, different entry points, different features.
+
+Rules specific to this library:
+- Include the library with #include <nlohmann/json.hpp>. The public API is nlohmann::json (nlohmann::basic_json), nlohmann::ordered_json, json_pointer, json patch/merge_patch and the documented SAX and conversion interfaces. Never use the detail namespace.
+- It is a header-only library: nothing to link. Programs are compiled as C++17.
+- Print JSON values with dump() (compact) or dump(2). Keys of nlohmann::json objects print in sorted order, so output is deterministic; do not depend on insertion order except with ordered_json.
+
+[user]
+# Pull request #5740: Allow SAX parsing of tagged CBOR
+
+## Description
+Fixes #5676.
+
+`sax_parse` rejects CBOR tags because its public signatures did not pass a tag handler to the binary reader. This also rejects binary values with a subtype written by `to_cbor`.
+
+Consolidate `sax_parse` by adding a defaulted `const cbor_tag_handler_t tag_handler = cbor_tag_handler_t::error` parameter directly to the existing `sax_parse` signatures (compatible inputs, iterator pairs, and the deprecated span adapter). The parameter passes the handler to the binary reader, allowing callers to choose `ignore` or `store`. Regression tests cover all three input forms, each handler mode, and the JSON path.
+
+Validation (Docker, GCC 12, C++11):
+
+- `unit-regression3` with multiple headers: 12 cases, 107 assertions passed.
+- `unit-regression3` with the single header: 12 cases, 107 assertions passed.
+- `unit-cbor --test-case="Tagged values"`: 1 case, 209 assertions passed.
+- Regenerated the single header with the repository amalgamation script and formatted with AStyle 3.4.13.
+
+- [x] Changes are described with the cause and fix.
+- [x] The existing issue is referenced.
+- [ ] OSS-Fuzz issue: not applicable.
+- [ ] Code coverage remains at 100%: not measured locally; the new branches have regression coverage.
+- [x] Documentation is updated.
+- [x] Ran `make amalgamate`: ran its amalgamation script and pinned formatter directly.
+
+## Commit message
+* Allow SAX parsing of tagged CBOR
+
+Signed-off-by: Tyagiquamar <mohdquamartyagi@gmail.com>
+
+* Consolidate sax_parse overloads with default tag_handler parameter
+
+Signed-off-by: Tyagiquamar <mohdquamartyagi@gmail.com>
+
+* Add version history entry for tag_handler in sax_parse documentation
+
+---------
+
+Signed-off-by: Tyagiquamar <mohdquamartyagi@gmail.com>
+Signed-off-by: Niels Lohmann <mail@nlohmann.me>
+Co-authored-by: Niels Lohmann <mail@nlohmann.me>
+
+## Linked issue #5676: sax_parse cannot read CBOR that contains tags, including binary values with a subtype written by to_cbor
+### Description
+
+[`sax_parse`](https://json.nlohmann.me/api/basic_json/sax_parse/) supports CBOR input, but it has no parameter for a [`cbor_tag_handler_t`](https://json.nlohmann.me/api/basic_json/cbor_tag_handler_t/). The CBOR reader therefore always runs with the default `cbor_tag_handler_t::error`, so any CBOR document that contains a tag fails with parse_error.112. That includes the output of `to_cbor` for every binary value with a subtype, because the writer stores subtypes as tags 0xD8..0xDB ([cbor.md](https://github.com/nlohmann/json/blob/633de8e44bbbc29383d72f8c920343ea5d1eaa21/docs/mkdocs/docs/features/binary_formats/cbor.md?plain=1#L60)).
+
+`from_cbor` has the same default, but it takes a `tag_handler` argument, and the documentation tells users to pass `ignore` or `store` ([cbor.md](https://github.com/nlohmann/json/blob/633de8e44bbbc29383d72f8c920343ea5d1eaa21/docs/mkdocs/docs/features/binary_formats/cbor.md?plain=1#L204)). With `sax_parse` there is no such way, so tagged CBOR cannot be processed with the SAX interface at all. Tags are common in real-world CBOR, for example for date/time, bignums and URIs.
+
+The underlying `detail::binary_reader::sax_parse` already takes the handler ([binary_reader.hpp](https://github.com/nlohmann/json/blob/633de8e44bbbc29383d72f8c920343ea5d1eaa21/include/nlohmann/detail/input/binary_reader.hpp#L134-L137)). The three public `basic_json::sax_parse` overloads just don't forward one ([json.hpp](https://github.com/nlohmann/json/blob/633de8e44bbbc29383d72f8c920343ea5d1eaa21/include/nlohmann/json.hpp#L4984-L5036)).
+
+**Possible fix (untested):**
+
+- Add a trailing `const cbor_tag_handler_t tag_handler = cbor_tag_handler_t::error` parameter to the three `sax_parse` overloads and pass it to `binary_reader::sax_parse`.
+- Alternatively, add CBOR-specific overloads, since the parameter only matters for CBOR, much like `ignore_comments` and `ignore_trailing_commas` only matter for JSON.
+
+Neither changes behavior for existing callers.
+
+Re
+[... truncated, 3345 more characters]
+
+## Discussion before merge
+- nlohmann: Thanks for the PR! I merged `develop` into your branch (857d3baaa) to resolve conflicts with #5737 and #5745. Two things changed besides the conflict markers, so please pull before pushing again:
+
+- On develop, `binary_reader` now gets the input format when it is constructed, so `binary_reader::sax_parse` no longer takes a `format` argument. I updated your three new call sites in `include/nlohmann/json.hpp` to `.sax_parse(sax, strict, tag_handler)`.
+- #5737 wrapped the deprecated span-adapter `sax_parse` overload in `#pragma clang diagnostic ignored "-Wdocumentation-deprecated-sync"`. Your two new deprecated overloads are now inside that block as well.
+
+`single_include` is regenerated. The CBOR "Tagged values" tests (209 assertions), unit-regression3 and unit-class_parser pass locally.
+
+(This comment was written by Claude Code.)
+- Tyagiquamar: Updated to consolidate the \sax_parse\ functions by adding the default \	ag_handler = cbor_tag_handler_t::error\ parameter directly to the existing signatures instead of having separate overloads. Documentation and \single_include\ have been regenerated, and all test suites pass locally in Docker.
+- Tyagiquamar: Merged \develop\ into the branch, added the version history entry for \	ag_handler\ in \docs/mkdocs/docs/api/basic_json/sax_parse.md\, verified amalgamation and formatting, and updated the PR description.
+- gregmarr: Can the handling just be added as new parameters to the existing functions?  Since this is a header-only library, we only need to preserve source compatibility, not binary.
+- nlohmann: I agree - this would also halve the code in this PR.
+- Tyagiquamar: Addressed in 5a3606080: tag_handler is now a defaulted final parameter on the three existing sax_parse overloads. The extra overloads were removed, and single_include and the API docs match.
+
+## Changed functions (from changes.py)
+- nlohmann::basic_json::sax_parse(InputType &&, SAX *, input_format_t, const bool, const bool, const bool, const cbor_tag_handler_t) (public)
+- nlohmann::basic_json::sax_parse(IteratorType, SentinelType, SAX *, input_format_t, const bool, const bool, const bool, const cbor_tag_handler_t) (public)
+- nlohmann::basic_json::sax_parse(detail::span_input_adapter &&, SAX *, input_format_t, const bool, const bool, const bool, const cbor_tag_handler_t) (public)
+- nlohmann::basic_json::sax_parse(InputType &&, SAX *, input_format_t, const bool, const bool, const bool) (public)
+- nlohmann::basic_json::sax_parse(IteratorType, SentinelType, SAX *, input_format_t, const bool, const bool, const bool) (public)
+- nlohmann::basic_json::sax_parse(detail::span_input_adapter &&, SAX *, input_format_t, const bool, const bool, const bool) (public)
+
+## Diff of the library source (before -> after)
+```diff
+diff --git a/include/nlohmann/json.hpp b/include/nlohmann/json.hpp
+index 788cc999c..397b253ad 100644
+--- a/include/nlohmann/json.hpp
++++ b/include/nlohmann/json.hpp
+@@ -5671,12 +5671,13 @@ public:
+                           input_format_t format = input_format_t::json,
+                           const bool strict = true,
+                           const bool ignore_comments = false,
+-                          const bool ignore_trailing_commas = false)
++                          const bool ignore_trailing_commas = false,
++                          const cbor_tag_handler_t tag_handler = cbor_tag_handler_t::error)
+     {
+         auto ia = detail::input_adapter(std::forward<InputType>(i));
+         return format == input_format_t::json
+                ? parser(std::move(ia), nullptr, true, ignore_comments, ignore_trailing_commas).sax_parse(sax, strict)
+-               : detail::binary_reader<basic_json, decltype(ia), SAX>(std::move(ia), format).sax_parse(sax, strict);
++               : detail::binary_reader<basic_json, decltype(ia), SAX>(std::move(ia), format).sax_parse(sax, strict, tag_handler);
+     }
+ 
+     /// @brief generate SAX events (iterator pair, or iterator+sentinel pair for C++20 ranges support)
+@@ -5688,12 +5689,13 @@ public:
+                           input_format_t format = input_format_t::json,
+                           const bool strict = true,
+                           const bool ignore_comments = false,
+-                          const bool ignore_trailing_commas = false)
++                          const bool ignore_trailing_commas = false,
++                          const cbor_tag_handler_t tag_handler = cbor_tag_handler_t::error)
+     {
+         auto ia = detail::input_adapter(std::move(first), std::move(last));
+         return format == input_format_t::json
+                ? parser(std::move(ia), nullptr, true, ignore_comments, ignore_trailing_commas).sax_parse(sax, strict)
+-               : detail::binary_reader<basic_json, decltype(ia), SAX>(std::move(ia), format).sax_parse(sax, strict);
++               : detail::binary_reader<basic_json, decltype(ia), SAX>(std::move(ia), format).sax_parse(sax, strict, tag_handler);
+     }
+ 
+     /// @brief generate SAX events
+@@ -5721,7 +5723,8 @@ public:
+                           input_format_t format = input_format_t::json,
+                           const bool strict = true,
+                           const bool ignore_comments = false,
+-                          const bool ignore_trailing_commas = false)
++                          const bool ignore_trailing_commas = false,
++                          const cbor_tag_handler_t tag_handler = cbor_tag_handler_t::error)
+ #if JSON_DELETE_DEPRECATED_FUNCTIONS
+     = delete;
+ #else
+@@ -5731,7 +5734,7 @@ public:
+                // NOLINTNEXTLINE(hicpp-move-const-arg,performance-move-const-arg)
+                ? parser(std::move(ia), nullptr, true, ignore_comments, ignore_trailing_commas).sax_parse(sax, strict)
+                // NOLINTNEXTLINE(hicpp-move-const-arg,performance-move-const-arg)
+-               : detail::binary_reader<basic_json, decltype(ia), SAX>(std::move(ia), format).sax_parse(sax, strict);
++               : detail::binary_reader<basic_json, decltype(ia), SAX>(std::move(ia), format).sax_parse(sax, strict, tag_handler);
+     }
+ #endif
+ #if defined(__clang__)
+```
+
+# Programs to repair
+
+## gen_17.cpp (compile)
+Intent: Verify explicit cbor_tag_handler_t::error mode behaves identical to default parameter.
+COMPILE ERROR. The program fails to compile, the same way against the old and the new library. Fix the error (wrong or missing include, typo, misuse of the public API) and keep the intent: the call under test must stay. Include only headers that exist; if you are unsure a header exists, use the library's main header.
+Compiler errors:
+```
+gen_17.cpp:16:15: error: cannot declare variable ‘sax’ to be of abstract type ‘throw_sax’
+gen_17.cpp:18:34: error: no matching function for call to ‘nlohmann::json_abi_v3_12_0::basic_json<>::sax_parse(std::vector<unsigned char>&, throw_sax*, nlohmann::json_abi_v3_12_0::detail::input_format_t, bool, bool, bool, nlohmann::json_abi_v3_12_0::detail::cbor_tag_handler_t)’
+18 |         nlohmann::json::sax_parse(cbor_data, &sax, nlohmann::json::input_format_t::cbor, true, false, false, nlohmann::json::cbor_tag_handler_t::error);
+18 |         nlohmann::json::sax_parse(cbor_data, &sax, nlohmann::json::input_format_t::cbor, true, false, false, nlohmann::json::cbor_tag_handler_t::error);
+```
+Source:
+```cpp
+#include <nlohmann/json.hpp>
+#include <iostream>
+
+class throw_sax : public nlohmann::json::json_sax_t {
+public:
+    bool parse_error(std::size_t, const std::string&, const nlohmann::json::exception& e) override {
+        std::cout << "parse_error callback: " << e.what() << std::endl;
+        return false;
+    }
+};
+
+int main() {
+    std::vector<uint8_t> cbor_data = {0xc1, 0x02};
+    throw_sax sax;
+    try {
+        nlohmann::json::sax_parse(cbor_data, &sax, nlohmann::json::input_format_t::cbor, true, false, false, nlohmann::json::cbor_tag_handler_t::error);
+    } catch (const std::exception& e) {
+        std::cout << "Exception: " << e.what() << std::endl;
+    }
+    return 0;
+}
+```
+
+## gen_18.cpp (compile)
+Intent: Verify parsing tagged CBOR string value with ignore tag handler.
+COMPILE ERROR. The program fails to compile, the same way against the old and the new library. Fix the error (wrong or missing include, typo, misuse of the public API) and keep the intent: the call under test must stay. Include only headers that exist; if you are unsure a header exists, use the library's main header.
+Compiler errors:
+```
+gen_18.cpp:20:13: error: cannot declare variable ‘sax’ to be of abstract type ‘str_sax’
+gen_18.cpp:22:34: error: no matching function for call to ‘nlohmann::json_abi_v3_12_0::basic_json<>::sax_parse(std::vector<unsigned char>&, str_sax*, nlohmann::json_abi_v3_12_0::detail::input_format_t, bool, bool, bool, nlohmann::json_abi_v3_12_0::detail::cbor_tag_handler_t)’
+```
+Source:
+```cpp
+#include <nlohmann/json.hpp>
+#include <iostream>
+
+class str_sax : public nlohmann::json::json_sax_t {
+public:
+    bool string(string_t& val) override {
+        std::cout << "string: " << val << std::endl;
+        return true;
+    }
+    bool parse_error(std::size_t, const std::string&, const nlohmann::json::exception& e) override {
+        std::cout << "Error: " << e.what() << std::endl;
+        return false;
+    }
+};
+
+int main() {
+    std::vector<uint8_t> cbor_tagged_str = {0xc0, 0x65, 'h', 'e', 'l', 'l', 'o'};
+    str_sax sax;
+    try {
+        nlohmann::json::sax_parse(cbor_tagged_str, &sax, nlohmann::json::input_format_t::cbor, true, false, false, nlohmann::json::cbor_tag_handler_t::ignore);
+    } catch (const std::exception& e) {
+        std::cout << "Exception: " << e.what() << std::endl;
+    }
+    return 0;
+}
+```
+
+## gen_19.cpp (compile)
+Intent: Verify parsing tagged CBOR array value with ignore tag handler.
+COMPILE ERROR. The program fails to compile, the same way against the old and the new library. Fix the error (wrong or missing include, typo, misuse of the public API) and keep the intent: the call under test must stay. Include only headers that exist; if you are unsure a header exists, use the library's main header.
+Compiler errors:
+```
+gen_19.cpp:28:13: error: cannot declare variable ‘sax’ to be of abstract type ‘arr_sax’
+gen_19.cpp:30:34: error: no matching function for call to ‘nlohmann::json_abi_v3_12_0::basic_json<>::sax_parse(std::vector<unsigned char>&, arr_sax*, nlohmann::json_abi_v3_12_0::detail::input_format_t, bool, bool, bool, nlohmann::json_abi_v3_12_0::detail::cbor_tag_handler_t)’
+```
+Source:
+```cpp
+#include <nlohmann/json.hpp>
+#include <iostream>
+
+class arr_sax : public nlohmann::json::json_sax_t {
+public:
+    bool start_array(std::size_t sz) override {
+        std::cout << "start_array: " << sz << std::endl;
+        return true;
+    }
+    bool number_unsigned(number_unsigned_t val) override {
+        std::cout << "elem: " << val << std::endl;
+        return true;
+    }
+    bool end_array() override {
+        std::cout << "end_array" << std::endl;
+        return true;
+    }
+    bool parse_error(std::size_t, const std::string&, const nlohmann::json::exception& e) override {
+        std::cout << "Error: " << e.what() << std::endl;
+        return false;
+    }
+};
+
+int main() {
+    std::vector<uint8_t> cbor_tagged_arr = {0xc1, 0x82, 0x01, 0x02};
+    arr_sax sax;
+    try {
+        nlohmann::json::sax_parse(cbor_tagged_arr, &sax, nlohmann::json::input_format_t::cbor, true, false, false, nlohmann::json::cbor_tag_handler_t::ignore);
+    } catch (const std::exception& e) {
+        std::cout << "Exception: " << e.what() << std::endl;
+    }
+    return 0;
+}
+```
+
+## gen_20.cpp (compile)
+Intent: Verify parsing tagged CBOR map value with ignore tag handler.
+COMPILE ERROR. The program fails to compile, the same way against the old and the new library. Fix the error (wrong or missing include, typo, misuse of the public API) and keep the intent: the call under test must stay. Include only headers that exist; if you are unsure a header exists, use the library's main header.
+Compiler errors:
+```
+gen_20.cpp:32:13: error: cannot declare variable ‘sax’ to be of abstract type ‘map_sax’
+gen_20.cpp:34:34: error: no matching function for call to ‘nlohmann::json_abi_v3_12_0::basic_json<>::sax_parse(std::vector<unsigned char>&, map_sax*, nlohmann::json_abi_v3_12_0::detail::input_format_t, bool, bool, bool, nlohmann::json_abi_v3_12_0::detail::cbor_tag_handler_t)’
+```
+Source:
+```cpp
+#include <nlohmann/json.hpp>
+#include <iostream>
+
+class map_sax : public nlohmann::json::json_sax_t {
+public:
+    bool start_object(std::size_t sz) override {
+        std::cout << "start_object: " << sz << std::endl;
+        return true;
+    }
+    bool key(string_t& k) override {
+        std::cout << "key: " << k << std::endl;
+        return true;
+    }
+    bool number_unsigned(number_unsigned_t val) override {
+        std::cout << "val: " << val << std::endl;
+        return true;
+    }
+    bool end_object() override {
+        std::cout << "end_object" << std::endl;
+        return true;
+    }
+    bool parse_error(std::size_t, const std::string&, const nlohmann::json::exception& e) override {
+        std::cout << "Error: " << e.what() << std::endl;
+        return false;
+    }
+};
+
+int main() {
+    std::vector<uint8_t> cbor_tagged_map = {0xc1, 0xa1, 0x61, 'a', 0x01};
+    map_sax sax;
+    try {
+        nlohmann::json::sax_parse(cbor_tagged_map, &sax, nlohmann::json::input_format_t::cbor, true, false, false, nlohmann::json::cbor_tag_handler_t::ignore);
+    } catch (const std::exception& e) {
+        std::cout << "Exception: " << e.what() << std::endl;
+    }
+    return 0;
+}
+```
+
+## gen_21.cpp (compile)
+Intent: Verify span_input_adapter overload of sax_parse taking json format, strict, ignore_comments, ignore_trailing_commas and tag_handler arguments.
+COMPILE ERROR. The program fails to compile, the same way against the old and the new library. Fix the error (wrong or missing include, typo, misuse of the public API) and keep the intent: the call under test must stay. Include only headers that exist; if you are unsure a header exists, use the library's main header.
+Compiler errors:
+```
+gen_21.cpp:30:25: error: ‘span_input_adapter’ is not a member of ‘nlohmann::json_abi_v3_12_0::json’ {aka ‘nlohmann::json_abi_v3_12_0::basic_json<>’}
+gen_21.cpp:32:56: error: ‘ia’ was not declared in this scope
+```
+Source:
+```cpp
+#include <nlohmann/json.hpp>
+#include <iostream>
+#include <vector>
+
+class null_sax : public nlohmann::json::json_sax_t {
+public:
+    bool null() override { return true; }
+    bool boolean(bool) override { return true; }
+    bool number_integer(number_integer_t) override { return true; }
+    bool number_unsigned(number_unsigned_t) override { return true; }
+    bool number_float(number_float_t, const string_t&) override { return true; }
+    bool string(string_t&) override { return true; }
+    bool binary(binary_t&) override { return true; }
+    bool start_object(std::size_t) override { return true; }
+    bool key(string_t&) override { return true; }
+    bool end_object() override { return true; }
+    bool start_array(std::size_t) override { return true; }
+    bool end_array() override { return true; }
+    bool parse_error(std::size_t, const std::string&, const nlohmann::json::exception& e) override {
+        std::cout << "Parse error: " << e.what() << std::endl;
+        return false;
+    }
+};
+
+int main() {
+    try {
+        std::vector<char> v = {'{', '}', '\0'};
+        nlohmann::json::span_input_adapter ia(v.data(), v.data() + 2);
+        null_sax sax;
+        bool res = nlohmann::json::sax_parse(std::move(ia), &sax, nlohmann::json::input_format_t::json, true, true, true, nlohmann::json::cbor_tag_handler_t::ignore);
+        std::cout << "Result: " << (res ? "true" : "false") << std::endl;
+    } catch (const std::exception& e) {
+        std::cout << "Exception: " << e.what() << std::endl;
+    }
+    return 0;
+}
+```
+
+## gen_22.cpp (detect)
+Intent: Verify iterator pair overload of sax_parse with non-json format (cbor) where tag_handler and other default parameter slots are explicitly passed.
+DETECTION REWRITE. The program fails to compile against the OLD library because the API or type it uses is not accepted there; it compiles against the NEW one. Rewrite it so it compiles against both. Check whether the expression is well-formed with the detection idiom (std::void_t or requires), print that result, and use the expression ONLY inside a function template that depends on the types involved, guarded by `if constexpr`. This matters: `if constexpr` in a plain function such as main() does NOT discard the other branch, so the old library would still fail to compile. Call that function template from main. When the expression is supported, exercise it fully (print every result, wrap throwing calls in try/catch). Keep the same types and inputs. Skeleton:
+```cpp
+template <class J, class K, class = void> struct can_use : std::false_type {};
+template <class J, class K>
+struct can_use<J, K, std::void_t<decltype(std::declval<J&>()[std::declval<K>()])>> : std::true_type {};
+template <class J, class K> void probe(J& j, K&& k) {
+    std::cout << "supported: " << can_use<J, K>::value << "\n";
+    if constexpr (can_use<J, K>::value) { /* use j[k] here, print results */ }
+}
+```
+(Replace the decltype expression with the one under test.)
+Compiler errors:
+```
+gen_22.cpp:32:45: error: no matching function for call to ‘nlohmann::json_abi_v3_12_0::basic_json<>::sax_parse(std::vector<unsigned char>::iterator, std::vector<unsigned char>::iterator, null_sax*, nlohmann::json_abi_v3_12_0::detail::input_format_t, bool, bool, bool, nlohmann::json_abi_v3_12_0::deta
+```
+Source:
+```cpp
+#include <nlohmann/json.hpp>
+#include <iostream>
+#include <vector>
+
+class null_sax : public nlohmann::json::json_sax_t {
+public:
+    bool null() override { return true; }
+    bool boolean(bool) override { return true; }
+    bool number_integer(number_integer_t) override { return true; }
+    bool number_unsigned(number_unsigned_t) override { return true; }
+    bool number_float(number_float_t, const string_t&) override { return true; }
+    bool string(string_t&) override { return true; }
+    bool binary(binary_t&) override { return true; }
+    bool start_object(std::size_t) override { return true; }
+    bool key(string_t&) override { return true; }
+    bool end_object() override { return true; }
+    bool start_array(std::size_t) override { return true; }
+    bool end_array() override { return true; }
+    bool parse_error(std::size_t, const std::string&, const nlohmann::json::exception& e) override {
+        std::cout << "Parse error: " << e.what() << std::endl;
+        return false;
+    }
+};
+
+int main() {
+    try {
+        // CBOR Tag 1 followed by integer 42: 0xc1 (tag 1), 0x1a (uint32) or just 0x2a (int)
+        std::vector<std::uint8_t> data = {0xc1, 0x1a, 0x00, 0x00, 0x00, 0x2a};
+        null_sax sax;
+        bool res = nlohmann::json::sax_parse(data.begin(), data.end(), &sax, nlohmann::json::input_format_t::cbor, true, false, false, nlohmann::json::cbor_tag_handler_t::ignore);
+        std::cout << "Result: " << (res ? "true" : "false") << std::endl;
+    } catch (const std::exception& e) {
+        std::cout << "Exception: " << e.what() << std::endl;
+    }
+    return 0;
+}
+```
+
+## gen_23.cpp (compile)
+Intent: Verify deprecated span adapter overload of sax_parse with cbor format, strict, ignore_comments, ignore_trailing_commas, and tag_handler.
+COMPILE ERROR. The program fails to compile, the same way against the old and the new library. Fix the error (wrong or missing include, typo, misuse of the public API) and keep the intent: the call under test must stay. Include only headers that exist; if you are unsure a header exists, use the library's main header.
+Compiler errors:
+```
+gen_23.cpp:30:25: error: ‘span_input_adapter’ is not a member of ‘nlohmann::json_abi_v3_12_0::json’ {aka ‘nlohmann::json_abi_v3_12_0::basic_json<>’}
+gen_23.cpp:32:56: error: ‘ia’ was not declared in this scope
+```
+Source:
+```cpp
+#include <nlohmann/json.hpp>
+#include <iostream>
+#include <vector>
+
+class null_sax : public nlohmann::json::json_sax_t {
+public:
+    bool null() override { return true; }
+    bool boolean(bool) override { return true; }
+    bool number_integer(number_integer_t) override { return true; }
+    bool number_unsigned(number_unsigned_t) override { return true; }
+    bool number_float(number_float_t, const string_t&) override { return true; }
+    bool string(string_t&) override { return true; }
+    bool binary(binary_t&) override { return true; }
+    bool start_object(std::size_t) override { return true; }
+    bool key(string_t&) override { return true; }
+    bool end_object() override { return true; }
+    bool start_array(std::size_t) override { return true; }
+    bool end_array() override { return true; }
+    bool parse_error(std::size_t, const std::string&, const nlohmann::json::exception& e) override {
+        std::cout << "Parse error: " << e.what() << std::endl;
+        return false;
+    }
+};
+
+int main() {
+    try {
+        std::vector<char> data = {static_cast<char>(0xc1), 0x01};
+        nlohmann::json::span_input_adapter ia(data.data(), data.data() + data.size());
+        null_sax sax;
+        bool res = nlohmann::json::sax_parse(std::move(ia), &sax, nlohmann::json::input_format_t::cbor, true, false, false, nlohmann::json::cbor_tag_handler_t::ignore);
+        std::cout << "Result: " << (res ? "true" : "false") << std::endl;
+    } catch (const std::exception& e) {
+        std::cout << "Exception: " << e.what() << std::endl;
+    }
+    return 0;
+}
+```
+
+## gen_24.cpp (detect)
+Intent: Verify InputStream/InputType template overload of sax_parse passing explicit tag_handler with store mode for cbor input.
+DETECTION REWRITE. The program fails to compile against the OLD library because the API or type it uses is not accepted there; it compiles against the NEW one. Rewrite it so it compiles against both. Check whether the expression is well-formed with the detection idiom (std::void_t or requires), print that result, and use the expression ONLY inside a function template that depends on the types involved, guarded by `if constexpr`. This matters: `if constexpr` in a plain function such as main() does NOT discard the other branch, so the old library would still fail to compile. Call that function template from main. When the expression is supported, exercise it fully (print every result, wrap throwing calls in try/catch). Keep the same types and inputs. Skeleton:
+```cpp
+template <class J, class K, class = void> struct can_use : std::false_type {};
+template <class J, class K>
+struct can_use<J, K, std::void_t<decltype(std::declval<J&>()[std::declval<K>()])>> : std::true_type {};
+template <class J, class K> void probe(J& j, K&& k) {
+    std::cout << "supported: " << can_use<J, K>::value << "\n";
+    if constexpr (can_use<J, K>::value) { /* use j[k] here, print results */ }
+}
+```
+(Replace the decltype expression with the one under test.)
+Compiler errors:
+```
+gen_24.cpp:34:45: error: no matching function for call to ‘nlohmann::json_abi_v3_12_0::basic_json<>::sax_parse(std::stringstream&, null_sax*, nlohmann::json_abi_v3_12_0::detail::input_format_t, bool, bool, bool, nlohmann::json_abi_v3_12_0::detail::cbor_tag_handler_t)’
+```
+Source:
+```cpp
+#include <nlohmann/json.hpp>
+#include <iostream>
+#include <sstream>
+#include <vector>
+
+class null_sax : public nlohmann::json::json_sax_t {
+public:
+    bool null() override { return true; }
+    bool boolean(bool) override { return true; }
+    bool number_integer(number_integer_t) override { return true; }
+    bool number_unsigned(number_unsigned_t) override { return true; }
+    bool number_float(number_float_t, const string_t&) override { return true; }
+    bool string(string_t&) override { return true; }
+    bool binary(binary_t&) override { return true; }
+    bool start_object(std::size_t) override { return true; }
+    bool key(string_t&) override { return true; }
+    bool end_object() override { return true; }
+    bool start_array(std::size_t) override { return true; }
+    bool end_array() override { return true; }
+    bool parse_error(std::size_t, const std::string&, const nlohmann::json::exception& e) override {
+        std::cout << "Parse error: " << e.what() << std::endl;
+        return false;
+    }
+};
+
+int main() {
+    try {
+        std::string s(1, static_cast<char>(0xc1));
+        s.push_back(0x01);
+        std::stringstream ss(s);
+        null_sax sax;
+        bool res = nlohmann::json::sax_parse(ss, &sax, nlohmann::json::input_format_t::cbor, true, false, false, nlohmann::json::cbor_tag_handler_t::store);
+        std::cout << "Result: " << (res ? "true" : "false") << std::endl;
+    } catch (const std::exception& e) {
+        std::cout << "Exception: " << e.what() << std::endl;
+    }
+    return 0;
+}
+```
+
+## gen_25.cpp (detect)
+Intent: Verify iterator pair overload of sax_parse with json input format, using ignore_comments, ignore_trailing_commas and tag_handler arguments simultaneously.
+DETECTION REWRITE. The program fails to compile against the OLD library because the API or type it uses is not accepted there; it compiles against the NEW one. Rewrite it so it compiles against both. Check whether the expression is well-formed with the detection idiom (std::void_t or requires), print that result, and use the expression ONLY inside a function template that depends on the types involved, guarded by `if constexpr`. This matters: `if constexpr` in a plain function such as main() does NOT discard the other branch, so the old library would still fail to compile. Call that function template from main. When the expression is supported, exercise it fully (print every result, wrap throwing calls in try/catch). Keep the same types and inputs. Skeleton:
+```cpp
+template <class J, class K, class = void> struct can_use : std::false_type {};
+template <class J, class K>
+struct can_use<J, K, std::void_t<decltype(std::declval<J&>()[std::declval<K>()])>> : std::true_type {};
+template <class J, class K> void probe(J& j, K&& k) {
+    std::cout << "supported: " << can_use<J, K>::value << "\n";
+    if constexpr (can_use<J, K>::value) { /* use j[k] here, print results */ }
+}
+```
+(Replace the decltype expression with the one under test.)
+Compiler errors:
+```
+gen_25.cpp:31:45: error: no matching function for call to ‘nlohmann::json_abi_v3_12_0::basic_json<>::sax_parse(std::__cxx11::basic_string<char>::iterator, std::__cxx11::basic_string<char>::iterator, null_sax*, nlohmann::json_abi_v3_12_0::detail::input_format_t, bool, bool, bool, nlohmann::json_abi_v
+```
+Source:
+```cpp
+#include <nlohmann/json.hpp>
+#include <iostream>
+#include <string>
+
+class null_sax : public nlohmann::json::json_sax_t {
+public:
+    bool null() override { return true; }
+    bool boolean(bool) override { return true; }
+    bool number_integer(number_integer_t) override { return true; }
+    bool number_unsigned(number_unsigned_t) override { return true; }
+    bool number_float(number_float_t, const string_t&) override { return true; }
+    bool string(string_t&) override { return true; }
+    bool binary(binary_t&) override { return true; }
+    bool start_object(std::size_t) override { return true; }
+    bool key(string_t&) override { return true; }
+    bool end_object() override { return true; }
+    bool start_array(std::size_t) override { return true; }
+    bool end_array() override { return true; }
+    bool parse_error(std::size_t, const std::string&, const nlohmann::json::exception& e) override {
+        std::cout << "Parse error: " << e.what() << std::endl;
+        return false;
+    }
+};
+
+int main() {
+    try {
+        std::string json_str = "{/* comment */}";
+        null_sax sax;
+        bool res = nlohmann::json::sax_parse(json_str.begin(), json_str.end(), &sax, nlohmann::json::input_format_t::json, true, true, true, nlohmann::json::cbor_tag_handler_t::ignore);
+        std::cout << "Result: " << (res ? "true" : "false") << std::endl;
+    } catch (const std::exception& e) {
+        std::cout << "Exception: " << e.what() << std::endl;
+    }
+    return 0;
+}
+```
+
+## gen_26.cpp (compile)
+Intent: Verify that parsing tagged CBOR with cbor_tag_handler_t::ignore successfully passes through without error.
+COMPILE ERROR. The program fails to compile, the same way against the old and the new library. Fix the error (wrong or missing include, typo, misuse of the public API) and keep the intent: the call under test must stay. Include only headers that exist; if you are unsure a header exists, use the library's main header.
+Compiler errors:
+```
+gen_26.cpp:51:10: error: no matching function for call to ‘probe(std::vector<unsigned char>&, counting_sax*, nlohmann::json_abi_v3_12_0::detail::input_format_t, bool, bool, bool)’
+```
+Source:
+```cpp
+#include <nlohmann/json.hpp>
+#include <iostream>
+
+class counting_sax : public nlohmann::json::json_sax_t {
+public:
+    int count = 0;
+    bool null() override { count++; return true; }
+    bool boolean(bool) override { count++; return true; }
+    bool number_integer(number_integer_t) override { count++; return true; }
+    bool number_unsigned(number_unsigned_t) override { count++; return true; }
+    bool number_float(number_float_t, const string_t&) override { count++; return true; }
+    bool string(string_t&) override { count++; return true; }
+    bool binary(binary_t&) override { count++; return true; }
+    bool start_object(std::size_t) override { count++; return true; }
+    bool key(string_t&) override { count++; return true; }
+    bool end_object() override { count++; return true; }
+    bool start_array(std::size_t) override { count++; return true; }
+    bool end_array() override { count++; return true; }
+    bool parse_error(std::size_t, const std::string&, const nlohmann::json::exception& e) override {
+        std::cout << "Error: " << e.what() << std::endl;
+        return false;
+    }
+};
+
+template <class J, class K, class L, class M, class N, class O, class P, class = void>
+struct can_use : std::false_type {};
+
+template <class J, class K, class L, class M, class N, class O, class P>
+struct can_use<J, K, L, M, N, O, P, std::void_t<decltype(J::sax_parse(std::declval<K>(), std::declval<L>(), std::declval<M>(), std::declval<N>(), std::declval<O>(), std::declval<P>(), std::declval<nlohmann::json::cbor_tag_handler_t>()))>> : std::true_type {};
+
+template <class J, class K, class L, class M, class N, class O, class P>
+void probe(K&& k, L&& l, M m, N n, O o, P p) {
+    std::cout << "supported: " << can_use<nlohmann::json, K, L, M, N, O, P>::value << "\n";
+    if constexpr (can_use<nlohmann::json, K, L, M, N, O, P>::value) {
+        try {
+            bool res = nlohmann::json::sax_parse(std::forward<K>(k), std::forward<L>(l), m, n, o, p, nlohmann::json::cbor_tag_handler_t::ignore);
+            std::cout << "Success: " << std::boolalpha << res << "\n";
+        } catch (const std::exception& e) {
+            std::cout << "Exception: " << e.what() << std::endl;
+        }
+    } else {
+        std::cout << "Skipped unsupported overload\n";
+    }
+}
+
+int main() {
+    std::vector<uint8_t> cbor_tagged = {0xc1, 0x01};
+    counting_sax sax;
+    probe(cbor_tagged, &sax, nlohmann::json::input_format_t::cbor, true, false, false);
+    return 0;
+}
+```
+
+## gen_27.cpp (compile)
+Intent: Verify that parsing tagged CBOR with cbor_tag_handler_t::store uses the store handler mode.
+COMPILE ERROR. The program fails to compile, the same way against the old and the new library. Fix the error (wrong or missing include, typo, misuse of the public API) and keep the intent: the call under test must stay. Include only headers that exist; if you are unsure a header exists, use the library's main header.
+Compiler errors:
+```
+gen_27.cpp:50:10: error: no matching function for call to ‘probe(std::vector<unsigned char>&, store_sax*, nlohmann::json_abi_v3_12_0::detail::input_format_t, bool, bool, bool)’
+```
+Source:
+```cpp
+#include <nlohmann/json.hpp>
+#include <iostream>
+
+class store_sax : public nlohmann::json::json_sax_t {
+public:
+    bool null() override { return true; }
+    bool boolean(bool) override { return true; }
+    bool number_integer(number_integer_t) override { return true; }
+    bool number_unsigned(number_unsigned_t) override { return true; }
+    bool number_float(number_float_t, const string_t&) override { return true; }
+    bool string(string_t&) override { return true; }
+    bool binary(binary_t&) override { return true; }
+    bool start_object(std::size_t) override { std::cout << "start_object\n"; return true; }
+    bool key(string_t& val) override { std::cout << "key: " << val << "\n"; return true; }
+    bool end_object() override { std::cout << "end_object\n"; return true; }
+    bool start_array(std::size_t) override { std::cout << "start_array\n"; return true; }
+    bool end_array() override { std::cout << "end_array\n"; return true; }
+    bool parse_error(std::size_t, const std::string&, const nlohmann::json::exception& e) override {
+        std::cout << "Error: " << e.what() << std::endl;
+        return false;
+    }
+};
+
+template <class J, class K, class L, class M, class N, class O, class P, class = void>
+struct can_use : std::false_type {};
+
+template <class J, class K, class L, class M, class N, class O, class P>
+struct can_use<J, K, L, M, N, O, P, std::void_t<decltype(J::sax_parse(std::declval<K>(), std::declval<L>(), std::declval<M>(), std::declval<N>(), std::declval<O>(), std::declval<P>(), std::declval<nlohmann::json::cbor_tag_handler_t>()))>> : std::true_type {};
+
+template <class J, class K, class L, class M, class N, class O, class P>
+void probe(K&& k, L&& l, M m, N n, O o, P p) {
+    std::cout << "supported: " << can_use<nlohmann::json, K, L, M, N, O, P>::value << "\n";
+    if constexpr (can_use<nlohmann::json, K, L, M, N, O, P>::value) {
+        try {
+            bool res = nlohmann::json::sax_parse(std::forward<K>(k), std::forward<L>(l), m, n, o, p, nlohmann::json::cbor_tag_handler_t::store);
+            std::cout << "Result: " << std::boolalpha << res << std::endl;
+        } catch (const std::exception& e) {
+            std::cout << "Exception: " << e.what() << std::endl;
+        }
+    } else {
+        std::cout << "Skipped unsupported overload\n";
+    }
+}
+
+int main() {
+    std::vector<uint8_t> cbor_tagged = {0xc1, 0x01};
+    store_sax sax;
+    probe(cbor_tagged, &sax, nlohmann::json::input_format_t::cbor, true, false, false);
+    return 0;
+}
+```
+
+## gen_28.cpp (compile)
+Intent: Verify iterator pair overload of sax_parse with tagged CBOR and ignore tag handler.
+COMPILE ERROR. The program fails to compile, the same way against the old and the new library. Fix the error (wrong or missing include, typo, misuse of the public API) and keep the intent: the call under test must stay. Include only headers that exist; if you are unsure a header exists, use the library's main header.
+Compiler errors:
+```
+gen_28.cpp:38:16: error: cannot declare variable ‘sax’ to be of abstract type ‘simple_sax’
+gen_28.cpp:39:10: error: no matching function for call to ‘probe(std::vector<unsigned char>::iterator, std::vector<unsigned char>::iterator, simple_sax*, nlohmann::json_abi_v3_12_0::detail::input_format_t, bool, bool, bool)’
+```
+Source:
+```cpp
+#include <nlohmann/json.hpp>
+#include <iostream>
+
+class simple_sax : public nlohmann::json::json_sax_t {
+public:
+    bool number_unsigned(number_unsigned_t val) override {
+        std::cout << "unsigned: " << val << "\n";
+        return true;
+    }
+    bool parse_error(std::size_t, const std::string&, const nlohmann::json::exception& e) override {
+        std::cout << "Error: " << e.what() << "\n";
+        return false;
+    }
+};
+
+template <class J, class K, class L, class M, class N, class O, class P, class Q, class R, class = void>
+struct can_use : std::false_type {};
+
+template <class J, class K, class L, class M, class N, class O, class P, class Q, class R>
+struct can_use<J, K, L, M, N, O, P, Q, R, std::void_t<decltype(J::sax_parse(std::declval<K>(), std::declval<L>(), std::declval<M>(), std::declval<N>(), std::declval<O>(), std::declval<P>(), std::declval<Q>(), std::declval<R>(), std::declval<nlohmann::json::cbor_tag_handler_t>()))>> : std::true_type {};
+
+template <class K, class L, class M, class N, class O, class P, class Q, class R>
+void probe(K k1, K k2, L&& l, M m, N n, O o, P p, Q q) {
+    std::cout << "supported: " << can_use<nlohmann::json, K, K, L&&, M, N, O, P, Q>::value << "\n";
+    if constexpr (can_use<nlohmann::json, K, K, L&&, M, N, O, P, Q>::value) {
+        try {
+            nlohmann::json::sax_parse(k1, k2, std::forward<L>(l), m, n, o, p, q, nlohmann::json::cbor_tag_handler_t::ignore);
+        } catch (const std::exception& e) {
+            std::cout << "Exception: " << e.what() << "\n";
+        }
+    }
+}
+
+int main() {
+    std::vector<uint8_t> cbor_tagged = {0xc1, 0x0a};
+    simple_sax sax;
+    probe(cbor_tagged.begin(), cbor_tagged.end(), &sax, nlohmann::json::input_format_t::cbor, true, false, false);
+    return 0;
+}
+```
+
+## gen_29.cpp (compile)
+Intent: Verify span input adapter overload of sax_parse with tagged CBOR and ignore tag handler.
+COMPILE ERROR. The program fails to compile, the same way against the old and the new library. Fix the error (wrong or missing include, typo, misuse of the public API) and keep the intent: the call under test must stay. Include only headers that exist; if you are unsure a header exists, use the library's main header.
+Compiler errors:
+```
+gen_29.cpp:38:16: error: cannot declare variable ‘sax’ to be of abstract type ‘simple_sax’
+gen_29.cpp:40:10: error: no matching function for call to ‘probe(std::remove_reference<nlohmann::json_abi_v3_12_0::detail::span_input_adapter&>::type, simple_sax*, nlohmann::json_abi_v3_12_0::detail::input_format_t, bool, bool, bool)’
+```
+Source:
+```cpp
+#include <nlohmann/json.hpp>
+#include <iostream>
+
+class simple_sax : public nlohmann::json::json_sax_t {
+public:
+    bool number_unsigned(number_unsigned_t val) override {
+        std::cout << "unsigned: " << val << "\n";
+        return true;
+    }
+    bool parse_error(std::size_t, const std::string&, const nlohmann::json::exception& e) override {
+        std::cout << "Error: " << e.what() << "\n";
+        return false;
+    }
+};
+
+template <class J, class K, class L, class M, class N, class O, class P, class Q, class = void>
+struct can_use : std::false_type {};
+
+template <class J, class K, class L, class M, class N, class O, class P, class Q>
+struct can_use<J, K, L, M, N, O, P, Q, std::void_t<decltype(J::sax_parse(std::declval<K>(), std::declval<L>(), std::declval<M>(), std::declval<N>(), std::declval<O>(), std::declval<P>(), std::declval<Q>(), std::declval<nlohmann::json::cbor_tag_handler_t>()))>> : std::true_type {};
+
+template <class K, class L, class M, class N, class O, class P, class Q>
+void probe(K k, L&& l, M m, N n, O o, P p, Q q) {
+    std::cout << "supported: " << can_use<nlohmann::json, K, L&&, M, N, O, P, Q>::value << "\n";
+    if constexpr (can_use<nlohmann::json, K, L&&, M, N, O, P, Q>::value) {
+        try {
+            nlohmann::json::sax_parse(std::forward<K>(k), std::forward<L>(l), m, n, o, p, q, nlohmann::json::cbor_tag_handler_t::ignore);
+        } catch (const std::exception& e) {
+            std::cout << "Exception: " << e.what() << "\n";
+        }
+    }
+}
+
+int main() {
+    std::vector<uint8_t> cbor_tagged = {0xc1, 0x14};
+    simple_sax sax;
+    nlohmann::detail::span_input_adapter adapter(cbor_tagged.data(), cbor_tagged.size());
+    probe(std::move(adapter), &sax, nlohmann::json::input_format_t::cbor, true, false, false);
+    return 0;
+}
+```
+
+## gen_30.cpp (compile)
+Intent: Verify sax_parse can read binary values with a subtype written by to_cbor using appropriate tag handlers.
+COMPILE ERROR. The program fails to compile, the same way against the old and the new library. Fix the error (wrong or missing include, typo, misuse of the public API) and keep the intent: the call under test must stay. Include only headers that exist; if you are unsure a header exists, use the library's main header.
+Compiler errors:
+```
+gen_30.cpp:39:13: error: cannot declare variable ‘sax’ to be of abstract type ‘bin_sax’
+```
+Source:
+```cpp
+#include <nlohmann/json.hpp>
+#include <iostream>
+
+class bin_sax : public nlohmann::json::json_sax_t {
+public:
+    bool binary(binary_t& val) override {
+        std::cout << "binary size: " << val.size() << " subtype: " << std::boolalpha << val.has_subtype() << "\n";
+        return true;
+    }
+    bool parse_error(std::size_t, const std::string&, const nlohmann::json::exception& e) override {
+        std::cout << "Error: " << e.what() << "\n";
+        return false;
+    }
+};
+
+template <class J, class K, class L, class M, class N, class O, class P, class = void>
+struct can_use : std::false_type {};
+
+template <class J, class K, class L, class M, class N, class O, class P>
+struct can_use<J, K, L, M, N, O, P, std::void_t<decltype(J::sax_parse(std::declval<K>(), std::declval<L>(), std::declval<M>(), std::declval<N>(), std::declval<O>(), std::declval<P>(), std::declval<nlohmann::json::cbor_tag_handler_t>()))>> : std::true_type {};
+
+template <class K, class L, class M, class N, class O, class P>
+void probe(K&& k, L&& l, M m, N n, O o, P p) {
+    std::cout << "supported: " << can_use<nlohmann::json, K, L, M, N, O, P>::value << "\n";
+    if constexpr (can_use<nlohmann::json, K, L, M, N, O, P>::value) {
+        try {
+            nlohmann::json::sax_parse(std::forward<K>(k), std::forward<L>(l), m, n, o, p, nlohmann::json::cbor_tag_handler_t::ignore);
+        } catch (const std::exception& e) {
+            std::cout << "Exception: " << e.what() << "\n";
+        }
+    }
+}
+
+int main() {
+    nlohmann::json j = nlohmann::json::binary({0x01, 0x02}, 42);
+    std::vector<uint8_t> cbor_data = nlohmann::json::to_cbor(j);
+    bin_sax sax;
+    probe(cbor_data, &sax, nlohmann::json::input_format_t::cbor, true, false, false);
+    return 0;
+}
+```
+
+## gen_31.cpp (compile)
+Intent: Verify that passing a tag handler to JSON format sax_parse works correctly without affecting JSON parsing.
+COMPILE ERROR. The program fails to compile, the same way against the old and the new library. Fix the error (wrong or missing include, typo, misuse of the public API) and keep the intent: the call under test must stay. Include only headers that exist; if you are unsure a header exists, use the library's main header.
+Compiler errors:
+```
+gen_31.cpp:38:14: error: cannot declare variable ‘sax’ to be of abstract type ‘json_sax’
+```
+Source:
+```cpp
+#include <nlohmann/json.hpp>
+#include <iostream>
+
+class json_sax : public nlohmann::json::json_sax_t {
+public:
+    bool number_integer(number_integer_t val) override {
+        std::cout << "int: " << val << "\n";
+        return true;
+    }
+    bool parse_error(std::size_t, const std::string&, const nlohmann::json::exception& e) override {
+        std::cout << "Error: " << e.what() << "\n";
+        return false;
+    }
+};
+
+template <class J, class K, class L, class M, class N, class O, class P, class = void>
+struct can_use : std::false_type {};
+
+template <class J, class K, class L, class M, class N, class O, class P>
+struct can_use<J, K, L, M, N, O, P, std::void_t<decltype(J::sax_parse(std::declval<K>(), std::declval<L>(), std::declval<M>(), std::declval<N>(), std::declval<O>(), std::declval<P>(), std::declval<nlohmann::json::cbor_tag_handler_t>()))>> : std::true_type {};
+
+template <class K, class L, class M, class N, class O, class P>
+void probe(K&& k, L&& l, M m, N n, O o, P p) {
+    std::cout << "supported: " << can_use<nlohmann::json, K, L, M, N, O, P>::value << "\n";
+    if constexpr (can_use<nlohmann::json, K, L, M, N, O, P>::value) {
+        try {
+            nlohmann::json::sax_parse(std::forward<K>(k), std::forward<L>(l), m, n, o, p, nlohmann::json::cbor_tag_handler_t::ignore);
+        } catch (const std::exception& e) {
+            std::cout << "Exception: " << e.what() << "\n";
+        }
+    }
+}
+
+int main() {
+    std::string json_str = "123";
+    json_sax sax;
+    probe(json_str, &sax, nlohmann::json::input_format_t::json, true, false, false);
+    return 0;
+}
+```
+
+# Task
+Return JSON with a "fixes" array: one item per program above, with "file" (exactly as given) and "code" (the complete repaired program, standalone, with its own int main). Do not return programs you cannot repair.

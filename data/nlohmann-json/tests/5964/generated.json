@@ -1,0 +1,166 @@
+{
+  "target": "nlohmann-json",
+  "pr": 5964,
+  "model": "gemini-3.5-flash-lite",
+  "prompt_sha256": "b9cad5b2afc9ba386ff57a83cd5d77c2c59a28e0ac10bd91aead9eb612edd920",
+  "n_requested": 20,
+  "dropped": 1,
+  "usage": {
+    "promptTokenCount": 6101,
+    "candidatesTokenCount": 2852,
+    "totalTokenCount": 8953,
+    "promptTokensDetails": [
+      {
+        "modality": "TEXT",
+        "tokenCount": 6101
+      }
+    ],
+    "serviceTier": "standard"
+  },
+  "tests": [
+    {
+      "file": "gen_01.cpp",
+      "name": "dump_17_digit_signed_integer",
+      "intent": "Verify serialization of 17-digit positive signed integers handled by the new fast path.",
+      "round": 0
+    },
+    {
+      "file": "gen_02.cpp",
+      "name": "dump_18_digit_signed_integer",
+      "intent": "Verify serialization of 18-digit positive signed integers handled by the new fast path.",
+      "round": 0
+    },
+    {
+      "file": "gen_03.cpp",
+      "name": "dump_19_digit_signed_integer",
+      "intent": "Verify serialization of 19-digit positive signed integers handled by the new fast path.",
+      "round": 0
+    },
+    {
+      "file": "gen_04.cpp",
+      "name": "dump_20_digit_max_int64",
+      "intent": "Verify serialization of the maximum 64-bit signed integer (9223372036854775807) using the fast path.",
+      "round": 0
+    },
+    {
+      "file": "gen_05.cpp",
+      "name": "dump_negative_17_digit_integer",
+      "intent": "Verify negative 17-digit integers use sign removal and then hit the 17-digit fast path.",
+      "round": 0
+    },
+    {
+      "file": "gen_06.cpp",
+      "name": "dump_negative_20_digit_min_int64",
+      "intent": "Verify the minimum 64-bit signed integer (-9223372036854775808) correctly dumps through the magnitude path.",
+      "round": 0
+    },
+    {
+      "file": "gen_07.cpp",
+      "name": "dump_17_digit_unsigned_integer",
+      "intent": "Verify 17-digit unsigned integer serialization with the new fast path.",
+      "round": 0
+    },
+    {
+      "file": "gen_08.cpp",
+      "name": "dump_max_uint64",
+      "intent": "Verify maximum 64-bit unsigned integer (18446744073709551615ULL) serialization using the fast path.",
+      "round": 0
+    },
+    {
+      "file": "gen_09.cpp",
+      "name": "dump_boundary_16_digit_integer",
+      "intent": "Verify upper boundary of the old 16-digit fast path (9999999999999999ULL) transitions correctly.",
+      "round": 0
+    },
+    {
+      "file": "gen_10.cpp",
+      "name": "dump_small_integer_reference",
+      "intent": "Verify small integers continue to dump correctly after the changes to serializer.",
+      "round": 0
+    },
+    {
+      "file": "gen_11.cpp",
+      "name": "dump_zero_integer",
+      "intent": "Verify zero integer dumps correctly.",
+      "round": 0
+    },
+    {
+      "file": "gen_12.cpp",
+      "name": "dump_various_digit_counts",
+      "intent": "Loop through various digit lengths around 16 to 20 digits to ensure consistent string output.",
+      "round": 0
+    },
+    {
+      "file": "gen_13.cpp",
+      "name": "ordered_json_18_digit_integer",
+      "intent": "Verify ordered_json also correctly handles 18-digit integers via the same underlying serializer path.",
+      "round": 0
+    },
+    {
+      "file": "gen_14.cpp",
+      "name": "dump_integer_stream_insertion",
+      "intent": "Verify stream insertion operator output for a 17-digit integer matches dump().",
+      "round": 0
+    },
+    {
+      "file": "gen_15.cpp",
+      "name": "dump_integer_pretty_print",
+      "intent": "Verify that pretty-printing indentation does not interfere with the 17-digit integer fast path output.",
+      "round": 0
+    },
+    {
+      "file": "gen_16.cpp",
+      "name": "dump_integer_array_elements",
+      "intent": "Verify array serialization containing multiple 17 to 20 digit integers.",
+      "round": 0
+    },
+    {
+      "file": "gen_17.cpp",
+      "name": "dump_integer_object_values",
+      "intent": "Verify object serialization containing 17 to 20 digit integers as values.",
+      "round": 0
+    },
+    {
+      "file": "gen_18.cpp",
+      "name": "dump_max_digits_all_nines_19",
+      "intent": "Verify serialization of 19-digit number consisting entirely of nines.",
+      "round": 0
+    },
+    {
+      "file": "gen_19.cpp",
+      "name": "dump_max_digits_all_nines_20",
+      "intent": "Verify serialization of 20-digit number consisting entirely of nines within 64-bit limits.",
+      "round": 0
+    },
+    {
+      "file": "gen_20.cpp",
+      "name": "gen_20",
+      "intent": "Exercise magnitude_fits_64_bits with std::false_type overload by passing a custom number type or manipulating basic_json with a wider number magnitude type if possible, or trigger through explicit instantiation/calls.",
+      "round": 1
+    },
+    {
+      "file": "gen_21.cpp",
+      "name": "gen_21",
+      "intent": "Explicitly test helper function checks for magnitude fitting 64 bits using large numbers near the boundary.",
+      "round": 1
+    },
+    {
+      "file": "gen_22.cpp",
+      "name": "gen_22",
+      "intent": "Check 17 to 20 digit numbers with basic_json configured or interacted via standard numeric limits traits check.",
+      "round": 1
+    },
+    {
+      "file": "gen_23.cpp",
+      "name": "gen_23",
+      "intent": "Serialize a 20-digit number that forces the serializer's magnitude_fits_64_bits evaluation path.",
+      "round": 1
+    },
+    {
+      "file": "gen_24.cpp",
+      "name": "gen_24",
+      "intent": "Dump various unsigned 64-bit integer limits and large numbers to ensure the serializer templates are fully instantiated.",
+      "round": 1
+    }
+  ]
+}

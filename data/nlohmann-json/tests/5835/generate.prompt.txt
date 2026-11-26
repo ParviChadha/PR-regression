@@ -1,0 +1,741 @@
+[system]
+You write test programs that probe a C++ library for behavioral changes made by one pull request.
+Each program is compiled and run twice, once against the library before the change and once after, and the two
+outputs are compared. Your job is to produce programs whose output reveals whether the change altered behavior,
+including side effects the author did not intend.
+
+Rules for every program:
+- It is standalone: one file with its own int main(), compiled as C++17, printing results to stdout.
+- Use only the library's documented public API. Never include internal headers or use detail/impl namespaces,
+  private members or undocumented macros.
+- Do not judge results (no assert, no expected-value comparisons): just print what the library returns. Print
+  enough to make differences visible, one fact per line.
+- Output must be deterministic. Never print pointers or addresses, uninitialized data, the order of
+  hash-based containers, timings, thread ids, random values, file paths or environment data. Print floating point
+  values with an explicit precision. No input, files, network, threads, clocks or randomness.
+- Wrap calls that may throw in try/catch and print the exception's type and message, so an exception is an
+  observable result. Do not crash on purpose.
+- Aim at the code the diff changes. Prefer calls that compile against both the old and the new library; one or two
+  programs may use an API the PR adds. Cover ordinary inputs and edge cases (empty, minimum and maximum values,
+  boundaries, special values, nesting, unusual types) and also neighbouring behavior the change could disturb.
+- When the diff changes which types or inputs an API accepts or rejects (constraints, overloads, traits,
+  conversions), test it with the detection idiom (std::void_t or requires) and `if constexpr`, so the program
+  compiles against both versions, prints whether the expression is well-formed, and exercises it when it is.
+  Accepting an input is not enough: also use it through every entry point that should follow (const and
+  non-const, read, write, insert, erase, lookup, nested use), because a change that admits new inputs can leave
+  later code unable to handle them.
+- If the changed code is internal (a detail, impl or internal namespace, a trait, a helper), do not name it in the
+  program. Reach it through the public API that depends on it, using detection (as above) where needed.
+- Use the exact types and values the diff is about (the new trait's argument types, the new overload's
+  parameters), not stand-ins.
+- Spread the programs over distinct public entry points and overloads, one main idea per program. Do not write
+  several programs that only rename a type or change a literal.
+- Make the programs differ from each other: different inputs, different entry points, different features.
+
+Rules specific to this library:
+- Include the library with #include <nlohmann/json.hpp>. The public API is nlohmann::json (nlohmann::basic_json), nlohmann::ordered_json, json_pointer, json patch/merge_patch and the documented SAX and conversion interfaces. Never use the detail namespace.
+- It is a header-only library: nothing to link. Programs are compiled as C++17.
+- Print JSON values with dump() (compact) or dump(2). Keys of nlohmann::json objects print in sorted order, so output is deterministic; do not depend on insertion order except with ordered_json.
+
+[user]
+# Pull request #5835: Speed up container destruction, iterator access and diff()
+
+## Description
+Three API-neutral speedups found in a performance survey of the non-parse API.
+
+1. **Destroy fast path**: a freshly entered container whose children are all leaves is freed in one go (`all_children_leaves`); the walk stays non-recursive and allocation-free (tested with `ulimit -s 512` on 1M–2M deep nesting). Object of 100k ints: 41.8 → 17.4 ns/member (std::map dtor itself: 15 ns); flat array of 1M doubles 2.1 → 1.8 ns; documents unchanged.
+2. **`iter_impl` fast paths**: array, then object, are checked before the type switch in `++`, `--` (prefix and postfix), `*`, `->` (arrays and objects) and `==`; `<`, `+=` and `-` stay on the switch; the cold throw in `==` moved to a `NEVER_INLINE` member. Range-for over an array 2.5 → 1.3 ns/element, `items()` over an array 2.2 → 1.0, range-for over an object 4.9 → 4.1.
+3. **`diff()`**: one `find` per source key (storing `vector<const basic_json*>`), target pass skipped when no keys were added, "add" operations built lazily, children compared with `==` before their path is built; same in the iterative (deep) path. `diff(a, a + 1% changes)`: citm 1.09 → 0.70 ms, twitter 0.92 → 0.41 ms; `diff({}, citm)` 3.18 → 1.62 ms.
+
+Reverse range iteration (`rbegin()`..`rend()`, Apple clang -O2 -DNDEBUG, best of 15): over a 1M-element array develop 3.5 ns/element, PR before this update 1.9, after 1.9 (the `--` fast path adds nothing measurable there, the reverse iterator was already well inlined); over a 200k-member object develop 8.2, before 6.2, after 6.5 (within noise).
+
+Tests added: reverse iteration (`--`, `rbegin`/`rend`) and object `->` for `json` and `ordered_json`, comparing iterators of different containers (unit-iterators1); `diff()` round trips with reordered keys and nested add/remove/replace for both types (unit-json_patch); destruction of empty, mixed and 5000-deep containers for both types (unit-constructor2). Run with `-fsanitize=address,undefined`, also with `-DJSON_DIAGNOSTICS=1` for diagnostics.
+
+Verification: differential fuzz of `diff` (40k random pairs, `json` and `ordered_json`, keys with `~` and `/`, reordered keys, deep nesting through the iterative path) is byte-identical to develop and `patch(diff)` round-trips. Unit tests iterators1/2, items, class_iterator, class_const_iterator, json_patch, regression2, class_parser, allocator, ordered_json/ordered_map, custom-object-key-type, diagnostics, merge_patch pass, also with `-DJSON_DIAGNOSTICS=1`.
+
+## Breaking changes
+None. No public interface, ABI or layout change; `diff()` output is identical.
+
+🤖 Generated with [Claude Code](https://claude.com/claude-code)
+
+## Commit message
+* Speed up container destruction, iterator access and diff()
+
+Signed-off-by: Niels Lohmann <mail@nlohmann.me>
+
+* Destroy the first levels of a value by recursion
+
+The pointer-reversing walk in destroy_container() avoids the call stack but
+moves a value around for every container it visits. Recurse for the first
+recursion_depth_limit() levels instead - no allocation, no thread-local, a
+bounded frame - and hand anything deeper to the walk. Destroy twitter
+0.49 -> 0.36 ms, citm 0.80 -> 0.74 ms (3.12.0: 0.47 / 1.00).
+
+Signed-off-by: Niels Lohmann <mail@nlohmann.me>
+
+---------
+
+Signed-off-by: Niels Lohmann <mail@nlohmann.me>
+
+## Discussion before merge
+- nlohmann: Written by Claude Code on behalf of @nlohmann. Pushed f4fd1e12e: `operator--` (prefix; postfix goes through it) and object `operator->` now have array/object fast paths like `++`; `<`, `+=`, `-` and the throws are untouched. Fixed the `free_container` comment (the container is empty *or* holds only leaves) and added a weaker assert for that. New tests in unit-iterators1 (reverse iteration, object `->`, cross-container comparison), unit-json_patch (diff round trips, reordered `ordered_json`) and unit-constructor2 (destruction, 5000-deep) pass under ASan/UBSan, also with JSON_DIAGNOSTICS. Reverse iteration over 1M array elements: develop 3.5 ns, previous head 1.9, now 1.9 (no further gain measurable).
+- gregmarr: Why duplicate the code from the switch here?  Was this supposed to be a move?  If so, why?
+- gregmarr: Why duplicate the code from the switch here?  Was this supposed to be a move?  If so, why?
+- gregmarr: Why duplicate the code from the switch here?  Was this supposed to be a move?  If so, why?
+- gregmarr: Why duplicate the code from the switch here?  Was this supposed to be a move?  If so, why?
+- nlohmann: Written by Claude Code on behalf of @nlohmann. You're right, the duplication was unintended: it is now a move (commit 7cc6f3223). The array/object branches sit in front of the switch so the hot path inlines (range-for over an array 2.5 → 1.3 ns/element); the switch bodies for those cases are gone, and what remained only handled primitives, so it is now plain code. No behaviour change.
+
+## Changed functions (from changes.py)
+- nlohmann::detail::iter_impl::operator*() (private); reached from the public API through: nlohmann::basic_json::begin(), nlohmann::basic_json::cbegin(), nlohmann::basic_json::cend(), nlohmann::basic_json::end(), nlohmann::basic_json::find(const typename object_t::key_type &), nlohmann::basic_json::insert(const_iterator, basic_json<...> &&), nlohmann::basic_json::insert(const_iterator, const basic_json<...> &), nlohmann::basic_json::insert(const_iterator, initializer_list_t), nlohmann::basic_json::insert(const_iterator, const_iterator), nlohmann::basic_json::insert(const_iterator, const_iterator, const_iterator)
+- nlohmann::detail::iter_impl::operator->() (private); reached from the public API through: nlohmann::basic_json::begin(), nlohmann::basic_json::cbegin(), nlohmann::basic_json::cend(), nlohmann::basic_json::end(), nlohmann::basic_json::find(const typename object_t::key_type &), nlohmann::basic_json::insert(const_iterator, basic_json<...> &&), nlohmann::basic_json::insert(const_iterator, const basic_json<...> &), nlohmann::basic_json::insert(const_iterator, initializer_list_t), nlohmann::basic_json::insert(const_iterator, const_iterator), nlohmann::basic_json::insert(const_iterator, const_iterator, const_iterator)
+- nlohmann::detail::iter_impl::operator++() (private); reached from the public API through: nlohmann::basic_json::begin(), nlohmann::basic_json::cbegin(), nlohmann::basic_json::cend(), nlohmann::basic_json::end(), nlohmann::basic_json::find(const typename object_t::key_type &), nlohmann::basic_json::insert(const_iterator, basic_json<...> &&), nlohmann::basic_json::insert(const_iterator, const basic_json<...> &), nlohmann::basic_json::insert(const_iterator, initializer_list_t), nlohmann::basic_json::insert(const_iterator, const_iterator), nlohmann::basic_json::insert(const_iterator, const_iterator, const_iterator)
+- nlohmann::detail::iter_impl::operator--() (private); reached from the public API through: nlohmann::basic_json::begin(), nlohmann::basic_json::cbegin(), nlohmann::basic_json::cend(), nlohmann::basic_json::end(), nlohmann::basic_json::find(const typename object_t::key_type &), nlohmann::basic_json::insert(const_iterator, basic_json<...> &&), nlohmann::basic_json::insert(const_iterator, const basic_json<...> &), nlohmann::basic_json::insert(const_iterator, initializer_list_t), nlohmann::basic_json::insert(const_iterator, const_iterator), nlohmann::basic_json::insert(const_iterator, const_iterator, const_iterator)
+- nlohmann::detail::iter_impl::operator==(const IterImpl &) (private); reached from the public API through: nlohmann::basic_json::begin(), nlohmann::basic_json::cbegin(), nlohmann::basic_json::cend(), nlohmann::basic_json::end(), nlohmann::basic_json::find(const typename object_t::key_type &), nlohmann::basic_json::insert(const_iterator, basic_json<...> &&), nlohmann::basic_json::insert(const_iterator, const basic_json<...> &), nlohmann::basic_json::insert(const_iterator, initializer_list_t), nlohmann::basic_json::insert(const_iterator, const_iterator), nlohmann::basic_json::insert(const_iterator, const_iterator, const_iterator)
+- nlohmann::basic_json::diff_recursively(basic_json<...> &, const basic_json<...> &, const basic_json<...> &, const string_t &, const std::size_t) (private); reached from the public API through: nlohmann::basic_json::diff(const basic_json<...> &, const basic_json<...> &, const string_t &)
+- nlohmann::basic_json::json_value (private); reached from the public API through: nlohmann::operator<<(std::ostream &, const basic_json<...> &), nlohmann::operator<<(basic_json<...> &, std::istream &), nlohmann::operator>>(std::istream &, basic_json<...> &), nlohmann::operator>>(const basic_json<...> &, std::ostream &), nlohmann::format_as(const basic_json<...> &), nlohmann::to_string(const basic_json<...> &), nlohmann::operator!=(const_reference, ScalarType), nlohmann::operator!=(ScalarType, const_reference), nlohmann::operator<(const_reference, ScalarType), nlohmann::operator<(ScalarType, const_reference)
+- nlohmann::basic_json::json_value::destroy_container(value_t) (private); reached from the public API through: nlohmann::operator<<(std::ostream &, const basic_json<...> &), nlohmann::operator<<(basic_json<...> &, std::istream &), nlohmann::operator>>(std::istream &, basic_json<...> &), nlohmann::operator>>(const basic_json<...> &, std::ostream &), nlohmann::format_as(const basic_json<...> &), nlohmann::to_string(const basic_json<...> &), nlohmann::operator!=(const_reference, ScalarType), nlohmann::operator!=(ScalarType, const_reference), nlohmann::operator<(const_reference, ScalarType), nlohmann::operator<(ScalarType, const_reference)
+- nlohmann::basic_json::diff_iteratively(basic_json<...> &, const basic_json<...> &, const basic_json<...> &, const string_t &) (private); reached from the public API through: nlohmann::basic_json::diff(const basic_json<...> &, const basic_json<...> &, const string_t &)
+- nlohmann::basic_json::diff_frame (private); reached from the public API through: nlohmann::basic_json::diff(const basic_json<...> &, const basic_json<...> &, const string_t &)
+- nlohmann::basic_json::json_value::free_container(basic_json<...> &) (private); reached from the public API through: nlohmann::operator<<(std::ostream &, const basic_json<...> &), nlohmann::operator<<(basic_json<...> &, std::istream &), nlohmann::operator>>(std::istream &, basic_json<...> &), nlohmann::operator>>(const basic_json<...> &, std::ostream &), nlohmann::format_as(const basic_json<...> &), nlohmann::to_string(const basic_json<...> &), nlohmann::operator!=(const_reference, ScalarType), nlohmann::operator!=(ScalarType, const_reference), nlohmann::operator<(const_reference, ScalarType), nlohmann::operator<(ScalarType, const_reference)
+- nlohmann::basic_json::diff_object_keys(basic_json<...> &, const basic_json<...> &, const basic_json<...> &, const string_t &, std::vector<const basic_json<...> *> &, std::vector<const_iterator> &) (private); reached from the public API through: nlohmann::basic_json::diff(const basic_json<...> &, const basic_json<...> &, const string_t &)
+- nlohmann::basic_json::json_value::destroy_bounded(basic_json<...> &, std::size_t) (private); reached from the public API through: nlohmann::operator<<(std::ostream &, const basic_json<...> &), nlohmann::operator<<(basic_json<...> &, std::istream &), nlohmann::operator>>(std::istream &, basic_json<...> &), nlohmann::operator>>(const basic_json<...> &, std::ostream &), nlohmann::format_as(const basic_json<...> &), nlohmann::to_string(const basic_json<...> &), nlohmann::operator!=(const_reference, ScalarType), nlohmann::operator!=(ScalarType, const_reference), nlohmann::operator<(const_reference, ScalarType), nlohmann::operator<(ScalarType, const_reference)
+- nlohmann::basic_json::diff_unequal(basic_json<...> &, const basic_json<...> &, const basic_json<...> &, const string_t &, const std::size_t) (private); reached from the public API through: nlohmann::basic_json::diff(const basic_json<...> &, const basic_json<...> &, const string_t &)
+- nlohmann::basic_json::json_value::all_children_leaves(const basic_json<...> &) (private); reached from the public API through: nlohmann::operator<<(std::ostream &, const basic_json<...> &), nlohmann::operator<<(basic_json<...> &, std::istream &), nlohmann::operator>>(std::istream &, basic_json<...> &), nlohmann::operator>>(const basic_json<...> &, std::ostream &), nlohmann::format_as(const basic_json<...> &), nlohmann::to_string(const basic_json<...> &), nlohmann::operator!=(const_reference, ScalarType), nlohmann::operator!=(ScalarType, const_reference), nlohmann::operator<(const_reference, ScalarType), nlohmann::operator<(ScalarType, const_reference)
+- nlohmann::basic_json::json_value::destroy_walk(basic_json<...> &) (private); reached from the public API through: nlohmann::operator<<(std::ostream &, const basic_json<...> &), nlohmann::operator<<(basic_json<...> &, std::istream &), nlohmann::operator>>(std::istream &, basic_json<...> &), nlohmann::operator>>(const basic_json<...> &, std::ostream &), nlohmann::format_as(const basic_json<...> &), nlohmann::to_string(const basic_json<...> &), nlohmann::operator!=(const_reference, ScalarType), nlohmann::operator!=(ScalarType, const_reference), nlohmann::operator<(const_reference, ScalarType), nlohmann::operator<(ScalarType, const_reference)
+- nlohmann::basic_json::diff_added(basic_json<...> &, const std::vector<const_iterator> &, const string_t &) (private); reached from the public API through: nlohmann::basic_json::diff(const basic_json<...> &, const basic_json<...> &, const string_t &)
+- nlohmann::basic_json::diff_frame::added (private)
+- nlohmann::basic_json::diff_frame::target_values (private)
+- nlohmann::basic_json::diff_object_keys(basic_json<...> &, const basic_json<...> &, const basic_json<...> &, const string_t &, std::vector<typename object_t::key_type> &, basic_json<...> &) (private); reached from the public API through: nlohmann::basic_json::diff(const basic_json<...> &, const basic_json<...> &, const string_t &)
+- nlohmann::basic_json::diff_frame::added_ops (private)
+- nlohmann::basic_json::diff_frame::common_keys (private)
+- nlohmann::basic_json::diff_frame::next_common (private)
+- nlohmann::basic_json (public)
+
+## Diff of the library source (before -> after)
+```diff
+diff --git a/include/nlohmann/detail/iterators/iter_impl.hpp b/include/nlohmann/detail/iterators/iter_impl.hpp
+index 81eae570d..b7c1df24a 100644
+--- a/include/nlohmann/detail/iterators/iter_impl.hpp
++++ b/include/nlohmann/detail/iterators/iter_impl.hpp
+@@ -294,40 +294,25 @@ class iter_impl // NOLINT(cppcoreguidelines-special-member-functions,hicpp-speci
+     {
+         JSON_ASSERT(m_object != nullptr);
+ 
+-        switch (m_object->m_data.m_type)
++        if (JSON_HEDLEY_LIKELY(m_object->m_data.m_type == value_t::array))
+         {
+-            case value_t::object:
+-            {
+-                JSON_ASSERT(m_it.object_iterator != m_object->m_data.m_value.object->end());
+-                return m_it.object_iterator->second;
+-            }
+-
+-            case value_t::array:
+-            {
+-                JSON_ASSERT(m_it.array_iterator != m_object->m_data.m_value.array->end());
+-                return *m_it.array_iterator;
+-            }
+-
+-            case value_t::null:
+-                throw_cannot_get_value();
++            JSON_ASSERT(m_it.array_iterator != m_object->m_data.m_value.array->end());
++            return *m_it.array_iterator;
++        }
+ 
+-            case value_t::string:
+-            case value_t::boolean:
+-            case value_t::number_integer:
+-            case value_t::number_unsigned:
+-            case value_t::number_float:
+-            case value_t::binary:
+-            case value_t::discarded:
+-            default:
+-            {
+-                if (JSON_HEDLEY_LIKELY(m_it.primitive_iterator.is_begin()))
+-                {
+-                    return *m_object;
+-                }
++        if (JSON_HEDLEY_LIKELY(m_object->m_data.m_type == value_t::object))
++        {
++            JSON_ASSERT(m_it.object_iterator != m_object->m_data.m_value.object->end());
++            return m_it.object_iterator->second;
++        }
+ 
+-                throw_cannot_get_value();
+-            }
++        // neither array nor object: a primitive value (null has no value to point to)
++        if (JSON_HEDLEY_LIKELY(m_object->m_data.m_type != value_t::null && m_it.primitive_iterator.is_begin()))
++        {
++            return *m_object;
+         }
++
++        throw_cannot_get_value();
+     }
+ 
+     /*!
+@@ -338,38 +323,25 @@ class iter_impl // NOLINT(cppcoreguidelines-special-member-functions,hicpp-speci
+     {
+         JSON_ASSERT(m_object != nullptr);
+ 
+-        switch (m_object->m_data.m_type)
++        if (JSON_HEDLEY_LIKELY(m_object->m_data.m_type == value_t::array))
+         {
+-            case value_t::object:
+-            {
+-                JSON_ASSERT(m_it.object_iterator != m_object->m_data.m_value.object->end());
+-                return &(m_it.object_iterator->second);
+-            }
+-
+-            case value_t::array:
+-            {
+-                JSON_ASSERT(m_it.array_iterator != m_object->m_data.m_value.array->end());
+-                return &*m_it.array_iterator;
+-            }
++            JSON_ASSERT(m_it.array_iterator != m_object->m_data.m_value.array->end());
++            return &*m_it.array_iterator;
++        }
+ 
+-            case value_t::null:
+-            case value_t::string:
+-            case value_t::boolean:
+-            case value_t::number_integer:
+-            case value_t::number_unsigned:
+-            case value_t::number_float:
+-            case value_t::binary:
+-            case value_t::discarded:
+-            default:
+-            {
+-                if (JSON_HEDLEY_LIKELY(m_it.primitive_iterator.is_begin()))
+-                {
+-                    return m_object;
+-                }
++        if (JSON_HEDLEY_LIKELY(m_object->m_data.m_type == value_t::object))
++        {
++            JSON_ASSERT(m_it.object_iterator != m_object->m_data.m_value.object->end());
++            return &(m_it.object_iterator->second);
++        }
+ 
+-                throw_cannot_get_value();
+-            }
++        // neither array nor object: a primitive value
++        if (JSON_HEDLEY_LIKELY(m_it.primitive_iterator.is_begin()))
++        {
++            return m_object;
+         }
++
++        throw_cannot_get_value();
+     }
+ 
+     /*!
+@@ -391,35 +363,20 @@ class iter_impl // NOLINT(cppcoreguidelines-special-member-functions,hicpp-speci
+     {
+         JSON_ASSERT(m_object != nullptr);
+ 
+-        switch (m_object->m_data.m_type)
++        if (JSON_HEDLEY_LIKELY(m_object->m_data.m_type == value_t::array))
+         {
+-            case value_t::object:
+-            {
+-                std::advance(m_it.object_iterator, 1);
+-                break;
+-            }
+-
+-            case value_t::array:
+-            {
+-                std::advance(m_it.array_iterator, 1);
+-                break;
+-            }
++            ++m_it.array_iterator;
++            return *this;
++        }
+ 
+-            case value_t::null:
+-            case value_t::string:
+-            case value_t::boolean:
+-            case value_t::number_integer:
+-            case value_t::number_unsigned:
+-            case value_t::number_float:
+-            case value_t::binary:
+-            case value_t::discarded:
+-            default:
+-            {
+-                ++m_it.primitive_iterator;
+-                break;
+-            }
++        if (JSON_HEDLEY_LIKELY(m_object->m_data.m_type == value_t::object))
++        {
++            std::advance(m_it.object_iterator, 1);
++            return *this;
+         }
+ 
++        // neither array nor object: a primitive value
++        ++m_it.primitive_iterator;
+         return *this;
+     }
+ 
+@@ -442,35 +399,20 @@ class iter_impl // NOLINT(cppcoreguidelines-special-member-functions,hicpp-speci
+     {
+         JSON_ASSERT(m_object != nullptr);
+ 
+-        switch (m_object->m_data.m_type)
++        if (JSON_HEDLEY_LIKELY(m_object->m_data.m_type == value_t::array))
+         {
+-            case value_t::object:
+-            {
+-                std::advance(m_it.object_iterator, -1);
+-                break;
+-            }
+-
+-            case value_t::array:
+-            {
+-                std::advance(m_it.array_iterator, -1);
+-                break;
+-            }
++            --m_it.array_iterator;
++            return *this;
++        }
+ 
+-            case value_t::null:
+-            case value_t::string:
+-            case value_t::boolean:
+-            case value_t::number_integer:
+-            case value_t::number_unsigned:
+-            case value_t::number_float:
+-            case value_t::binary:
+-            case value_t::discarded:
+-            default:
+-            {
+-                --m_it.primitive_iterator;
+-                break;
+-            }
++        if (JSON_HEDLEY_LIKELY(m_object->m_data.m_type == value_t::object))
++        {
++            std::advance(m_it.object_iterator, -1);
++            return *this;
+         }
+ 
++        // neither array nor object: a primitive value
++        --m_it.primitive_iterator;
+         return *this;
+     }
+ 
+@@ -493,25 +435,18 @@ class iter_impl // NOLINT(cppcoreguidelines-special-member-functions,hicpp-speci
+             return true;
+         }
+ 
+-        switch (m_object->m_data.m_type)
++        if (JSON_HEDLEY_LIKELY(m_object->m_data.m_type == value_t::array))
+         {
+-            case value_t::object:
+-                return (m_it.object_iterator == other.m_it.object_iterator);
+-
+-            case value_t::array:
+-                return (m_it.array_iterator == other.m_it.array_iterator);
++            return (m_it.array_iterator == other.m_it.array_iterator);
++        }
+ 
+-            case value_t::null:
+-            case value_t::string:
+-            case value_t::boolean:
+-            case value_t::number_integer:
+-            case value_t::number_unsigned:
+-            case value_t::number_float:
+-            case value_t::binary:
+-            case value_t::discarded:
+-            default:
+-                return (m_it.primitive_iterator == other.m_it.primitive_iterator);
++        if (JSON_HEDLEY_LIKELY(m_object->m_data.m_type == value_t::object))
++        {
++            return (m_it.object_iterator == other.m_it.object_iterator);
+         }
++
++        // neither array nor object: a primitive value
++        return (m_it.primitive_iterator == other.m_it.primitive_iterator);
+     }
+ 
+     /*!
+diff --git a/include/nlohmann/json.hpp b/include/nlohmann/json.hpp
+index f51b0642b..5bc4d2014 100644
+--- a/include/nlohmann/json.hpp
++++ b/include/nlohmann/json.hpp
+@@ -734,6 +734,34 @@ private:
+             }
+         }
+ 
++        // true if no child of the non-empty array/object v has children of
++        // its own, i.e. v can be freed in one go (its destructor then
++        // destroys scalars and empty containers only, so it recurses at most
++        // one level deep); stops at the first structured child it meets
++        static bool all_children_leaves(const basic_json& v) noexcept
++        {
++            if (v.m_data.m_type == value_t::array)
++            {
++                const auto& a = *v.m_data.m_value.array;
++                for (auto it = a.rbegin(); it != a.rend(); ++it)
++                {
++                    if (!has_no_children(*it))
++                    {
++                        return false;
++                    }
++                }
++                return true;
++            }
++            for (const auto& el : *v.m_data.m_value.object)
++            {
++                if (!has_no_children(el.second))
++                {
++                    return false;
++                }
++            }
++            return true;
++        }
++
+         // The walk in destroy_container() may take the children of a
+         // container in any order, as long as it picks the same child again
+         // while that container is not modified in between. Arrays and
+@@ -789,15 +817,16 @@ private:
+             }
+         }
+ 
+-        // deallocates the (already empty) array/object held by v; this is
+-        // the same allocator-based free the old recursive implementation
+-        // used, just factored out so every level of the walk in destroy()
+-        // can share it
++        // deallocates the array/object held by v, which is either empty or
++        // holds only scalars and empty containers (so its destructor
++        // recurses at most one level deep); this is the same allocator-based
++        // free the old recursive implementation used, just factored out so
++        // every level of the walk in destroy() can share it
+         static void free_container(basic_json& v) noexcept
+         {
++            JSON_ASSERT(has_no_children(v) || all_children_leaves(v));
+             if (v.m_data.m_type == value_t::array)
+             {
+-                JSON_ASSERT(v.m_data.m_value.array->empty());
+                 AllocatorType<array_t> alloc;
+                 std::allocator_traits<decltype(alloc)>::destroy(alloc, v.m_data.m_value.array);
+                 std::allocator_traits<decltype(alloc)>::deallocate(alloc, v.m_data.m_value.array, 1);
+@@ -805,7 +834,6 @@ private:
+             else
+             {
+                 JSON_ASSERT(v.m_data.m_type == value_t::object);
+-                JSON_ASSERT(v.m_data.m_value.object->empty());
+                 AllocatorType<object_t> alloc;
+                 std::allocator_traits<decltype(alloc)>::destroy(alloc, v.m_data.m_value.object);
+                 std::allocator_traits<decltype(alloc)>::deallocate(alloc, v.m_data.m_value.object, 1);
+@@ -850,7 +878,58 @@ public:
+                 return;
+             }
+ 
+-            // Destroy the tree without recursing per nesting level and
++            // This json_value is not itself a basic_json, so the top-level
++            // container is first moved into a local stand-in ("cur"); a
++            // default-constructed basic_json has a null pointer in its
++            // m_value (see data::m_value's initializer), so swapping it
++            // with *this leaves this union's own pointer null, and it is
++            // never looked at or freed a second time.
++            basic_json cur;
++            cur.m_data.m_type = t;
++            using std::swap;
++            swap(cur.m_data.m_value, *this);
++
++            destroy_bounded(cur, 0);
++        }
++
++        // Destroy the array/object v, whose children are destroyed first.
++        // The first recursion_depth_limit() levels are destroyed by plain
++        // recursion, which is the fastest way and cannot throw; anything
++        // nested deeper is handed to destroy_walk(), which uses no call stack.
++        static void destroy_bounded(basic_json& v, std::size_t depth) noexcept
++        {
++            if (JSON_HEDLEY_UNLIKELY(depth >= detail::recursion_depth_limit()))
++            {
++                destroy_walk(v);
++                return;
++            }
++
++            if (v.m_data.m_type == value_t::array)
++            {
++                for (auto& child : *v.m_data.m_value.array)
++                {
++                    if (child.m_data.m_type == value_t::array || child.m_data.m_type == value_t::object)
++                    {
++                        destroy_bounded(child, depth + 1);
++                    }
++                }
++            }
++            else
++            {
++                for (auto& child : *v.m_data.m_value.object)
++                {
++                    if (child.second.m_data.m_type == value_t::array || child.second.m_data.m_type == value_t::object)
++                    {
++                        destroy_bounded(child.second, depth + 1);
++                    }
++                }
++            }
++
++            // only leaves and already destroyed (null) children remain
++            free_container(v);
++        }
++
++            // Destroy the tree below top without recursing per nesting level and
+             // without any heap allocation: a heap-allocated flattening
+             // stack (the previous implementation) can itself throw
+             // bad_alloc, which would escape this noexcept destructor and
+@@ -874,16 +953,24 @@ public:
+             // pointer in its m_value (see data::m_value's initializer),
+             // so swapping it with *this leaves this union's own pointer
+             // null, and it is never looked at or freed a second time.
++        static void destroy_walk(basic_json& top) noexcept
++        {
+             basic_json cur;
+-            cur.m_data.m_type = t;
+-            using std::swap;
+-            swap(cur.m_data.m_value, *this);
++            take(cur, top);
+ 
+             basic_json prev; // value_t::null: no parent
+ 
++            // true right after cur was entered: its children have not been
++            // looked at yet. If none of them has children of its own, cur is
++            // freed in one go instead of child by child; this is tried once
++            // per container, so the walk stays linear.
++            bool fresh = true;
++
+             while (true)
+             {
+-                if (has_no_children(cur))
++                const bool fresh_now = fresh;
++                fresh = false;
++                if (has_no_children(cur) || (fresh_now && all_children_leaves(cur)))
+                 {
+                     if (prev.m_data.m_type == value_t::null)
+                     {
+@@ -922,6 +1009,7 @@ public:
+                 take(cur_child_ref, prev);
+                 take(prev, cur);
+                 take(cur, tmp);
++                fresh = true;
+             }
+         }
+ 
+@@ -7142,12 +7230,11 @@ public:
+         std::size_t index = 0;
+         /// objects: the next member of source to look at
+         const_iterator member{}; // NOLINT(readability-redundant-member-init)
+-        /// objects: the keys common to both, in source's order
+-        std::vector<typename object_t::key_type> common_keys{}; // NOLINT(readability-redundant-member-init)
+-        /// objects: the next entry of common_keys
+-        std::size_t next_common = 0;
+-        /// objects: the "add" operations for keys only target has
+-        basic_json added_ops{}; // NOLINT(readability-redundant-member-init)
++        /// objects: for each member of source (in order), its value in
++        /// target, or nullptr if target has no such key; `index` is the next
++        std::vector<const basic_json*> target_values{}; // NOLINT(readability-redundant-member-init)
++        /// objects: the members only target has, in target's order
++        std::vector<const_iterator> added{}; // NOLINT(readability-redundant-member-init)
+     };
+ 
+     // The operations of a diff are built by the functions below rather than
+@@ -7203,111 +7290,113 @@ public:
+         }
+     }
+ 
++    /// @brief appends the "add" operations for the members @a added to @a result
++    static void diff_added(basic_json& result, const std::vector<const_iterator>& added, const string_t& path)
++    {
++        for (const auto& it : added)
++        {
++            diff_add(result, detail::concat<string_t>(path, '/', detail::escape(it.key())), it.value());
++        }
++    }
++
+     /*!
+     @brief compare the keys of objects @a source and @a target
+ 
+     If object_t does not keep its members in insertion order, or if the keys
+     both objects have are in the same order in both, and the keys only
+-    @a target has come after them, stores the keys common to both in
+-    source's order in @a common_keys, stores the "add" operations for the keys
+-    only @a target has in @a added_ops, and returns true: the caller then diffs
+-    the objects member by member. Otherwise, appends operations that remove
+-    every member of @a source and add every member of @a target to @a result,
+-    and returns false.
++    @a target has come after them, stores in @a target_values, for each member
++    of source in order, its value in target (nullptr for a key target does not
++    have), stores the members only target has in @a added, and returns true:
++    the caller then diffs the objects member by member. Otherwise, appends
++    operations that remove every member of @a source and add every member of
++    @a target to @a result, and returns false.
+     */
+     static bool diff_object_keys(basic_json& result, const basic_json& source, const basic_json& target,
+-                                 const string_t& path, std::vector<typename object_t::key_type>& common_keys,
+-                                 basic_json& added_ops)
+-    {
+-        // first pass: record, for every source key, whether it is
+-        // common to both objects (in source's iteration order) or
+-        // was deleted (i.e., in source but not in target) -- this is
+-        // a by-product of the target.find() call already needed to
+-        // tell the two cases apart, so it adds no extra lookups. The
+-        // "remove" ops themselves are emitted later, interleaved
+-        // with the per-key diffs in the caller's fast path, to match
+-        // source's original iteration order (as the original,
+-        // pre-reordering-aware implementation did) instead of
+-        // grouping all removes before all per-key diffs.
+-        std::vector<typename object_t::key_type> common_keys_source_order;
++                                 const string_t& path, std::vector<const basic_json*>& target_values,
++                                 std::vector<const_iterator>& added)
++    {
++        // first pass: one lookup per source key
++        target_values.reserve(source.size());
++        std::size_t common = 0;
+         for (auto it = source.cbegin(); it != source.cend(); ++it)
+         {
+-            if (target.find(it.key()) != target.end())
+-            {
+-                common_keys_source_order.push_back(it.key());
+-            }
+-        }
+-
+-        // second pass: find keys that were added (i.e., in target but
+-        // not in source), and record the keys common to both, in
+-        // target's iteration order -- again a by-product of the
+-        // source.find() call already needed to detect added keys. At
+-        // the same time, determine whether every added key comes
+-        // after every common key in target's order (a precondition
+-        // for the fast path, which only ever appends new keys
+-        // at the very end). Both are only needed for an object_t that
+-        // keeps its members in insertion order, such as the one
+-        // backing `ordered_json`; for any other object_t, the fast
+-        // path is
+[... truncated, 12018 more characters]
+```
+
+## Existing upstream tests that call the changed code (for style and API usage)
+// Upstream tests at the PR's parent commit 6a27b9acb that use the changed code.
+// Names searched (test lines using each): basic_json (35), begin (699), cbegin (195), cend (127), end (556), find (161), insert (257), diff (0), format_as (23), to_string (97), operator<< (83), operator>> (79), operator!= (54), operator< (201), diff_recursively (0), json_value (11), destroy_container (0), diff_iteratively (0), diff_frame (0), free_container (0), diff_object_keys (0), destroy_bounded (0), diff_unequal (0), all_children_leaves (0), destroy_walk (0), diff_added (0), added (3), target_values (0), added_ops (0), common_keys (0), next_common (0)
+
+// ---- tests/src/unit-json_patch.cpp:1936-1948  (uses: added, operator<)
+    SECTION("json: added key sorts before an existing common key")
+    {
+        const json source = {{"a", 1}, {"c", {{"x", 1}, {"y", 2}}}};
+        const json target = {{"a", 1}, {"b", 0}, {"c", {{"x", 1}, {"y", 2}}}};
+
+        const json patch = json::diff(source, target);
+
+        // only the new key is added; "a" and "c" are left alone instead of
+        // being removed and re-added
+        const json expected = R"([{"op": "add", "path": "/b", "value": 0}])"_json;
+        CHECK(patch == expected);
+        CHECK(source.patch(patch) == target);
+    }
+
+// ---- tests/src/unit-merge_diff.cpp:862-873  (uses: added, operator<)
+        SECTION("added members follow target order")
+        {
+            auto original = ordered_json::parse(R"({"b":1})");
+            auto result   = ordered_json::parse(R"({"b":1,"z":2,"a":3})");
+
+            auto patch = ordered_json::merge_diff(original, result);
+            CHECK(patch.dump() == R"({"z":2,"a":3})");
+
+            original.merge_patch(patch);
+            CHECK(original == result);
+            CHECK(original.dump() == R"({"b":1,"z":2,"a":3})");
+        }
+
+// ---- tests/src/unit-merge_diff.cpp:913-924  (uses: added)
+        SECTION("member added before existing ones is appended")
+        {
+            auto original = ordered_json::parse(R"({"b":1})");
+            auto result   = ordered_json::parse(R"({"a":0,"b":1})");
+
+            auto patch = ordered_json::merge_diff(original, result);
+            CHECK(patch.dump() == R"({"a":0})");
+
+            original.merge_patch(patch);
+            CHECK(original != result);
+            CHECK(original.dump() == R"({"b":1,"a":0})");
+        }
+
+// ---- tests/src/unit-deserialization.cpp:1271-1316  (uses: operator<<, operator>>, to_string)
+TEST_CASE("parse error positions are the same for contiguous and stream input")
+{
+    // contiguous input derives the position from the input on error, stream
+    // input counts it while reading (see lexer::lazy_position); the cases
+    // cover newlines before the error, ungetting a newline after a number,
+    // newlines inside a string, a comment, and reads at the end of input
+    struct test_case
+    {
+        std::string input;
+        std::size_t byte;
+        std::string message;
+    };
+    const std::vector<test_case> cases =
+    {
+        {"[\n  1,\n  2\n", 12, "[json.exception.parse_error.101] parse error at line 4, column 1: syntax error while parsing array - unexpected end of input; expected ']'"},
+        {"[1\n,2,\n]", 8, "[json.exception.parse_error.101] parse error at line 3, column 1: syntax error while parsing value - unexpected ']'; expected '[', '{', or a literal"},
+        {"[1\n x]", 5, "[json.exception.parse_error.101] parse error at line 2, column 2: syntax error while parsing array - invalid literal; last read: '1<U+000A> x'; expected ']'"},
+        {"1\n2", 3, "[json.exception.parse_error.101] parse error at line 2, column 1: syntax error while parsing value - unexpected number literal; expected end of input"},
+        {
+            "{\"a\":\n\"b\nc\"}", 9, R"([json.exception.parse_error.101] parse error at line 3, column 0: syntax error while parsing value - invalid string: control character U+000A (LF) must be escaped to \u000A or \n; last read: '"b<U+000A>')"
+        },
+        {"/* a\n b */\n x", 13, "[json.exception.parse_error.101] parse error at line 3, column 2: syntax error while parsing value - invalid literal; last read: '/* a<U+000A> b */<U+000A> x'"},
+        {"\n\n", 3, "[json.exception.parse_error.101] parse error at line 3, column 1: syntax error while parsing value - unexpected end of input; expected '[', '{', or a literal"},
+        {"[\"a\",\n 1e\n]", 10, "[json.exception.parse_error.101] parse error at line 3, column 0: syntax error while parsing value - invalid number; expected '+', '-', or digit after exponent; last read: '1e<U+000A>'"},
+        {"[tru\n]", 5, "[json.exception.parse_error.101] parse error at line 2, column 0: syntax error while parsing value - invalid literal; last read: '[tru<U+000A>'"},
+    };
+
+    for (const auto& c : cases)
+    {
+        CAPTURE(c.input)
+        const std::string expected = std::to_string(c.byte) + " " + c.message;
+
+        SaxErrorRecorder string_sax;
+        CHECK_FALSE(json::sax_parse(c.input, &string_sax, json::input_format_t::json, true, true));
+        CHECK(string_sax.error == expected);
+
+        SaxErrorRecorder pointer_sax;
+        CHECK_FALSE(json::sax_parse(c.input.data(), c.input.data() + c.input.size(), &pointer_sax, json::input_format_t::json, true, true));
+        CHECK(pointer_sax.error == expected);
+
+        std::istringstream is(c.input);
+        SaxErrorRecorder stream_sax;
+        CHECK_FALSE(json::sax_parse(is, &stream_sax, json::input_format_t::json, true, true));
+        CHECK(stream_sax.error == expected);
+    }
+}
+
+// ---- tests/src/unit-ordered_map.cpp:562-576  (uses: cbegin, cend, insert, to_string)
+        SECTION("insert(first, last)")
+        {
+            std::vector<std::pair<const std::string, counted>> values;
+            values.reserve(100);
+            for (int i = 0; i < 100; ++i)
+            {
+                values.emplace_back(std::to_string(i), counted(i));
+            }
+            value_copies = 0;
+
+            om.insert(values.cbegin(), values.cend());
+            // only the inserted values are copied
+            CHECK(value_copies == 100);
+            check_contents();
+        }
+
+// ---- tests/src/unit-algorithms.cpp:126-136  (uses: begin, end, operator!=, operator<)
+            SECTION("using user-defined comparison")
+            {
+                // compare objects only by size of its elements
+                json j_array2 = {13, 29, 3, {"Hello", "World"}, true, false, {{"one", 1}, {"two", 2}, {"three", 3}}, "foo", "baz"};
+                CHECK(!std::equal(j_array.begin(), j_array.end(), j_array2.begin()));
+                CHECK(std::equal(j_array.begin(), j_array.end(), j_array2.begin(),
+                                 [](const json & a, const json & b)
+                {
+                    return (a.size() == b.size());
+                }));
+            }
+
+# Task
+Write 20 test programs for this pull request. Return JSON with a "tests" array; each item has "name" (short snake_case), "intent" (one sentence: what behavior it probes) and "code" (the complete C++ program).

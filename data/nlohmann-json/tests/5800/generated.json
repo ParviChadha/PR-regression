@@ -1,0 +1,158 @@
+{
+  "target": "nlohmann-json",
+  "pr": 5800,
+  "model": "gemini-3.5-flash-lite",
+  "prompt_sha256": "e225ba7e0419c9ce55a907005fe80cbf6685d773a24eabc80f19797f3a522239",
+  "n_requested": 20,
+  "dropped": 0,
+  "usage": {
+    "promptTokenCount": 5405,
+    "candidatesTokenCount": 2067,
+    "totalTokenCount": 7472,
+    "promptTokensDetails": [
+      {
+        "modality": "TEXT",
+        "tokenCount": 5405
+      }
+    ],
+    "serviceTier": "standard"
+  },
+  "tests": [
+    {
+      "file": "gen_01.cpp",
+      "name": "json_pointer_array_index_at_single_char",
+      "intent": "Probe json_pointer::at() with a single-character non-numeric array index like /x to check if it throws parse_error.109.",
+      "round": 0
+    },
+    {
+      "file": "gen_02.cpp",
+      "name": "json_pointer_array_index_subscript_single_char",
+      "intent": "Probe operator[] with a single-character non-numeric array index /x on an array.",
+      "round": 0
+    },
+    {
+      "file": "gen_03.cpp",
+      "name": "json_pointer_array_index_value_single_char",
+      "intent": "Probe json::value() with a single-character non-numeric array index /x to confirm it throws parse_error.109 instead of returning default.",
+      "round": 0
+    },
+    {
+      "file": "gen_04.cpp",
+      "name": "json_pointer_array_index_contains_single_char",
+      "intent": "Probe json::contains() with a single-character non-numeric array index /x to verify it still returns false.",
+      "round": 0
+    },
+    {
+      "file": "gen_05.cpp",
+      "name": "json_pointer_array_index_unflatten_single_char",
+      "intent": "Probe unflatten() with a single-character non-numeric array index token /x in a key.",
+      "round": 0,
+      "superseded_by": "gen_14.cpp"
+    },
+    {
+      "file": "gen_06.cpp",
+      "name": "json_pointer_array_index_dash_unflatten",
+      "intent": "Probe unflatten() with a dash token /-/ to verify it still raises out_of_range.404.",
+      "round": 0,
+      "superseded_by": "gen_15.cpp"
+    },
+    {
+      "file": "gen_07.cpp",
+      "name": "json_pointer_array_index_empty_unflatten",
+      "intent": "Probe unflatten() with an empty token // to verify it raises out_of_range.404.",
+      "round": 0,
+      "superseded_by": "gen_16.cpp"
+    },
+    {
+      "file": "gen_08.cpp",
+      "name": "json_patch_remove_single_char_index",
+      "intent": "Probe json patch remove operation with a single-character non-numeric array index /a/x.",
+      "round": 0,
+      "superseded_by": "gen_17.cpp"
+    },
+    {
+      "file": "gen_09.cpp",
+      "name": "gen_09",
+      "intent": "Test json_pointer construction/parsing of single-character non-numeric tokens like /x directly through json_pointer parsing to exercise the enum comment/documentation and status codes.",
+      "round": 1
+    },
+    {
+      "file": "gen_10.cpp",
+      "name": "gen_10",
+      "intent": "Test json_pointer relative operator/ concatenation with a single-character non-numeric string token to see if parsing invokes array index status not_a_number.",
+      "round": 1
+    },
+    {
+      "file": "gen_11.cpp",
+      "name": "gen_11",
+      "intent": "Test patch_inplace with a remove operation targeting a single-character non-numeric array index like /a/x to exercise the not_a_number path in json patch validation.",
+      "round": 1,
+      "superseded_by": "gen_18.cpp"
+    },
+    {
+      "file": "gen_12.cpp",
+      "name": "gen_12",
+      "intent": "Test ordered_map erase with a range iterator to exercise the container modification code path described in the comment update for C++20 life cycle / placement new conformance.",
+      "round": 1,
+      "superseded_by": "gen_19.cpp"
+    },
+    {
+      "file": "gen_13.cpp",
+      "name": "gen_13",
+      "intent": "Test json_pointer conversion via stream operator or string conversion for single-character non-numeric token arrays to verify parse error reporting behavior.",
+      "round": 1
+    },
+    {
+      "file": "gen_14.cpp",
+      "name": "json_pointer_array_index_unflatten_single_char_fixed",
+      "intent": "Probe unflatten() with a single-character non-numeric array index token /x in a key.",
+      "round": 2,
+      "fixes": "gen_05.cpp",
+      "kind": "compile"
+    },
+    {
+      "file": "gen_15.cpp",
+      "name": "json_pointer_array_index_dash_unflatten_fixed",
+      "intent": "Probe unflatten() with a dash token /-/ to verify it still raises out_of_range.404.",
+      "round": 2,
+      "fixes": "gen_06.cpp",
+      "kind": "compile"
+    },
+    {
+      "file": "gen_16.cpp",
+      "name": "json_pointer_array_index_empty_unflatten_fixed",
+      "intent": "Probe unflatten() with an empty token // to verify it raises out_of_range.404.",
+      "round": 2,
+      "fixes": "gen_07.cpp",
+      "kind": "compile"
+    },
+    {
+      "file": "gen_17.cpp",
+      "name": "json_patch_remove_single_char_index_fixed",
+      "intent": "Probe json patch remove operation with a single-character non-numeric array index /a/x.",
+      "round": 2,
+      "fixes": "gen_08.cpp",
+      "kind": "compile"
+    },
+    {
+      "file": "gen_18.cpp",
+      "name": "gen_11_fixed",
+      "intent": "Test patch_inplace with a remove operation targeting a single-character non-numeric array index like /a/x to exercise the not_a_number path in json patch validation.",
+      "round": 2,
+      "fixes": "gen_11.cpp",
+      "kind": "compile"
+    },
+    {
+      "file": "gen_19.cpp",
+      "name": "gen_12_fixed",
+      "intent": "Test ordered_map erase with a range iterator to exercise the container modification code path described in the comment update for C++20 life cycle / placement new conformance.",
+      "round": 2,
+      "fixes": "gen_12.cpp",
+      "kind": "compile"
+    }
+  ],
+  "fix": {
+    "rounds_max": 2,
+    "model": "gemini-3.5-flash-lite"
+  }
+}

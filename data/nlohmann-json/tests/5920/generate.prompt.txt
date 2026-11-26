@@ -1,0 +1,304 @@
+[system]
+You write test programs that probe a C++ library for behavioral changes made by one pull request.
+Each program is compiled and run twice, once against the library before the change and once after, and the two
+outputs are compared. Your job is to produce programs whose output reveals whether the change altered behavior,
+including side effects the author did not intend.
+
+Rules for every program:
+- It is standalone: one file with its own int main(), compiled as C++17, printing results to stdout.
+- Use only the library's documented public API. Never include internal headers or use detail/impl namespaces,
+  private members or undocumented macros.
+- Do not judge results (no assert, no expected-value comparisons): just print what the library returns. Print
+  enough to make differences visible, one fact per line.
+- Output must be deterministic. Never print pointers or addresses, uninitialized data, the order of
+  hash-based containers, timings, thread ids, random values, file paths or environment data. Print floating point
+  values with an explicit precision. No input, files, network, threads, clocks or randomness.
+- Wrap calls that may throw in try/catch and print the exception's type and message, so an exception is an
+  observable result. Do not crash on purpose.
+- Aim at the code the diff changes. Prefer calls that compile against both the old and the new library; one or two
+  programs may use an API the PR adds. Cover ordinary inputs and edge cases (empty, minimum and maximum values,
+  boundaries, special values, nesting, unusual types) and also neighbouring behavior the change could disturb.
+- When the diff changes which types or inputs an API accepts or rejects (constraints, overloads, traits,
+  conversions), test it with the detection idiom (std::void_t or requires) and `if constexpr`, so the program
+  compiles against both versions, prints whether the expression is well-formed, and exercises it when it is.
+  Accepting an input is not enough: also use it through every entry point that should follow (const and
+  non-const, read, write, insert, erase, lookup, nested use), because a change that admits new inputs can leave
+  later code unable to handle them.
+- If the changed code is internal (a detail, impl or internal namespace, a trait, a helper), do not name it in the
+  program. Reach it through the public API that depends on it, using detection (as above) where needed.
+- Use the exact types and values the diff is about (the new trait's argument types, the new overload's
+  parameters), not stand-ins.
+- Spread the programs over distinct public entry points and overloads, one main idea per program. Do not write
+  several programs that only rename a type or change a literal.
+- Make the programs differ from each other: different inputs, different entry points, different features.
+
+Rules specific to this library:
+- Include the library with #include <nlohmann/json.hpp>. The public API is nlohmann::json (nlohmann::basic_json), nlohmann::ordered_json, json_pointer, json patch/merge_patch and the documented SAX and conversion interfaces. Never use the detail namespace.
+- It is a header-only library: nothing to link. Programs are compiled as C++17.
+- Print JSON values with dump() (compact) or dump(2). Keys of nlohmann::json objects print in sorted order, so output is deterministic; do not depend on insertion order except with ordered_json.
+
+[user]
+# Pull request #5920: json_view: no save() and load() on big-endian targets
+
+## Description
+Part of the #5869 cleanup before 3.13.0, stacked on #5919.
+
+## What changes
+
+On a big-endian target, `basic_json_document::save()` and `load()` no longer exist, instead of throwing `type_error.320` at runtime. The image format is little-endian only, so a call could never succeed there; now it fails at compile time, just like `set()` on a read-only document. Suggested by @gregmarr in #5632 ([comment](https://github.com/nlohmann/json/pull/5632#discussion_r4321789217), [clarification](https://github.com/nlohmann/json/pull/5632#discussion_r4331187395)).
+
+`save_image()`/`load_image()` and the members `save()`/`load()` are guarded by `#if NLOHMANN_VIEW_LITTLE_ENDIAN`. The members need the guard as well, since they call the functions with a non-dependent argument. `NLOHMANN_VIEW_LITTLE_ENDIAN` comes from the target's predefined macros, so it is the same in every translation unit of a build: no ODR risk.
+
+**Error 320 stays**, now only for "cannot save a discarded json_document". This corrects my reply on #5632, which said that `type_error.320` goes away: the discarded-document case still throws it.
+
+## Breaking changes
+
+None for released versions: `save()`/`load()` are new in 3.13.0. Code on `develop` that called them on a big-endian target, and therefore always threw, no longer compiles.
+
+## Tests
+
+- The big-endian test case checks with a detection trait that `save()`/`load()` don't exist; the little-endian tests check that they do.
+- `unit-json_view_image.cpp` compiled for s390x (big-endian) in Docker; all `unit-json_view*` tests with ASan/UBSan.
+- Docs: `save`, `load`, `type_error.320`, and the json_view feature page say "little-endian targets only".
+
+🤖 Generated with [Claude Code](https://claude.com/claude-code)
+
+## Commit message
+The image format is little-endian only. Instead of throwing
+type_error.320 at runtime, save_image(), load_image() and the members
+save() and load() do not exist on a big-endian target, so a call fails to
+compile, like set() on a read-only document. type_error.320 remains for
+saving a discarded document.
+
+Signed-off-by: Niels Lohmann <mail@nlohmann.me>
+
+## Headers the programs must include
+- Also write #include <nlohmann/json_view.hpp>. The json_view feature (json_document, json_view and their image loading and editing API) is declared only in this header; nlohmann/json.hpp does not include it, so without this line those names do not exist. Use only names you can see in the diff or the context below.
+
+## Changed functions (from changes.py)
+- nlohmann::detail::view::load_image(document_data &, const std::uint8_t *, std::size_t, image_check) (private); reached from the public API through: nlohmann::basic_json_document::load(std::vector<std::uint8_t> &&, const image_check), nlohmann::basic_json_document::load(const std::uint8_t *, std::size_t, const image_check)
+- nlohmann::detail::view::save_image(const document_data &) (private); reached from the public API through: nlohmann::basic_json_document::save()
+- nlohmann::detail::exception_id::document_image_unsupported (private); reached from the public API through: nlohmann::basic_json_document::save()
+- nlohmann::basic_json_document (public)
+- nlohmann::basic_json_document::load(std::vector<std::uint8_t> &&, const image_check) (public)
+
+## Diff of the library source (before -> after)
+```diff
+diff --git a/include/nlohmann/detail/exceptions.hpp b/include/nlohmann/detail/exceptions.hpp
+index cdef3019f..d47ed6f17 100644
+--- a/include/nlohmann/detail/exceptions.hpp
++++ b/include/nlohmann/detail/exceptions.hpp
+@@ -102,7 +102,7 @@ enum class exception_id : int
+     type_not_serializable = 317, ///< a value cannot be serialized to the requested binary format
+     enum_key_duplicate = 318, ///< an enum-keyed map has two keys that serialize to the same string
+     document_binary_value = 319, ///< a binary value is stored in a json_document
+-    document_image_unsupported = 320, ///< a json_document image cannot be saved or loaded (discarded document, big-endian target)
++    document_image_unsupported = 320, ///< a discarded json_document cannot be saved as an image
+     discarded_value_used = 321, ///< a discarded value is used
+     // out_of_range
+     array_index_out_of_range = 401, ///< an array index is out of range
+diff --git a/include/nlohmann/detail/view/image.hpp b/include/nlohmann/detail/view/image.hpp
+index c13d269e1..637350949 100644
+--- a/include/nlohmann/detail/view/image.hpp
++++ b/include/nlohmann/detail/view/image.hpp
+@@ -182,12 +182,10 @@ inline void compact_nodes(const document_data& d, std::size_t arena_size, std::v
+     }
+ }
+ 
++#if NLOHMANN_VIEW_LITTLE_ENDIAN // (the image format is little-endian: no save() elsewhere)
+ /// the document as an image
+ inline std::vector<std::uint8_t> save_image(const document_data& d)
+ {
+-#if !NLOHMANN_VIEW_LITTLE_ENDIAN
+-    throw_type_error(exception_id::document_image_unsupported, "json_document images need a little-endian target"); // LCOV_EXCL_LINE
+-#endif
+     const std::size_t arena_size = d.arena_size;
+     std::vector<node> compacted;
+     std::string text_tail;
+@@ -243,6 +241,7 @@ inline std::vector<std::uint8_t> save_image(const document_data& d)
+     *o = 0;
+     return image;
+ }
++#endif
+ 
+ /// the parts of a number token that the checks need
+ struct number_token
+@@ -663,13 +662,11 @@ inline bool check_image(const node* nodes, std::size_t count, const unsigned cha
+     throw_parse_error(exception_id::invalid_document_image, concat("invalid json_document image: ", what));
+ }
+ 
++#if NLOHMANN_VIEW_LITTLE_ENDIAN // (the image format is little-endian: no load() elsewhere)
+ /// Read an image into d. The text and the decoded strings stay in the image;
+ /// the nodes are copied (so that they are aligned, and edits can change them).
+ inline void load_image(document_data& d, const std::uint8_t* image, std::size_t size, image_check check)
+ {
+-#if !NLOHMANN_VIEW_LITTLE_ENDIAN
+-    throw_type_error(exception_id::document_image_unsupported, "json_document images need a little-endian target"); // LCOV_EXCL_LINE
+-#endif
+     if (image == nullptr || size < sizeof(image_header))
+     {
+         throw_invalid_image("too short");
+@@ -738,6 +735,7 @@ inline void load_image(document_data& d, const std::uint8_t* image, std::size_t
+     std::vector<std::uint32_t>().swap(d.large_objects); // (only needed while building)
+     d.discarded = false;
+ }
++#endif
+ 
+ }  // namespace view
+ }  // namespace detail
+diff --git a/include/nlohmann/json_view.hpp b/include/nlohmann/json_view.hpp
+index 42a8cb99e..79c9b8dde 100644
+--- a/include/nlohmann/json_view.hpp
++++ b/include/nlohmann/json_view.hpp
+@@ -1191,6 +1191,10 @@ class basic_json_document
+     /// how load() checks an image (full, bounds, or none)
+     using image_check = detail::view::image_check;
+ 
++#if NLOHMANN_VIEW_LITTLE_ENDIAN
++    // (the image format is little-endian: big-endian targets have no save()
++    // and load(), so that a call fails to compile instead of always throwing)
++
+     /// The document as an image that load() reads without parsing: the node
+     /// index, the text, and the decoded strings. An edited document is
+     /// written in its current state (floats that are not finite become null,
+@@ -1232,6 +1236,7 @@ class basic_json_document
+         detail::view::load_image(*d.m_data, d.m_data->owned_image.data(), d.m_data->owned_image.size(), check);
+         return d;
+     }
++#endif
+ 
+     ///////////
+     // edits //
+```
+
+## Existing upstream tests that call the changed code (for style and API usage)
+// Upstream tests at the PR's parent commit 731f1b5bf that use the changed code.
+// Names searched (test lines using each): basic_json_document (7), load (0), save (41), load_image (0), save_image (0), document_image_unsupported (0)
+
+// ---- tests/src/unit-json_view.cpp:278-306  (uses: basic_json_document)
+    SECTION("overflow of the floating-point type")
+    {
+        // the overflow is that of the document's number_float_t: 1e39
+        // overflows a float, the largest float 3.4028235e38 does not, but
+        // 3.4028236e38 rounds beyond it; a double document is not affected
+        using json_float = nlohmann::basic_json<std::map, std::vector, std::string, bool, std::int64_t, std::uint64_t, float>;
+        using float_document = nlohmann::basic_json_document<json_float>;
+        CHECK_FALSE(json_float::accept("1e39"));
+        CHECK(json_float::accept("3.4028235e38"));
+        CHECK_FALSE(json_float::accept("3.4028236e38"));
+        for (const char* text :
+                {
+                    "1e39", "-1e39", "[3.4028235e38]", "[3.4028236e38]", "{\"a\": [1e38, -3.4028235e38]}", "{\"a\": [1e-50, 1e39]}"
+                })
+        {
+            CAPTURE(text)
+            const bool accepted = json_float::accept(text);
+            CHECK(float_document::accept(text) == accepted);
+            CHECK(float_document::parse(text, false).is_discarded() == !accepted);
+            CHECK(json_document::accept(text));
+            if (accepted)
+            {
+                CHECK(materialized<float_document>(text) == json_float::parse(text));
+            }
+        }
+        float_document f;
+        CHECK_THROWS_WITH_AS(f = float_document::parse("1e39"), "[json.exception.out_of_range.406] number overflow parsing '1e39'", json::out_of_range&);
+        CHECK_THROWS_WITH_AS(f = float_document::parse("[3.4028236e38]"), "[json.exception.out_of_range.406] number overflow parsing '3.4028236e38'", json::out_of_range&);
+    }
+
+// ---- tests/src/unit-json_view.cpp:1396-1412  (uses: basic_json_document)
+            tokens.emplace_back(buf.data());
+        }
+        using json_float = nlohmann::basic_json<std::map, std::vector, std::string, bool, std::int64_t, std::uint64_t, float>;
+        for (const auto& token : tokens)
+        {
+            CAPTURE(token)
+            const std::string text = "[" + token + "]";
+            const double b = json::parse(text)[0].get<double>();
+            const json_document dd = json_document::parse(text);
+            CHECK(bits(dd.root()[0].get<double>()) == bits(b));
+            if (std::abs(b) < 1e38)
+            {
+                const nlohmann::basic_json_document<json_float> df = nlohmann::basic_json_document<json_float>::parse(text);
+                CHECK(bits(df.root()[0].get<float>()) == bits(json_float::parse(text)[0].get<float>()));
+            }
+        }
+    }
+
+// ---- tests/src/unit-json_view_dump.cpp:159-173  (uses: basic_json_document)
+            double x = 0;
+            std::memcpy(&x, &bits, sizeof(x));
+            if (std::isfinite(x))
+            {
+                many += (many.size() > 1 ? "," : "") + json(x).dump();
+            }
+        }
+        many += ']';
+        const json_document many_document = json_document::parse(many);
+        CHECK(many_document.root().dump() == json::parse(many).dump());
+
+        using json_float = nlohmann::basic_json<std::map, std::vector, std::string, bool, std::int64_t, std::uint64_t, float>;
+        const nlohmann::basic_json_document<json_float> float_document = nlohmann::basic_json_document<json_float>::parse("[0.1, 1.5e10, 3.4028235e38]");
+        CHECK(float_document.root().dump() == json_float::parse("[0.1, 1.5e10, 3.4028235e38]").dump());
+    }
+
+// ---- tests/src/unit-json_view_edit_values.cpp:81-95  (uses: basic_json_document)
+TEST_CASE("json_view modes")
+{
+    using nlohmann::basic_json_document;
+    using nlohmann::basic_json_view;
+    using nlohmann::ordered_json;
+    using nlohmann::view_mode;
+
+    SECTION("read-only is the default, and the shortcuts name the modes")
+    {
+        static_assert(std::is_same<basic_json_view<json>, basic_json_view<json, view_mode::read_only>>::value, "default mode");
+        static_assert(std::is_same<basic_json_document<json>, basic_json_document<json, view_mode::read_only>>::value, "default mode");
+        static_assert(std::is_same<nlohmann::json_view, basic_json_view<json, view_mode::read_only>>::value, "json_view");
+        static_assert(std::is_same<json_editable_view, basic_json_view<json, view_mode::editable>>::value, "json_editable_view");
+        static_assert(std::is_same<json_editable_document, basic_json_document<json, view_mode::editable>>::value, "json_editable_document");
+        static_assert(std::is_same<nlohmann::ordered_json_editable_view, basic_json_view<ordered_json, view_mode::editable>>::value, "ordered_json_editable_view");
+
+// ---- tests/src/unit-json_view_edit_values.cpp:205-216  (uses: basic_json_document)
+    SECTION("numbers of other float types")
+    {
+        // doubles have their own path to the output; other float types are
+        // written as basic_json writes them, non-finite values as null
+        using json_float = nlohmann::basic_json<std::map, std::vector, std::string, bool, std::int64_t, std::uint64_t, float>;
+        using document_float = nlohmann::basic_json_document<json_float, nlohmann::view_mode::editable>;
+        document_float d = document_float::parse("[1.5]");
+        d.push_back(d.root(), std::numeric_limits<float>::quiet_NaN());
+        d.push_back(d.root(), -std::numeric_limits<float>::infinity());
+        CHECK(d.root().dump() == "[1.5,null,null]");
+        CHECK(d.root().dump(2) == json_float::parse("[1.5, null, null]").dump(2));
+    }
+
+// ---- tests/src/fuzzer-json_view_image.cpp:63-87  (uses: save)
+        }
+        catch (const json::type_error& e)
+        {
+            // invalid UTF-8 can only pass the bounds check
+            assert(check == image_check::bounds && e.id == 316);
+            continue;
+        }
+        const json j = d.root().materialize();
+        if (check == image_check::full)
+        {
+            assert(json::parse(dumped) == j);
+            // an image of the loaded document is the input
+            assert(d.save() == std::vector<std::uint8_t>(data, data + size));
+        }
+    }
+
+    // the input as a JSON text
+    const std::string text(reinterpret_cast<const char*>(data), size); // NOLINT(cppcoreguidelines-pro-type-reinterpret-cast)
+    const json_document parsed = json_document::parse(text, false);
+    if (!parsed.is_discarded())
+    {
+        const std::vector<std::uint8_t> image = parsed.save();
+        for (const image_check check :
+                {
+                    image_check::full, image_check::bounds, image_check::none
+
+# Task
+Write 20 test programs for this pull request. Return JSON with a "tests" array; each item has "name" (short snake_case), "intent" (one sentence: what behavior it probes) and "code" (the complete C++ program).

@@ -1,0 +1,248 @@
+{
+  "target": "nlohmann-json",
+  "pr": 5902,
+  "model": "gemini-3.5-flash-lite",
+  "prompt_sha256": "ecd36a5fb7f001a988496c8672d261bc9b22c045f1e3775361569a1fdafc05b2",
+  "n_requested": 20,
+  "dropped": 0,
+  "usage": {
+    "promptTokenCount": 5945,
+    "candidatesTokenCount": 3945,
+    "totalTokenCount": 9890,
+    "promptTokensDetails": [
+      {
+        "modality": "TEXT",
+        "tokenCount": 5945
+      }
+    ],
+    "serviceTier": "standard"
+  },
+  "tests": [
+    {
+      "file": "gen_01.cpp",
+      "name": "arithmetic_from_json_unsigned",
+      "intent": "Probes from_json on an unsigned integer type using number-first dispatch.",
+      "round": 0
+    },
+    {
+      "file": "gen_02.cpp",
+      "name": "arithmetic_from_json_integer",
+      "intent": "Probes from_json on a signed integer type using number-first dispatch.",
+      "round": 0
+    },
+    {
+      "file": "gen_03.cpp",
+      "name": "arithmetic_from_json_float",
+      "intent": "Probes from_json on a floating-point type using number-first dispatch.",
+      "round": 0
+    },
+    {
+      "file": "gen_04.cpp",
+      "name": "arithmetic_from_json_boolean",
+      "intent": "Probes from_json on an arithmetic type with a boolean value via the cold path.",
+      "round": 0
+    },
+    {
+      "file": "gen_05.cpp",
+      "name": "arithmetic_from_json_invalid_type",
+      "intent": "Probes from_json type error on arithmetic type when given a string.",
+      "round": 0
+    },
+    {
+      "file": "gen_06.cpp",
+      "name": "std_array_trivial_get_to",
+      "intent": "Probes get_to for std::array with trivial elements using the loop optimization.",
+      "round": 0
+    },
+    {
+      "file": "gen_07.cpp",
+      "name": "std_array_trivial_get_direct",
+      "intent": "Probes direct get for std::array with trivial elements using from_json_make_array via is_trivial_element.",
+      "round": 0
+    },
+    {
+      "file": "gen_08.cpp",
+      "name": "std_array_short_json_array",
+      "intent": "Probes from_json_std_array behavior when the JSON array is shorter than the target std::array.",
+      "round": 0
+    },
+    {
+      "file": "gen_09.cpp",
+      "name": "std_array_short_json_array_throws",
+      "intent": "Probes out_of_range exception when json array is shorter than the target std::array size during read.",
+      "round": 0
+    },
+    {
+      "file": "gen_10.cpp",
+      "name": "std_array_nontrivial_element",
+      "intent": "Probes get for std::array with non-trivial elements using pack expansion path.",
+      "round": 0
+    },
+    {
+      "file": "gen_11.cpp",
+      "name": "std_array_invalid_json_type",
+      "intent": "Probes type error when target is std::array but JSON value is not an array.",
+      "round": 0
+    },
+    {
+      "file": "gen_12.cpp",
+      "name": "std_array_large_trivial",
+      "intent": "Probes large std::array of trivial types using the loop-based deserialization path.",
+      "round": 0
+    },
+    {
+      "file": "gen_13.cpp",
+      "name": "vector_int_number_first",
+      "intent": "Probes vector of ints conversion benefiting from number-first dispatch inside element loop.",
+      "round": 0
+    },
+    {
+      "file": "gen_14.cpp",
+      "name": "deque_int_number_first",
+      "intent": "Probes deque of ints conversion utilizing the optimized element loop dispatch.",
+      "round": 0
+    },
+    {
+      "file": "gen_15.cpp",
+      "name": "arithmetic_from_json_null_throws",
+      "intent": "Probes from_json with arithmetic type and null JSON value to verify it throws.",
+      "round": 0
+    },
+    {
+      "file": "gen_16.cpp",
+      "name": "arithmetic_from_json_double_to_int",
+      "intent": "Probes casting float json value to integer arithmetic type via number-first dispatch.",
+      "round": 0
+    },
+    {
+      "file": "gen_17.cpp",
+      "name": "std_array_nested_trivial",
+      "intent": "Probes nested std::array of trivial type conversion.",
+      "round": 0
+    },
+    {
+      "file": "gen_18.cpp",
+      "name": "std_array_element_type_error",
+      "intent": "Probes type error when an element inside the std::array loop has an invalid type.",
+      "round": 0
+    },
+    {
+      "file": "gen_19.cpp",
+      "name": "arithmetic_from_json_unsigned_boundaries",
+      "intent": "Probes boundary values for unsigned arithmetic conversions.",
+      "round": 0
+    },
+    {
+      "file": "gen_20.cpp",
+      "name": "std_array_empty_trivial",
+      "intent": "Probes conversion of empty std::array of trivial elements.",
+      "round": 0
+    },
+    {
+      "file": "gen_21.cpp",
+      "name": "gen_21",
+      "intent": "Explicitly instantiate is_trivial_element with a trivial type and evaluate its value_type base or bool conversion to cover is_trivial_element definition.",
+      "round": 1,
+      "superseded_by": "gen_26.cpp"
+    },
+    {
+      "file": "gen_22.cpp",
+      "name": "gen_22",
+      "intent": "Explicitly instantiate is_trivial_element with a non-trivial type to cover the non-trivial instantiation path.",
+      "round": 1,
+      "superseded_by": "gen_27.cpp"
+    },
+    {
+      "file": "gen_23.cpp",
+      "name": "gen_23",
+      "intent": "Trigger from_json_make_array with a false_type is_trivial_element parameter by invoking identity_tag conversion on a std::array of a non-trivial element type.",
+      "round": 1
+    },
+    {
+      "file": "gen_24.cpp",
+      "name": "gen_24",
+      "intent": "Directly exercise from_json_make_array with std::true_type using a trivial element array identity_tag to ensure full coverage of the true_type overload of from_json_make_array.",
+      "round": 1,
+      "superseded_by": "gen_28.cpp"
+    },
+    {
+      "file": "gen_25.cpp",
+      "name": "gen_25",
+      "intent": "Directly exercise from_json_make_array with std::false_type using a non-trivial element array identity_tag.",
+      "round": 1,
+      "superseded_by": "gen_29.cpp"
+    },
+    {
+      "file": "gen_26.cpp",
+      "name": "gen_21_fixed",
+      "intent": "Explicitly instantiate is_trivial_element with a trivial type and evaluate its value_type base or bool conversion to cover is_trivial_element definition.",
+      "round": 2,
+      "fixes": "gen_21.cpp",
+      "kind": "detect",
+      "superseded_by": "gen_30.cpp"
+    },
+    {
+      "file": "gen_27.cpp",
+      "name": "gen_22_fixed",
+      "intent": "Explicitly instantiate is_trivial_element with a non-trivial type to cover the non-trivial instantiation path.",
+      "round": 2,
+      "fixes": "gen_22.cpp",
+      "kind": "detect",
+      "superseded_by": "gen_31.cpp"
+    },
+    {
+      "file": "gen_28.cpp",
+      "name": "gen_24_fixed",
+      "intent": "Directly exercise from_json_make_array with std::true_type using a trivial element array identity_tag to ensure full coverage of the true_type overload of from_json_make_array.",
+      "round": 2,
+      "fixes": "gen_24.cpp",
+      "kind": "detect",
+      "superseded_by": "gen_32.cpp"
+    },
+    {
+      "file": "gen_29.cpp",
+      "name": "gen_25_fixed",
+      "intent": "Directly exercise from_json_make_array with std::false_type using a non-trivial element array identity_tag.",
+      "round": 2,
+      "fixes": "gen_25.cpp",
+      "kind": "detect",
+      "superseded_by": "gen_33.cpp"
+    },
+    {
+      "file": "gen_30.cpp",
+      "name": "gen_21_fixed_fixed",
+      "intent": "Explicitly instantiate is_trivial_element with a trivial type and evaluate its value_type base or bool conversion to cover is_trivial_element definition.",
+      "round": 3,
+      "fixes": "gen_26.cpp",
+      "kind": "detect"
+    },
+    {
+      "file": "gen_31.cpp",
+      "name": "gen_22_fixed_fixed",
+      "intent": "Explicitly instantiate is_trivial_element with a non-trivial type to cover the non-trivial instantiation path.",
+      "round": 3,
+      "fixes": "gen_27.cpp",
+      "kind": "detect"
+    },
+    {
+      "file": "gen_32.cpp",
+      "name": "gen_24_fixed_fixed",
+      "intent": "Directly exercise from_json_make_array with std::true_type using a trivial element array identity_tag to ensure full coverage of the true_type overload of from_json_make_array.",
+      "round": 3,
+      "fixes": "gen_28.cpp",
+      "kind": "detect"
+    },
+    {
+      "file": "gen_33.cpp",
+      "name": "gen_25_fixed_fixed",
+      "intent": "Directly exercise from_json_make_array with std::false_type using a non-trivial element array identity_tag.",
+      "round": 3,
+      "fixes": "gen_29.cpp",
+      "kind": "detect"
+    }
+  ],
+  "fix": {
+    "rounds_max": 2,
+    "model": "gemini-3.5-flash-lite"
+  }
+}

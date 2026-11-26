@@ -1,0 +1,416 @@
+[system]
+You write test programs that probe a C++ library for behavioral changes made by one pull request.
+Each program is compiled and run twice, once against the library before the change and once after, and the two
+outputs are compared. Your job is to produce programs whose output reveals whether the change altered behavior,
+including side effects the author did not intend.
+
+Rules for every program:
+- It is standalone: one file with its own int main(), compiled as C++17, printing results to stdout.
+- Use only the library's documented public API. Never include internal headers or use detail/impl namespaces,
+  private members or undocumented macros.
+- Do not judge results (no assert, no expected-value comparisons): just print what the library returns. Print
+  enough to make differences visible, one fact per line.
+- Output must be deterministic. Never print pointers or addresses, uninitialized data, the order of
+  hash-based containers, timings, thread ids, random values, file paths or environment data. Print floating point
+  values with an explicit precision. No input, files, network, threads, clocks or randomness.
+- Wrap calls that may throw in try/catch and print the exception's type and message, so an exception is an
+  observable result. Do not crash on purpose.
+- Aim at the code the diff changes. Prefer calls that compile against both the old and the new library; one or two
+  programs may use an API the PR adds. Cover ordinary inputs and edge cases (empty, minimum and maximum values,
+  boundaries, special values, nesting, unusual types) and also neighbouring behavior the change could disturb.
+- When the diff changes which types or inputs an API accepts or rejects (constraints, overloads, traits,
+  conversions), test it with the detection idiom (std::void_t or requires) and `if constexpr`, so the program
+  compiles against both versions, prints whether the expression is well-formed, and exercises it when it is.
+  Accepting an input is not enough: also use it through every entry point that should follow (const and
+  non-const, read, write, insert, erase, lookup, nested use), because a change that admits new inputs can leave
+  later code unable to handle them.
+- If the changed code is internal (a detail, impl or internal namespace, a trait, a helper), do not name it in the
+  program. Reach it through the public API that depends on it, using detection (as above) where needed.
+- Use the exact types and values the diff is about (the new trait's argument types, the new overload's
+  parameters), not stand-ins.
+- Spread the programs over distinct public entry points and overloads, one main idea per program. Do not write
+  several programs that only rename a type or change a literal.
+- Make the programs differ from each other: different inputs, different entry points, different features.
+
+Rules specific to this library:
+- Include the library with #include <nlohmann/json.hpp>. The public API is nlohmann::json (nlohmann::basic_json), nlohmann::ordered_json, json_pointer, json patch/merge_patch and the documented SAX and conversion interfaces. Never use the detail namespace.
+- It is a header-only library: nothing to link. Programs are compiled as C++17.
+- Print JSON values with dump() (compact) or dump(2). Keys of nlohmann::json objects print in sorted order, so output is deterministic; do not depend on insertion order except with ordered_json.
+
+[user]
+# Pull request #5976: Binary readers: swap the bytes of floats with a single byteswap
+
+## Description
+Stacked on #5975.
+
+## What
+
+`binary_reader::byte_swap` reversed `float` and `double` values byte by byte with a loop of `std::swap`. C++23's `std::byteswap` takes only integers. Clang merges the loop into one `bswap`, but GCC 13 does not: in callgrind it was about 7 % of the instructions for reading canada.json from CBOR.
+
+- New `byte_swap(float&)` and `byte_swap(double&)` overloads copy the bits into a `uint32_t`/`uint64_t`, call `detail::byteswap` from `bit_ops.hpp`, and copy them back. Integers keep the existing code.
+- The change applies to every reader that uses `get_number`: CBOR, MessagePack, UBJSON, BJData and BON8.
+- In the CBOR reader, the 0xFA/0xFB cases call a new never-inlined `get_cbor_float<T>()`. With the overloads alone, GCC stopped inlining `input_stream_adapter::get_character()` into `parse_cbor_internal`, making CBOR from a `std::istringstream` +0.45 % slower. Moving the float reads out of `parse_cbor_value`, which is inlined into `parse_cbor_internal`, removes that. Floats inside arrays are read by #5975's scalar-run loop, which does not take this path.
+
+## Measurements
+
+CBOR reads, B/A, where A is #5975. Same harness as #5975: ab-harness one-binary A/B. GCC 13 instruction counts are from callgrind on x86-64. The Mac is an M1 Max with Apple clang (60 reps; time is the geomean over both code layouts).
+
+| | GCC 13 instr | Mac instr | Mac time |
+|---|---|---|---|
+| DOM read canada | **0.961** | 1.000 | 1.005 |
+| SAX canada | 1.000 | 1.002 | 0.995 |
+| DOM read citm_catalog | 1.001 | 1.001 | 1.003 |
+| SAX citm_catalog | 1.000 | 1.001 | 1.000 |
+| DOM read twitter | 1.002 | 1.001 | 1.002 |
+| SAX twitter | 1.000 | 0.998 | 0.999 |
+| strict UTF-8, citm_catalog | 1.001 | 1.000 | 1.000 |
+| `std::istringstream`, citm_catalog | 0.999 | 1.000 | 1.012 |
+
+The Mac time rows above 1 are layout noise: the instruction counts are flat, and neither layout's confidence interval shows a slowdown. Clang already produced a single `bswap`, so the Mac gains nothing.
+
+Variants that were measured and dropped:
+- the overloads without the CBOR helper: stream +0.45 % on GCC;
+- the same plus `JSON_HEDLEY_ALWAYS_INLINE` on the stream adapter's `get_character()`: no help;
+- `JSON_HEDLEY_ALWAYS_INLINE` on `binary_reader::get()`. This fixes it too and is slightly faster (read canada 0.956, twitter 0.993), but it affects every binary format, and only CBOR was measured.
+
+## Tests
+
+The existing CBOR, MessagePack, UBJSON, BJData and BON8 tests cover float and double reads. The CBOR, BJData and BON8 tests also include NaN, infinities and negative zero. #5975's new test compares contiguous and stream input for every truncation of a document with floats. The full ctest suite passes with ASan/UBSan (184/184).
+
+## Breaking changes
+
+None. The values read are identical bit for bit, and the public API is unchanged.
+
+🤖 Generated with [Claude Code](https://claude.com/claude-code)
+
+## Commit message
+* Binary readers: swap the bytes of floats with a single byteswap
+
+byte_swap reversed float and double values byte by byte. GCC does not
+merge that loop into one bswap, and C++23's std::byteswap accepts only
+integers. Overloads for float and double now copy the bits into a
+uint32_t/uint64_t, call detail::byteswap, and copy them back. This
+applies to every binary reader that uses get_number.
+
+In the CBOR reader, the single- and double-precision float cases call a
+non-inlined helper. Without it, GCC stopped inlining the stream
+adapter's get_character() into parse_cbor_internal, which made reading
+from a std::istream about 0.5 % slower.
+
+Signed-off-by: Niels Lohmann <mail@nlohmann.me>
+
+* CBOR reader: inline get_cbor_float() and always inline get() instead
+
+The never-inlined get_cbor_float() costs a call for every float read
+from input without bulk access: reading canada.json from CBOR through a
+FILE* became 5.6 % slower on Apple clang in the benchmark suite. The
+helper existed only because GCC 13 stopped inlining the stream adapter's
+get_character() into parse_cbor_internal. Always inlining
+binary_reader::get() fixes that as well.
+
+callgrind, all binary formats on buffer, std::istringstream and FILE*
+input (canada and citm_catalog): GCC 13 0.986-1.003, GCC 16 0.994-1.006,
+Clang 23 identical. Apple clang suite: FromBinaryFile/cbor/canada 0.939,
+geomean of the 53 binary reader rows 0.998.
+
+Signed-off-by: Niels Lohmann <mail@nlohmann.me>
+
+---------
+
+Signed-off-by: Niels Lohmann <mail@nlohmann.me>
+
+## Discussion before merge
+- github-advanced-security[bot]: ## Flawfinder / Does not check for buffer overflows when copying to destination (CWE-120).
+
+buffer/memcpy:Does not check for buffer overflows when copying to destination (CWE-120).
+
+[Show more details](https://github.com/nlohmann/json/security/code-scanning/1110)
+- github-advanced-security[bot]: ## Flawfinder / Does not check for buffer overflows when copying to destination (CWE-120).
+
+buffer/memcpy:Does not check for buffer overflows when copying to destination (CWE-120).
+
+[Show more details](https://github.com/nlohmann/json/security/code-scanning/1111)
+
+## Changed functions (from changes.py)
+- nlohmann::detail::binary_reader (private); reached from the public API through: nlohmann::basic_json::sax_parse(detail::span_input_adapter &&, SAX *, input_format_t, const bool, const bool, const bool, const cbor_tag_handler_t), nlohmann::basic_json::sax_parse(InputType &&, SAX *, input_format_t, const bool, const bool, const bool, const cbor_tag_handler_t), nlohmann::basic_json::sax_parse(IteratorType, SentinelType, SAX *, input_format_t, const bool, const bool, const bool, const cbor_tag_handler_t), nlohmann::basic_json::from_bson(detail::span_input_adapter &&, const bool, const bool), nlohmann::basic_json::from_cbor(detail::span_input_adapter &&, const bool, const bool, const cbor_tag_handler_t), nlohmann::basic_json::from_msgpack(detail::span_input_adapter &&, const bool, const bool), nlohmann::basic_json::from_ubjson(detail::span_input_adapter &&, const bool, const bool), nlohmann::basic_json::from_bjdata(InputType &&, const bool, const bool, const error_handler_t), nlohmann::basic_json::from_bon8(InputType &&, const bool, const bool), nlohmann::basic_json::from_bson(InputType &&, const bool, const bool, const error_handler_t)
+- nlohmann::detail::binary_reader::parse_cbor_value(const bool, const cbor_tag_handler_t, bool &, bool &) (private); reached from the public API through: nlohmann::basic_json::sax_parse(detail::span_input_adapter &&, SAX *, input_format_t, const bool, const bool, const bool, const cbor_tag_handler_t), nlohmann::basic_json::sax_parse(InputType &&, SAX *, input_format_t, const bool, const bool, const bool, const cbor_tag_handler_t), nlohmann::basic_json::sax_parse(IteratorType, SentinelType, SAX *, input_format_t, const bool, const bool, const bool, const cbor_tag_handler_t), nlohmann::basic_json::from_bson(detail::span_input_adapter &&, const bool, const bool), nlohmann::basic_json::from_cbor(detail::span_input_adapter &&, const bool, const bool, const cbor_tag_handler_t), nlohmann::basic_json::from_msgpack(detail::span_input_adapter &&, const bool, const bool), nlohmann::basic_json::from_ubjson(detail::span_input_adapter &&, const bool, const bool), nlohmann::basic_json::from_bjdata(InputType &&, const bool, const bool, const error_handler_t), nlohmann::basic_json::from_bon8(InputType &&, const bool, const bool), nlohmann::basic_json::from_bson(InputType &&, const bool, const bool, const error_handler_t)
+- nlohmann::detail::binary_reader::byte_swap(double &) (private); reached from the public API through: nlohmann::basic_json::sax_parse(detail::span_input_adapter &&, SAX *, input_format_t, const bool, const bool, const bool, const cbor_tag_handler_t), nlohmann::basic_json::sax_parse(InputType &&, SAX *, input_format_t, const bool, const bool, const bool, const cbor_tag_handler_t), nlohmann::basic_json::sax_parse(IteratorType, SentinelType, SAX *, input_format_t, const bool, const bool, const bool, const cbor_tag_handler_t), nlohmann::basic_json::from_bson(detail::span_input_adapter &&, const bool, const bool), nlohmann::basic_json::from_cbor(detail::span_input_adapter &&, const bool, const bool, const cbor_tag_handler_t), nlohmann::basic_json::from_msgpack(detail::span_input_adapter &&, const bool, const bool), nlohmann::basic_json::from_ubjson(detail::span_input_adapter &&, const bool, const bool), nlohmann::basic_json::from_bjdata(InputType &&, const bool, const bool, const error_handler_t), nlohmann::basic_json::from_bon8(InputType &&, const bool, const bool), nlohmann::basic_json::from_bson(InputType &&, const bool, const bool, const error_handler_t)
+- nlohmann::detail::binary_reader::byte_swap(float &) (private); reached from the public API through: nlohmann::basic_json::sax_parse(detail::span_input_adapter &&, SAX *, input_format_t, const bool, const bool, const bool, const cbor_tag_handler_t), nlohmann::basic_json::sax_parse(InputType &&, SAX *, input_format_t, const bool, const bool, const bool, const cbor_tag_handler_t), nlohmann::basic_json::sax_parse(IteratorType, SentinelType, SAX *, input_format_t, const bool, const bool, const bool, const cbor_tag_handler_t), nlohmann::basic_json::from_bson(detail::span_input_adapter &&, const bool, const bool), nlohmann::basic_json::from_cbor(detail::span_input_adapter &&, const bool, const bool, const cbor_tag_handler_t), nlohmann::basic_json::from_msgpack(detail::span_input_adapter &&, const bool, const bool), nlohmann::basic_json::from_ubjson(detail::span_input_adapter &&, const bool, const bool), nlohmann::basic_json::from_bjdata(InputType &&, const bool, const bool, const error_handler_t), nlohmann::basic_json::from_bon8(InputType &&, const bool, const bool), nlohmann::basic_json::from_bson(InputType &&, const bool, const bool, const error_handler_t)
+- nlohmann::detail::binary_reader::get_cbor_float() (private); reached from the public API through: nlohmann::basic_json::sax_parse(detail::span_input_adapter &&, SAX *, input_format_t, const bool, const bool, const bool, const cbor_tag_handler_t), nlohmann::basic_json::sax_parse(InputType &&, SAX *, input_format_t, const bool, const bool, const bool, const cbor_tag_handler_t), nlohmann::basic_json::sax_parse(IteratorType, SentinelType, SAX *, input_format_t, const bool, const bool, const bool, const cbor_tag_handler_t), nlohmann::basic_json::from_bson(detail::span_input_adapter &&, const bool, const bool), nlohmann::basic_json::from_cbor(detail::span_input_adapter &&, const bool, const bool, const cbor_tag_handler_t), nlohmann::basic_json::from_msgpack(detail::span_input_adapter &&, const bool, const bool), nlohmann::basic_json::from_ubjson(detail::span_input_adapter &&, const bool, const bool), nlohmann::basic_json::from_bjdata(InputType &&, const bool, const bool, const error_handler_t), nlohmann::basic_json::from_bon8(InputType &&, const bool, const bool), nlohmann::basic_json::from_bson(InputType &&, const bool, const bool, const error_handler_t)
+- nlohmann::detail::binary_reader::get() (private); reached from the public API through: nlohmann::basic_json::sax_parse(detail::span_input_adapter &&, SAX *, input_format_t, const bool, const bool, const bool, const cbor_tag_handler_t), nlohmann::basic_json::sax_parse(InputType &&, SAX *, input_format_t, const bool, const bool, const bool, const cbor_tag_handler_t), nlohmann::basic_json::sax_parse(IteratorType, SentinelType, SAX *, input_format_t, const bool, const bool, const bool, const cbor_tag_handler_t), nlohmann::basic_json::from_bson(detail::span_input_adapter &&, const bool, const bool), nlohmann::basic_json::from_cbor(detail::span_input_adapter &&, const bool, const bool, const cbor_tag_handler_t), nlohmann::basic_json::from_msgpack(detail::span_input_adapter &&, const bool, const bool), nlohmann::basic_json::from_ubjson(detail::span_input_adapter &&, const bool, const bool), nlohmann::basic_json::from_bjdata(InputType &&, const bool, const bool, const error_handler_t), nlohmann::basic_json::from_bon8(InputType &&, const bool, const bool), nlohmann::basic_json::from_bson(InputType &&, const bool, const bool, const error_handler_t)
+
+## Diff of the library source (before -> after)
+```diff
+diff --git a/include/nlohmann/detail/input/binary_reader.hpp b/include/nlohmann/detail/input/binary_reader.hpp
+index 40df891bc..686b265a6 100644
+--- a/include/nlohmann/detail/input/binary_reader.hpp
++++ b/include/nlohmann/detail/input/binary_reader.hpp
+@@ -22,6 +22,7 @@
+     #include <bit>  //byteswap
+ #endif
+ 
++#include <nlohmann/detail/bit_ops.hpp>
+ #include <nlohmann/detail/exceptions.hpp>
+ #include <nlohmann/detail/input/input_adapters.hpp>
+ #include <nlohmann/detail/input/json_sax.hpp>
+@@ -1139,16 +1140,10 @@ class binary_reader
+                 return get_half_float(false);
+ 
+             case 0xFA: // Single-Precision Float (four-byte IEEE 754)
+-            {
+-                float number{};
+-                return get_number(number) && emit_float(number);
+-            }
++                return get_cbor_float<float>();
+ 
+             case 0xFB: // Double-Precision Float (eight-byte IEEE 754)
+-            {
+-                double number{};
+-                return get_number(number) && emit_float(number);
+-            }
++                return get_cbor_float<double>();
+ 
+             default: // anything else (0xFF is handled inside the other types)
+             {
+@@ -1157,6 +1152,14 @@ class binary_reader
+         }
+     }
+ 
++    /// read a single- or double-precision float
++    template<typename NumberType>
++    bool get_cbor_float()
++    {
++        NumberType number{};
++        return get_number(number) && emit_float(number);
++    }
++
+     /*!
+     @brief reports a nested indefinite-length CBOR string or byte array
+     @param[in] type_name  name of the rejected string type
+@@ -4176,7 +4179,12 @@ class binary_reader
+     `char_traits<char_type>::eof()` in that case.
+ 
+     @return character read from the input
++
++    @note always inlined: GCC otherwise stops inlining the stream adapter's
++          get_character() into parse_cbor_internal once that function grows
++          (+0.45 % instructions for CBOR from a std::istringstream with GCC 13)
+     */
++    JSON_HEDLEY_ALWAYS_INLINE
+     char_int_type get()
+     {
+         ++chars_read;
+@@ -4222,6 +4230,27 @@ class binary_reader
+         return current;
+     }
+ 
++    /// reverse the byte order of a double with a single byteswap(): GCC does
++    /// not merge the byte-wise swap of the generic version into one
++    static void byte_swap(double& number) noexcept
++    {
++        static_assert(sizeof(double) == sizeof(std::uint64_t), "double must have 64 bits");
++        std::uint64_t bits{};
++        std::memcpy(&bits, &number, sizeof(bits));
++        bits = byteswap(bits);
++        std::memcpy(&number, &bits, sizeof(bits));
++    }
++
++    /// reverse the byte order of a float with a single byteswap()
++    static void byte_swap(float& number) noexcept
++    {
++        static_assert(sizeof(float) == sizeof(std::uint32_t), "float must have 32 bits");
++        std::uint32_t bits{};
++        std::memcpy(&bits, &number, sizeof(bits));
++        bits = byteswap(bits);
++        std::memcpy(&number, &bits, sizeof(bits));
++    }
++
+     template<class NumberType>
+     static void byte_swap(NumberType& number)
+     {
+```
+
+## Existing upstream tests that call the changed code (for style and API usage)
+// Upstream tests at the PR's parent commit 6c3ab966d that use the changed code.
+// Names searched (test lines using each): sax_parse (0), from_bson (0), from_cbor (0), from_msgpack (0), from_ubjson (0), from_bjdata (0), from_bon8 (0), binary_reader (2), parse_cbor_value (0), byte_swap (0), get_cbor_float (0), get (784)
+
+// ---- tests/src/unit-bjdata.cpp:76-111  (uses: binary_reader)
+    SECTION("binary_reader BJData lookup tables")
+    {
+        // both lookups are static member functions
+        std::vector<std::uint8_t> const data;
+        using reader_t = nlohmann::detail::binary_reader<json, decltype(nlohmann::detail::input_adapter(data))>;
+
+        // the excluded optimized-type markers must match binary_writer's
+        // is_bjdata_excluded_type_marker(), which encodes the same 8 markers
+        for (const char marker :
+                {'[', '{', 'S', 'H', 'T', 'F', 'N', 'Z'
+                })
+        {
+            CHECK(reader_t::is_bjd_excluded_optimized_type(static_cast<unsigned char>(marker)));
+        }
+        for (const char marker :
+                {'U', 'i', 'u', 'I', 'm', 'l', 'M', 'L', 'd', 'D', 'C', 'B', 'x'
+                })
+        {
+            CHECK(!reader_t::is_bjd_excluded_optimized_type(static_cast<unsigned char>(marker)));
+        }
+
+        // every dtype marker must round-trip to its ND-array type name
+        const std::vector<std::pair<char, std::string>> types
+        {
+            {'B', "byte"}, {'C', "char"}, {'D', "double"}, {'I', "int16"},
+            {'L', "int64"}, {'M', "uint64"}, {'U', "uint8"}, {'d', "single"},
+            {'i', "int8"}, {'l', "int32"}, {'m', "uint32"}, {'u', "uint16"}
+        };
+        for (const auto& type : types)
+        {
+            const char* name = reader_t::bjd_type_name(static_cast<unsigned char>(type.first));
+            REQUIRE(name != nullptr);
+            CHECK(std::string(name) == type.second);
+        }
+        CHECK(reader_t::bjd_type_name(static_cast<unsigned char>('x')) == nullptr);
+    }
+
+// ---- tests/src/fuzzer-driver_afl.cpp:18-39  (uses: get)
+
+extern "C" int LLVMFuzzerTestOneInput(const uint8_t* data, size_t size);
+
+int main()
+{
+#ifdef __AFL_HAVE_MANUAL_CONTROL
+    while (__AFL_LOOP(1000))
+    {
+#endif
+        // copy stdin to byte vector
+        std::vector<uint8_t> vec;
+        char c = 0;
+        while (std::cin.get(c))
+        {
+            vec.push_back(static_cast<uint8_t>(c));
+        }
+
+        LLVMFuzzerTestOneInput(vec.data(), vec.size());
+#ifdef __AFL_HAVE_MANUAL_CONTROL
+    }
+#endif
+}
+
+// ---- tests/src/unit-algorithms.cpp:35-45  (uses: get)
+        SECTION("std::any_of")
+        {
+            CHECK(std::any_of(j_array.begin(), j_array.end(), [](const json & value)
+            {
+                return value.is_string() && value.get<std::string>() == "foo";
+            }));
+            CHECK(std::any_of(j_object.begin(), j_object.end(), [](const json & value)
+            {
+                return value.get<int>() > 1;
+            }));
+        }
+
+// ---- tests/src/unit-algorithms.cpp:47-57  (uses: get)
+        SECTION("std::none_of")
+        {
+            CHECK(std::none_of(j_array.begin(), j_array.end(), [](const json & value)
+            {
+                return value.empty();
+            }));
+            CHECK(std::none_of(j_object.begin(), j_object.end(), [](const json & value)
+            {
+                return value.get<int>() <= 0;
+            }));
+        }
+
+// ---- tests/src/unit-alt-string.cpp:184-208  (uses: get)
+    SECTION("binary formats")
+    {
+        alt_json doc;
+        doc["pi"] = 3.141;
+        doc["happy"] = true;
+        doc["list"] = {1, 2, 3};
+
+        CHECK(alt_json::from_cbor(alt_json::to_cbor(doc)) == doc);
+        CHECK(alt_json::from_msgpack(alt_json::to_msgpack(doc)) == doc);
+        CHECK(alt_json::from_bon8(alt_json::to_bon8(doc)) == doc);
+        // BSON is not covered: it additionally needs string_t::find(value_type),
+        // which alt_string does not provide
+        CHECK(alt_json::from_ubjson(alt_json::to_ubjson(doc)) == doc);
+
+        // a UBJSON high-precision number is parsed into a std::string that the
+        // reader has to hand to the SAX interface as an alt_string
+        const std::vector<uint8_t> high_precision =
+        {
+            'H', 'i', 0x16, '3', '.', '1', '4', '1', '5', '9', '2', '6', '5', '3',
+            '5', '8', '9', '7', '9', '3', '2', '3', '8', '4', '6'
+        };
+        const auto number = alt_json::from_ubjson(high_precision);
+        CHECK(number.is_number_float());
+        CHECK(number.get<double>() == doctest::Approx(3.14159265358979323846));
+    }
+
+// ---- tests/src/unit-alt-string.cpp:435-468  (uses: get)
+    SECTION("conversion between basic_json specializations (#2649)")
+    {
+        // explicit conversions are always possible
+        CHECK(std::is_constructible<nlohmann::json, alt_json>::value);
+        CHECK(std::is_constructible<alt_json, nlohmann::json>::value);
+        CHECK(std::is_constructible<nlohmann::json, nlohmann::ordered_json>::value);
+        CHECK(std::is_constructible<nlohmann::ordered_json, nlohmann::json>::value);
+
+        // specializations with the same string type are implicitly convertible
+        CHECK(std::is_convertible<nlohmann::ordered_json, nlohmann::json>::value);
+        CHECK(std::is_convertible<nlohmann::json, nlohmann::ordered_json>::value);
+
+        // specializations with different string types are only implicitly convertible
+        // if implicit conversions are enabled
+#if JSON_USE_IMPLICIT_CONVERSIONS
+        CHECK(std::is_convertible<alt_json, nlohmann::json>::value);
+        CHECK(std::is_convertible<nlohmann::json, alt_json>::value);
+#else
+        CHECK_FALSE(std::is_convertible<alt_json, nlohmann::json>::value);
+        CHECK_FALSE(std::is_convertible<nlohmann::json, alt_json>::value);
+#endif
+
+        // get<BasicJsonType>() works in either case
+        const nlohmann::json j = {{"foo", 1}, {"bar", true}};
+        CHECK(j.get<nlohmann::ordered_json>() == nlohmann::ordered_json(j));
+        // (only a number is converted here, as objects and strings are affected by #3425)
+        CHECK(nlohmann::json(42).get<alt_json>() == 42);
+        CHECK(alt_json(nlohmann::json(42)) == 42);
+
+        // get_to() also works in either case
+        alt_json a;
+        nlohmann::json(42).get_to(a);
+        CHECK(a == 42);
+    }
+
+// ---- tests/src/unit-binary_writer_sinks.cpp:283-307  (uses: get)
+        }
+        else if (u <= 0xFFFFFFFF)
+        {
+            put(0xCE, u, 4);
+        }
+        else
+        {
+            put(0xCF, u, 8);
+        }
+        return;
+    }
+
+    const auto n = j.get<std::int64_t>();
+    const auto bits = static_cast<std::uint64_t>(n);
+    if (n >= -32)
+    {
+        out.push_back(static_cast<std::uint8_t>(bits));
+    }
+    else if (n >= -128)
+    {
+        put(0xD0, bits, 1);
+    }
+    else if (n >= -32768)
+    {
+        put(0xD1, bits, 2);
+
+# Task
+Write 20 test programs for this pull request. Return JSON with a "tests" array; each item has "name" (short snake_case), "intent" (one sentence: what behavior it probes) and "code" (the complete C++ program).

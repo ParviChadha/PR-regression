@@ -1,0 +1,1328 @@
+[system]
+You write test programs that probe a C++ library for behavioral changes made by one pull request.
+Each program is compiled and run twice, once against the library before the change and once after, and the two
+outputs are compared. Your job is to produce programs whose output reveals whether the change altered behavior,
+including side effects the author did not intend.
+
+Rules for every program:
+- It is standalone: one file with its own int main(), compiled as C++17, printing results to stdout.
+- Use only the library's documented public API. Never include internal headers or use detail/impl namespaces,
+  private members or undocumented macros.
+- Do not judge results (no assert, no expected-value comparisons): just print what the library returns. Print
+  enough to make differences visible, one fact per line.
+- Output must be deterministic. Never print pointers or addresses, uninitialized data, the order of
+  hash-based containers, timings, thread ids, random values, file paths or environment data. Print floating point
+  values with an explicit precision. No input, files, network, threads, clocks or randomness.
+- Wrap calls that may throw in try/catch and print the exception's type and message, so an exception is an
+  observable result. Do not crash on purpose.
+- Aim at the code the diff changes. Prefer calls that compile against both the old and the new library; one or two
+  programs may use an API the PR adds. Cover ordinary inputs and edge cases (empty, minimum and maximum values,
+  boundaries, special values, nesting, unusual types) and also neighbouring behavior the change could disturb.
+- When the diff changes which types or inputs an API accepts or rejects (constraints, overloads, traits,
+  conversions), test it with the detection idiom (std::void_t or requires) and `if constexpr`, so the program
+  compiles against both versions, prints whether the expression is well-formed, and exercises it when it is.
+  Accepting an input is not enough: also use it through every entry point that should follow (const and
+  non-const, read, write, insert, erase, lookup, nested use), because a change that admits new inputs can leave
+  later code unable to handle them.
+- If the changed code is internal (a detail, impl or internal namespace, a trait, a helper), do not name it in the
+  program. Reach it through the public API that depends on it, using detection (as above) where needed.
+- Use the exact types and values the diff is about (the new trait's argument types, the new overload's
+  parameters), not stand-ins.
+- Spread the programs over distinct public entry points and overloads, one main idea per program. Do not write
+  several programs that only rename a type or change a literal.
+- Make the programs differ from each other: different inputs, different entry points, different features.
+
+Rules specific to this library:
+- Include the library with #include <nlohmann/json.hpp>. The public API is nlohmann::json (nlohmann::basic_json), nlohmann::ordered_json, json_pointer, json patch/merge_patch and the documented SAX and conversion interfaces. Never use the detail namespace.
+- It is a header-only library: nothing to link. Programs are compiled as C++17.
+- Print JSON values with dump() (compact) or dump(2). Keys of nlohmann::json objects print in sorted order, so output is deterministic; do not depend on insertion order except with ordered_json.
+
+[user]
+# Pull request #5805: Fix silent wrong results for custom number types
+
+## Description
+Two silent wrong-result bugs for custom number types that already compile on `develop`, found while analysing #3578.
+
+## Integer/float comparison with a class-type integer
+
+`compare_integer_with_float()` (`detail/value_t.hpp`) took the signedness from `std::is_signed<IntegerType>`, which is `false` for class types such as `absl::int128` or `boost::multiprecision::cpp_int`. Every float below zero then compared as less than every integer:
+
+```cpp
+using J = nlohmann::basic_json<std::map, std::vector, std::string, bool, absl::int128, absl::uint128, double>;
+J i(J::value_t::number_integer);
+i.get_ref<absl::int128&>() = -5;
+J(-2.5) < i;  // true before, false now
+i < J(-2.5);  // false before, true now
+```
+
+The signedness now comes from `std::numeric_limits<IntegerType>::is_signed`, matching the `digits` already used for the range bound.
+
+## Binary writers with integer types wider than 64 bits
+
+With `basic_json<..., __int128, unsigned __int128, double>`:
+
+| format | before | after |
+|---|---|---|
+| CBOR | truncated (2^100 → 0) | `out_of_range.407` outside [-2^64, 2^64-1] |
+| MessagePack | truncated | `out_of_range.407` outside [-2^63, 2^64-1] |
+| BSON | truncated | `out_of_range.407` outside int64 (signed) / uint64 (unsigned), before anything is written |
+| BON8 | did not compile (`std::to_string` ambiguous) | `out_of_range.407` outside int64 (same message as before for uint64) |
+| UBJSON | exact `H` high-precision number | unchanged |
+| BJData | signed: exact `H`; unsigned: truncated via `M` | unsigned beyond uint64 also written as `H` |
+| BJData ND-array | elements/dimensions beyond 64 bits truncated before the range check, so they could be encoded as wrong values | object falls back to a plain object, like other out-of-range elements |
+
+The checks (`integer_fits_max/min/fits` in `binary_writer`) get the ranges from `std::numeric_limits` digits. They dispatch on a compile-time tag, so for number types of at most 64 bits they are the constant `true` and compile away. I checked this by compiling `to_cbor`/`to_msgpack`/`to_bson`/`to_ubjson`/`to_bjdata`/`to_bon8` for the default `json` at -O2. The CBOR, MessagePack and BSON writer functions have identical instruction counts before and after (clang). The UBJSON/BJData functions change by a few instructions because clang now makes different inlining decisions; they get no extra runtime checks. The cold throw path is shared with BON8.
+
+The error message prints the number with `dump()`, because `std::to_string` has no overload for `__int128`.
+
+## Tests
+
+New file `tests/src/unit-custom-number-types.cpp`:
+- A small trivial class-type signed integer with `std::numeric_limits` specialized (`is_signed = true`), standing in for `absl::int128`, which CI does not have. It covers `<`, `>`, `<=`, `>=`, `==`, `!=` against floats, including floats outside the integer's range.
+- `__int128`/`unsigned __int128` writers for all formats, including the edges of each range and the ND-array fallback. These tests are compiled only when the standard library treats `__int128` as an integral type: libc++, or libstdc++ outside strict ISO mode (`__GLIBCXX_TYPE_INT_N_0`; CMake builds use GNU mode by default). A `static_assert` checks the traits.
+
+Against `develop`'s headers, 30 of the new assertions fail (BON8 part left out, since it doesn't compile there). With the fix, all pass with Apple clang, GCC 16 and GCC 9 (C++11/17/20). Also checked: the existing cbor/msgpack/bson/ubjson/bjdata/bon8/comparison/binary_formats suites under ASan/UBSan, GCC 16's CI warning flags, clang `-Weverything` (Apple clang and clang 19), and clang-tidy with the repo config.
+
+Docs: the `out_of_range.407` entry in `exceptions.md` (it still said the exception could not occur, although BON8 already throws it) and the exception sections and version histories of `to_cbor`, `to_msgpack`, `to_bson`, `to_bjdata` and `to_bon8`.
+
+## Does this break the public API?
+
+No breaking changes for the default number types: no signatures change, and the new
+[... truncated, 521 more characters]
+
+## Commit message
+* Fix silent wrong results for custom number types
+
+Squashed onto develop cd6b428ef (CI fixes from #5860). Original commits:
+
+- Fix silent wrong results for custom number types
+- Fix CI: build the out_of_range.407 message from string_t and fix a link
+- Fix CI: diagnostics message, clang-tidy, and MinGW section limit
+- Format the out_of_range.407 number without dump()
+- Move the std::deque array test out of unit-regression3.cpp
+- Fix clang-tidy and clang 3.4/3.5 failures in the custom number type changes
+- Fix CI: cast the 128-bit unsigned value explicitly in the integer fast path
+
+Signed-off-by: Niels Lohmann <mail@nlohmann.me>
+
+* Name the range checks of integer_fits_max/min
+
+Signed-off-by: Niels Lohmann <mail@nlohmann.me>
+
+---------
+
+Signed-off-by: Niels Lohmann <mail@nlohmann.me>
+
+## Discussion before merge
+- gregmarr: astyle, not sure if fixable.
+- gregmarr: negation
+- nlohmann: Fixed in 8c632d7df. The two conditions are now named members of a small `integer_range` trait (`may_exceed_max`, `may_fall_below_min`), so the `std::integral_constant<bool, ...>` argument no longer contains a comparison, and astyle leaves the line alone.
+
+— posted by Claude Code on behalf of @nlohmann
+- nlohmann: Same commit (8c632d7df): the `!` moved into `integer_range::may_fall_below_min`, which is a plain `static constexpr bool`, so the template argument has no negation anymore.
+
+— posted by Claude Code on behalf of @nlohmann
+
+## Changed functions (from changes.py)
+- nlohmann::detail::binary_writer (private); reached from the public API through: nlohmann::basic_json::to_bjdata(const basic_json<...> &, detail::output_adapter<char>, const bool, const bool, const bjdata_version_t, const error_handler_t), nlohmann::basic_json::to_bjdata(const basic_json<...> &, detail::output_adapter<std::uint8_t>, const bool, const bool, const bjdata_version_t, const error_handler_t), nlohmann::basic_json::to_bon8(const basic_json<...> &, detail::output_adapter<char>), nlohmann::basic_json::to_bon8(const basic_json<...> &, detail::output_adapter<std::uint8_t>), nlohmann::basic_json::to_bson(const basic_json<...> &, detail::output_adapter<char>, const error_handler_t), nlohmann::basic_json::to_bson(const basic_json<...> &, detail::output_adapter<std::uint8_t>, const error_handler_t), nlohmann::basic_json::to_cbor(const basic_json<...> &, detail::output_adapter<char>, const error_handler_t), nlohmann::basic_json::to_cbor(const basic_json<...> &, detail::output_adapter<std::uint8_t>, const error_handler_t), nlohmann::basic_json::to_msgpack(const basic_json<...> &, detail::output_adapter<char>, const error_handler_t), nlohmann::basic_json::to_msgpack(const basic_json<...> &, detail::output_adapter<std::uint8_t>, const error_handler_t)
+- nlohmann::detail::binary_writer::write_msgpack_integer(const BasicJsonType &, std::false_type) (private); reached from the public API through: nlohmann::basic_json::to_bjdata(const basic_json<...> &, detail::output_adapter<char>, const bool, const bool, const bjdata_version_t, const error_handler_t), nlohmann::basic_json::to_bjdata(const basic_json<...> &, detail::output_adapter<std::uint8_t>, const bool, const bool, const bjdata_version_t, const error_handler_t), nlohmann::basic_json::to_bon8(const basic_json<...> &, detail::output_adapter<char>), nlohmann::basic_json::to_bon8(const basic_json<...> &, detail::output_adapter<std::uint8_t>), nlohmann::basic_json::to_bson(const basic_json<...> &, detail::output_adapter<char>, const error_handler_t), nlohmann::basic_json::to_bson(const basic_json<...> &, detail::output_adapter<std::uint8_t>, const error_handler_t), nlohmann::basic_json::to_cbor(const basic_json<...> &, detail::output_adapter<char>, const error_handler_t), nlohmann::basic_json::to_cbor(const basic_json<...> &, detail::output_adapter<std::uint8_t>, const error_handler_t), nlohmann::basic_json::to_msgpack(const basic_json<...> &, detail::output_adapter<char>, const error_handler_t), nlohmann::basic_json::to_msgpack(const basic_json<...> &, detail::output_adapter<std::uint8_t>, const error_handler_t)
+- nlohmann::detail::binary_writer::calc_bson_value_size(const BasicJsonType &) (private); reached from the public API through: nlohmann::basic_json::to_bjdata(const basic_json<...> &, detail::output_adapter<char>, const bool, const bool, const bjdata_version_t, const error_handler_t), nlohmann::basic_json::to_bjdata(const basic_json<...> &, detail::output_adapter<std::uint8_t>, const bool, const bool, const bjdata_version_t, const error_handler_t), nlohmann::basic_json::to_bon8(const basic_json<...> &, detail::output_adapter<char>), nlohmann::basic_json::to_bon8(const basic_json<...> &, detail::output_adapter<std::uint8_t>), nlohmann::basic_json::to_bson(const basic_json<...> &, detail::output_adapter<char>, const error_handler_t), nlohmann::basic_json::to_bson(const basic_json<...> &, detail::output_adapter<std::uint8_t>, const error_handler_t), nlohmann::basic_json::to_cbor(const basic_json<...> &, detail::output_adapter<char>, const error_handler_t), nlohmann::basic_json::to_cbor(const basic_json<...> &, detail::output_adapter<std::uint8_t>, const error_handler_t), nlohmann::basic_json::to_msgpack(const basic_json<...> &, detail::output_adapter<char>, const error_handler_t), nlohmann::basic_json::to_msgpack(const basic_json<...> &, detail::output_adapter<std::uint8_t>, const error_handler_t)
+- nlohmann::detail::binary_writer::write_bjdata_ndarray(const typename BasicJsonType::object_t &, const bool, const bool, const bjdata_version_t) (private); reached from the public API through: nlohmann::basic_json::to_bjdata(const basic_json<...> &, detail::output_adapter<char>, const bool, const bool, const bjdata_version_t, const error_handler_t), nlohmann::basic_json::to_bjdata(const basic_json<...> &, detail::output_adapter<std::uint8_t>, const bool, const bool, const bjdata_version_t, const error_handler_t), nlohmann::basic_json::to_bon8(const basic_json<...> &, detail::output_adapter<char>), nlohmann::basic_json::to_bon8(const basic_json<...> &, detail::output_adapter<std::uint8_t>), nlohmann::basic_json::to_bson(const basic_json<...> &, detail::output_adapter<char>, const error_handler_t), nlohmann::basic_json::to_bson(const basic_json<...> &, detail::output_adapter<std::uint8_t>, const error_handler_t), nlohmann::basic_json::to_cbor(const basic_json<...> &, detail::output_adapter<char>, const error_handler_t), nlohmann::basic_json::to_cbor(const basic_json<...> &, detail::output_adapter<std::uint8_t>, const error_handler_t), nlohmann::basic_json::to_msgpack(const basic_json<...> &, detail::output_adapter<char>, const error_handler_t), nlohmann::basic_json::to_msgpack(const basic_json<...> &, detail::output_adapter<std::uint8_t>, const error_handler_t)
+- nlohmann::detail::binary_writer::write_bon8_value(const BasicJsonType &, bool &, const std::size_t) (private); reached from the public API through: nlohmann::basic_json::to_bjdata(const basic_json<...> &, detail::output_adapter<char>, const bool, const bool, const bjdata_version_t, const error_handler_t), nlohmann::basic_json::to_bjdata(const basic_json<...> &, detail::output_adapter<std::uint8_t>, const bool, const bool, const bjdata_version_t, const error_handler_t), nlohmann::basic_json::to_bon8(const basic_json<...> &, detail::output_adapter<char>), nlohmann::basic_json::to_bon8(const basic_json<...> &, detail::output_adapter<std::uint8_t>), nlohmann::basic_json::to_bson(const basic_json<...> &, detail::output_adapter<char>, const error_handler_t), nlohmann::basic_json::to_bson(const basic_json<...> &, detail::output_adapter<std::uint8_t>, const error_handler_t), nlohmann::basic_json::to_cbor(const basic_json<...> &, detail::output_adapter<char>, const error_handler_t), nlohmann::basic_json::to_cbor(const basic_json<...> &, detail::output_adapter<std::uint8_t>, const error_handler_t), nlohmann::basic_json::to_msgpack(const basic_json<...> &, detail::output_adapter<char>, const error_handler_t), nlohmann::basic_json::to_msgpack(const basic_json<...> &, detail::output_adapter<std::uint8_t>, const error_handler_t)
+- nlohmann::detail::compare_integer_with_float(const IntegerType, const FloatType) (private); reached from the public API through: nlohmann::operator<(const_reference, const_reference), nlohmann::operator==(const_reference, const_reference)
+- nlohmann::detail::binary_writer::bjdata_ndarray_value_in_range(const BasicJsonType &) (private); reached from the public API through: nlohmann::basic_json::to_bjdata(const basic_json<...> &, detail::output_adapter<char>, const bool, const bool, const bjdata_version_t, const error_handler_t), nlohmann::basic_json::to_bjdata(const basic_json<...> &, detail::output_adapter<std::uint8_t>, const bool, const bool, const bjdata_version_t, const error_handler_t), nlohmann::basic_json::to_bon8(const basic_json<...> &, detail::output_adapter<char>), nlohmann::basic_json::to_bon8(const basic_json<...> &, detail::output_adapter<std::uint8_t>), nlohmann::basic_json::to_bson(const basic_json<...> &, detail::output_adapter<char>, const error_handler_t), nlohmann::basic_json::to_bson(const basic_json<...> &, detail::output_adapter<std::uint8_t>, const error_handler_t), nlohmann::basic_json::to_cbor(const basic_json<...> &, detail::output_adapter<char>, const error_handler_t), nlohmann::basic_json::to_cbor(const basic_json<...> &, detail::output_adapter<std::uint8_t>, const error_handler_t), nlohmann::basic_json::to_msgpack(const basic_json<...> &, detail::output_adapter<char>, const error_handler_t), nlohmann::basic_json::to_msgpack(const basic_json<...> &, detail::output_adapter<std::uint8_t>, const error_handler_t)
+- nlohmann::detail::binary_writer::write_bson_value(const string_t &, const BasicJsonType &) (private); reached from the public API through: nlohmann::basic_json::to_bjdata(const basic_json<...> &, detail::output_adapter<char>, const bool, const bool, const bjdata_version_t, const error_handler_t), nlohmann::basic_json::to_bjdata(const basic_json<...> &, detail::output_adapter<std::uint8_t>, const bool, const bool, const bjdata_version_t, const error_handler_t), nlohmann::basic_json::to_bon8(const basic_json<...> &, detail::output_adapter<char>), nlohmann::basic_json::to_bon8(const basic_json<...> &, detail::output_adapter<std::uint8_t>), nlohmann::basic_json::to_bson(const basic_json<...> &, detail::output_adapter<char>, const error_handler_t), nlohmann::basic_json::to_bson(const basic_json<...> &, detail::output_adapter<std::uint8_t>, const error_handler_t), nlohmann::basic_json::to_cbor(const basic_json<...> &, detail::output_adapter<char>, const error_handler_t), nlohmann::basic_json::to_cbor(const basic_json<...> &, detail::output_adapter<std::uint8_t>, const error_handler_t), nlohmann::basic_json::to_msgpack(const basic_json<...> &, detail::output_adapter<char>, const error_handler_t), nlohmann::basic_json::to_msgpack(const basic_json<...> &, detail::output_adapter<std::uint8_t>, const error_handler_t)
+- nlohmann::detail::binary_writer::write_cbor_array(const BasicJsonType &, const std::size_t) (private); reached from the public API through: nlohmann::basic_json::to_bjdata(const basic_json<...> &, detail::output_adapter<char>, const bool, const bool, const bjdata_version_t, const error_handler_t), nlohmann::basic_json::to_bjdata(const basic_json<...> &, detail::output_adapter<std::uint8_t>, const bool, const bool, const bjdata_version_t, const error_handler_t), nlohmann::basic_json::to_bon8(const basic_json<...> &, detail::output_adapter<char>), nlohmann::basic_json::to_bon8(const basic_json<...> &, detail::output_adapter<std::uint8_t>), nlohmann::basic_json::to_bson(const basic_json<...> &, detail::output_adapter<char>, const error_handler_t), nlohmann::basic_json::to_bson(const basic_json<...> &, detail::output_adapter<std::uint8_t>, const error_handler_t), nlohmann::basic_json::to_cbor(const basic_json<...> &, detail::output_adapter<char>, const error_handler_t), nlohmann::basic_json::to_cbor(const basic_json<...> &, detail::output_adapter<std::uint8_t>, const error_handler_t), nlohmann::basic_json::to_msgpack(const basic_json<...> &, detail::output_adapter<char>, const error_handler_t), nlohmann::basic_json::to_msgpack(const basic_json<...> &, detail::output_adapter<std::uint8_t>, const error_handler_t)
+- nlohmann::detail::binary_writer::ubjson_integer_prefix(const NumberType, const bool) (private); reached from the public API through: nlohmann::basic_json::to_bjdata(const basic_json<...> &, detail::output_adapter<char>, const bool, const bool, const bjdata_version_t, const error_handler_t), nlohmann::basic_json::to_bjdata(const basic_json<...> &, detail::output_adapter<std::uint8_t>, const bool, const bool, const bjdata_version_t, const error_handler_t), nlohmann::basic_json::to_bon8(const basic_json<...> &, detail::output_adapter<char>), nlohmann::basic_json::to_bon8(const basic_json<...> &, detail::output_adapter<std::uint8_t>), nlohmann::basic_json::to_bson(const basic_json<...> &, detail::output_adapter<char>, const error_handler_t), nlohmann::basic_json::to_bson(const basic_json<...> &, detail::output_adapter<std::uint8_t>, const error_handler_t), nlohmann::basic_json::to_cbor(const basic_json<...> &, detail::output_adapter<char>, const error_handler_t), nlohmann::basic_json::to_cbor(const basic_json<...> &, detail::output_adapter<std::uint8_t>, const error_handler_t), nlohmann::basic_json::to_msgpack(const basic_json<...> &, detail::output_adapter<char>, const error_handler_t), nlohmann::basic_json::to_msgpack(const basic_json<...> &, detail::output_adapter<std::uint8_t>, const error_handler_t)
+- nlohmann::detail::binary_writer::write_cbor(const BasicJsonType &, const std::size_t) (private); reached from the public API through: nlohmann::basic_json::to_bjdata(const basic_json<...> &, detail::output_adapter<char>, const bool, const bool, const bjdata_version_t, const error_handler_t), nlohmann::basic_json::to_bjdata(const basic_json<...> &, detail::output_adapter<std::uint8_t>, const bool, const bool, const bjdata_version_t, const error_handler_t), nlohmann::basic_json::to_bon8(const basic_json<...> &, detail::output_adapter<char>), nlohmann::basic_json::to_bon8(const basic_json<...> &, detail::output_adapter<std::uint8_t>), nlohmann::basic_json::to_bson(const basic_json<...> &, detail::output_adapter<char>, const error_handler_t), nlohmann::basic_json::to_bson(const basic_json<...> &, detail::output_adapter<std::uint8_t>, const error_handler_t), nlohmann::basic_json::to_cbor(const basic_json<...> &, detail::output_adapter<char>, const error_handler_t), nlohmann::basic_json::to_cbor(const basic_json<...> &, detail::output_adapter<std::uint8_t>, const error_handler_t), nlohmann::basic_json::to_msgpack(const basic_json<...> &, detail::output_adapter<char>, const error_handler_t), nlohmann::basic_json::to_msgpack(const basic_json<...> &, detail::output_adapter<std::uint8_t>, const error_handler_t)
+- nlohmann::detail::binary_writer::write_msgpack(const BasicJsonType &, const std::size_t) (private); reached from the public API through: nlohmann::basic_json::to_bjdata(const basic_json<...> &, detail::output_adapter<char>, const bool, const bool, const bjdata_version_t, const error_handler_t), nlohmann::basic_json::to_bjdata(const basic_json<...> &, detail::output_adapter<std::uint8_t>, const bool, const bool, const bjdata_version_t, const error_handler_t), nlohmann::basic_json::to_bon8(const basic_json<...> &, detail::output_adapter<char>), nlohmann::basic_json::to_bon8(const basic_json<...> &, detail::output_adapter<std::uint8_t>), nlohmann::basic_json::to_bson(const basic_json<...> &, detail::output_adapter<char>, const error_handler_t), nlohmann::basic_json::to_bson(const basic_json<...> &, detail::output_adapter<std::uint8_t>, const error_handler_t), nlohmann::basic_json::to_cbor(const basic_json<...> &, detail::output_adapter<char>, const error_handler_t), nlohmann::basic_json::to_cbor(const basic_json<...> &, detail::output_adapter<std::uint8_t>, const error_handler_t), nlohmann::basic_json::to_msgpack(const basic_json<...> &, detail::output_adapter<char>, const error_handler_t), nlohmann::basic_json::to_msgpack(const basic_json<...> &, detail::output_adapter<std::uint8_t>, const error_handler_t)
+- nlohmann::detail::binary_writer::write_msgpack_array(const BasicJsonType &, const std::size_t) (private); reached from the public API through: nlohmann::basic_json::to_bjdata(const basic_json<...> &, detail::output_adapter<char>, const bool, const bool, const bjdata_version_t, const error_handler_t), nlohmann::basic_json::to_bjdata(const basic_json<...> &, detail::output_adapter<std::uint8_t>, const bool, const bool, const bjdata_version_t, const error_handler_t), nlohmann::basic_json::to_bon8(const basic_json<...> &, detail::output_adapter<char>), nlohmann::basic_json::to_bon8(const basic_json<...> &, detail::output_adapter<std::uint8_t>), nlohmann::basic_json::to_bson(const basic_json<...> &, detail::output_adapter<char>, const error_handler_t), nlohmann::basic_json::to_bson(const basic_json<...> &, detail::output_adapter<std::uint8_t>, const error_handler_t), nlohmann::basic_json::to_cbor(const basic_json<...> &, detail::output_adapter<char>, const error_handler_t), nlohmann::basic_json::to_cbor(const basic_json<...> &, detail::output_adapter<std::uint8_t>, const error_handler_t), nlohmann::basic_json::to_msgpack(const basic_json<...> &, detail::output_adapter<char>, const error_handler_t), nlohmann::basic_json::to_msgpack(const basic_json<...> &, detail::output_adapter<std::uint8_t>, const error_handler_t)
+- nlohmann::detail::serializer::dump_integer(NumberType) (private); reached from the public API through: nlohmann::operator<<(std::ostream &, const basic_json<...> &), nlohmann::operator<<(basic_json<...> &, std::istream &), nlohmann::operator>>(std::istream &, basic_json<...> &), nlohmann::operator>>(const basic_json<...> &, std::ostream &), nlohmann::format_as(const basic_json<...> &), nlohmann::to_string(const basic_json<...> &), nlohmann::operator!=(const_reference, ScalarType), nlohmann::operator!=(ScalarType, const_reference), nlohmann::operator<(const_reference, ScalarType), nlohmann::operator<(ScalarType, const_reference)
+- nlohmann::detail::binary_writer::write_cbor_integer(const BasicJsonType &, std::false_type) (private); reached from the public API through: nlohmann::basic_json::to_bjdata(const basic_json<...> &, detail::output_adapter<char>, const bool, const bool, const bjdata_version_t, const error_handler_t), nlohmann::basic_json::to_bjdata(const basic_json<...> &, detail::output_adapter<std::uint8_t>, const bool, const bool, const bjdata_version_t, const error_handler_t), nlohmann::basic_json::to_bon8(const basic_json<...> &, detail::output_adapter<char>), nlohmann::basic_json::to_bon8(const basic_json<...> &, detail::output_adapter<std::uint8_t>), nlohmann::basic_json::to_bson(const basic_json<...> &, detail::output_adapter<char>, const error_handler_t), nlohmann::basic_json::to_bson(const basic_json<...> &, detail::output_adapter<std::uint8_t>, const error_handler_t), nlohmann::basic_json::to_cbor(const basic_json<...> &, detail::output_adapter<char>, const error_handler_t), nlohmann::basic_json::to_cbor(const basic_json<...> &, detail::output_adapter<std::uint8_t>, const error_handler_t), nlohmann::basic_json::to_msgpack(const basic_json<...> &, detail::output_adapter<char>, const error_handler_t), nlohmann::basic_json::to_msgpack(const basic_json<...> &, detail::output_adapter<std::uint8_t>, const error_handler_t)
+- nlohmann::detail::binary_writer::integer_to_string(NumberType, std::true_type) (private); reached from the public API through: nlohmann::basic_json::to_bjdata(const basic_json<...> &, detail::output_adapter<char>, const bool, const bool, const bjdata_version_t, const error_handler_t), nlohmann::basic_json::to_bjdata(const basic_json<...> &, detail::output_adapter<std::uint8_t>, const bool, const bool, const bjdata_version_t, const error_handler_t), nlohmann::basic_json::to_bon8(const basic_json<...> &, detail::output_adapter<char>), nlohmann::basic_json::to_bon8(const basic_json<...> &, detail::output_adapter<std::uint8_t>), nlohmann::basic_json::to_bson(const basic_json<...> &, detail::output_adapter<char>, const error_handler_t), nlohmann::basic_json::to_bson(const basic_json<...> &, detail::output_adapter<std::uint8_t>, const error_handler_t), nlohmann::basic_json::to_cbor(const basic_json<...> &, detail::output_adapter<char>, const error_handler_t), nlohmann::basic_json::to_cbor(const basic_json<...> &, detail::output_adapter<std::uint8_t>, const error_handler_t), nlohmann::basic_json::to_msgpack(const basic_json<...> &, detail::output_adapter<char>, const error_handler_t), nlohmann::basic_json::to_msgpack(const basic_json<...> &, detail::output_adapter<std::uint8_t>, const error_handler_t)
+- nlohmann::detail::binary_writer::integer_to_string(NumberType, std::false_type) (private); reached from the public API through: nlohmann::basic_json::to_bjdata(const basic_json<...> &, detail::output_adapter<char>, const bool, const bool, const bjdata_version_t, const error_handler_t), nlohmann::basic_json::to_bjdata(const basic_json<...> &, detail::output_adapter<std::uint8_t>, const bool, const bool, const bjdata_version_t, const error_handler_t), nlohmann::basic_json::to_bon8(const basic_json<...> &, detail::output_adapter<char>), nlohmann::basic_json::to_bon8(const basic_json<...> &, detail::output_adapter<std::uint8_t>), nlohmann::basic_json::to_bson(const basic_json<...> &, detail::output_adapter<char>, const error_handler_t), nlohmann::basic_json::to_bson(const basic_json<...> &, detail::output_adapter<std::uint8_t>, const error_handler_t), nlohmann::basic_json::to_cbor(const basic_json<...> &, detail::output_adapter<char>, const error_handler_t), nlohmann::basic_json::to_cbor(const basic_json<...> &, detail::output_adapter<std::uint8_t>, const error_handler_t), nlohmann::basic_json::to_msgpack(const basic_json<...> &, detail::output_adapter<char>, const error_handler_t), nlohmann::basic_json::to_msgpack(const basic_json<...> &, detail::output_adapter<std::uint8_t>, const error_handler_t)
+- nlohmann::detail::binary_writer::throw_integer_out_of_range(const BasicJsonType &, const char *, const char *) (private); reached from the public API through: nlohmann::basic_json::to_bjdata(const basic_json<...> &, detail::output_adapter<char>, const bool, const bool, const bjdata_version_t, const error_handler_t), nlohmann::basic_json::to_bjdata(const basic_json<...> &, detail::output_adapter<std::uint8_t>, const bool, const bool, const bjdata_version_t, const error_handler_t), nlohmann::basic_json::to_bon8(const basic_json<...> &, detail::output_adapter<char>), nlohmann::basic_json::to_bon8(const basic_json<...> &, detail::output_adapter<std::uint8_t>), nlohmann::basic_json::to_bson(const basic_json<...> &, detail::output_adapter<char>, const error_handler_t), nlohmann::basic_json::to_bson(const basic_json<...> &, detail::output_adapter<std::uint8_t>, const error_handler_t), nlohmann::basic_json::to_cbor(const basic_json<...> &, detail::output_adapter<char>, const error_handler_t), nlohmann::basic_json::to_cbor(const basic_json<...> &, detail::output_adapter<std::uint8_t>, const error_handler_t), nlohmann::basic_json::to_msgpack(const basic_json<...> &, detail::output_adapter<char>, const error_handler_t), nlohmann::basic_json::to_msgpack(const basic_json<...> &, detail::output_adapter<std::uint8_t>, const error_handler_t)
+- nlohmann::detail::binary_writer::integer_fits_min(const NumberType, std::true_type) (private); reached from the public API through: nlohmann::basic_json::to_bjdata(const basic_json<...> &, detail::output_adapter<char>, const bool, const bool, const bjdata_version_t, const error_handler_t), nlohmann::basic_json::to_bjdata(const basic_json<...> &, detail::output_adapter<std::uint8_t>, const bool, const bool, const bjdata_version_t, const error_handler_t), nlohmann::basic_json::to_bon8(const basic_json<...> &, detail::output_adapter<char>), nlohmann::basic_json::to_bon8(const basic_json<...> &, detail::output_adapter<std::uint8_t>), nlohmann::basic_json::to_bson(const basic_json<...> &, detail::output_adapter<char>, const error_handler_t), nlohmann::basic_json::to_bson(const basic_json<...> &, detail::output_adapter<std::uint8_t>, const error_handler_t), nlohmann::basic_json::to_cbor(const basic_json<...> &, detail::output_adapter<char>, const error_handler_t), nlohmann::basic_json::to_cbor(const basic_json<...> &, detail::output_adapter<std::uint8_t>, const error_handler_t), nlohmann::basic_json::to_msgpack(const basic_json<...> &, detail::output_adapter<char>, const error_handler_t), nlohmann::basic_json::to_msgpack(const basic_json<...> &, detail::output_adapter<std::uint8_t>, const error_handler_t)
+- nlohmann::detail::binary_writer::write_cbor_array_elements(const BasicJsonType &, const std::size_t, std::false_type) (private); reached from the public API through: nlohmann::basic_json::to_bjdata(const basic_json<...> &, detail::output_adapter<char>, const bool, const bool, const bjdata_version_t, const error_handler_t), nlohmann::basic_json::to_bjdata(const basic_json<...> &, detail::output_adapter<std::uint8_t>, const bool, const bool, const bjdata_version_t, const error_handler_t), nlohmann::basic_json::to_bon8(const basic_json<...> &, detail::output_adapter<char>), nlohmann::basic_json::to_bon8(const basic_json<...> &, detail::output_adapter<std::uint8_t>), nlohmann::basic_json::to_bson(const basic_json<...> &, detail::output_adapter<char>, const error_handler_t), nlohmann::basic_json::to_bson(const basic_json<...> &, detail::output_adapter<std::uint8_t>, const error_handler_t), nlohmann::basic_json::to_cbor(const basic_json<...> &, detail::output_adapter<char>, const error_handler_t), nlohmann::basic_json::to_cbor(const basic_json<...> &, detail::output_adapter<std::uint8_t>, const error_handler_t), nlohmann::basic_json::to_msgpack(const basic_json<...> &, detail::output_adapter<char>, const error_handler_t), nlohmann::basic_json::to_msgpack(const basic_json<...> &, detail::output_adapter<std::uint8_t>, const error_handler_t)
+- nlohmann::detail::binary_writer::integer_fits_max(const NumberType, std::true_type) (private); reached from the public API through: nlohmann::basic_json::to_bjdata(const basic_json<...> &, detail::output_adapter<char>, const bool, const bool, const bjdata_version_t, const error_handler_t), nlohmann::basic_json::to_bjdata(const basic_json<...> &, detail::output_adapter<std::uint8_t>, const bool, const bool, const bjdata_version_t, const error_handler_t), nlohmann::basic_json::to_bon8(const basic_json<...> &, detail::output_adapter<char>), nlohmann::basic_json::to_bon8(const basic_json<...> &, detail::output_adapter<std::uint8_t>), nlohmann::basic_json::to_bson(const basic_json<...> &, detail::output_adapter<char>, const error_handler_t), nlohmann::basic_json::to_bson(const basic_json<...> &, detail::output_adapter<std::uint8_t>, const error_handler_t), nlohmann::basic_json::to_cbor(const basic_json<...> &, detail::output_adapter<char>, const error_handler_t), nlohmann::basic_json::to_cbor(const basic_json<...> &, detail::output_adapter<std::uint8_t>, const error_handler_t), nlohmann::basic_json::to_msgpack(const basic_json<...> &, detail::output_adapter<char>, const error_handler_t), nlohmann::basic_json::to_msgpack(const basic_json<...> &, detail::output_adapter<std::uint8_t>, const error_handler_t)
+- nlohmann::detail::binary_writer::integer_range (private); reached from the public API through: nlohmann::basic_json::to_bjdata(const basic_json<...> &, detail::output_adapter<char>, const bool, const bool, const bjdata_version_t, const error_handler_t), nlohmann::basic_json::to_bjdata(const basic_json<...> &, detail::output_adapter<std::uint8_t>, const bool, const bool, const bjdata_version_t, const error_handler_t), nlohmann::basic_json::to_bon8(const basic_json<...> &, detail::output_adapter<char>), nlohmann::basic_json::to_bon8(const basic_json<...> &, detail::output_adapter<std::uint8_t>), nlohmann::basic_json::to_bson(const basic_json<...> &, detail::output_adapter<char>, const error_handler_t), nlohmann::basic_json::to_bson(const basic_json<...> &, detail::output_adapter<std::uint8_t>, const error_handler_t), nlohmann::basic_json::to_cbor(const basic_json<...> &, detail::output_adapter<char>, const error_handler_t), nlohmann::basic_json::to_cbor(const basic_json<...> &, detail::output_adapter<std::uint8_t>, const error_handler_t), nlohmann::basic_json::to_msgpack(const basic_json<...> &, detail::output_adapter<char>, const error_handler_t), nlohmann::basic_json::to_msgpack(const basic_json<...> &, detail::output_adapter<std::uint8_t>, const error_handler_t)
+- nlohmann::detail::binary_writer::integer_fits(const NumberType) (private); reached from the public API through: nlohmann::basic_json::to_bjdata(const basic_json<...> &, detail::output_adapter<char>, const bool, const bool, const bjdata_version_t, const error_handler_t), nlohmann::basic_json::to_bjdata(const basic_json<...> &, detail::output_adapter<std::uint8_t>, const bool, const bool, const bjdata_version_t, const error_handler_t), nlohmann::basic_json::to_bon8(const basic_json<...> &, detail::output_adapter<char>), nlohmann::basic_json::to_bon8(const basic_json<...> &, detail::output_adapter<std::uint8_t>), nlohmann::basic_json::to_bson(const basic_json<...> &, detail::output_adapter<char>, const error_handler_t), nlohmann::basic_json::to_bson(const basic_json<...> &, detail::output_adapter<std::uint8_t>, const error_handler_t), nlohmann::basic_json::to_cbor(const basic_json<...> &, detail::output_adapter<char>, const error_handler_t), nlohmann::basic_json::to_cbor(const basic_json<...> &, detail::output_adapter<std::uint8_t>, const error_handler_t), nlohmann::basic_json::to_msgpack(const basic_json<...> &, detail::output_adapter<char>, const error_handler_t), nlohmann::basic_json::to_msgpack(const basic_json<...> &, detail::output_adapter<std::uint8_t>, const error_handler_t)
+- nlohmann::detail::binary_writer::integer_fits_max(const NumberType) (private); reached from the public API through: nlohmann::basic_json::to_bjdata(const basic_json<...> &, detail::output_adapter<char>, const bool, const bool, const bjdata_version_t, const error_handler_t), nlohmann::basic_json::to_bjdata(const basic_json<...> &, detail::output_adapter<std::uint8_t>, const bool, const bool, const bjdata_version_t, const error_handler_t), nlohmann::basic_json::to_bon8(const basic_json<...> &, detail::output_adapter<char>), nlohmann::basic_json::to_bon8(const basic_json<...> &, detail::output_adapter<std::uint8_t>), nlohmann::basic_json::to_bson(const basic_json<...> &, detail::output_adapter<char>, const error_handler_t), nlohmann::basic_json::to_bson(const basic_json<...> &, detail::output_adapter<std::uint8_t>, const error_handler_t), nlohmann::basic_json::to_cbor(const basic_json<...> &, detail::output_adapter<char>, const error_handler_t), nlohmann::basic_json::to_cbor(const basic_json<...> &, detail::output_adapter<std::uint8_t>, const error_handler_t), nlohmann::basic_json::to_msgpack(const basic_json<...> &, detail::output_adapter<char>, const error_handler_t), nlohmann::basic_json::to_msgpack(const basic_json<...> &, detail::output_adapter<std::uint8_t>, const error_handler_t)
+- nlohmann::detail::binary_writer::integer_fits_max(const NumberType, std::false_type) (private); reached from the public API through: nlohmann::basic_json::to_bjdata(const basic_json<...> &, detail::output_adapter<char>, const bool, const bool, const bjdata_version_t, const error_handler_t), nlohmann::basic_json::to_bjdata(const basic_json<...> &, detail::output_adapter<std::uint8_t>, const bool, const bool, const bjdata_version_t, const error_handler_t), nlohmann::basic_json::to_bon8(const basic_json<...> &, detail::output_adapter<char>), nlohmann::basic_json::to_bon8(const basic_json<...> &, detail::output_adapter<std::uint8_t>), nlohmann::basic_json::to_bson(const basic_json<...> &, detail::output_adapter<char>, const error_handler_t), nlohmann::basic_json::to_bson(const basic_json<...> &, detail::output_adapter<std::uint8_t>, const error_handler_t), nlohmann::basic_json::to_cbor(const basic_json<...> &, detail::output_adapter<char>, const error_handler_t), nlohmann::basic_json::to_cbor(const basic_json<...> &, detail::output_adapter<std::uint8_t>, const error_handler_t), nlohmann::basic_json::to_msgpack(const basic_json<...> &, detail::output_adapter<char>, const error_handler_t), nlohmann::basic_json::to_msgpack(const basic_json<...> &, detail::output_adapter<std::uint8_t>, const error_handler_t)
+- nlohmann::detail::binary_writer::integer_fits_min(const NumberType) (private); reached from the public API through: nlohmann::basic_json::to_bjdata(const basic_json<...> &, detail::output_adapter<char>, const bool, const bool, const bjdata_version_t, const error_handler_t), nlohmann::basic_json::to_bjdata(const basic_json<...> &, detail::output_adapter<std::uint8_t>, const bool, const bool, const bjdata_version_t, const error_handler_t), nlohmann::basic_json::to_bon8(const basic_json<...> &, detail::output_adapter<char>), nlohmann::basic_json::to_bon8(const basic_json<...> &, detail::output_adapter<std::uint8_t>), nlohmann::basic_json::to_bson(const basic_json<...> &, detail::output_adapter<char>, const error_handler_t), nlohmann::basic_json::to_bson(const basic_json<...> &, detail::output_adapter<std::uint8_t>, const error_handler_t), nlohmann::basic_json::to_cbor(const basic_json<...> &, detail::output_adapter<char>, const error_handler_t), nlohmann::basic_json::to_cbor(const basic_json<...> &, detail::output_adapter<std::uint8_t>, const error_handler_t), nlohmann::basic_json::to_msgpack(const basic_json<...> &, detail::output_adapter<char>, const error_handler_t), nlohmann::basic_json::to_msgpack(const basic_json<...> &, detail::output_adapter<std::uint8_t>, const error_handler_t)
+- nlohmann::detail::binary_writer::integer_fits_min(const NumberType, std::false_type) (private); reached from the public API through: nlohmann::basic_json::to_bjdata(const basic_json<...> &, detail::output_adapter<char>, const bool, const bool, const bjdata_version_t, const error_handler_t), nlohmann::basic_json::to_bjdata(const basic_json<...> &, detail::output_adapter<std::uint8_t>, const bool, const bool, const bjdata_version_t, const error_handler_t), nlohmann::basic_json::to_bon8(const basic_json<...> &, detail::output_adapter<char>), nlohmann::basic_json::to_bon8(const basic_json<...> &, detail::output_adapter<std::uint8_t>), nlohmann::basic_json::to_bson(const basic_json<...> &, detail::output_adapter<char>, const error_handler_t), nlohmann::basic_json::to_bson(const basic_json<...> &, detail::output_adapter<std::uint8_t>, const error_handler_t), nlohmann::basic_json::to_cbor(const basic_json<...> &, detail::output_adapter<char>, const error_handler_t), nlohmann::basic_json::to_cbor(const basic_json<...> &, detail::output_adapter<std::uint8_t>, const error_handler_t), nlohmann::basic_json::to_msgpack(const basic_json<...> &, detail::output_adapter<char>, const error_handler_t), nlohmann::basic_json::to_msgpack(const basic_json<...> &, detail::output_adapter<std::uint8_t>, const error_handler_t)
+- nlohmann::detail::binary_writer::integer_range::may_fall_below_min (private); reached from the public API through: nlohmann::basic_json::to_bjdata(const basic_json<...> &, detail::output_adapter<char>, const bool, const bool, const bjdata_version_t, const error_handler_t), nlohmann::basic_json::to_bjdata(const basic_json<...> &, detail::output_adapter<std::uint8_t>, const bool, const bool, const bjdata_version_t, const error_handler_t), nlohmann::basic_json::to_bon8(const basic_json<...> &, detail::output_adapter<char>), nlohmann::basic_json::to_bon8(const basic_json<...> &, detail::output_adapter<std::uint8_t>), nlohmann::basic_json::to_bson(const basic_json<...> &, detail::output_adapter<char>, const error_handler_t), nlohmann::basic_json::to_bson(const basic_json<...> &, detail::output_adapter<std::uint8_t>, const error_handler_t), nlohmann::basic_json::to_cbor(const basic_json<...> &, detail::output_adapter<char>, const error_handler_t), nlohmann::basic_json::to_cbor(const basic_json<...> &, detail::output_adapter<std::uint8_t>, const error_handler_t), nlohmann::basic_json::to_msgpack(const basic_json<...> &, detail::output_adapter<char>, const error_handler_t), nlohmann::basic_json::to_msgpack(const basic_json<...> &, detail::output_adapter<std::uint8_t>, const error_handler_t)
+- nlohmann::detail::binary_writer::write_cbor_array_elements(const BasicJsonType &, const std::size_t, std::true_type) (private); reached from the public API through: nlohmann::basic_json::to_bjdata(const basic_json<...> &, detail::output_adapter<char>, const bool, const bool, const bjdata_version_t, const error_handler_t), nlohmann::basic_json::to_bjdata(const basic_json<...> &, detail::output_adapter<std::uint8_t>, const bool, const bool, const bjdata_version_t, const error_handler_t), nlohmann::basic_json::to_bon8(const basic_json<...> &, detail::output_adapter<char>), nlohmann::basic_json::to_bon8(const basic_json<...> &, detail::output_adapter<std::uint8_t>), nlohmann::basic_json::to_bson(const basic_json<...> &, detail::output_adapter<char>, const error_handler_t), nlohmann::basic_json::to_bson(const basic_json<...> &, detail::output_adapter<std::uint8_t>, const error_handler_t), nlohmann::basic_json::to_cbor(const basic_json<...> &, detail::output_adapter<char>, const error_handler_t), nlohmann::basic_json::to_cbor(const basic_json<...> &, detail::output_adapter<std::uint8_t>, const error_handler_t), nlohmann::basic_json::to_msgpack(const basic_json<...> &, detail::output_adapter<char>, const error_handler_t), nlohmann::basic_json::to_msgpack(const basic_json<...> &, detail::output_adapter<std::uint8_t>, const error_handler_t)
+- nlohmann::detail::binary_writer::integer_range::may_exceed_max (private); reached from the public API through: nlohmann::basic_json::to_bjdata(const basic_json<...> &, detail::output_adapter<char>, const bool, const bool, const bjdata_version_t, const error_handler_t), nlohmann::basic_json::to_bjdata(const basic_json<...> &, detail::output_adapter<std::uint8_t>, const bool, const bool, const bjdata_version_t, const error_handler_t), nlohmann::basic_json::to_bon8(const basic_json<...> &, detail::output_adapter<char>), nlohmann::basic_json::to_bon8(const basic_json<...> &, detail::output_adapter<std::uint8_t>), nlohmann::basic_json::to_bson(const basic_json<...> &, detail::output_adapter<char>, const error_handler_t), nlohmann::basic_json::to_bson(const basic_json<...> &, detail::output_adapter<std::uint8_t>, const error_handler_t), nlohmann::basic_json::to_cbor(const basic_json<...> &, detail::output_adapter<char>, const error_handler_t), nlohmann::basic_json::to_cbor(const basic_json<...> &, detail::output_adapter<std::uint8_t>, const error_handler_t), nlohmann::basic_json::to_msgpack(const basic_json<...> &, detail::output_adapter<char>, const error_handler_t), nlohmann::basic_json::to_msgpack(const basic_json<...> &, detail::output_adapter<std::uint8_t>, const error_handler_t)
+- nlohmann::detail::binary_writer::integers_fit_64_bits() (private); reached from the public API through: nlohmann::basic_json::to_bjdata(const basic_json<...> &, detail::output_adapter<char>, const bool, const bool, const bjdata_version_t, const error_handler_t), nlohmann::basic_json::to_bjdata(const basic_json<...> &, detail::output_adapter<std::uint8_t>, const bool, const bool, const bjdata_version_t, const error_handler_t), nlohmann::basic_json::to_bon8(const basic_json<...> &, detail::output_adapter<char>), nlohmann::basic_json::to_bon8(const basic_json<...> &, detail::output_adapter<std::uint8_t>), nlohmann::basic_json::to_bson(const basic_json<...> &, detail::output_adapter<char>, const error_handler_t), nlohmann::basic_json::to_bson(const basic_json<...> &, detail::output_adapter<std::uint8_t>, const error_handler_t), nlohmann::basic_json::to_cbor(const basic_json<...> &, detail::output_adapter<char>, const error_handler_t), nlohmann::basic_json::to_cbor(const basic_json<...> &, detail::output_adapter<std::uint8_t>, const error_handler_t), nlohmann::basic_json::to_msgpack(const basic_json<...> &, detail::output_adapter<char>, const error_handler_t), nlohmann::basic_json::to_msgpack(const basic_json<...> &, detail::output_adapter<std::uint8_t>, const error_handler_t)
+- nlohmann::detail::binary_writer::throw_integer_out_of_range::integer_limits (private); reached from the public API through: nlohmann::basic_json::to_bjdata(const basic_json<...> &, detail::output_adapter<char>, const bool, const bool, const bjdata_version_t, const error_handler_t), nlohmann::basic_json::to_bjdata(const basic_json<...> &, detail::output_adapter<std::uint8_t>, const bool, const bool, const bjdata_version_t, const error_handler_t), nlohmann::basic_json::to_bon8(const basic_json<...> &, detail::output_adapter<char>), nlohmann::basic_json::to_bon8(const basic_json<...> &, detail::output_adapter<std::uint8_t>), nlohmann::basic_json::to_bson(const basic_json<...> &, detail::output_adapter<char>, const error_handler_t), nlohmann::basic_json::to_bson(const basic_json<...> &, detail::output_adapter<std::uint8_t>, const error_handler_t), nlohmann::basic_json::to_cbor(const basic_json<...> &, detail::output_adapter<char>, const error_handler_t), nlohmann::basic_json::to_cbor(const basic_json<...> &, detail::output_adapter<std::uint8_t>, const error_handler_t), nlohmann::basic_json::to_msgpack(const basic_json<...> &, detail::output_adapter<char>, const error_handler_t), nlohmann::basic_json::to_msgpack(const basic_json<...> &, detail::output_adapter<std::uint8_t>, const error_handler_t)
+- nlohmann::detail::binary_writer::throw_integer_out_of_range::unsigned_limits (private); reached from the public API through: nlohmann::basic_json::to_bjdata(const basic_json<...> &, detail::output_adapter<char>, const bool, const bool, const bjdata_version_t, const error_handler_t), nlohmann::basic_json::to_bjdata(const basic_json<...> &, detail::output_adapter<std::uint8_t>, const bool, const bool, const bjdata_version_t, const error_handler_t), nlohmann::basic_json::to_bon8(const basic_json<...> &, detail::output_adapter<char>), nlohmann::basic_json::to_bon8(const basic_json<...> &, detail::output_adapter<std::uint8_t>), nlohmann::basic_json::to_bson(const basic_json<...> &, detail::output_adapter<char>, const error_handler_t), nlohmann::basic_json::to_bson(const basic_json<...> &, detail::output_adapter<std::uint8_t>, const error_handler_t), nlohmann::basic_json::to_cbor(const basic_json<...> &, detail::output_adapter<char>, const error_handler_t), nlohmann::basic_json::to_cbor(const basic_json<...> &, detail::output_adapter<std::uint8_t>, const error_handler_t), nlohmann::basic_json::to_msgpack(const basic_json<...> &, detail::output_adapter<char>, const error_handler_t), nlohmann::basic_json::to_msgpack(const basic_json<...> &, detail::output_adapter<std::uint8_t>, const error_handler_t)
+- nlohmann::detail::binary_writer::write_cbor_integer(const BasicJsonType &, std::true_type) (private); reached from the public API through: nlohmann::basic_json::to_bjdata(const basic_json<...> &, detail::output_adapter<char>, const bool, const bool, const bjdata_version_t, const error_handler_t), nlohmann::basic_json::to_bjdata(const basic_json<...> &, detail::output_adapter<std::uint8_t>, const bool, const bool, const bjdata_version_t, const error_handler_t), nlohmann::basic_json::to_bon8(const basic_json<...> &, detail::output_adapter<char>), nlohmann::basic_json::to_bon8(const basic_json<...> &, detail::output_adapter<std::uint8_t>), nlohmann::basic_json::to_bson(const basic_json<...> &, detail::output_adapter<char>, const error_handler_t), nlohmann::basic_json::to_bson(const basic_json<...> &, detail::output_adapter<std::uint8_t>, const error_handler_t), nlohmann::basic_json::to_cbor(const basic_json<...> &, detail::output_adapter<char>, const error_handler_t), nlohmann::basic_json::to_cbor(const basic_json<...> &, detail::output_adapter<std::uint8_t>, const error_handler_t), nlohmann::basic_json::to_msgpack(const basic_json<...> &, detail::output_adapter<char>, const error_handler_t), nlohmann::basic_json::to_msgpack(const basic_json<...> &, detail::output_adapter<std::uint8_t>, const error_handler_t)
+- nlohmann::detail::compare_integer_with_float::limits (private); reached from the public API through: nlohmann::operator<(const_reference, const_reference), nlohmann::operator==(const_reference, const_reference)
+- nlohmann::detail::binary_writer::msgpack_integers_fit_64_bits() (private); reached from the public API through: nlohmann::basic_json::to_bjdata(const basic_json<...> &, detail::output_adapter<char>, const bool, const bool, const bjdata_version_t, const error_handler_t), nlohmann::basic_json::to_bjdata(const basic_json<...> &, detail::output_adapter<std::uint8_t>, const bool, const bool, const bjdata_version_t, const error_handler_t), nlohmann::basic_json::to_bon8(const basic_json<...> &, detail::output_adapter<char>), nlohmann::basic_json::to_bon8(const basic_json<...> &, detail::output_adapter<std::uint8_t>), nlohmann::basic_json::to_bson(const basic_json<...> &, detail::output_adapter<char>, const error_handler_t), nlohmann::basic_json::to_bson(const basic_json<...> &, detail::output_adapter<std::uint8_t>, const error_handler_t), nlohmann::basic_json::to_cbor(const basic_json<...> &, detail::output_adapter<char>, const error_handler_t), nlohmann::basic_json::to_cbor(const basic_json<...> &, detail::output_adapter<std::uint8_t>, const error_handler_t), nlohmann::basic_json::to_msgpack(const basic_json<...> &, detail::output_adapter<char>, const error_handler_t), nlohmann::basic_json::to_msgpack(const basic_json<...> &, detail::output_adapter<std::uint8_t>, const error_handler_t)
+- nlohmann::detail::binary_writer::write_cbor_integer(const BasicJsonType &) (private); reached from the public API through: nlohmann::basic_json::to_bjdata(const basic_json<...> &, detail::output_adapter<char>, const bool, const bool, const bjdata_version_t, const error_handler_t), nlohmann::basic_json::to_bjdata(const basic_json<...> &, detail::output_adapter<std::uint8_t>, const bool, const bool, const bjdata_version_t, const error_handler_t), nlohmann::basic_json::to_bon8(const basic_json<...> &, detail::output_adapter<char>), nlohmann::basic_json::to_bon8(const basic_json<...> &, detail::output_adapter<std::uint8_t>), nlohmann::basic_json::to_bson(const basic_json<...> &, detail::output_adapter<char>, const error_handler_t), nlohmann::basic_json::to_bson(const basic_json<...> &, detail::output_adapter<std::uint8_t>, const error_handler_t), nlohmann::basic_json::to_cbor(const basic_json<...> &, detail::output_adapter<char>, const error_handler_t), nlohmann::basic_json::to_cbor(const basic_json<...> &, detail::output_adapter<std::uint8_t>, const error_handler_t), nlohmann::basic_json::to_msgpack(const basic_json<...> &, detail::output_adapter<char>, const error_handler_t), nlohmann::basic_json::to_msgpack(const basic_json<...> &, detail::output_adapter<std::uint8_t>, const error_handler_t)
+
+## Diff of the library source (before -> after)
+```diff
+diff --git a/include/nlohmann/detail/output/binary_writer.hpp b/include/nlohmann/detail/output/binary_writer.hpp
+index 0fe8b51f9..981035165 100644
+--- a/include/nlohmann/detail/output/binary_writer.hpp
++++ b/include/nlohmann/detail/output/binary_writer.hpp
+@@ -210,7 +210,7 @@ class binary_writer
+                 // one case for both, so that an array mixing negative
+                 // (number_integer) and non-negative (number_unsigned) values
+                 // does not mispredict the switch
+-                write_cbor_integer(j);
++                write_cbor_integer(j, std::integral_constant<bool, integers_fit_64_bits()>());
+                 break;
+             }
+ 
+@@ -408,7 +408,7 @@ class binary_writer
+                 // one case for both, so that an array mixing negative
+                 // (number_integer) and non-negative (number_unsigned) values
+                 // does not mispredict the switch
+-                write_msgpack_integer(j, std::integral_constant<bool, msgpack_integers_fit_64_bits()>());
++                write_msgpack_integer(j, std::integral_constant<bool, integers_fit_64_bits()>());
+                 break;
+             }
+ 
+@@ -759,6 +759,142 @@ class binary_writer
+         JSON_THROW(type_error::create(exception_id::discarded_value_used, concat("cannot serialize discarded value to ", format_name), &j));
+     }
+ 
++    /// how the range of integer type @a NumberType relates to that of @a TargetType
++    template<typename TargetType, typename NumberType>
++    struct integer_range
++    {
++        /// whether NumberType can hold values above the maximum of TargetType
++        static constexpr bool may_exceed_max = std::numeric_limits<NumberType>::digits > std::numeric_limits<TargetType>::digits;
++        /// whether NumberType can hold values below the minimum of TargetType
++        static constexpr bool may_fall_below_min = std::numeric_limits<NumberType>::is_signed
++            && (!std::numeric_limits<TargetType>::is_signed || may_exceed_max);
++    };
++
++    /*!
++    @brief whether integer @a n does not exceed the maximum of @a TargetType
++
++    The binary formats store integers in at most 64 bits, but number_integer_t
++    and number_unsigned_t may be wider (e.g., __int128). The range of the
++    integer is taken from std::numeric_limits, so a number type whose range
++    fits into @a TargetType is never checked: the function is then constant
++    true, and the default int64_t/uint64_t types pay nothing.
++    */
++    template<typename TargetType, typename NumberType>
++    static constexpr bool integer_fits_max(const NumberType n) noexcept
++    {
++        return integer_fits_max<TargetType>(n, std::integral_constant<bool, integer_range<TargetType, NumberType>::may_exceed_max>());
++    }
++
++    template<typename TargetType, typename NumberType>
++    static constexpr bool integer_fits_max(const NumberType /*unused*/, std::false_type /*may_exceed*/) noexcept
++    {
++        return true;
++    }
++
++    template<typename TargetType, typename NumberType>
++    static constexpr bool integer_fits_max(const NumberType n, std::true_type /*may_exceed*/) noexcept
++    {
++        // NumberType has more digits than TargetType, so it can hold its maximum
++        return n <= static_cast<NumberType>((std::numeric_limits<TargetType>::max)());
++    }
++
++    /*!
++    @brief whether integer @a n is not below the minimum of @a TargetType;
++           constant true if NumberType cannot hold such a value
++    */
++    template<typename TargetType, typename NumberType>
++    static constexpr bool integer_fits_min(const NumberType n) noexcept
++    {
++        return integer_fits_min<TargetType>(n, std::integral_constant<bool, integer_range<TargetType, NumberType>::may_fall_below_min>());
++    }
++
++    template<typename TargetType, typename NumberType>
++    static constexpr bool integer_fits_min(const NumberType /*unused*/, std::false_type /*may_fall_below*/) noexcept
++    {
++        return true;
++    }
++
++    template<typename TargetType, typename NumberType>
++    static constexpr bool integer_fits_min(const NumberType n, std::true_type /*may_fall_below*/) noexcept
++    {
++        // NumberType is signed and either TargetType is unsigned (minimum 0)
++        // or NumberType has more digits, so it can hold the minimum
++        return n >= static_cast<NumberType>((std::numeric_limits<TargetType>::min)());
++    }
++
++    /*!
++    @brief whether integer @a n lies in the range of @a TargetType
++    */
++    template<typename TargetType, typename NumberType>
++    static constexpr bool integer_fits(const NumberType n) noexcept
++    {
++        return integer_fits_min<TargetType>(n) && integer_fits_max<TargetType>(n);
++    }
++
++    /*!
++    @brief the decimal digits of the non-negative integer @a n
++    */
++    template<typename NumberType>
++    static std::string integer_to_string(NumberType n, std::false_type /*is_signed*/)
++    {
++        std::string result;
++        do
++        {
++            result.push_back(static_cast<char>('0' + (n % 10)));
++            n = static_cast<NumberType>(n / 10);
++        }
++        while (n != 0);
++        std::reverse(result.begin(), result.end());
++        return result;
++    }
++
++    /*!
++    @brief the decimal digits of the integer @a n, with a leading '-' if it
++           is negative
++    */
++    template<typename NumberType>
++    static std::string integer_to_string(NumberType n, std::true_type /*is_signed*/)
++    {
++        // the remainder of a negative n is not positive; each digit is
++        // negated on its own, because negating the minimum of NumberType
++        // as a whole would overflow
++        const bool negative = n < 0;
++        std::string result;
++        do
++        {
++            const auto remainder = n % 10;
++            result.push_back(static_cast<char>('0' + (remainder < 0 ? -remainder : remainder)));
++            n = static_cast<NumberType>(n / 10);
++        }
++        while (n != 0);
++        if (negative)
++        {
++            result.push_back('-');
++        }
++        std::reverse(result.begin(), result.end());
++        return result;
++    }
++
++    /*!
++    @brief throws because the integer @a j is too large for @a format_name
++    @throw out_of_range.407 always
++    */
++    JSON_HEDLEY_NO_RETURN static void throw_integer_out_of_range(const BasicJsonType& j, const char* format_name, const char* range)
++    {
++        // neither std::to_string(), which has no overload for integer types
++        // wider than 64 bits, nor dump(), which would also instantiate the
++        // serializer for objects and fail for key types it cannot write
++        using integer_limits = std::numeric_limits<typename BasicJsonType::number_integer_t>;
++        using unsigned_limits = std::numeric_limits<typename BasicJsonType::number_unsigned_t>;
++        const std::string number = j.is_number_unsigned()
++                                   ? integer_to_string(j.m_data.m_value.number_unsigned, std::integral_constant<bool, unsigned_limits::is_signed>())
++                                   : integer_to_string(j.m_data.m_value.number_integer, std::integral_constant<bool, integer_limits::is_signed>());
++        static_cast<void>(number); // unused when JSON_NOEXCEPTION is defined
++        static_cast<void>(format_name);
++        static_cast<void>(range);
++        JSON_THROW(out_of_range::create(exception_id::integer_too_large, concat("integer number ", number, " cannot be represented by ", format_name, " as it does not fit ", range), &j));
++    }
++
+     void write_msgpack_array_prefix(const std::size_t N, const BasicJsonType& j)
+     {
+         const auto n = to_msgpack_length(N, j);
+@@ -1515,6 +1651,8 @@ class binary_writer
+             is neither an object nor an array
+     @throw out_of_range.415 if @a j is binary with a subtype that does not fit
+            into a byte, before anything is written
++    @throw out_of_range.407 if @a j is an integer that does not fit the 64 bits
++           of a BSON integer, before anythi
+[... truncated, 11546 more characters]
+diff --git a/include/nlohmann/detail/output/serializer.hpp b/include/nlohmann/detail/output/serializer.hpp
+index 3621a78d9..1dd5e41e3 100644
+--- a/include/nlohmann/detail/output/serializer.hpp
++++ b/include/nlohmann/detail/output/serializer.hpp
+@@ -1525,7 +1525,7 @@ class serializer
+         // without leading zeros
+         if (abs_value < 10000000000000000u)
+         {
+-            const std::uint64_t value = abs_value;
++            const auto value = static_cast<std::uint64_t>(abs_value); // fits: abs_value < 10^16
+             const std::uint64_t upper = value / 100000000u;
+             const std::uint64_t first = dtoa_impl::eight_digit_bytes(upper != 0 ? upper : value);
+             const auto leading = static_cast<unsigned>(count_leading_zeros(first) / 8); // (first is not 0)
+diff --git a/include/nlohmann/detail/value_t.hpp b/include/nlohmann/detail/value_t.hpp
+index 70d600365..9f64cb90b 100644
+--- a/include/nlohmann/detail/value_t.hpp
++++ b/include/nlohmann/detail/value_t.hpp
+@@ -14,7 +14,6 @@
+ #include <cstdint> // uint8_t
+ #include <limits> // numeric_limits
+ #include <string> // string
+-#include <type_traits> // is_signed
+ 
+ #include <nlohmann/detail/macro_scope.hpp>
+ #if JSON_HAS_THREE_WAY_COMPARISON
+@@ -208,13 +207,16 @@ FloatType compare_integer_with_float(const IntegerType i, const FloatType f) noe
+ 
+     // values of IntegerType lie in [-bound, bound) when signed and in
+     // [0, bound) when unsigned; digits excludes the sign bit, so bound is a
+-    // power of two that the float represents exactly
+-    const FloatType bound = std::ldexp(static_cast<FloatType>(1), std::numeric_limits<IntegerType>::digits);
++    // power of two that the float represents exactly; the signedness comes
++    // from numeric_limits as well, because std::is_signed is false for class
++    // types such as 128-bit or multiprecision integers
++    using limits = std::numeric_limits<IntegerType>;
++    const FloatType bound = std::ldexp(static_cast<FloatType>(1), limits::digits);
+     if (f >= bound)
+     {
+         return ordered(-1);
+     }
+-    if (std::is_signed<IntegerType>::value ? (f < -bound) : (f < static_cast<FloatType>(0)))
++    if (limits::is_signed ? (f < -bound) : (f < static_cast<FloatType>(0)))
+     {
+         return ordered(1);
+     }
+```
+
+## Existing upstream tests that call the changed code (for style and API usage)
+// Upstream tests at the PR's parent commit 0cbe95ffa that use the changed code.
+// Names searched (test lines using each): to_bjdata (0), to_bon8 (0), to_bson (0), to_cbor (0), to_msgpack (0), format_as (23), to_string (138), operator< (209), operator== (63), operator<< (96), operator>> (91), operator!= (58), binary_writer (0), write_msgpack_integer (0), calc_bson_value_size (0), write_bjdata_ndarray (0), write_bon8_value (0), compare_integer_with_float (0), bjdata_ndarray_value_in_range (0), write_bson_value (0), write_cbor_array (0), ubjson_integer_prefix (0), write_cbor (0), write_msgpack (0), write_msgpack_array (0), dump_integer (0), write_cbor_integer (0), integer_to_string (0), throw_integer_out_of_range (0), integer_fits_min (0), write_cbor_array_elements (0), integer_fits_max (0), integer_range (0), integer_fits (0), may_fall_below_min (0), may_exceed_max (0), integers_fit_64_bits (0), integer_limits (0), unsigned_limits (0), limits (32), msgpack_integers_fit_64_bits (0)
+
+// ---- tests/src/unit-comparison.cpp:74-86  (uses: operator!=, operator<, operator==)
+TEST_CASE("lexicographical comparison operators")
+{
+    constexpr auto f_ = false;
+    constexpr auto _t = true;
+    constexpr auto nan = std::numeric_limits<json::number_float_t>::quiet_NaN();
+#if JSON_HAS_THREE_WAY_COMPARISON
+    constexpr auto lt = std::partial_ordering::less;
+    constexpr auto gt = std::partial_ordering::greater;
+    constexpr auto eq = std::partial_ordering::equivalent;
+    constexpr auto un = std::partial_ordering::unordered;
+#endif
+
+#if JSON_HAS_THREE_WAY_COMPARISON
+
+// ---- tests/src/unit-comparison.cpp:128-148  (uses: operator!=, operator<, operator==)
+        SECTION("comparison: less")
+        {
+            REQUIRE(expected_lt.size() == j_types.size());
+            for (size_t i = 0; i < j_types.size(); ++i)
+            {
+                REQUIRE(expected_lt[i].size() == j_types.size());
+                for (size_t j = 0; j < j_types.size(); ++j)
+                {
+                    CAPTURE(i)
+                    CAPTURE(j)
+                    // check precomputed values
+#if JSON_HAS_THREE_WAY_COMPARISON
+                    // JSON_HAS_CPP_20 (do not remove; see note at top of file)
+                    CHECK((j_types[i] < j_types[j]) == expected_lt[i][j]);
+#else
+                    CHECK(operator<(j_types[i], j_types[j]) == expected_lt[i][j]);
+#endif
+                    CHECK(f(j_types[i], j_types[j]) == expected_lt[i][j]);
+                }
+            }
+        }
+
+// ---- tests/src/unit-deserialization.cpp:1271-1316  (uses: operator<<, operator>>, to_string)
+TEST_CASE("parse error positions are the same for contiguous and stream input")
+{
+    // contiguous input derives the position from the input on error, stream
+    // input counts it while reading (see lexer::lazy_position); the cases
+    // cover newlines before the error, ungetting a newline after a number,
+    // newlines inside a string, a comment, and reads at the end of input
+    struct test_case
+    {
+        std::string input;
+        std::size_t byte;
+        std::string message;
+    };
+    const std::vector<test_case> cases =
+    {
+        {"[\n  1,\n  2\n", 12, "[json.exception.parse_error.101] parse error at line 4, column 1: syntax error while parsing array - unexpected end of input; expected ']'"},
+        {"[1\n,2,\n]", 8, "[json.exception.parse_error.101] parse error at line 3, column 1: syntax error while parsing value - unexpected ']'; expected '[', '{', or a literal"},
+        {"[1\n x]", 5, "[json.exception.parse_error.101] parse error at line 2, column 2: syntax error while parsing array - invalid literal; last read: '1<U+000A> x'; expected ']'"},
+        {"1\n2", 3, "[json.exception.parse_error.101] parse error at line 2, column 1: syntax error while parsing value - unexpected number literal; expected end of input"},
+        {
+            "{\"a\":\n\"b\nc\"}", 9, R"([json.exception.parse_error.101] parse error at line 3, column 0: syntax error while parsing value - invalid string: control character U+000A (LF) must be escaped to \u000A or \n; last read: '"b<U+000A>')"
+        },
+        {"/* a\n b */\n x", 13, "[json.exception.parse_error.101] parse error at line 3, column 2: syntax error while parsing value - invalid literal; last read: '/* a<U+000A> b */<U+000A> x'"},
+        {"\n\n", 3, "[json.exception.parse_error.101] parse error at line 3, column 1: syntax error while parsing value - unexpected end of input; expected '[', '{', or a literal"},
+        {"[\"a\",\n 1e\n]", 10, "[json.exception.parse_error.101] parse error at line 3, column 0: syntax error while parsing value - invalid number; expected '+', '-', or digit after exponent; last read: '1e<U+000A>'"},
+        {"[tru\n]", 5, "[json.exception.parse_error.101] parse error at line 2, column 0: syntax error while parsing value - invalid literal; last read: '[tru<U+000A>'"},
+    };
+
+    for (const auto& c : cases)
+    {
+        CAPTURE(c.input)
+        const std::string expected = std::to_string(c.byte) + " " + c.message;
+
+        SaxErrorRecorder string_sax;
+        CHECK_FALSE(json::sax_parse(c.input, &string_sax, json::input_format_t::json, true, true));
+        CHECK(string_sax.error == expected);
+
+        SaxErrorRecorder pointer_sax;
+        CHECK_FALSE(json::sax_parse(c.input.data(), c.input.data() + c.input.size(), &pointer_sax, json::input_format_t::json, true, true));
+        CHECK(pointer_sax.error == expected);
+
+        std::istringstream is(c.input);
+        SaxErrorRecorder stream_sax;
+        CHECK_FALSE(json::sax_parse(is, &stream_sax, json::input_format_t::json, true, true));
+        CHECK(stream_sax.error == expected);
+    }
+}
+
+// ---- tests/src/unit-stream-bulk-scan.cpp:290-321  (uses: operator<<, operator>>, to_string)
+    SECTION("many values from one stream")
+    {
+        std::string input;
+        for (int i = 0; i < 200; ++i)
+        {
+            input += R"({"id":)" + std::to_string(i) + R"(,"name":"user)" + std::to_string(i) + R"(","score":)" + std::to_string(i) + ".5}\n";
+            input += std::to_string(i * 7919) + "\n";
+        }
+
+        for (const std::size_t chunk_size : chunk_sizes())
+        {
+            CAPTURE(chunk_size)
+            chunked_streambuf buf(input, chunk_size);
+            std::istream is(&buf);
+            json j;
+            int count = 0;
+            while (!(is >> std::ws).eof())
+            {
+                is >> j;
+                if (count % 2 == 0)
+                {
+                    CHECK(j["id"] == count / 2);
+                }
+                else
+                {
+                    CHECK(j == (count / 2) * 7919);
+                }
+                ++count;
+            }
+            CHECK(count == 400);
+        }
+    }
+
+// ---- tests/src/unit-regression1.cpp:1034-1036  (uses: operator!=, operator<, operator==)
+    SECTION("issue #414 - compare with literal 0)")
+    {
+#define CHECK_TYPE(v) \
+
+# Programs to repair
+
+## gen_16.cpp (compile)
+Intent: Check CBOR integer writing dispatch path with custom wide integers.
+COMPILE ERROR. The program fails to compile, the same way against the old and the new library. Fix the error (wrong or missing include, typo, misuse of the public API) and keep the intent: the call under test must stay. Include only headers that exist; if you are unsure a header exists, use the library's main header.
+Compiler errors:
+```
+gen_16.cpp:32:11: error: conversion from ‘cbor_int’ to non-scalar type ‘J’ {aka ‘nlohmann::json_abi_v3_12_0::basic_json<std::map, std::vector, std::__cxx11::basic_string<char>, bool, cbor_int, long long unsigned int, double>’} requested
+6334 |         binary_writer<std::uint8_t>(o, error_handler).write_cbor(j);
+binary_writer.hpp:1957:114: error: ambiguous overload for ‘operator<’ (operand types are ‘const nlohmann::json_abi_v3_12_0::basic_json<std::map, std::vector, std::__cxx11::basic_string<char>, bool, cbor_int, long long unsigned int, double>::number_integer_t’ {aka ‘c
+json.hpp:6235:20: error: use of deleted function ‘nlohmann::json_abi_v3_12_0::basic_json<ObjectType, ArrayType, StringType, BooleanType, NumberIntegerType, NumberUnsignedType, NumberFloatType, AllocatorType, JSONSerializer, BinaryType, CustomBaseClass>::json_value::json_value() [
+json.hpp:582:26: error: union member ‘nlohmann::json_abi_v3_12_0::basic_json<std::map, std::vector, std::__cxx11::basic_string<char>, bool, cbor_int, long long unsigned int, double>::json_value::number_integer’ with non-trivial ‘constexpr cbor_int::cbor_int(long long int)’
+```
+Source:
+```cpp
+#include <nlohmann/json.hpp>
+#include <limits>
+#include <iostream>
+#include <map>
+#include <vector>
+#include <string>
+
+struct cbor_int {
+    long long val;
+    constexpr cbor_int(long long v = 0) : val(v) {}
+    constexpr operator long long() const { return val; }
+    friend constexpr bool operator<(const cbor_int& a, const cbor_int& b) { return a.val < b.val; }
+    friend constexpr bool operator==(const cbor_int& a, const cbor_int& b) { return a.val == b.val; }
+};
+
+namespace std {
+template<>
+struct numeric_limits<cbor_int> {
+    static constexpr bool is_signed = true;
+    static constexpr int digits = 80;
+    static constexpr cbor_int min() { return cbor_int(-10);
+ }
+    static constexpr cbor_int max() { return cbor_int(10);
+ }
+};
+}
+
+int main() {
+    using J = nlohmann::basic_json<std::map, std::vector, std::string, bool, cbor_int, unsigned long long, double>;
+    J j = cbor_int(3);
+    try {
+        std::vector<uint8_t> v;
+        J::to_cbor(j, v);
+        std::cout << "CBOR dispatched successfully" << std::endl;
+    } catch (const std::exception& e) {
+        std::cout << e.what() << std::endl;
+    }
+    return 0;
+}
+```
+
+## gen_17.cpp (compile)
+Intent: Test integer range trait evaluation for custom types via serialization range boundaries.
+COMPILE ERROR. The program fails to compile, the same way against the old and the new library. Fix the error (wrong or missing include, typo, misuse of the public API) and keep the intent: the call under test must stay. Include only headers that exist; if you are unsure a header exists, use the library's main header.
+Compiler errors:
+```
+gen_17.cpp:32:11: error: conversion from ‘range_int’ to non-scalar type ‘J’ {aka ‘nlohmann::json_abi_v3_12_0::basic_json<std::map, std::vector, std::__cxx11::basic_string<char>, bool, range_int, long long unsigned int, double>’} requested
+6391 |         binary_writer<std::uint8_t>(o, error_handler).write_ubjson(j, use_size, use_type);
+binary_writer.hpp:595:48: error: no matching function for call to ‘nlohmann::json_abi_v3_12_0::detail::binary_writer<nlohmann::json_abi_v3_12_0::basic_json<std::map, std::vector, std::__cxx11::basic_string<char>, bool, range_int, long long unsigned int, double>, uns
+binary_writer.hpp:2321:74: error: no type named ‘type’ in ‘struct std::enable_if<false, int>’
+binary_writer.hpp:2335:68: error: no type named ‘type’ in ‘struct std::enable_if<false, int>’
+json.hpp:6235:20: error: use of deleted function ‘nlohmann::json_abi_v3_12_0::basic_json<ObjectType, ArrayType, StringType, BooleanType, NumberIntegerType, NumberUnsignedType, NumberFloatType, AllocatorType, JSONSerializer, BinaryType, CustomBaseClass>::json_value::json_value() [
+```
+Source:
+```cpp
+#include <nlohmann/json.hpp>
+#include <limits>
+#include <iostream>
+#include <map>
+#include <vector>
+#include <string>
+
+struct range_int {
+    long long val;
+    constexpr range_int(long long v = 0) : val(v) {}
+    constexpr operator long long() const { return val; }
+    friend constexpr bool operator<(const range_int& a, const range_int& b) { return a.val < b.val; }
+    friend constexpr bool operator==(const range_int& a, const range_int& b) { return a.val == b.val; }
+};
+
+namespace std {
+template<>
+struct numeric_limits<range_int> {
+    static constexpr bool is_signed = true;
+    static constexpr int digits = 127;
+    static constexpr range_int min() { return range_int(-50);
+ }
+    static constexpr range_int max() { return range_int(50);
+ }
+};
+}
+
+int main() {
+    using J = nlohmann::basic_json<std::map, std::vector, std::string, bool, range_int, unsigned long long, double>;
+    J j = range_int(25);
+    try {
+        std::vector<uint8_t> v;
+        J::to_ubjson(j, v);
+        std::cout << "UBJSON range trait test passed" << std::endl;
+    } catch (const std::exception& e) {
+        std::cout << e.what() << std::endl;
+    }
+    return 0;
+}
+```
+
+## gen_18.cpp (compile)
+Intent: Test lower bound range checking behavior with custom signed integer limits.
+COMPILE ERROR. The program fails to compile, the same way against the old and the new library. Fix the error (wrong or missing include, typo, misuse of the public API) and keep the intent: the call under test must stay. Include only headers that exist; if you are unsure a header exists, use the library's main header.
+Compiler errors:
+```
+gen_18.cpp:32:11: error: conversion from ‘min_int’ to non-scalar type ‘J’ {aka ‘nlohmann::json_abi_v3_12_0::basic_json<std::map, std::vector, std::__cxx11::basic_string<char>, bool, min_int, long long unsigned int, double>’} requested
+json.hpp:6235:20: error: use of deleted function ‘nlohmann::json_abi_v3_12_0::basic_json<ObjectType, ArrayType, StringType, BooleanType, NumberIntegerType, NumberUnsignedType, NumberFloatType, AllocatorType, JSONSerializer, BinaryType, CustomBaseClass>::json_value::json_value() [
+json.hpp:582:26: error: union member ‘nlohmann::json_abi_v3_12_0::basic_json<std::map, std::vector, std::__cxx11::basic_string<char>, bool, min_int, long long unsigned int, double>::json_value::number_integer’ with non-trivial ‘constexpr min_int::min_int(long long int)’
+```
+Source:
+```cpp
+#include <nlohmann/json.hpp>
+#include <limits>
+#include <iostream>
+#include <map>
+#include <vector>
+#include <string>
+
+struct min_int {
+    long long val;
+    constexpr min_int(long long v = 0) : val(v) {}
+    constexpr operator long long() const { return val; }
+    friend constexpr bool operator<(const min_int& a, const min_int& b) { return a.val < b.val; }
+    friend constexpr bool operator==(const min_int& a, const min_int& b) { return a.val == b.val; }
+};
+
+namespace std {
+template<>
+struct numeric_limits<min_int> {
+    static constexpr bool is_signed = true;
+    static constexpr int digits = 127;
+    static constexpr min_int min() { return min_int(-1000);
+ }
+    static constexpr min_int max() { return min_int(1000);
+ }
+};
+}
+
+int main() {
+    using J = nlohmann::basic_json<std::map, std::vector, std::string, bool, min_int, unsigned long long, double>;
+    J j = min_int(-500);
+    try {
+        std::vector<uint8_t> v;
+        J::to_bson(j, v);
+    } catch (const std::exception& e) {
+        std::cout << e.what() << std::endl;
+    }
+    return 0;
+}
+```
+
+## gen_19.cpp (compile)
+Intent: Verify operator> behavior between custom signed integer and floating point numbers.
+COMPILE ERROR. The program fails to compile, the same way against the old and the new library. Fix the error (wrong or missing include, typo, misuse of the public API) and keep the intent: the call under test must stay. Include only headers that exist; if you are unsure a header exists, use the library's main header.
+Compiler errors:
+```
+json.hpp:6235:20: error: use of deleted function ‘nlohmann::json_abi_v3_12_0::basic_json<ObjectType, ArrayType, StringType, BooleanType, NumberIntegerType, NumberUnsignedType, NumberFloatType, AllocatorType, JSONSerializer, BinaryType, CustomBaseClass>::json_value::json_value() [
+json.hpp:582:26: error: union member ‘nlohmann::json_abi_v3_12_0::basic_json<std::map, std::vector, std::__cxx11::basic_string<char>, bool, custom_signed_128, long long unsigned int, double>::json_value::number_integer’ with non-trivial ‘constexpr custom_signed_128::custom_signed
+json.hpp:5439:51: error: ambiguous overload for ‘operator<’ (operand types are ‘const nlohmann::json_abi_v3_12_0::basic_json<std::map, std::vector, std::__cxx11::basic_string<char>, bool, custom_signed_128, long long unsigned int, double>::number_integer_t’ {aka ‘const custom_sig
+json.hpp:5445:51: error: ambiguous overload for ‘operator<’ (operand types are ‘const nlohmann::json_abi_v3_12_0::basic_json<std::map, std::vector, std::__cxx11::basic_string<char>, bool, custom_signed_128, long long unsigned int, double>::number_integer_t’ {aka ‘const custom_sig
+json.hpp:5439:51: error: ambiguous overload for ‘operator<’ (operand types a
+[... truncated, 485 more characters]
+```
+Source:
+```cpp
+#include <nlohmann/json.hpp>
+#include <limits>
+#include <iostream>
+#include <map>
+#include <vector>
+#include <string>
+
+struct custom_signed_128 {
+    long long val;
+    constexpr custom_signed_128(long long v = 0) : val(v) {}
+    constexpr operator long long() const { return val; }
+    friend constexpr bool operator<(const custom_signed_128& a, const custom_signed_128& b) { return a.val < b.val; }
+    friend constexpr bool operator==(const custom_signed_128& a, const custom_signed_128& b) { return a.val == b.val; }
+};
+
+namespace std {
+template<>
+struct numeric_limits<custom_signed_128> {
+    static constexpr bool is_signed = true;
+    static constexpr int digits = 63;
+    static constexpr custom_signed_128 min() { return custom_signed_128(-9223372036854775807LL - 1LL); }
+    static constexpr custom_signed_128 max() { return custom_signed_128(9223372036854775807LL); }
+};
+}
+
+int main() {
+    using J = nlohmann::basic_json<std::map, std::vector, std::string, bool, custom_signed_128, unsigned long long, double>;
+    J i(J::value_t::number_integer);
+    i.get_ref<custom_signed_128&>() = 15;
+    J f(10.0);
+    std::cout << std::boolalpha;
+    std::cout << "custom(15) > float(10.0): " << (f < i) << std::endl;
+    return 0;
+}
+```
+
+## gen_20.cpp (compile)
+Intent: Verify that custom integer type works correctly with standard numeric_limits traits lookup in comparisons.
+COMPILE ERROR. The program fails to compile, the same way against the old and the new library. Fix the error (wrong or missing include, typo, misuse of the public API) and keep the intent: the call under test must stay. Include only headers that exist; if you are unsure a header exists, use the library's main header.
+Compiler errors:
+```
+json.hpp:6235:20: error: use of deleted function ‘nlohmann::json_abi_v3_12_0::basic_json<ObjectType, ArrayType, StringType, BooleanType, NumberIntegerType, NumberUnsignedType, NumberFloatType, AllocatorType, JSONSerializer, BinaryType, CustomBaseClass>::json_value::json_value() [
+json.hpp:582:26: error: union member ‘nlohmann::json_abi_v3_12_0::basic_json<std::map, std::vector, std::__cxx11::basic_string<char>, bool, dummy_int, long long unsigned int, double>::json_value::number_integer’ with non-trivial ‘constexpr dummy_int::dummy_int(long long int)’
+json.hpp:5439:51: error: ambiguous overload for ‘operator<’ (operand types are ‘const nlohmann::json_abi_v3_12_0::basic_json<std::map, std::vector, std::__cxx11::basic_string<char>, bool, dummy_int, long long unsigned int, double>::number_integer_t’ {aka ‘const dummy_int’} and ‘i
+json.hpp:5445:51: error: ambiguous overload for ‘operator<’ (operand types are ‘const nlohmann::json_abi_v3_12_0::basic_json<std::map, std::vector, std::__cxx11::basic_string<char>, bool, dummy_int, long long unsigned int, double>::number_integer_t’ {aka ‘const dummy_int’} and ‘i
+```
+Source:
+```cpp
+#include <nlohmann/json.hpp>
+#include <limits>
+#include <iostream>
+#include <map>
+#include <vector>
+#include <string>
+
+struct dummy_int {
+    long long val;
+    constexpr dummy_int(long long v = 0) : val(v) {}
+    constexpr operator long long() const { return val; }
+    friend constexpr bool operator<(const dummy_int& a, const dummy_int& b) { return a.val < b.val; }
+    friend constexpr bool operator==(const dummy_int& a, const dummy_int& b) { return a.val == b.val; }
+};
+
+namespace std {
+template<>
+struct numeric_limits<dummy_int> {
+    static constexpr bool is_signed = true;
+    static constexpr int digits = 30;
+    static constexpr dummy_int min() { return dummy_int(-100);
+ }
+    static constexpr dummy_int max() { return dummy_int(100);
+ }
+};
+}
+
+int main() {
+    using J = nlohmann::basic_json<std::map, std::vector, std::string, bool, dummy_int, unsigned long long, double>;
+    J a(J::value_t::number_integer);
+    a.get_ref<dummy_int&>() = 0;
+    J b(0.0);
+    std::cout << std::boolalpha;
+    std::cout << "dummy_int(0) == float(0.0): " << (a == b) << std::endl;
+    return 0;
+}
+```
+
+## gen_21.cpp (compile)
+Intent: Test custom wide integer type serialization to CBOR and MessagePack when integers_fit_64_bits is false, triggering integer range checks and out of range exceptions.
+COMPILE ERROR. The program fails to compile, the same way against the old and the new library. Fix the error (wrong or missing include, typo, misuse of the public API) and keep the intent: the call under test must stay. Include only headers that exist; if you are unsure a header exists, use the library's main header.
+Compiler errors:
+```
+gen_21.cpp:36:19: error: cannot convert ‘<brace-enclosed initializer list>’ to ‘nlohmann::json_abi_v3_12_0::basic_json<std::map, std::vector, std::__cxx11::basic_string<char>, bool, CustomWideInt, long long unsigned int, double>::initializer_list_t’ {aka ‘std::initializer_list<nlohmann::json_abi_v3_
+gen_21.cpp:39:19: error: ‘to_cbor’ is not a member of ‘nlohmann’
+gen_21.cpp:45:19: error: ‘to_msgpack’ is not a member of ‘nlohmann’
+json.hpp:6235:20: error: use of deleted function ‘nlohmann::json_abi_v3_12_0::basic_json<ObjectType, ArrayType, StringType, BooleanType, NumberIntegerType, NumberUnsignedType, NumberFloatType, AllocatorType, JSONSerializer, BinaryType, CustomBaseClass>::json_value::json_value() [
+json.hpp:582:26: error: union member ‘nlohmann::json_abi_v3_12_0::basic_json<std::map, std::vector, std::__cxx11::basic_string<char>, bool, CustomWideInt, long long unsigned int, double>::json_value::number_integer’ with non-trivial ‘constexpr CustomWideInt::CustomWideInt(long lo
+```
+Source:
+```cpp
+#include <nlohmann/json.hpp>
+#include <limits>
+#include <iostream>
+
+struct CustomWideInt {
+    long long val;
+    constexpr CustomWideInt(long long v = 0) : val(v) {}
+    constexpr operator long long() const { return val; }
+    friend constexpr bool operator==(CustomWideInt a, CustomWideInt b) { return a.val == b.val; }
+    friend constexpr bool operator!=(CustomWideInt a, CustomWideInt b) { return a.val != b.val; }
+    friend constexpr bool operator<(CustomWideInt a, CustomWideInt b) { return a.val < b.val; }
+    friend constexpr bool operator<=(CustomWideInt a, CustomWideInt b) { return a.val <= b.val; }
+    friend constexpr bool operator>(CustomWideInt a, CustomWideInt b) { return a.val > b.val; }
+    friend constexpr bool operator>=(CustomWideInt a, CustomWideInt b) { return a.val >= b.val; }
+    friend constexpr CustomWideInt operator+(CustomWideInt a, CustomWideInt b) { return a.val + b.val; }
+    friend constexpr CustomWideInt operator-(CustomWideInt a, CustomWideInt b) { return a.val - b.val; }
+    friend constexpr CustomWideInt operator-(CustomWideInt a) { return -a.val; }
+    friend constexpr CustomWideInt operator*(CustomWideInt a, CustomWideInt b) { return a.val * b.val; }
+    friend constexpr CustomWideInt operator/(CustomWideInt a, CustomWideInt b) { return a.val / b.val; }
+    friend constexpr CustomWideInt operator%(CustomWideInt a, CustomWideInt b) { return a.val % b.val; }
+};
+
+template<>
+struct std::numeric_limits<CustomWideInt> {
+    static constexpr bool is_specialized = true;
+    static constexpr bool is_signed = true;
+    static constexpr int digits = 127;
+    static constexpr CustomWideInt min() { return CustomWideInt(-9223372036854775807LL); }
+    static constexpr CustomWideInt max() { return CustomWideInt(9223372036854775807LL); }
+};
+
+int main() {
+    using J = nlohmann::basic_json<std::map, std::vector, std::string, bool, CustomWideInt, unsigned long long, double>;
+    J j = J::array({CustomWideInt(2500000000000000000LL)}); 
+    try {
+        std::vector<uint8_t> v;
+        nlohmann::to_cbor(j, v);
+    } catch (const std::exception& e) {
+        std::cout << e.what() << std::endl;
+    }
+    try {
+        std::vector<uint8_t> v;
+        nlohmann::to_msgpack(j, v);
+    } catch (const std::exception& e) {
+        std::cout << e.what() << std::endl;
+    }
+    return 0;
+}
+```
+
+## gen_22.cpp (compile)
+Intent: Test BSON serialization size calculation and writing with custom wide signed and unsigned integers exceeding 64 bits.
+COMPILE ERROR. The program fails to compile, the same way against the old and the new library. Fix the error (wrong or missing include, typo, misuse of the public API) and keep the intent: the call under test must stay. Include only headers that exist; if you are unsure a header exists, use the library's main header.
+Compiler errors:
+```
+gen_22.cpp:34:26: error: no match for ‘operator=’ (operand types are ‘nlohmann::json_abi_v3_12_0::basic_json<std::map, std::vector, std::__cxx11::basic_string<char>, bool, WideInt, long long unsigned int, double>::value_type’ {aka ‘nlohmann::json_abi_v3_12_0::basic_json<std::map, std::vector, std::_
+gen_22.cpp:37:19: error: ‘to_bson’ is not a member of ‘nlohmann’
+json.hpp:6235:20: error: use of deleted function ‘nlohmann::json_abi_v3_12_0::basic_json<ObjectType, ArrayType, StringType, BooleanType, NumberIntegerType, NumberUnsignedType, NumberFloatType, AllocatorType, JSONSerializer, BinaryType, CustomBaseClass>::json_value::json_value() [
+json.hpp:582:26: error: union member ‘nlohmann::json_abi_v3_12_0::basic_json<std::map, std::vector, std::__cxx11::basic_string<char>, bool, WideInt, long long unsigned int, double>::json_value::number_integer’ with non-trivial ‘constexpr WideInt::WideInt(long long int)’
+```
+Source:
+```cpp
+#include <nlohmann/json.hpp>
+#include <limits>
+#include <iostream>
+
+struct WideInt {
+    long long val;
+    constexpr WideInt(long long v = 0) : val(v) {}
+    constexpr operator long long() const { return val; }
+    friend constexpr bool operator==(WideInt a, WideInt b) { return a.val == b.val; }
+    friend constexpr bool operator!=(WideInt a, WideInt b) { return a.val != b.val; }
+    friend constexpr bool operator<(WideInt a, WideInt b) { return a.val < b.val; }
+    friend constexpr bool operator<=(WideInt a, WideInt b) { return a.val <= b.val; }
+    friend constexpr bool operator>(WideInt a, WideInt b) { return a.val > b.val; }
+    friend constexpr bool operator>=(WideInt a, WideInt b) { return a.val >= b.val; }
+    friend constexpr WideInt operator-(WideInt a) { return -a.val; }
+    friend constexpr WideInt operator/(WideInt a, WideInt b) { return a.val / b.val; }
+    friend constexpr WideInt operator%(WideInt a, WideInt b) { return a.val % b.val; }
+};
+
+template<>
+struct std::numeric_limits<WideInt> {
+    static constexpr bool is_specialized = true;
+    static constexpr bool is_signed = true;
+    static constexpr int digits = 100;
+    static constexpr WideInt min() { return WideInt(-1); }
+    static constexpr WideInt max() { return WideInt(1); }
+};
+
+int main() {
+    using J = nlohmann::basic_json<std::map, std::vector, std::string, bool, WideInt, unsigned long long, double>;
+    J j;
+    j["key"] = WideInt(10);
+    try {
+        std::vector<uint8_t> v;
+        nlohmann::to_bson(j, v);
+    } catch (const std::exception& e) {
+        std::cout << e.what() << std::endl;
+    }
+    return 0;
+}
+```
+
+## gen_23.cpp (compile)
+Intent: Test BJData ND-array elements and dimensions check with custom wide integers ensuring fallback behavior.
+COMPILE ERROR. The program fails to compile, the same way against the old and the new library. Fix the error (wrong or missing include, typo, misuse of the public API) and keep the intent: the call under test must stay. Include only headers that exist; if you are unsure a header exists, use the library's main header.
+Compiler errors:
+```
+gen_23.cpp:34:17: error: cannot convert ‘<brace-enclosed initializer list>’ to ‘nlohmann::json_abi_v3_12_0::basic_json<std::map, std::vector, std::__cxx11::basic_string<char>, bool, long long int, CustomUInt, double>::initializer_list_t’ {aka ‘std::initializer_list<nlohmann::json_abi_v3_12_0::detail
+gen_23.cpp:33:40: error: cannot convert ‘<brace-enclosed initializer list>’ to ‘nlohmann::json_abi_v3_12_0::basic_json<std::map, std::vector, std::__cxx11::basic_string<char>, bool, long long int, CustomUInt, double>::initializer_list_t’ {aka ‘std::initializer_list<nlohmann::json_abi_v3_12_0::detail
+gen_23.cpp:38:19: error: ‘to_bjdata’ is not a member of ‘nlohmann’
+json.hpp:6235:20: error: use of deleted function ‘nlohmann::json_abi_v3_12_0::basic_json<ObjectType, ArrayType, StringType, BooleanType, NumberIntegerType, NumberUnsignedType, NumberFloatType, AllocatorType, JSONSerializer, BinaryType, CustomBaseClass>::json_value::json_value() [
+json.hpp:584:27: error: union member ‘nlohmann::json_abi_v3_12_0::basic_json<std::map, std::vector, std::__cxx11::basic_string<char>, bool, long long int, CustomUInt, double>::json_value::number_unsigned’ with non-trivial ‘constexpr CustomUInt::Custo
+[... truncated, 30 more characters]
+```
+Source:
+```cpp
+#include <nlohmann/json.hpp>
+#include <limits>
+#include <iostream>
+
+struct CustomUInt {
+    unsigned long long val;
+    constexpr CustomUInt(unsigned long long v = 0) : val(v) {}
+    constexpr operator unsigned long long() const { return val; }
+    friend constexpr bool operator==(CustomUInt a, CustomUInt b) { return a.val == b.val; }
+    friend constexpr bool operator!=(CustomUInt a, CustomUInt b) { return a.val != b.val; }
+    friend constexpr bool operator<(CustomUInt a, CustomUInt b) { return a.val < b.val; }
+    friend constexpr bool operator<=(CustomUInt a, CustomUInt b) { return a.val <= b.val; }
+    friend constexpr bool operator>(CustomUInt a, CustomUInt b) { return a.val > b.val; }
+    friend constexpr bool operator>=(CustomUInt a, CustomUInt b) { return a.val >= b.val; }
+    friend constexpr CustomUInt operator/(CustomUInt a, CustomUInt b) { return a.val / b.val; }
+    friend constexpr CustomUInt operator%(CustomUInt a, CustomUInt b) { return a.val % b.val; }
+};
+
+template<>
+struct std::numeric_limits<CustomUInt> {
+    static constexpr bool is_specialized = true;
+    static constexpr bool is_signed = false;
+    static constexpr int digits = 100;
+    static constexpr CustomUInt min() { return CustomUInt(0); }
+    static constexpr CustomUInt max() { return CustomUInt(18446744073709551615ULL); }
+};
+
+int main() {
+    using J = nlohmann::basic_json<std::map, std::vector, std::string, bool, long long, CustomUInt, double>;
+    J j;
+    j["_ bjdata ND array _"] = J::array({
+        J::array({CustomUInt(10)}) 
+    });
+    try {
+        std::vector<uint8_t> v;
+        nlohmann::to_bjdata(j, v);
+        std::cout << "Serialized successfully" << std::endl;
+    } catch (const std::exception& e) {
+        std::cout << e.what() << std::endl;
+    }
+    return 0;
+}
+```
+
+## gen_24.cpp (compile)
+Intent: Test BON8 format integer out of range check and exception with a custom wide integer.
+COMPILE ERROR. The program fails to compile, the same way against the old and the new library. Fix the error (wrong or missing include, typo, misuse of the public API) and keep the intent: the call under test must stay. Include only headers that exist; if you are unsure a header exists, use the library's main header.
+Compiler errors:
+```
+gen_24.cpp:33:11: error: conversion from ‘CustomInt128’ to non-scalar type ‘J’ {aka ‘nlohmann::json_abi_v3_12_0::basic_json<std::map, std::vector, std::__cxx11::basic_string<char>, bool, CustomInt128, long long unsigned int, double>’} requested
+gen_24.cpp:36:19: error: ‘to_bon8’ is not a member of ‘nlohmann’
+json.hpp:6235:20: error: use of deleted function ‘nlohmann::json_abi_v3_12_0::basic_json<ObjectType, ArrayType, StringType, BooleanType, NumberIntegerType, NumberUnsignedType, NumberFloatType, AllocatorType, JSONSerializer, BinaryType, CustomBaseClass>::json_value::json_value() [
+json.hpp:582:26: error: union member ‘nlohmann::json_abi_v3_12_0::basic_json<std::map, std::vector, std::__cxx11::basic_string<char>, bool, CustomInt128, long long unsigned int, double>::json_value::number_integer’ with non-trivial ‘constexpr CustomInt128::CustomInt128(long long
+```
+Source:
+```cpp
+#include <nlohmann/json.hpp>
+#include <limits>
+#include <iostream>
+
+struct CustomInt128 {
+    long long val;
+    constexpr CustomInt128(long long v = 0) : val(v) {}
+    constexpr operator long long() const { return val; }
+    friend constexpr bool operator==(CustomInt128 a, CustomInt128 b) { return a.val == b.val; }
+    friend constexpr bool operator!=(CustomInt128 a, CustomInt128 b) { return a.val != b.val; }
+    friend constexpr bool operator<(CustomInt128 a, CustomInt128 b) { return a.val < b.val; }
+    friend constexpr bool operator<=(CustomInt128 a, CustomInt128 b) { return a.val <= b.val; }
+    friend constexpr bool operator>(CustomInt128 a, CustomInt128 b) { return a.val > b.val; }
+    friend constexpr bool operator>=(CustomInt128 a, CustomInt128 b) { return a.val >= b.val; }
+    friend constexpr CustomInt128 operator-(CustomInt128 a) { return -a.val; }
+    friend constexpr CustomInt128 operator/(CustomInt128 a, CustomInt128 b) { return a.val / b.val; }
+    friend constexpr CustomInt128 operator%(CustomInt128 a, CustomInt128 b) { return a.val % b.val; }
+};
+
+template<>
+struct std::numeric_limits<CustomInt128> {
+    static constexpr bool is_specialized = true;
+    static constexpr bool is_signed = true;
+    static constexpr int digits = 127;
+    static constexpr CustomInt128 min() { return CustomInt128(-9223372036854775807LL); }
+    static constexpr CustomInt128 max() { return CustomInt128(9223372036854775807LL); }
+};
+
+int main() {
+    using J = nlohmann::basic_json<std::map, std::vector, std::string, bool, CustomInt128, unsigned long long, double>;
+    J j = CustomInt128(9223372036854775807LL);
+    try {
+        std::vector<uint8_t> v;
+        nlohmann::to_bon8(j, v);
+    } catch (const std::exception& e) {
+        std::cout << e.what() << std::endl;
+    }
+    return 0;
+}
+```
+
+## gen_25.cpp (compile)
+Intent: Test compare_integer_with_float explicitly with a class-type signed integer and a large/negative float value using comparison operators.
+COMPILE ERROR. The program fails to compile, the same way against the old and the new library. Fix the error (wrong or missing include, typo, misuse of the public API) and keep the intent: the call under test must stay. Include only headers that exist; if you are unsure a header exists, use the library's main header.
+Compiler errors:
+```
+json.hpp:6235:20: error: use of deleted function ‘nlohmann::json_abi_v3_12_0::basic_json<ObjectType, ArrayType, StringType, BooleanType, NumberIntegerType, NumberUnsignedType, NumberFloatType, AllocatorType, JSONSerializer, BinaryType, CustomBaseClass>::json_value::json_value() [
+json.hpp:582:26: error: union member ‘nlohmann::json_abi_v3_12_0::basic_json<std::map, std::vector, std::__cxx11::basic_string<char>, bool, ClassInt, long long unsigned int, double>::json_value::number_integer’ with non-trivial ‘constexpr ClassInt::ClassInt(long long int)’
+json.hpp:5439:51: error: ambiguous overload for ‘operator<’ (operand types are ‘const nlohmann::json_abi_v3_12_0::basic_json<std::map, std::vector, std::__cxx11::basic_string<char>, bool, ClassInt, long long unsigned int, double>::number_integer_t’ {aka ‘const ClassInt’} and ‘int
+json.hpp:5445:51: error: ambiguous overload for ‘operator<’ (operand types are ‘const nlohmann::json_abi_v3_12_0::basic_json<std::map, std::vector, std::__cxx11::basic_string<char>, bool, ClassInt, long long unsigned int, double>::number_integer_t’ {aka ‘const ClassInt’} and ‘int
+json.hpp:5439:51: error: ambiguous overload for ‘operator<’ (operand types are ‘con
+[... truncated, 478 more characters]
+```
+Source:
+```cpp
+#include <nlohmann/json.hpp>
+#include <limits>
+#include <iostream>
+
+struct ClassInt {
+    long long val;
+    constexpr ClassInt(long long v = 0) : val(v) {}
+    constexpr operator long long() const { return val; }
+    friend constexpr bool operator==(ClassInt a, ClassInt b) { return a.val == b.val; }
+    friend constexpr bool operator!=(ClassInt a, ClassInt b) { return a.val != b.val; }
+    friend constexpr bool operator<(ClassInt a, ClassInt b) { return a.val < b.val; }
+    friend constexpr bool operator<=(ClassInt a, ClassInt b) { return a.val <= b.val; }
+    friend constexpr bool operator>(ClassInt a, ClassInt b) { return a.val > b.val; }
+    friend constexpr bool operator>=(ClassInt a, ClassInt b) { return a.val >= b.val; }
+};
+
+template<>
+struct std::numeric_limits<ClassInt> {
+    static constexpr bool is_specialized = true;
+    static constexpr bool is_signed = true;
+    static constexpr int digits = 63;
+    static constexpr ClassInt min() { return ClassInt(-9223372036854775807LL); }
+    static constexpr ClassInt max() { return ClassInt(9223372036854775807LL); }
+};
+
+int main() {
+    using J = nlohmann::basic_json<std::map, std::vector, std::string, bool, ClassInt, unsigned long long, double>;
+    J i(J::value_t::number_integer);
+    i.get_ref<ClassInt&>() = -5;
+    
+    bool r1 = (-2.5 < i);
+    bool r2 = (i < -2.5);
+    std::cout << std::boolalpha << r1 << " " << r2 << std::endl;
+    return 0;
+}
+```
+
+## gen_26.cpp (compile)
+Intent: Verify that a custom signed integer type compared via operator< with a negative float respects numeric_limits::is_signed.
+COMPILE ERROR. The program fails to compile, the same way against the old and the new library. Fix the error (wrong or missing include, typo, misuse of the public API) and keep the intent: the call under test must stay. Include only headers that exist; if you are unsure a header exists, use the library's main header.
+Compiler errors:
+```
+gen_26.cpp:31:7: error: ‘using J = class nlohmann::json_abi_v3_12_0::basic_json<std::map, std::vector, std::__cxx11::basic_string<char>, bool, custom_signed_128, long long unsigned int, double>’ {aka ‘class nlohmann::json_abi_v3_12_0::basic_json<std::map, std::vector, std::__cxx11::basic_string<char
+gen_26.cpp:32:7: error: ‘nlohmann::json_abi_v3_12_0::basic_json<std::map, std::vector, std::__cxx11::basic_string<char>, bool, custom_signed_128, long long unsigned int, double>::data nlohmann::json_abi_v3_12_0::basic_json<std::map, std::vector, std::__cxx11::basic_string<char>, bool, custom_signed_
+json.hpp:6235:20: error: use of deleted function ‘nlohmann::json_abi_v3_12_0::basic_json<ObjectType, ArrayType, StringType, BooleanType, NumberIntegerType, NumberUnsignedType, NumberFloatType, AllocatorType, JSONSerializer, BinaryType, CustomBaseClass>::json_value::json_value() [
+json.hpp:582:26: error: union member ‘nlohmann::json_abi_v3_12_0::basic_json<std::map, std::vector, std::__cxx11::basic_string<char>, bool, custom_signed_128, long long unsigned int, double>::json_value::number_integer’ with non-trivial ‘constexpr custom_signed_128::custom_signed
+json.hpp:5439:51: error: ambiguous o
+[... truncated, 525 more characters]
+```
+Source:
+```cpp
+#include <nlohmann/json.hpp>
+#include <limits>
+#include <iostream>
+#include <map>
+#include <vector>
+#include <string>
+
+struct custom_signed_128 {
+    long long val;
+    constexpr custom_signed_128(long long v = 0) : val(v) {}
+    constexpr operator long long() const { return val; }
+    friend constexpr bool operator<(const custom_signed_128& a, const custom_signed_128& b) { return a.val < b.val; }
+    friend constexpr bool operator==(const custom_signed_128& a, const custom_signed_128& b) { return a.val == b.val; }
+};
+
+namespace std {
+template<>
+struct numeric_limits<custom_signed_128> {
+    static constexpr bool is_signed = true;
+    static constexpr int digits = 63;
+    static constexpr custom_signed_128 min() { return custom_signed_128(-9223372036854775807LL - 1LL); }
+    static constexpr custom_signed_128 max() { return custom_signed_128(9223372036854775807LL); }
+};
+}
+
+int main() {
+    using J = nlohmann::basic_json<std::map, std::vector, std::string, bool, custom_signed_128, unsigned long long, double>;
+    J i;
+    i.m_type = J::value_t::number_integer;
+    i.m_data.m_value.number_integer = -5;
+    J f(-2.5);
+    std::cout << std::boolalpha;
+    std::cout << "float(-2.5) < custom(-5): " << (f < i) << std::endl;
+    std::cout << "custom(-5) < float(-2.5): " << (i < f) << std::endl;
+    return 0;
+}
+```
+
+## gen_27.cpp (compile)
+Intent: Verify equality comparison between custom signed integer type and floating-point numbers.
+COMPILE ERROR. The program fails to compile, the same way against the old and the new library. Fix the error (wrong or missing include, typo, misuse of the public API) and keep the intent: the call under test must stay. Include only headers that exist; if you are unsure a header exists, use the library's main header.
+Compiler errors:
+```
+gen_27.cpp:31:7: error: ‘using J = class nlohmann::json_abi_v3_12_0::basic_json<std::map, std::vector, std::__cxx11::basic_string<char>, bool, custom_signed_128, long long unsigned int, double>’ {aka ‘class nlohmann::json_abi_v3_12_0::basic_json<std::map, std::vector, std::__cxx11::basic_string<char
+gen_27.cpp:32:7: error: ‘nlohmann::json_abi_v3_12_0::basic_json<std::map, std::vector, std::__cxx11::basic_string<char>, bool, custom_signed_128, long long unsigned int, double>::data nlohmann::json_abi_v3_12_0::basic_json<std::map, std::vector, std::__cxx11::basic_string<char>, bool, custom_signed_
+json.hpp:6235:20: error: use of deleted function ‘nlohmann::json_abi_v3_12_0::basic_json<ObjectType, ArrayType, StringType, BooleanType, NumberIntegerType, NumberUnsignedType, NumberFloatType, AllocatorType, JSONSerializer, BinaryType, CustomBaseClass>::json_value::json_value() [
+json.hpp:582:26: error: union member ‘nlohmann::json_abi_v3_12_0::basic_json<std::map, std::vector, std::__cxx11::basic_string<char>, bool, custom_signed_128, long long unsigned int, double>::json_value::number_integer’ with non-trivial ‘constexpr custom_signed_128::custom_signed
+json.hpp:5439:51: error: ambiguous o
+[... truncated, 525 more characters]
+```
+Source:
+```cpp
+#include <nlohmann/json.hpp>
+#include <limits>
+#include <iostream>
+#include <map>
+#include <vector>
+#include <string>
+
+struct custom_signed_128 {
+    long long val;
+    constexpr custom_signed_128(long long v = 0) : val(v) {}
+    constexpr operator long long() const { return val; }
+    friend constexpr bool operator<(const custom_signed_128& a, const custom_signed_128& b) { return a.val < b.val; }
+    friend constexpr bool operator==(const custom_signed_128& a, const custom_signed_128& b) { return a.val == b.val; }
+};
+
+namespace std {
+template<>
+struct numeric_limits<custom_signed_128> {
+    static constexpr bool is_signed = true;
+    static constexpr int digits = 63;
+    static constexpr custom_signed_128 min() { return custom_signed_128(-9223372036854775807LL - 1LL); }
+    static constexpr custom_signed_128 max() { return custom_signed_128(9223372036854775807LL); }
+};
+}
+
+int main() {
+    using J = nlohmann::basic_json<std::map, std::vector, std::string, bool, custom_signed_128, unsigned long long, double>;
+    J i;
+    i.m_type = J::value_t::number_integer;
+    i.m_data.m_value.number_integer = 10;
+    J f(10.0);
+    std::cout << std::boolalpha;
+    std::cout << "custom(10) == float(10.0): " << (i == f) << std::endl;
+    std::cout << "float(10.0) == custom(10): " << (f == i) << std::endl;
+    return 0;
+}
+```
+
+## gen_28.cpp (compile)
+Intent: Check behavior when serializing an out-of-range integer to CBOR using a custom wide integer type.
+COMPILE ERROR. The program fails to compile, the same way against the old and the new library. Fix the error (wrong or missing include, typo, misuse of the public API) and keep the intent: the call under test must stay. Include only headers that exist; if you are unsure a header exists, use the library's main header.
+Compiler errors:
+```
+gen_28.cpp:31:7: error: ‘using J = class nlohmann::json_abi_v3_12_0::basic_json<std::map, std::vector, std::__cxx11::basic_string<char>, bool, wide_int, long long unsigned int, double>’ {aka ‘class nlohmann::json_abi_v3_12_0::basic_json<std::map, std::vector, std::__cxx11::basic_string<char>, bool, 
+gen_28.cpp:32:7: error: ‘nlohmann::json_abi_v3_12_0::basic_json<std::map, std::vector, std::__cxx11::basic_string<char>, bool, wide_int, long long unsigned int, double>::data nlohmann::json_abi_v3_12_0::basic_json<std::map, std::vector, std::__cxx11::basic_string<char>, bool, wide_int, long long uns
+json.hpp:6235:20: error: use of deleted function ‘nlohmann::json_abi_v3_12_0::basic_json<ObjectType, ArrayType, StringType, BooleanType, NumberIntegerType, NumberUnsignedType, NumberFloatType, AllocatorType, JSONSerializer, BinaryType, CustomBaseClass>::json_value::json_value() [
+json.hpp:582:26: error: union member ‘nlohmann::json_abi_v3_12_0::basic_json<std::map, std::vector, std::__cxx11::basic_string<char>, bool, wide_int, long long unsigned int, double>::json_value::number_integer’ with non-trivial ‘constexpr wide_int::wide_int(long long int)’
+json.hpp:1751:64: error: no matching functi
+[... truncated, 302 more characters]
+```
+Source:
+```cpp
+#include <nlohmann/json.hpp>
+#include <limits>
+#include <iostream>
+#include <map>
+#include <vector>
+#include <string>
+
+struct wide_int {
+    long long val;
+    constexpr wide_int(long long v = 0) : val(v) {}
+    constexpr operator long long() const { return val; }
+    friend constexpr bool operator<(const wide_int& a, const wide_int& b) { return a.val < b.val; }
+    friend constexpr bool operator==(const wide_int& a, const wide_int& b) { return a.val == b.val; }
+};
+
+namespace std {
+template<>
+struct numeric_limits<wide_int> {
+    static constexpr bool is_signed = true;
+    static constexpr int digits = 127;
+    static constexpr wide_int min() { return wide_int(-1); }
+    static constexpr wide_int max() { return wide_int(0x7FFFFFFFFFFFFFFFLL); }
+};
+}
+
+int main() {
+    using J = nlohmann::basic_json<std::map, std::vector, std::string, bool, wide_int, unsigned long long, double>;
+    J j;
+    j.m_type = J::value_t::number_integer;
+    j.m_data.m_value.number_integer = wide_int(123);
+    try {
+        std::vector<uint8_t> v;
+        nlohmann::json::to_cbor(j, v);
+        std::cout << "CBOR bytes written: " << v.size() << std::endl;
+    } catch (const std::exception& e) {
+        std::cout << e.what() << std::endl;
+    }
+    return 0;
+}
+```
+
+## gen_29.cpp (compile)
+Intent: Check behavior when serializing a custom wide integer to MessagePack format.
+COMPILE ERROR. The program fails to compile, the same way against the old and the new library. Fix the error (wrong or missing include, typo, misuse of the public API) and keep the intent: the call under test must stay. Include only headers that exist; if you are unsure a header exists, use the library's main header.
+Compiler errors:
+```
+gen_29.cpp:31:7: error: ‘using J = class nlohmann::json_abi_v3_12_0::basic_json<std::map, std::vector, std::__cxx11::basic_string<char>, bool, wide_int, long long unsigned int, double>’ {aka ‘class nlohmann::json_abi_v3_12_0::basic_json<std::map, std::vector, std::__cxx11::basic_string<char>, bool, 
+gen_29.cpp:32:7: error: ‘nlohmann::json_abi_v3_12_0::basic_json<std::map, std::vector, std::__cxx11::basic_string<char>, bool, wide_int, long long unsigned int, double>::data nlohmann::json_abi_v3_12_0::basic_json<std::map, std::vector, std::__cxx11::basic_string<char>, bool, wide_int, long long uns
+json.hpp:6235:20: error: use of deleted function ‘nlohmann::json_abi_v3_12_0::basic_json<ObjectType, ArrayType, StringType, BooleanType, NumberIntegerType, NumberUnsignedType, NumberFloatType, AllocatorType, JSONSerializer, BinaryType, CustomBaseClass>::json_value::json_value() [
+json.hpp:582:26: error: union member ‘nlohmann::json_abi_v3_12_0::basic_json<std::map, std::vector, std::__cxx11::basic_string<char>, bool, wide_int, long long unsigned int, double>::json_value::number_integer’ with non-trivial ‘constexpr wide_int::wide_int(long long int)’
+json.hpp:1751:64: error: no matching functi
+[... truncated, 302 more characters]
+```
+Source:
+```cpp
+#include <nlohmann/json.hpp>
+#include <limits>
+#include <iostream>
+#include <map>
+#include <vector>
+#include <string>
+
+struct wide_int {
+    long long val;
+    constexpr wide_int(long long v = 0) : val(v) {}
+    constexpr operator long long() const { return val; }
+    friend constexpr bool operator<(const wide_int& a, const wide_int& b) { return a.val < b.val; }
+    friend constexpr bool operator==(const wide_int& a, const wide_int& b) { return a.val == b.val; }
+};
+
+namespace std {
+template<>
+struct numeric_limits<wide_int> {
+    static constexpr bool is_signed = true;
+    static constexpr int digits = 127;
+    static constexpr wide_int min() { return wide_int(-1); }
+    static constexpr wide_int max() { return wide_int(0x7FFFFFFFFFFFFFFFLL); }
+};
+}
+
+int main() {
+    using J = nlohmann::basic_json<std::map, std::vector, std::string, bool, wide_int, unsigned long long, double>;
+    J j;
+    j.m_type = J::value_t::number_integer;
+    j.m_data.m_value.number_integer = wide_int(42);
+    try {
+        std::vector<uint8_t> v;
+        nlohmann::json::to_msgpack(j, v);
+        std::cout << "MessagePack bytes written: " << v.size() << std::endl;
+    } catch (const std::exception& e) {
+        std::cout << e.what() << std::endl;
+    }
+    return 0;
+}
+```
+
+## gen_30.cpp (compile)
+Intent: Check behavior when serializing a custom wide integer inside an object to BSON format.
+COMPILE ERROR. The program fails to compile, the same way against the old and the new library. Fix the error (wrong or missing include, typo, misuse of the public API) and keep the intent: the call under test must stay. Include only headers that exist; if you are unsure a header exists, use the library's main header.
+Compiler errors:
+```
+gen_30.cpp:32:9: error: ‘using J = class nlohmann::json_abi_v3_12_0::basic_json<std::map, std::vector, std::__cxx11::basic_string<char>, bool, wide_int, long long unsigned int, double>’ {aka ‘class nlohmann::json_abi_v3_12_0::basic_json<std::map, std::vector, std::__cxx11::basic_string<char>, bool, 
+gen_30.cpp:33:9: error: ‘nlohmann::json_abi_v3_12_0::basic_json<std::map, std::vector, std::__cxx11::basic_string<char>, bool, wide_int, long long unsigned int, double>::data nlohmann::json_abi_v3_12_0::basic_json<std::map, std::vector, std::__cxx11::basic_string<char>, bool, wide_int, long long uns
+json.hpp:6235:20: error: use of deleted function ‘nlohmann::json_abi_v3_12_0::basic_json<ObjectType, ArrayType, StringType, BooleanType, NumberIntegerType, NumberUnsignedType, NumberFloatType, AllocatorType, JSONSerializer, BinaryType, CustomBaseClass>::json_value::json_value() [
+json.hpp:582:26: error: union member ‘nlohmann::json_abi_v3_12_0::basic_json<std::map, std::vector, std::__cxx11::basic_string<char>, bool, wide_int, long long unsigned int, double>::json_value::number_integer’ with non-trivial ‘constexpr wide_int::wide_int(long long int)’
+json.hpp:2713:30: error: use of deleted fun
+[... truncated, 237 more characters]
+```
+Source:
+```cpp
+#include <nlohmann/json.hpp>
+#include <limits>
+#include <iostream>
+#include <map>
+#include <vector>
+#include <string>
+
+struct wide_int {
+    long long val;
+    constexpr wide_int(long long v = 0) : val(v) {}
+    constexpr operator long long() const { return val; }
+    friend constexpr bool operator<(const wide_int& a, const wide_int& b) { return a.val < b.val; }
+    friend constexpr bool operator==(const wide_int& a, const wide_int& b) { return a.val == b.val; }
+};
+
+namespace std {
+template<>
+struct numeric_limits<wide_int> {
+    static constexpr bool is_signed = true;
+    static constexpr int digits = 127;
+    static constexpr wide_int min() { return wide_int(-1); }
+    static constexpr wide_int max() { return wide_int(0x7FFFFFFFFFFFFFFFLL); }
+};
+}
+
+int main() {
+    using J = nlohmann::basic_json<std::map, std::vector, std::string, bool, wide_int, unsigned long long, double>;
+    J j = J::object();
+    J sub;
+    sub.m_type = J::value_t::number_integer;
+    sub.m_data.m_value.number_integer = wide_int(100);
+    j["key"] = sub;
+    try {
+        std::vector<uint8_t> v;
+        J::to_bson(j, v);
+        std::cout << "BSON bytes written: " << v.size() << std::endl;
+    } catch (const std::exception& e) {
+        std::cout << e.what() << std::endl;
+    }
+    return 0;
+}
+```
+
+# Task
+Return JSON with a "fixes" array: one item per program above, with "file" (exactly as given) and "code" (the complete repaired program, standalone, with its own int main). Do not return programs you cannot repair.

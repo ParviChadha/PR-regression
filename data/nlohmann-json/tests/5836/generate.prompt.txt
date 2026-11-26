@@ -1,0 +1,757 @@
+[system]
+You write test programs that probe a C++ library for behavioral changes made by one pull request.
+Each program is compiled and run twice, once against the library before the change and once after, and the two
+outputs are compared. Your job is to produce programs whose output reveals whether the change altered behavior,
+including side effects the author did not intend.
+
+Rules for every program:
+- It is standalone: one file with its own int main(), compiled as C++17, printing results to stdout.
+- Use only the library's documented public API. Never include internal headers or use detail/impl namespaces,
+  private members or undocumented macros.
+- Do not judge results (no assert, no expected-value comparisons): just print what the library returns. Print
+  enough to make differences visible, one fact per line.
+- Output must be deterministic. Never print pointers or addresses, uninitialized data, the order of
+  hash-based containers, timings, thread ids, random values, file paths or environment data. Print floating point
+  values with an explicit precision. No input, files, network, threads, clocks or randomness.
+- Wrap calls that may throw in try/catch and print the exception's type and message, so an exception is an
+  observable result. Do not crash on purpose.
+- Aim at the code the diff changes. Prefer calls that compile against both the old and the new library; one or two
+  programs may use an API the PR adds. Cover ordinary inputs and edge cases (empty, minimum and maximum values,
+  boundaries, special values, nesting, unusual types) and also neighbouring behavior the change could disturb.
+- When the diff changes which types or inputs an API accepts or rejects (constraints, overloads, traits,
+  conversions), test it with the detection idiom (std::void_t or requires) and `if constexpr`, so the program
+  compiles against both versions, prints whether the expression is well-formed, and exercises it when it is.
+  Accepting an input is not enough: also use it through every entry point that should follow (const and
+  non-const, read, write, insert, erase, lookup, nested use), because a change that admits new inputs can leave
+  later code unable to handle them.
+- If the changed code is internal (a detail, impl or internal namespace, a trait, a helper), do not name it in the
+  program. Reach it through the public API that depends on it, using detection (as above) where needed.
+- Use the exact types and values the diff is about (the new trait's argument types, the new overload's
+  parameters), not stand-ins.
+- Spread the programs over distinct public entry points and overloads, one main idea per program. Do not write
+  several programs that only rename a type or change a literal.
+- Make the programs differ from each other: different inputs, different entry points, different features.
+
+Rules specific to this library:
+- Include the library with #include <nlohmann/json.hpp>. The public API is nlohmann::json (nlohmann::basic_json), nlohmann::ordered_json, json_pointer, json patch/merge_patch and the documented SAX and conversion interfaces. Never use the detail namespace.
+- It is a header-only library: nothing to link. Programs are compiled as C++17.
+- Print JSON values with dump() (compact) or dump(2). Keys of nlohmann::json objects print in sorted order, so output is deterministic; do not depend on insertion order except with ordered_json.
+
+[user]
+# Pull request #5836: Speed up JSON pointer parsing, formatting, comparison and lookup
+
+## Description
+## Summary
+
+Constant-factor speedups for `json_pointer` and its users, with identical behavior (exception types, ids and messages unchanged; `reference_tokens` layout unchanged).
+
+- **Lookup** (`get_checked`, const `get_unchecked`, `get_checked_or_null`, `contains`): access the object map / array vector directly instead of going through `at()`/`contains()`+`operator[]`; misses still go through `at()` so the exception text is identical. Array indices of up to 18 digits (9 for a 32-bit `size_type`) are parsed with a digit loop instead of `strtoull`+`errno`.
+- **Non-const access** (`get_unchecked`, `get_and_create`): existing object members are found without copying the key.
+- `to_string`: one reserved buffer and a new `detail::escape_into` instead of `std::accumulate` re-copying the prefix; `escape` scans once for both special characters; `unescape` moves its result.
+- `split`: reserves, moves tokens, skips `~` validation/unescaping for tokens without `~`.
+- `operator/`, `parent_pointer`: build the result directly with `reserve`.
+- `ptr == string` (deprecated): compares in place without splitting; malformed strings still throw `parse_error.107/108`.
+- `unflatten`: each key is parsed once.
+- `patch`: no copies of `op`/`path`/`from`; no redundant `top()`/`at(top)` check in `add` (the following `at(parent)` reports the same error); `last_path` is moved; `move` no longer deep-copies twice; `copy` copies once.
+
+## Measurements (Apple clang 21, -O2, ns per call, best of 7)
+
+| operation | before | after |
+|---|---:|---:|
+| `json_pointer("/features/42/geometry/coordinates/1")` | 189 | 80 |
+| `to_string()` | 172 | 88 |
+| `to_string()` with escapes | 100 | 52 |
+| `ptr == std::string` | 207 | 38 |
+| `ptr / "x" / "y" / 3` | 308 | 136 |
+| const `at(ptr)` | 54 | 36 |
+| `contains(ptr)` hit / miss | 67 / 52 | 33 / 28 |
+| `value(ptr, default)` | 58 | 35 |
+| non-const `operator[](ptr)` | 56 | 42 |
+| `unflatten()` (100 features) | 0.49 ms | 0.30 ms |
+| `patch()` (500 mixed ops) | 0.32 ms | 0.19 ms |
+
+`parent_pointer()` is unchanged (32 vs 35 ns, noise).
+
+## Cold throw helpers
+
+An earlier revision moved the throw sites into out-of-line helpers. That was dropped (reverted in the latest commits) because it had no measurable gain: const `at(ptr)` 36.0 → 34.8 ns, `contains` hit 33.3 → 33.7, miss 27.4 → 27.8 are all within noise. Only `JSON_HEDLEY_NEVER_INLINE` on the existing `throw_no_parent()` and `throw_unresolved()` helpers (from #5783) is kept.
+
+## Tests
+
+New cases in `unit-json_pointer.cpp`: a differential test of array-index tokens against a `strtoull`-based reference (boundary values incl. leading zeros, `-`, 18/19/20-digit values, `SIZE_MAX`, plus 5000 random tokens), escaped-token round trips, `ptr == string` against all pairs, lookups, and move/copy patch edge cases. Ran json_pointer, json_patch, merge_patch, element_access1/2, alt-string, regression1/2, ordered_json and the custom key type suites with C++11, C++17 + `JSON_DIAGNOSTICS=1`, and C++20 on Apple clang; `single_include` regenerated.
+
+## Breaking changes
+
+None. No public API change; all exception types, ids and messages are unchanged.
+
+One side effect: `json_pointer.hpp` no longer uses `std::accumulate`, so `<nlohmann/json.hpp>` no longer includes `<numeric>`. Code that used `std::iota`/`std::accumulate` without including `<numeric>` itself, like `tests/src/unit-algorithms.cpp` did, needs to add the include; that test now does.
+
+🤖 Generated with [Claude Code](https://claude.com/claude-code)
+
+## Commit message
+* Speed up JSON pointer parsing, formatting, comparison and lookup
+
+Signed-off-by: Niels Lohmann <mail@nlohmann.me>
+
+* Restore unflatten() speed after the linear-time rewrite
+
+The prefix tree introduced for linear unflatten() kept a std::map per prefix,
+copied each token into it and looked every token up a second time while
+creating the values. Replace the per-prefix maps by one open-addressing table
+keyed by (parent, token) that refers to the parsed tokens, skip the lookups for
+the prefix shared with the previous key (flattened objects are mostly sorted),
+and derive the prefix numbers of the second pass from parent links instead of
+lookups.
+
+Time and memory stay linear in the pointer depth, and the result is still
+independent of the iteration order of the flattened object.
+
+Signed-off-by: Niels Lohmann <mail@nlohmann.me>
+
+* Put [[noreturn]] before __attribute__ on the JSON pointer throw helpers
+
+Clang 18 on Linux rejects a C++11 attribute list after a GNU
+__attribute__ ("an attribute list cannot appear here").
+
+Signed-off-by: Niels Lohmann <mail@nlohmann.me>
+
+---------
+
+Signed-off-by: Niels Lohmann <mail@nlohmann.me>
+
+## Discussion before merge
+- nlohmann: Written by Claude Code on behalf of @nlohmann.
+
+Changes since the last review: the cold-throw commit (7 new helpers: `throw_past_the_end`, `throw_index_out_of_range`, `throw_leading_zero`, `throw_not_a_number`, `throw_exceeds_size_type`, `throw_missing_slash`, `throw_invalid_escape`) is reverted, as it had no measurable gain. The throw sites are inline `JSON_THROW` again, with unchanged messages. `JSON_HEDLEY_NEVER_INLINE` was added to the existing `throw_no_parent()`/`throw_unresolved()` from #5783. `single_include` regenerated; `unit-json_pointer` passes (7 test cases, 211093 assertions). Head: 7785ae251. The PR description is updated; no breaking changes.
+- gregmarr: Is there a reason to not just construct  from `.begin()` and `.end() - 1`?  Is this a limit on the functions required on the array type?
+- gregmarr: Would it make sense to just put this inside the end of the loop and eliminate the `all_digits`?
+
+```
+if (JSON_HEDLEY_UNLIKELY(i == s.size() - 1)) 
+{
+  idx = acc;
+  return array_index_status::ok;
+}
+```
+- gregmarr: Is this better than the `emplace()` version that you used yesterday to avoid the `operator[]` lookup after `find()`?
+- gregmarr: Why remove the move?
+- nlohmann: Good point, no restriction on the container type here. `parent_pointer()` now constructs the token vector directly from `begin()` and `end() - 1` (the range constructor allocates exactly once, so the explicit `reserve` is gone). Timing is unchanged (35 ns before and after). Done in 91e62146c.
+
+(Written by Claude Code on behalf of @nlohmann.)
+
+## Changed functions (from changes.py)
+- nlohmann::json_pointer::unflatten(const BasicJsonType &) (private); reached from the public API through: nlohmann::operator/(const json_pointer<RefStringType> &, const json_pointer<RefStringType> &), nlohmann::operator/(const json_pointer<RefStringType> &, string_t), nlohmann::operator/(const json_pointer<RefStringType> &, std::size_t), nlohmann::operator<<(std::ostream &, const json_pointer<RefStringType> &), nlohmann::operator!=(const json_pointer<RefStringTypeLhs> &, const json_pointer<RefStringTypeRhs> &), nlohmann::operator!=(const json_pointer<RefStringTypeLhs> &, const StringType &), nlohmann::operator!=(const StringType &, const json_pointer<RefStringTypeRhs> &), nlohmann::operator<(const json_pointer<RefStringTypeLhs> &, const json_pointer<RefStringTypeRhs> &), nlohmann::operator==(const json_pointer<RefStringTypeLhs> &, const json_pointer<RefStringTypeRhs> &), nlohmann::operator==(const json_pointer<RefStringTypeLhs> &, const StringType &)
+- nlohmann::json_pointer::split(const string_t &) (private); reached from the public API through: nlohmann::json_pointer::json_pointer<RefStringType>(const string_t &)
+- nlohmann::detail::escape(const StringType &) (private); reached from the public API through: nlohmann::basic_json::diff(const basic_json<...> &, const basic_json<...> &, const string_t &), nlohmann::operator/(const json_pointer<RefStringType> &, const json_pointer<RefStringType> &), nlohmann::operator/(const json_pointer<RefStringType> &, string_t), nlohmann::operator/(const json_pointer<RefStringType> &, std::size_t), nlohmann::operator<<(std::ostream &, const json_pointer<RefStringType> &), nlohmann::operator!=(const json_pointer<RefStringTypeLhs> &, const json_pointer<RefStringTypeRhs> &), nlohmann::operator!=(const json_pointer<RefStringTypeLhs> &, const StringType &), nlohmann::operator!=(const StringType &, const json_pointer<RefStringTypeRhs> &), nlohmann::operator<(const json_pointer<RefStringTypeLhs> &, const json_pointer<RefStringTypeRhs> &), nlohmann::operator==(const json_pointer<RefStringTypeLhs> &, const json_pointer<RefStringTypeRhs> &)
+- nlohmann::json_pointer::parse_array_index(const string_t &, typename BasicJsonType::size_type &) (private); reached from the public API through: nlohmann::operator/(const json_pointer<RefStringType> &, const json_pointer<RefStringType> &), nlohmann::operator/(const json_pointer<RefStringType> &, string_t), nlohmann::operator/(const json_pointer<RefStringType> &, std::size_t), nlohmann::operator<<(std::ostream &, const json_pointer<RefStringType> &), nlohmann::operator!=(const json_pointer<RefStringTypeLhs> &, const json_pointer<RefStringTypeRhs> &), nlohmann::operator!=(const json_pointer<RefStringTypeLhs> &, const StringType &), nlohmann::operator!=(const StringType &, const json_pointer<RefStringTypeRhs> &), nlohmann::operator<(const json_pointer<RefStringTypeLhs> &, const json_pointer<RefStringTypeRhs> &), nlohmann::operator==(const json_pointer<RefStringTypeLhs> &, const json_pointer<RefStringTypeRhs> &), nlohmann::operator==(const json_pointer<RefStringTypeLhs> &, const StringType &)
+- nlohmann::json_pointer::prefix_tree (private); reached from the public API through: nlohmann::operator/(const json_pointer<RefStringType> &, const json_pointer<RefStringType> &), nlohmann::operator/(const json_pointer<RefStringType> &, string_t), nlohmann::operator/(const json_pointer<RefStringType> &, std::size_t), nlohmann::operator<<(std::ostream &, const json_pointer<RefStringType> &), nlohmann::operator!=(const json_pointer<RefStringTypeLhs> &, const json_pointer<RefStringTypeRhs> &), nlohmann::operator!=(const json_pointer<RefStringTypeLhs> &, const StringType &), nlohmann::operator!=(const StringType &, const json_pointer<RefStringTypeRhs> &), nlohmann::operator<(const json_pointer<RefStringTypeLhs> &, const json_pointer<RefStringTypeRhs> &), nlohmann::operator==(const json_pointer<RefStringTypeLhs> &, const json_pointer<RefStringTypeRhs> &), nlohmann::operator==(const json_pointer<RefStringTypeLhs> &, const StringType &)
+- nlohmann::json_pointer::get_checked(BasicJsonType *) (private); reached from the public API through: nlohmann::operator/(const json_pointer<RefStringType> &, const json_pointer<RefStringType> &), nlohmann::operator/(const json_pointer<RefStringType> &, string_t), nlohmann::operator/(const json_pointer<RefStringType> &, std::size_t), nlohmann::operator<<(std::ostream &, const json_pointer<RefStringType> &), nlohmann::operator!=(const json_pointer<RefStringTypeLhs> &, const json_pointer<RefStringTypeRhs> &), nlohmann::operator!=(const json_pointer<RefStringTypeLhs> &, const StringType &), nlohmann::operator!=(const StringType &, const json_pointer<RefStringTypeRhs> &), nlohmann::operator<(const json_pointer<RefStringTypeLhs> &, const json_pointer<RefStringTypeRhs> &), nlohmann::operator==(const json_pointer<RefStringTypeLhs> &, const json_pointer<RefStringTypeRhs> &), nlohmann::operator==(const json_pointer<RefStringTypeLhs> &, const StringType &)
+- nlohmann::json_pointer::contains(const BasicJsonType *) (private); reached from the public API through: nlohmann::operator/(const json_pointer<RefStringType> &, const json_pointer<RefStringType> &), nlohmann::operator/(const json_pointer<RefStringType> &, string_t), nlohmann::operator/(const json_pointer<RefStringType> &, std::size_t), nlohmann::operator<<(std::ostream &, const json_pointer<RefStringType> &), nlohmann::operator!=(const json_pointer<RefStringTypeLhs> &, const json_pointer<RefStringTypeRhs> &), nlohmann::operator!=(const json_pointer<RefStringTypeLhs> &, const StringType &), nlohmann::operator!=(const StringType &, const json_pointer<RefStringTypeRhs> &), nlohmann::operator<(const json_pointer<RefStringTypeLhs> &, const json_pointer<RefStringTypeRhs> &), nlohmann::operator==(const json_pointer<RefStringTypeLhs> &, const json_pointer<RefStringTypeRhs> &), nlohmann::operator==(const json_pointer<RefStringTypeLhs> &, const StringType &)
+- nlohmann::json_pointer::get_checked_or_null(const BasicJsonType *) (private); reached from the public API through: nlohmann::operator/(const json_pointer<RefStringType> &, const json_pointer<RefStringType> &), nlohmann::operator/(const json_pointer<RefStringType> &, string_t), nlohmann::operator/(const json_pointer<RefStringType> &, std::size_t), nlohmann::operator<<(std::ostream &, const json_pointer<RefStringType> &), nlohmann::operator!=(const json_pointer<RefStringTypeLhs> &, const json_pointer<RefStringTypeRhs> &), nlohmann::operator!=(const json_pointer<RefStringTypeLhs> &, const StringType &), nlohmann::operator!=(const StringType &, const json_pointer<RefStringTypeRhs> &), nlohmann::operator<(const json_pointer<RefStringTypeLhs> &, const json_pointer<RefStringTypeRhs> &), nlohmann::operator==(const json_pointer<RefStringTypeLhs> &, const json_pointer<RefStringTypeRhs> &), nlohmann::operator==(const json_pointer<RefStringTypeLhs> &, const StringType &)
+- nlohmann::json_pointer::get_unchecked(const BasicJsonType *) (private); reached from the public API through: nlohmann::operator/(const json_pointer<RefStringType> &, const json_pointer<RefStringType> &), nlohmann::operator/(const json_pointer<RefStringType> &, string_t), nlohmann::operator/(const json_pointer<RefStringType> &, std::size_t), nlohmann::operator<<(std::ostream &, const json_pointer<RefStringType> &), nlohmann::operator!=(const json_pointer<RefStringTypeLhs> &, const json_pointer<RefStringTypeRhs> &), nlohmann::operator!=(const json_pointer<RefStringTypeLhs> &, const StringType &), nlohmann::operator!=(const StringType &, const json_pointer<RefStringTypeRhs> &), nlohmann::operator<(const json_pointer<RefStringTypeLhs> &, const json_pointer<RefStringTypeRhs> &), nlohmann::operator==(const json_pointer<RefStringTypeLhs> &, const json_pointer<RefStringTypeRhs> &), nlohmann::operator==(const json_pointer<RefStringTypeLhs> &, const StringType &)
+- nlohmann::json_pointer::prefix_tree::prefix_tree() (private); reached from the public API through: nlohmann::operator/(const json_pointer<RefStringType> &, const json_pointer<RefStringType> &), nlohmann::operator/(const json_pointer<RefStringType> &, string_t), nlohmann::operator/(const json_pointer<RefStringType> &, std::size_t), nlohmann::operator<<(std::ostream &, const json_pointer<RefStringType> &), nlohmann::operator!=(const json_pointer<RefStringTypeLhs> &, const json_pointer<RefStringTypeRhs> &), nlohmann::operator!=(const json_pointer<RefStringTypeLhs> &, const StringType &), nlohmann::operator!=(const StringType &, const json_pointer<RefStringTypeRhs> &), nlohmann::operator<(const json_pointer<RefStringTypeLhs> &, const json_pointer<RefStringTypeRhs> &), nlohmann::operator==(const json_pointer<RefStringTypeLhs> &, const json_pointer<RefStringTypeRhs> &), nlohmann::operator==(const json_pointer<RefStringTypeLhs> &, const StringType &)
+- nlohmann::detail::unescape(StringType &) (private); reached from the public API through: nlohmann::json_pointer::json_pointer<RefStringType>(const string_t &)
+- nlohmann::json_pointer::get_unchecked(BasicJsonType *) (private); reached from the public API through: nlohmann::operator/(const json_pointer<RefStringType> &, const json_pointer<RefStringType> &), nlohmann::operator/(const json_pointer<RefStringType> &, string_t), nlohmann::operator/(const json_pointer<RefStringType> &, std::size_t), nlohmann::operator<<(std::ostream &, const json_pointer<RefStringType> &), nlohmann::operator!=(const json_pointer<RefStringTypeLhs> &, const json_pointer<RefStringTypeRhs> &), nlohmann::operator!=(const json_pointer<RefStringTypeLhs> &, const StringType &), nlohmann::operator!=(const StringType &, const json_pointer<RefStringTypeRhs> &), nlohmann::operator<(const json_pointer<RefStringTypeLhs> &, const json_pointer<RefStringTypeRhs> &), nlohmann::operator==(const json_pointer<RefStringTypeLhs> &, const json_pointer<RefStringTypeRhs> &), nlohmann::operator==(const json_pointer<RefStringTypeLhs> &, const StringType &)
+- nlohmann::json_pointer::throw_no_parent() (private); reached from the public API through: nlohmann::json_pointer::back(), nlohmann::json_pointer::front(), nlohmann::json_pointer::pop_back(), nlohmann::json_pointer::pop_front(), nlohmann::operator/(const json_pointer<RefStringType> &, const json_pointer<RefStringType> &), nlohmann::operator/(const json_pointer<RefStringType> &, string_t), nlohmann::operator/(const json_pointer<RefStringType> &, std::size_t), nlohmann::operator<<(std::ostream &, const json_pointer<RefStringType> &), nlohmann::operator!=(const json_pointer<RefStringTypeLhs> &, const json_pointer<RefStringTypeRhs> &), nlohmann::operator!=(const json_pointer<RefStringTypeLhs> &, const StringType &)
+- nlohmann::json_pointer::throw_unresolved(const string_t &, BasicJsonContext) (private); reached from the public API through: nlohmann::operator/(const json_pointer<RefStringType> &, const json_pointer<RefStringType> &), nlohmann::operator/(const json_pointer<RefStringType> &, string_t), nlohmann::operator/(const json_pointer<RefStringType> &, std::size_t), nlohmann::operator<<(std::ostream &, const json_pointer<RefStringType> &), nlohmann::operator!=(const json_pointer<RefStringTypeLhs> &, const json_pointer<RefStringTypeRhs> &), nlohmann::operator!=(const json_pointer<RefStringTypeLhs> &, const StringType &), nlohmann::operator!=(const StringType &, const json_pointer<RefStringTypeRhs> &), nlohmann::operator<(const json_pointer<RefStringTypeLhs> &, const json_pointer<RefStringTypeRhs> &), nlohmann::operator==(const json_pointer<RefStringTypeLhs> &, const json_pointer<RefStringTypeRhs> &), nlohmann::operator==(const json_pointer<RefStringTypeLhs> &, const StringType &)
+- nlohmann::json_pointer::equals_string(const string_t &) (private); reached from the public API through: nlohmann::operator/(const json_pointer<RefStringType> &, const json_pointer<RefStringType> &), nlohmann::operator/(const json_pointer<RefStringType> &, string_t), nlohmann::operator/(const json_pointer<RefStringType> &, std::size_t), nlohmann::operator<<(std::ostream &, const json_pointer<RefStringType> &), nlohmann::operator!=(const json_pointer<RefStringTypeLhs> &, const json_pointer<RefStringTypeRhs> &), nlohmann::operator!=(const json_pointer<RefStringTypeLhs> &, const StringType &), nlohmann::operator!=(const StringType &, const json_pointer<RefStringTypeRhs> &), nlohmann::operator<(const json_pointer<RefStringTypeLhs> &, const json_pointer<RefStringTypeRhs> &), nlohmann::operator==(const json_pointer<RefStringTypeLhs> &, const json_pointer<RefStringTypeRhs> &), nlohmann::operator==(const json_pointer<RefStringTypeLhs> &, const StringType &)
+- nlohmann::json_pointer::prefix_tree::add_child(std::size_t, const string_t &) (private); reached from the public API through: nlohmann::operator/(const json_pointer<RefStringType> &, const json_pointer<RefStringType> &), nlohmann::operator/(const json_pointer<RefStringType> &, string_t), nlohmann::operator/(const json_pointer<RefStringType> &, std::size_t), nlohmann::operator<<(std::ostream &, const json_pointer<RefStringType> &), nlohmann::operator!=(const json_pointer<RefStringTypeLhs> &, const json_pointer<RefStringTypeRhs> &), nlohmann::operator!=(const json_pointer<RefStringTypeLhs> &, const StringType &), nlohmann::operator!=(const StringType &, const json_pointer<RefStringTypeRhs> &), nlohmann::operator<(const json_pointer<RefStringTypeLhs> &, const json_pointer<RefStringTypeRhs> &), nlohmann::operator==(const json_pointer<RefStringTypeLhs> &, const json_pointer<RefStringTypeRhs> &), nlohmann::operator==(const json_pointer<RefStringTypeLhs> &, const StringType &)
+- nlohmann::json_pointer::prefix_tree::grow() (private); reached from the public API through: nlohmann::operator/(const json_pointer<RefStringType> &, const json_pointer<RefStringType> &), nlohmann::operator/(const json_pointer<RefStringType> &, string_t), nlohmann::operator/(const json_pointer<RefStringType> &, std::size_t), nlohmann::operator<<(std::ostream &, const json_pointer<RefStringType> &), nlohmann::operator!=(const json_pointer<RefStringTypeLhs> &, const json_pointer<RefStringTypeRhs> &), nlohmann::operator!=(const json_pointer<RefStringTypeLhs> &, const StringType &), nlohmann::operator!=(const StringType &, const json_pointer<RefStringTypeRhs> &), nlohmann::operator<(const json_pointer<RefStringTypeLhs> &, const json_pointer<RefStringTypeRhs> &), nlohmann::operator==(const json_pointer<RefStringTypeLhs> &, const json_pointer<RefStringTypeRhs> &), nlohmann::operator==(const json_pointer<RefStringTypeLhs> &, const StringType &)
+- nlohmann::detail::escape_into(StringType &, const StringType &) (private); reached from the public API through: nlohmann::json_pointer::to_string(), nlohmann::basic_json::diff(const basic_json<...> &, const basic_json<...> &, const string_t &), nlohmann::operator/(const json_pointer<RefStringType> &, const json_pointer<RefStringType> &), nlohmann::operator/(const json_pointer<RefStringType> &, string_t), nlohmann::operator/(const json_pointer<RefStringType> &, std::size_t), nlohmann::operator<<(std::ostream &, const json_pointer<RefStringType> &), nlohmann::operator!=(const json_pointer<RefStringTypeLhs> &, const json_pointer<RefStringTypeRhs> &), nlohmann::operator!=(const json_pointer<RefStringTypeLhs> &, const StringType &), nlohmann::operator!=(const StringType &, const json_pointer<RefStringTypeRhs> &), nlohmann::operator<(const json_pointer<RefStringTypeLhs> &, const json_pointer<RefStringTypeRhs> &)
+- nlohmann::json_pointer::object_member(BasicJsonType &, const string_t &) (private); reached from the public API through: nlohmann::operator/(const json_pointer<RefStringType> &, const json_pointer<RefStringType> &), nlohmann::operator/(const json_pointer<RefStringType> &, string_t), nlohmann::operator/(const json_pointer<RefStringType> &, std::size_t), nlohmann::operator<<(std::ostream &, const json_pointer<RefStringType> &), nlohmann::operator!=(const json_pointer<RefStringTypeLhs> &, const json_pointer<RefStringTypeRhs> &), nlohmann::operator!=(const json_pointer<RefStringTypeLhs> &, const StringType &), nlohmann::operator!=(const StringType &, const json_pointer<RefStringTypeRhs> &), nlohmann::operator<(const json_pointer<RefStringTypeLhs> &, const json_pointer<RefStringTypeRhs> &), nlohmann::operator==(const json_pointer<RefStringTypeLhs> &, const json_pointer<RefStringTypeRhs> &), nlohmann::operator==(const json_pointer<RefStringTypeLhs> &, const StringType &)
+- nlohmann::json_pointer::prefix_tree::hash_of(std::size_t, const string_t &) (private); reached from the public API through: nlohmann::operator/(const json_pointer<RefStringType> &, const json_pointer<RefStringType> &), nlohmann::operator/(const json_pointer<RefStringType> &, string_t), nlohmann::operator/(const json_pointer<RefStringType> &, std::size_t), nlohmann::operator<<(std::ostream &, const json_pointer<RefStringType> &), nlohmann::operator!=(const json_pointer<RefStringTypeLhs> &, const json_pointer<RefStringTypeRhs> &), nlohmann::operator!=(const json_pointer<RefStringTypeLhs> &, const StringType &), nlohmann::operator!=(const StringType &, const json_pointer<RefStringTypeRhs> &), nlohmann::operator<(const json_pointer<RefStringTypeLhs> &, const json_pointer<RefStringTypeRhs> &), nlohmann::operator==(const json_pointer<RefStringTypeLhs> &, const json_pointer<RefStringTypeRhs> &), nlohmann::operator==(const json_pointer<RefStringTypeLhs> &, const StringType &)
+- nlohmann::json_pointer::get_and_create(BasicJsonType &, const std::vector<string_t> &, const std::vector<std::size_t> &, const prefix_tree &) (private); reached from the public API through: nlohmann::operator/(const json_pointer<RefStringType> &, const json_pointer<RefStringType> &), nlohmann::operator/(const json_pointer<RefStringType> &, string_t), nlohmann::operator/(const json_pointer<RefStringType> &, std::size_t), nlohmann::operator<<(std::ostream &, const json_pointer<RefStringType> &), nlohmann::operator!=(const json_pointer<RefStringTypeLhs> &, const json_pointer<RefStringTypeRhs> &), nlohmann::operator!=(const json_pointer<RefStringTypeLhs> &, const StringType &), nlohmann::operator!=(const StringType &, const json_pointer<RefStringTypeRhs> &), nlohmann::operator<(const json_pointer<RefStringTypeLhs> &, const json_pointer<RefStringTypeRhs> &), nlohmann::operator==(const json_pointer<RefStringTypeLhs> &, const json_pointer<RefStringTypeRhs> &), nlohmann::operator==(const json_pointer<RefStringTypeLhs> &, const StringType &)
+- nlohmann::json_pointer::prefix_tree::slot (private); reached from the public API through: nlohmann::operator/(const json_pointer<RefStringType> &, const json_pointer<RefStringType> &), nlohmann::operator/(const json_pointer<RefStringType> &, string_t), nlohmann::operator/(const json_pointer<RefStringType> &, std::size_t), nlohmann::operator<<(std::ostream &, const json_pointer<RefStringType> &), nlohmann::operator!=(const json_pointer<RefStringTypeLhs> &, const json_pointer<RefStringTypeRhs> &), nlohmann::operator!=(const json_pointer<RefStringTypeLhs> &, const StringType &), nlohmann::operator!=(const StringType &, const json_pointer<RefStringTypeRhs> &), nlohmann::operator<(const json_pointer<RefStringTypeLhs> &, const json_pointer<RefStringTypeRhs> &), nlohmann::operator==(const json_pointer<RefStringTypeLhs> &, const json_pointer<RefStringTypeRhs> &), nlohmann::operator==(const json_pointer<RefStringTypeLhs> &, const StringType &)
+- nlohmann::json_pointer::prefix_tree::slot::slot() (private); reached from the public API through: nlohmann::operator/(const json_pointer<RefStringType> &, const json_pointer<RefStringType> &), nlohmann::operator/(const json_pointer<RefStringType> &, string_t), nlohmann::operator/(const json_pointer<RefStringType> &, std::size_t), nlohmann::operator<<(std::ostream &, const json_pointer<RefStringType> &), nlohmann::operator!=(const json_pointer<RefStringTypeLhs> &, const json_pointer<RefStringTypeRhs> &), nlohmann::operator!=(const json_pointer<RefStringTypeLhs> &, const StringType &), nlohmann::operator!=(const StringType &, const json_pointer<RefStringTypeRhs> &), nlohmann::operator<(const json_pointer<RefStringTypeLhs> &, const json_pointer<RefStringTypeRhs> &), nlohmann::operator==(const json_pointer<RefStringTypeLhs> &, const json_pointer<RefStringTypeRhs> &), nlohmann::operator==(const json_pointer<RefStringTypeLhs> &, const StringType &)
+- nlohmann::json_pointer::prefix_tree::slot::slot(std::size_t, std::size_t, const string_t *, std::size_t) (private); reached from the public API through: nlohmann::operator/(const json_pointer<RefStringType> &, const json_pointer<RefStringType> &), nlohmann::operator/(const json_pointer<RefStringType> &, string_t), nlohmann::operator/(const json_pointer<RefStringType> &, std::size_t), nlohmann::operator<<(std::ostream &, const json_pointer<RefStringType> &), nlohmann::operator!=(const json_pointer<RefStringTypeLhs> &, const json_pointer<RefStringTypeRhs> &), nlohmann::operator!=(const json_pointer<RefStringTypeLhs> &, const StringType &), nlohmann::operator!=(const StringType &, const json_pointer<RefStringTypeRhs> &), nlohmann::operator<(const json_pointer<RefStringTypeLhs> &, const json_pointer<RefStringTypeRhs> &), nlohmann::operator==(const json_pointer<RefStringTypeLhs> &, const json_pointer<RefStringTypeRhs> &), nlohmann::operator==(const json_pointer<RefStringTypeLhs> &, const StringType &)
+- nlohmann::json_pointer::prefix_tree::parent (private); reached from the public API through: nlohmann::operator/(const json_pointer<RefStringType> &, const json_pointer<RefStringType> &), nlohmann::operator/(const json_pointer<RefStringType> &, string_t), nlohmann::operator/(const json_pointer<RefStringType> &, std::size_t), nlohmann::operator<<(std::ostream &, const json_pointer<RefStringType> &), nlohmann::operator!=(const json_pointer<RefStringTypeLhs> &, const json_pointer<RefStringTypeRhs> &), nlohmann::operator!=(const json_pointer<RefStringTypeLhs> &, const StringType &), nlohmann::operator!=(const StringType &, const json_pointer<RefStringTypeRhs> &), nlohmann::operator<(const json_pointer<RefStringTypeLhs> &, const json_pointer<RefStringTypeRhs> &), nlohmann::operator==(const json_pointer<RefStringTypeLhs> &, const json_pointer<RefStringTypeRhs> &), nlohmann::operator==(const json_pointer<RefStringTypeLhs> &, const StringType &)
+- nlohmann::json_pointer::prefix_tree::slot::hash (private); reached from the public API through: nlohmann::operator/(const json_pointer<RefStringType> &, const json_pointer<RefStringType> &), nlohmann::operator/(const json_pointer<RefStringType> &, string_t), nlohmann::operator/(const json_pointer<RefStringType> &, std::size_t), nlohmann::operator<<(std::ostream &, const json_pointer<RefStringType> &), nlohmann::operator!=(const json_pointer<RefStringTypeLhs> &, const json_pointer<RefStringTypeRhs> &), nlohmann::operator!=(const json_pointer<RefStringTypeLhs> &, const StringType &), nlohmann::operator!=(const StringType &, const json_pointer<RefStringTypeRhs> &), nlohmann::operator<(const json_pointer<RefStringTypeLhs> &, const json_pointer<RefStringTypeRhs> &), nlohmann::operator==(const json_pointer<RefStringTypeLhs> &, const json_pointer<RefStringTypeRhs> &), nlohmann::operator==(const json_pointer<RefStringTypeLhs> &, const StringType &)
+- nlohmann::json_pointer::prefix_tree::slot::id (private); reached from the public API through: nlohmann::operator/(const json_pointer<RefStringType> &, const json_pointer<RefStringType> &), nlohmann::operator/(const json_pointer<RefStringType> &, string_t), nlohmann::operator/(const json_pointer<RefStringType> &, std::size_t), nlohmann::operator<<(std::ostream &, const json_pointer<RefStringType> &), nlohmann::operator!=(const json_pointer<RefStringTypeLhs> &, const json_pointer<RefStringTypeRhs> &), nlohmann::operator!=(const json_pointer<RefStringTypeLhs> &, const StringType &), nlohmann::operator!=(const StringType &, const json_pointer<RefStringTypeRhs> &), nlohmann::operator<(const json_pointer<RefStringTypeLhs> &, const json_pointer<RefStringTypeRhs> &), nlohmann::operator==(const json_pointer<RefStringTypeLhs> &, const json_pointer<RefStringTypeRhs> &), nlohmann::operator==(const json_pointer<RefStringTypeLhs> &, const StringType &)
+- nlohmann::json_pointer::prefix_tree::slot::parent (private); reached from the public API through: nlohmann::operator/(const json_pointer<RefStringType> &, const json_pointer<RefStringType> &), nlohmann::operator/(const json_pointer<RefStringType> &, string_t), nlohmann::operator/(const json_pointer<RefStringType> &, std::size_t), nlohmann::operator<<(std::ostream &, const json_pointer<RefStringType> &), nlohmann::operator!=(const json_pointer<RefStringTypeLhs> &, const json_pointer<RefStringTypeRhs> &), nlohmann::operator!=(const json_pointer<RefStringTypeLhs> &, const StringType &), nlohmann::operator!=(const StringType &, const json_pointer<RefStringTypeRhs> &), nlohmann::operator<(const json_pointer<RefStringTypeLhs> &, const json_pointer<RefStringTypeRhs> &), nlohmann::operator==(const json_pointer<RefStringTypeLhs> &, const json_pointer<RefStringTypeRhs> &), nlohmann::operator==(const json_pointer<RefStringTypeLhs> &, const StringType &)
+- nlohmann::json_pointer::prefix_tree::slot::token (private); reached from the public API through: nlohmann::operator/(const json_pointer<RefStringType> &, const json_pointer<RefStringType> &), nlohmann::operator/(const json_pointer<RefStringType> &, string_t), nlohmann::operator/(const json_pointer<RefStringType> &, std::size_t), nlohmann::operator<<(std::ostream &, const json_pointer<RefStringType> &), nlohmann::operator!=(const json_pointer<RefStringTypeLhs> &, const json_pointer<RefStringTypeRhs> &), nlohmann::operator!=(const json_pointer<RefStringTypeLhs> &, const StringType &), nlohmann::operator!=(const StringType &, const json_pointer<RefStringTypeRhs> &), nlohmann::operator<(const json_pointer<RefStringTypeLhs> &, const json_pointer<RefStringTypeRhs> &), nlohmann::operator==(const json_pointer<RefStringTypeLhs> &, const json_pointer<RefStringTypeRhs> &), nlohmann::operator==(const json_pointer<RefStringTypeLhs> &, const StringType &)
+- nlohmann::json_pointer::prefix_tree::slots (private); reached from the public API through: nlohmann::operator/(const json_pointer<RefStringType> &, const json_pointer<RefStringType> &), nlohmann::operator/(const json_pointer<RefStringType> &, string_t), nlohmann::operator/(const json_pointer<RefStringType> &, std::size_t), nlohmann::operator<<(std::ostream &, const json_pointer<RefStringType> &), nlohmann::operator!=(const json_pointer<RefStringTypeLhs> &, const json_pointer<RefStringTypeRhs> &), nlohmann::operator!=(const json_pointer<RefStringTypeLhs> &, const StringType &), nlohmann::operator!=(const StringType &, const json_pointer<RefStringTypeRhs> &), nlohmann::operator<(const json_pointer<RefStringTypeLhs> &, const json_pointer<RefStringTypeRhs> &), nlohmann::operator==(const json_pointer<RefStringTypeLhs> &, const json_pointer<RefStringTypeRhs> &), nlohmann::operator==(const json_pointer<RefStringTypeLhs> &, const StringType &)
+- nlohmann::json_pointer::prefix_tree::used (private); reached from the public API through: nlohmann::operator/(const json_pointer<RefStringType> &, const json_pointer<RefStringType> &), nlohmann::operator/(const json_pointer<RefStringType> &, string_t), nlohmann::operator/(const json_pointer<RefStringType> &, std::size_t), nlohmann::operator<<(std::ostream &, const json_pointer<RefStringType> &), nlohmann::operator!=(const json_pointer<RefStringTypeLhs> &, const json_pointer<RefStringTypeRhs> &), nlohmann::operator!=(const json_pointer<RefStringTypeLhs> &, const StringType &), nlohmann::operator!=(const StringType &, const json_pointer<RefStringTypeRhs> &), nlohmann::operator<(const json_pointer<RefStringTypeLhs> &, const json_pointer<RefStringTypeRhs> &), nlohmann::operator==(const json_pointer<RefStringTypeLhs> &, const json_pointer<RefStringTypeRhs> &), nlohmann::operator==(const json_pointer<RefStringTypeLhs> &, const StringType &)
+- nlohmann::json_pointer::get_and_create(BasicJsonType &, const prefix_tree &) (private); reached from the public API through: nlohmann::operator/(const json_pointer<RefStringType> &, const json_pointer<RefStringType> &), nlohmann::operator/(const json_pointer<RefStringType> &, string_t), nlohmann::operator/(const json_pointer<RefStringType> &, std::size_t), nlohmann::operator<<(std::ostream &, const json_pointer<RefStringType> &), nlohmann::operator!=(const json_pointer<RefStringTypeLhs> &, const json_pointer<RefStringTypeRhs> &), nlohmann::operator!=(const json_pointer<RefStringTypeLhs> &, const StringType &), nlohmann::operator!=(const StringType &, const json_pointer<RefStringTypeRhs> &), nlohmann::operator<(const json_pointer<RefStringTypeLhs> &, const json_pointer<RefStringTypeRhs> &), nlohmann::operator==(const json_pointer<RefStringTypeLhs> &, const json_pointer<RefStringTypeRhs> &), nlohmann::operator==(const json_pointer<RefStringTypeLhs> &, const StringType &)
+- nlohmann::json_pointer::prefix_tree::add_child(std::size_t, string_t &&) (private); reached from the public API through: nlohmann::operator/(const json_pointer<RefStringType> &, const json_pointer<RefStringType> &), nlohmann::operator/(const json_pointer<RefStringType> &, string_t), nlohmann::operator/(const json_pointer<RefStringType> &, std::size_t), nlohmann::operator<<(std::ostream &, const json_pointer<RefStringType> &), nlohmann::operator!=(const json_pointer<RefStringTypeLhs> &, const json_pointer<RefStringTypeRhs> &), nlohmann::operator!=(const json_pointer<RefStringTypeLhs> &, const StringType &), nlohmann::operator!=(const StringType &, const json_pointer<RefStringTypeRhs> &), nlohmann::operator<(const json_pointer<RefStringTypeLhs> &, const json_pointer<RefStringTypeRhs> &), nlohmann::operator==(const json_pointer<RefStringTypeLhs> &, const json_pointer<RefStringTypeRhs> &), nlohmann::operator==(const json_pointer<RefStringTypeLhs> &, const StringType &)
+- nlohmann::json_pointer::prefix_tree::find_child(std::size_t, const string_t &) (private); reached from the public API through: nlohmann::operator/(const json_pointer<RefStringType> &, const json_pointer<RefStringType> &), nlohmann::operator/(const json_pointer<RefStringType> &, string_t), nlohmann::operator/(const json_pointer<RefStringType> &, std::size_t), nlohmann::operator<<(std::ostream &, const json_pointer<RefStringType> &), nlohmann::operator!=(const json_pointer<RefStringTypeLhs> &, const json_pointer<RefStringTypeRhs> &), nlohmann::operator!=(const json_pointer<RefStringTypeLhs> &, const StringType &), nlohmann::operator!=(const StringType &, const json_pointer<RefStringTypeRhs> &), nlohmann::operator<(const json_pointer<RefStringTypeLhs> &, const json_pointer<RefStringTypeRhs> &), nlohmann::operator==(const json_pointer<RefStringTypeLhs> &, const json_pointer<RefStringTypeRhs> &), nlohmann::operator==(const json_pointer<RefStringTypeLhs> &, const StringType &)
+- nlohmann::json_pointer::prefix_tree::children (private); reached from the public API through: nlohmann::operator/(const json_pointer<RefStringType> &, const json_pointer<RefStringType> &), nlohmann::operator/(const json_pointer<RefStringType> &, string_t), nlohmann::operator/(const json_pointer<RefStringType> &, std::size_t), nlohmann::operator<<(std::ostream &, const json_pointer<RefStringType> &), nlohmann::operator!=(const json_pointer<RefStringTypeLhs> &, const json_pointer<RefStringTypeRhs> &), nlohmann::operator!=(const json_pointer<RefStringTypeLhs> &, const StringType &), nlohmann::operator!=(const StringType &, const json_pointer<RefStringTypeRhs> &), nlohmann::operator<(const json_pointer<RefStringTypeLhs> &, const json_pointer<RefStringTypeRhs> &), nlohmann::operator==(const json_pointer<RefStringTypeLhs> &, const json_pointer<RefStringTypeRhs> &), nlohmann::operator==(const json_pointer<RefStringTypeLhs> &, const StringType &)
+- nlohmann::basic_json::patch_inplace(const basic_json<...> &) (public)
+- nlohmann::json_pointer (public)
+- nlohmann::json_pointer::to_string() (public)
+- nlohmann::operator/(const json_pointer<RefStringType> &, const json_pointer<RefStringType> &) (public)
+- nlohmann::operator/(const json_pointer<RefStringType> &, string_t) (public)
+- nlohmann::json_pointer::parent_pointer() (public)
+- nlohmann::operator/(const json_pointer<RefStringType> &, std::size_t) (public)
+- nlohmann::operator==(const StringType &, const json_pointer<RefStringTypeRhs> &) (public)
+- nlohmann::operator==(const json_pointer<RefStringTypeLhs> &, const StringType &) (public)
+
+## Diff of the library source (before -> after)
+```diff
+diff --git a/include/nlohmann/detail/json_pointer.hpp b/include/nlohmann/detail/json_pointer.hpp
+index f5cd4631c..a752deb08 100644
+--- a/include/nlohmann/detail/json_pointer.hpp
++++ b/include/nlohmann/detail/json_pointer.hpp
+@@ -16,8 +16,6 @@
+     #include <iosfwd> // ostream
+ #endif  // JSON_NO_IO
+ #include <limits> // max
+-#include <map> // map
+-#include <numeric> // accumulate
+ #include <string> // string
+ #include <utility> // move
+ #include <vector> // vector
+@@ -70,12 +68,21 @@ class json_pointer
+     /// @sa https://json.nlohmann.me/api/json_pointer/to_string/
+     string_t to_string() const
+     {
+-        return std::accumulate(reference_tokens.begin(), reference_tokens.end(),
+-                               string_t{},
+-                               [](const string_t& a, const string_t& b)
++        // one buffer: every token adds its escaped form (at least its length) and a slash
++        std::size_t length = 0;
++        for (const auto& reference_token : reference_tokens)
++        {
++            length += reference_token.size() + 1;
++        }
++
++        string_t result;
++        result.reserve(length);
++        for (const auto& reference_token : reference_tokens)
+         {
+-            return detail::concat<string_t>(a, '/', detail::escape(b));
+-        });
++            result.append("/", 1);
++            detail::escape_into(result, reference_token);
++        }
++        return result;
+     }
+ 
+     /// @brief return a string representation of the JSON pointer
+@@ -130,21 +137,29 @@ class json_pointer
+     friend json_pointer operator/(const json_pointer& lhs,
+                                   const json_pointer& rhs)
+     {
+-        return json_pointer(lhs) /= rhs;
++        json_pointer result;
++        result.reference_tokens.reserve(lhs.reference_tokens.size() + rhs.reference_tokens.size());
++        result.reference_tokens.insert(result.reference_tokens.end(), lhs.reference_tokens.begin(), lhs.reference_tokens.end());
++        result.reference_tokens.insert(result.reference_tokens.end(), rhs.reference_tokens.begin(), rhs.reference_tokens.end());
++        return result;
+     }
+ 
+     /// @brief create a new JSON pointer by appending the unescaped token at the end of the JSON pointer
+     /// @sa https://json.nlohmann.me/api/json_pointer/operator_slash/
+     friend json_pointer operator/(const json_pointer& lhs, string_t token) // NOLINT(performance-unnecessary-value-param)
+     {
+-        return json_pointer(lhs) /= std::move(token);
++        json_pointer result;
++        result.reference_tokens.reserve(lhs.reference_tokens.size() + 1);
++        result.reference_tokens.insert(result.reference_tokens.end(), lhs.reference_tokens.begin(), lhs.reference_tokens.end());
++        result.reference_tokens.push_back(std::move(token));
++        return result;
+     }
+ 
+     /// @brief create a new JSON pointer by appending the array-index-token at the end of the JSON pointer
+     /// @sa https://json.nlohmann.me/api/json_pointer/operator_slash/
+     friend json_pointer operator/(const json_pointer& lhs, std::size_t array_idx)
+     {
+-        return json_pointer(lhs) /= array_idx;
++        return lhs / detail::to_string<string_t>(array_idx);
+     }
+ 
+     /// @brief returns the parent of this JSON pointer
+@@ -156,8 +171,8 @@ class json_pointer
+             return *this;
+         }
+ 
+-        json_pointer res = *this;
+-        res.pop_back();
++        json_pointer res;
++        res.reference_tokens = std::vector<string_t>(reference_tokens.begin(), reference_tokens.end() - 1);
+         return res;
+     }
+ 
+@@ -246,14 +261,14 @@ class json_pointer
+ 
+   private:
+     /// @throw out_of_range.405 always
+-    JSON_HEDLEY_NO_RETURN static void throw_no_parent()
++    JSON_HEDLEY_NO_RETURN JSON_HEDLEY_NEVER_INLINE static void throw_no_parent()
+     {
+         JSON_THROW(detail::out_of_range::create(detail::exception_id::patch_on_root, "JSON pointer has no parent", nullptr));
+     }
+ 
+     /// @throw out_of_range.404 always
+     template<typename BasicJsonContext>
+-    JSON_HEDLEY_NO_RETURN static void throw_unresolved(const string_t& reference_token, BasicJsonContext context)
++    JSON_HEDLEY_NO_RETURN JSON_HEDLEY_NEVER_INLINE static void throw_unresolved(const string_t& reference_token, BasicJsonContext context)
+     {
+         static_cast<void>(reference_token); // unused when JSON_NOEXCEPTION is defined
+         static_cast<void>(context);
+@@ -306,6 +321,28 @@ class json_pointer
+             return array_index_status::not_a_number;
+         }
+ 
++        // fast path: up to 18 decimal digits cannot overflow unsigned long long or
++        // size_type (9 digits for a 32-bit size_type), so strtoull and errno are not needed
++        constexpr std::size_t max_fast_digits = sizeof(size_type) >= 8 ? 18 : 9;
++        if (!s.empty() && s.size() <= max_fast_digits)
++        {
++            size_type acc = 0;
++            for (std::size_t i = 0; i < s.size(); ++i)
++            {
++                const char c = s[i];
++                if (JSON_HEDLEY_UNLIKELY(c < '0' || c > '9'))
++                {
++                    break; // not a plain number: let strtoull decide
++                }
++                acc = static_cast<size_type>(acc * 10 + static_cast<size_type>(c - '0'));
++                if (JSON_HEDLEY_UNLIKELY(i == s.size() - 1))
++                {
++                    idx = acc;
++                    return array_index_status::ok;
++                }
++            }
++        }
++
+         const char* p = s.data();
+         char* p_end = nullptr; // NOLINT(misc-const-correctness)
+         errno = 0; // strtoull doesn't reset errno
+@@ -362,6 +399,83 @@ class json_pointer
+         return idx;
+     }
+ 
++    /*!
++    @brief compare with a JSON pointer string without splitting it into tokens
++
++    @throw parse_error.107  if the string is not empty or begins with '/'
++    @throw parse_error.108  if character '~' is not followed by '0' or '1'
++    */
++    bool equals_string(const string_t& reference_string) const
++    {
++        if (reference_string.empty())
++        {
++            return reference_tokens.empty();
++        }
++
++        if (JSON_HEDLEY_UNLIKELY(reference_string[0] != '/'))
++        {
++            JSON_THROW(detail::parse_error::create(detail::exception_id::pointer_missing_slash, 1, detail::concat("JSON pointer must be empty or begin with '/' - was: '", reference_string, "'"), nullptr));
++        }
++
++        // the whole string is validated, whether or not it matches
++        const std::size_t size = reference_string.size();
++        for (std::size_t pos = reference_string.find_first_of('~');
++                pos != string_t::npos;
++                pos = reference_string.find_first_of('~', pos + 1))
++        {
++            if (JSON_HEDLEY_UNLIKELY(pos == size - 1 || (reference_string[pos + 1] != '0' && reference_string[pos + 1] != '1')))
++            {
++                JSON_THROW(detail::parse_error::create(detail::exception_id::pointer_invalid_escape, 0, "escape character '~' must be followed with '0' or '1'", nullptr));
++            }
++        }
++
++        // compare token by token, unescaping the string on the fly
++        std::size_t pos = 0; // the slash in front of the next token
++        for (const auto& reference_token : reference_tokens)
++        {
++            if (pos >= size)
++            {
++                return false;
++            }
++
++            std::size_t i = pos + 1;
++            std::size_t j = 0;
++            const std::size_t token_size = reference_token.size();
++            while (i < size && reference_string[i] != '/')
++            {
++                char c = reference_string[i++];
++                if (c == '~')
++                {
++                    c = (reference_string[i++] == '0') ? '~' : '/';
++                }
++                if (j == token_size || reference_token[j] != c)
++                {
++                    return false;
++                }
++                ++j;
++            }
++            if (j != token_size)
++      
+[... truncated, 20341 more characters]
+diff --git a/include/nlohmann/detail/string_escape.hpp b/include/nlohmann/detail/string_escape.hpp
+index a6489e054..b3308b5c3 100644
+--- a/include/nlohmann/detail/string_escape.hpp
++++ b/include/nlohmann/detail/string_escape.hpp
+@@ -9,6 +9,7 @@
+ #pragma once
+ 
+ #include <cstddef> // size_t
++#include <utility> // move
+ 
+ #include <nlohmann/detail/abi_macros.hpp>
+ 
+@@ -24,39 +25,46 @@ namespace detail
+  * Note the order of escaping "~" to "~0" and "/" to "~1" is important.
+  *
+  * The string is rebuilt in a single pass, appending whole runs between the
+- * characters that need escaping. Scanning with find_first_of() keeps the
+- * common case -- nothing to escape -- as fast as a single search, while
+- * repeated replace() calls would move the tail of the string once per
+- * escaped character.
++ * characters that need escaping, while repeated replace() calls would move
++ * the tail of the string once per escaped character. @ref escape_into appends
++ * the escaped string to an existing one.
+  */
+ template<typename StringType>
+-inline StringType escape(const StringType& s)
++inline void escape_into(StringType& out, const StringType& s)
+ {
+-    auto next_special = [&s](std::size_t from)
++    const std::size_t size = s.size();
++    std::size_t run = 0;
++    for (std::size_t i = 0; i < size; ++i)
+     {
+-        const auto tilde = s.find_first_of('~', from);
+-        const auto slash = s.find_first_of('/', from);
+-        return tilde < slash ? tilde : slash; // npos is the largest value
+-    };
++        const char c = s[i];
++        if (c == '~' || c == '/')
++        {
++            out.append(s.data() + run, i - run);
++            out.append(c == '~' ? "~0" : "~1", 2);
++            run = i + 1;
++        }
++    }
++    out.append(s.data() + run, size - run);
++}
+ 
+-    auto pos = next_special(0);
+-    if (pos == StringType::npos)
++template<typename StringType>
++inline StringType escape(const StringType& s)
++{
++    // a single scan for both special characters; nothing to escape is the common case
++    const std::size_t size = s.size();
++    std::size_t i = 0;
++    while (i < size && s[i] != '~' && s[i] != '/')
++    {
++        ++i;
++    }
++    if (i == size)
+     {
+         return s;
+     }
+ 
+     StringType result;
+-    result.reserve(s.size() + 2);
+-
+-    std::size_t run = 0;
+-    while (pos != StringType::npos)
+-    {
+-        result.append(s.data() + run, pos - run);
+-        result.append(s[pos] == '~' ? "~0" : "~1", 2);
+-        run = pos + 1;
+-        pos = next_special(run);
+-    }
+-    result.append(s.data() + run, s.size() - run);
++    result.reserve(size + 2);
++    escape_into(result, s);
+     return result;
+ }
+ 
+@@ -101,7 +109,7 @@ inline void unescape(StringType& s)
+         pos = s.find_first_of('~', run);
+     }
+     result.append(s.data() + run, s.size() - run);
+-    s = result;
++    s = std::move(result);
+ }
+ 
+ }  // namespace detail
+diff --git a/include/nlohmann/json.hpp b/include/nlohmann/json.hpp
+index 3bad024f1..665ebb8e1 100644
+--- a/include/nlohmann/json.hpp
++++ b/include/nlohmann/json.hpp
+@@ -6562,24 +6562,18 @@ public:
+         };
+ 
+         // wrapper for "add" operation; add value at ptr
+-        const auto operation_add = [&result](json_pointer & ptr, const basic_json & val)
++        const auto operation_add = [&result](json_pointer & ptr, basic_json val)
+         {
+             // adding to the root of the target document means replacing it
+             if (ptr.empty())
+             {
+-                result = val;
++                result = std::move(val);
+                 return;
+             }
+ 
+-            // make sure the top element of the pointer exists
+-            json_pointer const top_pointer = ptr.top();
+-            if (top_pointer != ptr)
+-            {
+-                result.at(top_pointer);
+-            }
+-
+-            // get reference to the parent of the JSON pointer ptr
+-            const auto last_path = ptr.back();
++            // get reference to the parent of the JSON pointer ptr; a missing
++            // parent (or one of its ancestors) is reported by at()
++            auto last_path = std::move(ptr.reference_tokens.back());
+             ptr.pop_back();
+             // parent must exist when performing patch add per RFC6902 specs
+             basic_json& parent = result.at(ptr);
+@@ -6590,7 +6584,7 @@ public:
+                 case value_t::object:
+                 {
+                     // use operator[] to add value
+-                    parent[last_path] = val;
++                    parent[std::move(last_path)] = std::move(val);
+                     break;
+                 }
+ 
+@@ -6599,7 +6593,7 @@ public:
+                     if (last_path == "-")
+                     {
+                         // special case: append to back
+-                        parent.push_back(val);
++                        parent.push_back(std::move(val));
+                     }
+                     else
+                     {
+@@ -6611,7 +6605,7 @@ public:
+                         }
+ 
+                         // default case: insert add offset
+-                        parent.insert(parent.begin() + static_cast<difference_type>(idx), val);
++                        parent.insert(parent.begin() + static_cast<difference_type>(idx), std::move(val));
+                     }
+                     break;
+                 }
+@@ -6634,7 +6628,8 @@ public:
+         const auto operation_remove = [this, & result](json_pointer & ptr)
+         {
+             // get reference to the parent of the JSON pointer ptr
+-            const auto last_path = ptr.back();
++            static_cast<void>(ptr.back()); // throws out_of_range.405 if ptr is the root
++            const auto last_path = std::move(ptr.reference_tokens.back());
+             ptr.pop_back();
+             basic_json& parent = result.at(ptr);
+ 
+@@ -6734,8 +6729,8 @@ public:
+             }
+ 
+             // collect mandatory members
+-            const auto op = get_value("op", "op", true).template get<string_t>();
+-            const auto path = get_value(op, "path", true).template get<string_t>();
++            const string_t& op = *get_value("op", "op", true).m_data.m_value.string;
++            const string_t& path = *get_value(op, "path", true).m_data.m_value.string;
+             json_pointer ptr(path);
+ 
+             switch (get_op(op))
+@@ -6761,7 +6756,7 @@ public:
+ 
+                 case patch_operations::move:
+                 {
+-                    const auto from_path = get_value("move", "from", true).template get<string_t>();
++                    const string_t& from_path = *get_value("move", "from", true).m_data.m_value.string;
+                     json_pointer from_ptr(from_path);
+ 
+                     if (JSON_HEDLEY_UNLIKELY(is_proper_prefix(from_ptr, ptr)))
+@@ -6770,29 +6765,28 @@ public:
+                     }
+ 
+                     // the "from" location must exist - use at()
+-                    basic_json const v = result.at(from_ptr);
++                    // a root "from" is rejected by operation_remove below, which must leave result intact
++                    basic_json v = from_ptr.empty() ? basic_json(result) : std::move(result.at(from_ptr));
+ 
+                     // The move operation is functionally identical to a
+                     // "remove" operation on the "from" location, followed
+                     // immediately by an "add" operation at the target
+                     // location with the value that was just removed.
+                     operation_remove(from_ptr);
+-                    operation_add(ptr, v);
++                    operation_add(ptr, std::move(v));
+                     break;
+                 }
+ 
+                 case patch_operations::copy:
+                 {
+-                    const auto from_path = get_value("copy", "from", true).template get<string_t>();
++                    const string_t& from_path = *get_value("copy", "from", true).m_data.m_value.string;
+                     const json_pointer from_ptr(from_path);
+ 
+-                    // the "from" location must exist - use at()
+-                    basic_json const v = result.at(from_ptr);
+-
+                     // The copy is functionally identical to an "add"
+                     // operation at the target location using the value
+-                    // specified in the "from" member.
+-                    operation_add(ptr, v);
++                    // specified in the "from" member; the "from" location
++                    // must exist - use at()
++                    operation_add(ptr, result.at(from_ptr));
+                     break;
+                 }
+```
+
+## Existing upstream tests that call the changed code (for style and API usage)
+// Upstream tests at the PR's parent commit 0c4e7c103 that use the changed code.
+// Names searched (test lines using each): patch_inplace (4), json_pointer (158), to_string (7), parent_pointer (3), diff (0), back (83), front (31), pop_back (17), pop_front (3), operator/ (0), operator<< (83), operator!= (52), operator< (197), operator== (57), unflatten (32), split (0), escape (1), parse_array_index (0), prefix_tree (0), get_checked (0), contains (140), get_checked_or_null (0), get_unchecked (0), unescape (3), throw_no_parent (0), throw_unresolved (0), equals_string (0), add_child (0), grow (0), escape_into (0), object_member (0), hash_of (0), get_and_create (0), slot (0), parent (30), hash (59), id (37), token (43), slots (0), used (20), find_child (0), children (1)
+
+// ---- tests/src/unit-unicode.cpp:333-361  (uses: escape, json_pointer, unescape)
+        SECTION("check JSON Pointers")
+        {
+            for (const auto& s : j)
+            {
+                // skip non-string JSON values
+                if (!s.is_string())
+                {
+                    continue;
+                }
+
+                auto ptr = s.get<std::string>();
+
+                // tilde must be followed by 0 or 1
+                if (ptr == "~")
+                {
+                    ptr += "0";
+                }
+
+                // JSON Pointers must begin with "/"
+                ptr.insert(0, "/");
+
+                CHECK_NOTHROW(json::json_pointer("/" + ptr));
+
+                // check escape/unescape roundtrip
+                auto escaped = nlohmann::detail::escape(ptr);
+                nlohmann::detail::unescape(escaped);
+                CHECK(escaped == ptr);
+            }
+        }
+
+// ---- tests/src/unit-alt-string.cpp:328-349  (uses: json_pointer, to_string, unflatten)
+    SECTION("JSON pointer")
+    {
+        // Direct conversion from a json literal to alt_json is not supported due to issue #3425:
+        // alt_json's string_t (alt_string) is not directly constructible from std::string, so the
+        // cross-basic_json conversion falls back to the array-conversion path, incorrectly representing
+        // objects as arrays of [key, value] pairs and strings as arrays of character codes.
+        // See https://github.com/nlohmann/json/issues/3425 for details.
+        // Workaround: use alt_json::parse() instead of implicit conversion.
+        auto j = alt_json::parse(R"({"foo": ["bar", "baz"]})");
+
+        CHECK(j.at(alt_json::json_pointer("/foo/0")) == j["foo"][0]);
+        CHECK(j.at(alt_json::json_pointer("/foo/1")) == j["foo"][1]);
+
+        // RFC 6901 escaping works without string_t::find(str, pos), replace(),
+        // and substr()
+        auto j2 = alt_json::parse(R"({"a/b": 1, "m~n": 2, "~/~~//": 3})");
+        CHECK(j2.at(alt_json::json_pointer("/a~1b")) == 1);
+        CHECK(j2.at(alt_json::json_pointer("/m~0n")) == 2);
+        CHECK(j2.at(alt_json::json_pointer("/~0~1~0~0~1~1")) == 3);
+        CHECK(alt_json::json_pointer("/~0~1~0~0~1~1").to_string() == alt_string("/~0~1~0~0~1~1"));
+        CHECK(j2.flatten().unflatten() == j2);
+    }
+
+// ---- tests/src/unit-regression2.cpp:1174-1178  (uses: children)
+    SECTION("container children in first and last position")
+    {
+        BasicJsonType root = BasicJsonType::array({BasicJsonType::array({1}), 2, 3, BasicJsonType::array({4})});
+        check_destroy_edge_case(root);
+    }
+
+// ---- tests/src/unit-json_pointer.cpp:33-57  (uses: json_pointer, parent, pop_back)
+    SECTION("errors")
+    {
+        CHECK_THROWS_WITH_AS(json::json_pointer("foo"),
+                             "[json.exception.parse_error.107] parse error at byte 1: JSON pointer must be empty or begin with '/' - was: 'foo'", json::parse_error&);
+
+        CHECK_THROWS_WITH_AS(json::json_pointer("/~~"),
+                             "[json.exception.parse_error.108] parse error: escape character '~' must be followed with '0' or '1'", json::parse_error&);
+
+        CHECK_THROWS_WITH_AS(json::json_pointer("/~"),
+                             "[json.exception.parse_error.108] parse error: escape character '~' must be followed with '0' or '1'", json::parse_error&);
+
+        json::json_pointer p;
+        CHECK_THROWS_WITH_AS(p.top(),
+                             "[json.exception.out_of_range.405] JSON pointer has no parent", json::out_of_range&);
+        CHECK_THROWS_WITH_AS(p.pop_back(),
+                             "[json.exception.out_of_range.405] JSON pointer has no parent", json::out_of_range&);
+
+        SECTION("array index error")
+        {
+            json v = {1, 2, 3, 4};
+            json::json_pointer const ptr("/10e");
+            CHECK_THROWS_WITH_AS(v[ptr],
+                                 "[json.exception.out_of_range.404] unresolved reference token '10e'", json::out_of_range&);
+        }
+    }
+
+// ---- tests/src/unit-delete_deprecated_functions.cpp:207-228  (uses: contains, json_pointer, to_string)
+    SECTION("the non-deprecated functions still work")
+    {
+        const json j = {{"a", {1, 2}}};
+        const auto cbor = json::to_cbor(j);
+        CHECK(json::from_cbor(cbor.data(), cbor.data() + cbor.size()) == j);
+
+        const json::json_pointer ptr("/a/1");
+        CHECK(ptr == json::json_pointer("/a/1"));
+        CHECK(ptr.to_string() == "/a/1");
+        CHECK(j[ptr] == 2);
+        CHECK(j.at(ptr) == 2);
+        CHECK(j.value(ptr, 0) == 2);
+        CHECK(j.contains(ptr));
+
+        std::ostringstream os;
+        os << j;
+        CHECK(os.str() == R"({"a":[1,2]})");
+        std::istringstream is(os.str());
+        json parsed;
+        is >> parsed;
+        CHECK(parsed == j);
+    }
+
+// ---- tests/src/unit-json_pointer.cpp:829-843  (uses: json_pointer, operator!=, operator<, operator==)
+    SECTION("less-than comparison")
+    {
+        auto ptr1 = json::json_pointer("/foo/a");
+        auto ptr2 = json::json_pointer("/foo/b");
+
+        CHECK(ptr1 < ptr2);
+        CHECK_FALSE(ptr2 < ptr1);
+
+        // build with C++20
+        // JSON_HAS_CPP_20
+#if JSON_HAS_THREE_WAY_COMPARISON
+        CHECK((ptr1 <=> ptr2) == std::strong_ordering::less); // *NOPAD*
+        CHECK(ptr2 > ptr1);
+#endif
+    }
+
+// ---- tests/src/unit-comparison.cpp:73-85  (uses: operator!=, operator<, operator==)
+TEST_CASE("lexicographical comparison operators")
+{
+    constexpr auto f_ = false;
+    constexpr auto _t = true;
+    constexpr auto nan = std::numeric_limits<json::number_float_t>::quiet_NaN();
+#if JSON_HAS_THREE_WAY_COMPARISON
+    constexpr auto lt = std::partial_ordering::less;
+    constexpr auto gt = std::partial_ordering::greater;
+    constexpr auto eq = std::partial_ordering::equivalent;
+    constexpr auto un = std::partial_ordering::unordered;
+#endif
+
+#if JSON_HAS_THREE_WAY_COMPARISON
+
+// ---- tests/src/unit-regression1.cpp:1034-1036  (uses: operator!=, operator<, operator==)
+    SECTION("issue #414 - compare with literal 0)")
+    {
+#define CHECK_TYPE(v) \
+
+# Task
+Write 20 test programs for this pull request. Return JSON with a "tests" array; each item has "name" (short snake_case), "intent" (one sentence: what behavior it probes) and "code" (the complete C++ program).

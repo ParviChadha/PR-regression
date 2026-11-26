@@ -1,0 +1,783 @@
+[system]
+You write test programs that probe a C++ library for behavioral changes made by one pull request.
+Each program is compiled and run twice, once against the library before the change and once after, and the two
+outputs are compared. Your job is to produce programs whose output reveals whether the change altered behavior,
+including side effects the author did not intend.
+
+Rules for every program:
+- It is standalone: one file with its own int main(), compiled as C++17, printing results to stdout.
+- Use only the library's documented public API. Never include internal headers or use detail/impl namespaces,
+  private members or undocumented macros.
+- Do not judge results (no assert, no expected-value comparisons): just print what the library returns. Print
+  enough to make differences visible, one fact per line.
+- Output must be deterministic. Never print pointers or addresses, uninitialized data, the order of
+  hash-based containers, timings, thread ids, random values, file paths or environment data. Print floating point
+  values with an explicit precision. No input, files, network, threads, clocks or randomness.
+- Wrap calls that may throw in try/catch and print the exception's type and message, so an exception is an
+  observable result. Do not crash on purpose.
+- Aim at the code the diff changes. Prefer calls that compile against both the old and the new library; one or two
+  programs may use an API the PR adds. Cover ordinary inputs and edge cases (empty, minimum and maximum values,
+  boundaries, special values, nesting, unusual types) and also neighbouring behavior the change could disturb.
+- When the diff changes which types or inputs an API accepts or rejects (constraints, overloads, traits,
+  conversions), test it with the detection idiom (std::void_t or requires) and `if constexpr`, so the program
+  compiles against both versions, prints whether the expression is well-formed, and exercises it when it is.
+  Accepting an input is not enough: also use it through every entry point that should follow (const and
+  non-const, read, write, insert, erase, lookup, nested use), because a change that admits new inputs can leave
+  later code unable to handle them.
+- If the changed code is internal (a detail, impl or internal namespace, a trait, a helper), do not name it in the
+  program. Reach it through the public API that depends on it, using detection (as above) where needed.
+- Use the exact types and values the diff is about (the new trait's argument types, the new overload's
+  parameters), not stand-ins.
+- Spread the programs over distinct public entry points and overloads, one main idea per program. Do not write
+  several programs that only rename a type or change a literal.
+- Make the programs differ from each other: different inputs, different entry points, different features.
+
+Rules specific to this library:
+- Include the library with #include <nlohmann/json.hpp>. The public API is nlohmann::json (nlohmann::basic_json), nlohmann::ordered_json, json_pointer, json patch/merge_patch and the documented SAX and conversion interfaces. Never use the detail namespace.
+- It is a header-only library: nothing to link. Programs are compiled as C++17.
+- Print JSON values with dump() (compact) or dump(2). Keys of nlohmann::json objects print in sorted order, so output is deterministic; do not depend on insertion order except with ordered_json.
+
+[user]
+# Pull request #5908: json_view: dump and read canada.json-style floats faster (batched float decisions)
+
+## Description
+1. **Read float tokens of 16 to 19 digits 16 bytes at a time.**
+   - `layout_decimal()` combines the digits with NEON or SSE2 (`sixteen_digits()`), and `layout_float()` sends them to Eisel-Lemire directly.
+   - `get<double>()` converts tokens of 16 or 17 digits without an exponent (the shape of coordinates written with full precision) with a lean Eisel-Lemire (`coordinate_float()`).
+2. **Dump such tokens in batches of up to 256 ahead of the walk, one loop per step.**
+   - The digits, 16 bytes at a time, and the token's last four digits.
+   - `locate_token()`: Eisel-Lemire gives the double x. The position of x relative to the token is exact in a 64-bit fixed-point number, with 56 bits after the point of the token's last digit.
+   - `token_digits_1/2()`, one loop per kind: the digits Zmij would write, chosen from that position. Exact ties between two candidates (like `754570942.33984373`, whose double is `...33984375`) are left to the full conversion.
+   - The output is the token with its last four digits replaced. A rounding that carries further goes to the writer of Zmij's results.
+   - The batch storage is allocated on the heap by the first conversion. A pair of floats like `[x, y]` in a read-only document is written without a frame.
+   - Only on SIMD targets (NEON, SSE2) that are little-endian (`NLOHMANN_VIEW_VECTOR`, `NLOHMANN_VIEW_LITTLE_ENDIAN`). Other targets keep the previous code.
+
+## Numbers
+
+`compare.py --download --rounds 30`, Apple M1 Max, clang 21, two runs in opposite order after the rebase onto develop. json_view, and the factor of yyjson 0.13.0 over it:
+
+| row | develop | this PR | yyjson / json_view |
+|---|---|---|---|
+| canada dump | 3872 µs | 1733 µs | 0.47x → 1.05x |
+| canada traverse | 2455 µs | 1921 µs | 0.84x → 1.08x |
+| canada patch | 4803 µs | 2814 ... 2936 µs | 0.80x → 1.39x ... 1.43x |
+| canada update | 4941 µs | 3134 ... 3845 µs | 0.78x → 1.05x ... 1.30x |
+| corpus citm_catalog dump | | | −8 % ... −14 % |
+| corpus twitter dump | | | −4 % ... −5 % |
+
+Linux x86-64 (Haswell VPS, GCC 13, before the rebase): canada dump 0.53x → 0.72x, traverse 0.89x → 0.95x, patch 1.01x → 1.17x, update 0.96x → 1.13x.
+
+### Open
+
+- Canada dump on x86-64 is still behind yyjson, but less. With GCC 13, most of the gap was branch mispredictions: GCC compiled the `?:` selections of `token_digits_1/2()`, `biased_distance()` and the batch's classification loop as branches, whose conditions are as good as random (callgrind `--branch-sim`: 220k mispredictions per dump with GCC, 97k with Clang). 9fad526888 writes them as masks (`mask_if()`, `select_if()`):
+  - GCC 13: canada dump 4.74 ... 5.04 ms → 3.98 ... 4.24 ms (`dprobe`, best of 60, 3 interleaved rounds), 98k mispredictions; in `bench_all`, 0.75 ... 0.78x → 0.91x of yyjson, and now ahead of `json::dump()` and Glaze there.
+  - Clang 18 unchanged (0.90 ... 0.95x of yyjson before and after); Apple M1 Max: 0.5 ... 1.8 % fewer cycles per dump.
+  - The rest is the conversion: a float of more than 15 digits is converted from its text before it is written.
+- Canada traverse in a build with aligned code (`-falign-loops=64 -mllvm -align-all-functions=6`) is at 0.99x.
+- In `bench_view` only, twitter, citm_catalog, rpc, and status dump are 2 ... 9 % slower in both runs. The same dumps are 4 ... 14 % faster in `bench_corpus`, and a separate probe built against both trees also shows them faster (twitter 77 → 71 µs, citm_catalog 145 → 136 µs). They match with page-aligned functions, so this is code layout of the `bench_view` binary.
+- The jeopardy rows of `bench_view` vary by ±40 % between runs, without a change in the parser; a separate traverse probe shows no difference (6.55 ms both).
+
+An opt-in conversion at parse time (`JSON_VIEW_EAGER_FLOATS`) was prototyped and dropped: canada parse+traverse −4 ... −7 %, but parse+dump +11 ... +30 % and canada parse +36 ... +90 %.
+
+## Validation
+
+- **Differential check:** `dump()` output is byte-identical to develop for 10^9 generated tokens in one arr
+[... truncated, 1258 more characters]
+
+## Commit message
+Signed-off-by: Niels Lohmann <mail@nlohmann.me>
+
+## Discussion before merge
+- nlohmann: Independent check of this PR on the Mac, plus a profile on x86-64 that explains the remaining gap there. I'm sharing this as measurements; the numbers come from my own scripts, not from the PR description.
+
+**Mac, develop (cc917d7123) vs this PR (e7d245db7e)**
+
+Apple M1 Max, clang 21, `compare.py --download --rounds 30` with Boost, pinned yyjson 0.13.0 / simdjson 4.6.11. Each tree was built unaligned twice and once with `-mllvm -align-all-functions=6`. The aligned run is clean (the other engines moved by a median of 1.000 between the two trees); in the unaligned runs the other engines drifted by up to ±10 % in places, so I rely on the aligned run and on best-of-3.
+
+| canada row | develop | this PR | json_view / yyjson (aligned run) |
+|---|---|---|---|
+| dump | 3.70 ms | 1.65 ms | 0.95 |
+| parse+dump | 4.70 ms | 2.62 ms | 0.81 |
+| traverse | 2.35 ms | 1.84 ms | 0.97 |
+| patch | 4.74 ms | 2.81 ms | 0.74 |
+| update | 4.89 ms | 2.99 ms | 0.79 |
+
+No other `json_view` row of `bench_view`, `bench_corpus` or `bench_edit` differs by more than 3 % between the trees (best of three runs). Traverse and dump are within about 5 % of yyjson, so I would call them even rather than ahead.
+
+**Output i
+[... truncated, 2578 more characters]
+- github-advanced-security[bot]: ## Flawfinder / Does not check for buffer overflows when copying to destination (CWE-120).
+
+buffer/memcpy:Does not check for buffer overflows when copying to destination (CWE-120).
+
+[Show more details](https://github.com/nlohmann/json/security/code-scanning/1051)
+- github-advanced-security[bot]: ## Flawfinder / Does not check for buffer overflows when copying to destination (CWE-120).
+
+buffer/memcpy:Does not check for buffer overflows when copying to destination (CWE-120).
+
+[Show more details](https://github.com/nlohmann/json/security/code-scanning/1052)
+- github-advanced-security[bot]: ## Flawfinder / Does not check for buffer overflows when copying to destination (CWE-120).
+
+buffer/memcpy:Does not check for buffer overflows when copying to destination (CWE-120).
+
+[Show more details](https://github.com/nlohmann/json/security/code-scanning/1053)
+- github-advanced-security[bot]: ## Flawfinder / Does not check for buffer overflows when copying to destination (CWE-120).
+
+buffer/memcpy:Does not check for buffer overflows when copying to destination (CWE-120).
+
+[Show more details](https://github.com/nlohmann/json/security/code-scanning/1054)
+- github-advanced-security[bot]: ## Flawfinder / Does not check for buffer overflows when copying to destination (CWE-120).
+
+buffer/memcpy:Does not check for buffer overflows when copying to destination (CWE-120).
+
+[Show more details](https://github.com/nlohmann/json/security/code-scanning/1055)
+
+## Headers the programs must include
+- Also write #include <nlohmann/json_view.hpp>. The json_view feature (json_document, json_view and their image loading and editing API) is declared only in this header; nlohmann/json.hpp does not include it, so without this line those names do not exist. Use only names you can see in the diff or the context below.
+
+## Changed functions (from changes.py)
+- nlohmann::detail::view::view_serializer (private); reached from the public API through: nlohmann::basic_json_view::dump(const int, const char, const bool, const number_format)
+- nlohmann::detail::view::layout_decimal(const unsigned char *, const unsigned char *, unsigned int, unsigned int, const unsigned char *) (private); reached from the public API through: nlohmann::basic_json_view::materialize(), nlohmann::basic_json_view::get(), nlohmann::operator==(const basic_json_view<BasicJsonType, Mode> &, const basic_json_view<BasicJsonType, M> &), nlohmann::operator==(const basic_json_view<BasicJsonType, Mode> &, const BasicJsonType &), nlohmann::operator==(const basic_json_view<BasicJsonType, Mode> &, const basic_json_view<BasicJsonType, Mode> &), nlohmann::basic_json_view::dump(const int, const char, const bool, const number_format)
+- nlohmann::detail::view::view_serializer::dump_text(const node *) (private); reached from the public API through: nlohmann::basic_json_view::dump(const int, const char, const bool, const number_format)
+- nlohmann::detail::view::layout_float(const unsigned char *, const unsigned char *, unsigned int, unsigned int, const unsigned char *) (private); reached from the public API through: nlohmann::basic_json_view::materialize(), nlohmann::basic_json_view::get(), nlohmann::operator==(const basic_json_view<BasicJsonType, Mode> &, const basic_json_view<BasicJsonType, M> &), nlohmann::operator==(const basic_json_view<BasicJsonType, Mode> &, const BasicJsonType &), nlohmann::operator==(const basic_json_view<BasicJsonType, Mode> &, const basic_json_view<BasicJsonType, Mode> &), nlohmann::basic_json_view::dump(const int, const char, const bool, const number_format)
+- nlohmann::detail::view::float_value(const document_data &, const node &, std::true_type) (private); reached from the public API through: nlohmann::basic_json_view::materialize(), nlohmann::basic_json_view::get(), nlohmann::operator==(const basic_json_view<BasicJsonType, Mode> &, const basic_json_view<BasicJsonType, M> &), nlohmann::operator==(const basic_json_view<BasicJsonType, Mode> &, const BasicJsonType &), nlohmann::operator==(const basic_json_view<BasicJsonType, Mode> &, const basic_json_view<BasicJsonType, Mode> &), nlohmann::basic_json_view::dump(const int, const char, const bool, const number_format)
+- nlohmann::detail::view::view_serializer::convert_ahead(const node *, float_batch &) (private); reached from the public API through: nlohmann::basic_json_view::dump(const int, const char, const bool, const number_format)
+- nlohmann::detail::view::locate_token(std::uint64_t, int, std::uint64_t &, std::uint64_t &) (private); reached from the public API through: nlohmann::basic_json_view::dump(const int, const char, const bool, const number_format)
+- nlohmann::detail::view::sixteen_digits(const unsigned char *, unsigned int) (private); reached from the public API through: nlohmann::basic_json_view::materialize(), nlohmann::basic_json_view::get(), nlohmann::operator==(const basic_json_view<BasicJsonType, Mode> &, const basic_json_view<BasicJsonType, M> &), nlohmann::operator==(const basic_json_view<BasicJsonType, Mode> &, const BasicJsonType &), nlohmann::operator==(const basic_json_view<BasicJsonType, Mode> &, const basic_json_view<BasicJsonType, Mode> &), nlohmann::basic_json_view::dump(const int, const char, const bool, const number_format)
+- nlohmann::detail::view::coordinate_bits(std::int64_t, std::uint64_t, ieee_binary_format<53>) (private); reached from the public API through: nlohmann::basic_json_view::materialize(), nlohmann::basic_json_view::get(), nlohmann::operator==(const basic_json_view<BasicJsonType, Mode> &, const basic_json_view<BasicJsonType, M> &), nlohmann::operator==(const basic_json_view<BasicJsonType, Mode> &, const BasicJsonType &), nlohmann::operator==(const basic_json_view<BasicJsonType, Mode> &, const basic_json_view<BasicJsonType, Mode> &), nlohmann::basic_json_view::dump(const int, const char, const bool, const number_format)
+- nlohmann::detail::view::view_serializer::write_double_beside(char *, const node *, float_batch &) (private); reached from the public API through: nlohmann::basic_json_view::dump(const int, const char, const bool, const number_format)
+- nlohmann::detail::view::view_serializer::write_token_digits(char *, const char *, const node &, std::uint64_t) (private); reached from the public API through: nlohmann::basic_json_view::dump(const int, const char, const bool, const number_format)
+- nlohmann::detail::view::coordinate_float(const document_data &, const node &, FloatType &) (private); reached from the public API through: nlohmann::basic_json_view::materialize(), nlohmann::basic_json_view::get(), nlohmann::operator==(const basic_json_view<BasicJsonType, Mode> &, const basic_json_view<BasicJsonType, M> &), nlohmann::operator==(const basic_json_view<BasicJsonType, Mode> &, const BasicJsonType &), nlohmann::operator==(const basic_json_view<BasicJsonType, Mode> &, const basic_json_view<BasicJsonType, Mode> &), nlohmann::basic_json_view::dump(const int, const char, const bool, const number_format)
+- nlohmann::detail::view::view_serializer::write_double_ahead(char *, const char *, const node *, float_batch &) (private); reached from the public API through: nlohmann::basic_json_view::dump(const int, const char, const bool, const number_format)
+- nlohmann::detail::view::token_digits_2(std::uint64_t, std::uint64_t, std::uint64_t, std::uint64_t, std::uint64_t) (private); reached from the public API through: nlohmann::basic_json_view::dump(const int, const char, const bool, const number_format)
+- nlohmann::detail::view::view_serializer::write_carried_digits(char *, const node &, std::uint64_t) (private); reached from the public API through: nlohmann::basic_json_view::dump(const int, const char, const bool, const number_format)
+- nlohmann::detail::view::token_digits_1(std::uint64_t, std::uint64_t, std::uint64_t, std::uint64_t) (private); reached from the public API through: nlohmann::basic_json_view::dump(const int, const char, const bool, const number_format)
+- nlohmann::detail::view::four_digit_text(std::uint32_t) (private); reached from the public API through: nlohmann::basic_json_view::dump(const int, const char, const bool, const number_format)
+- nlohmann::detail::view::biased_distance(std::uint64_t) (private); reached from the public API through: nlohmann::basic_json_view::dump(const int, const char, const bool, const number_format)
+- nlohmann::detail::view::coordinate_bits(std::int64_t, std::uint64_t, Format) (private); reached from the public API through: nlohmann::basic_json_view::materialize(), nlohmann::basic_json_view::get(), nlohmann::operator==(const basic_json_view<BasicJsonType, Mode> &, const basic_json_view<BasicJsonType, M> &), nlohmann::operator==(const basic_json_view<BasicJsonType, Mode> &, const BasicJsonType &), nlohmann::operator==(const basic_json_view<BasicJsonType, Mode> &, const basic_json_view<BasicJsonType, Mode> &), nlohmann::basic_json_view::dump(const int, const char, const bool, const number_format)
+- nlohmann::detail::view::view_serializer::float_batch (private); reached from the public API through: nlohmann::basic_json_view::dump(const int, const char, const bool, const number_format)
+- nlohmann::detail::view::view_serializer::mark(std::uint64_t, std::uint64_t, std::uint64_t) (private); reached from the public API through: nlohmann::basic_json_view::dump(const int, const char, const bool, const number_format)
+- nlohmann::detail::view::mask_if(bool) (private); reached from the public API through: nlohmann::basic_json_view::dump(const int, const char, const bool, const number_format)
+- nlohmann::detail::view::select_if(bool, std::uint64_t, std::uint64_t) (private); reached from the public API through: nlohmann::basic_json_view::dump(const int, const char, const bool, const number_format)
+- nlohmann::detail::view::view_serializer::carried() (private); reached from the public API through: nlohmann::basic_json_view::dump(const int, const char, const bool, const number_format)
+- nlohmann::detail::view::view_serializer::float_batch::capacity() (private); reached from the public API through: nlohmann::basic_json_view::dump(const int, const char, const bool, const number_format)
+- nlohmann::detail::view::view_serializer::float_batch::entries (private); reached from the public API through: nlohmann::basic_json_view::dump(const int, const char, const bool, const number_format)
+- nlohmann::detail::view::coordinate_float::format (private); reached from the public API through: nlohmann::basic_json_view::materialize(), nlohmann::basic_json_view::get(), nlohmann::operator==(const basic_json_view<BasicJsonType, Mode> &, const basic_json_view<BasicJsonType, M> &), nlohmann::operator==(const basic_json_view<BasicJsonType, Mode> &, const BasicJsonType &), nlohmann::operator==(const basic_json_view<BasicJsonType, Mode> &, const basic_json_view<BasicJsonType, Mode> &), nlohmann::basic_json_view::dump(const int, const char, const bool, const number_format)
+- nlohmann::detail::view::layout_float::format (private); reached from the public API through: nlohmann::basic_json_view::materialize(), nlohmann::basic_json_view::get(), nlohmann::operator==(const basic_json_view<BasicJsonType, Mode> &, const basic_json_view<BasicJsonType, M> &), nlohmann::operator==(const basic_json_view<BasicJsonType, Mode> &, const BasicJsonType &), nlohmann::operator==(const basic_json_view<BasicJsonType, Mode> &, const basic_json_view<BasicJsonType, Mode> &), nlohmann::basic_json_view::dump(const int, const char, const bool, const number_format)
+- nlohmann::detail::view::view_serializer::float_batch::at (private)
+- nlohmann::detail::view::view_serializer::float_batch::count (private)
+- nlohmann::detail::view::view_serializer::float_batch::digits (private)
+- nlohmann::detail::view::view_serializer::float_batch::entries::at (private)
+- nlohmann::detail::view::view_serializer::float_batch::entries::digits (private)
+- nlohmann::detail::view::view_serializer::float_batch::next (private)
+- nlohmann::detail::view::view_serializer::float_batch::scanned (private)
+- nlohmann::detail::view::view_serializer::float_batch::storage (private)
+
+## Diff of the library source (before -> after)
+```diff
+diff --git a/include/nlohmann/detail/view/number.hpp b/include/nlohmann/detail/view/number.hpp
+index 10e2aa85d..7fc1b946f 100644
+--- a/include/nlohmann/detail/view/number.hpp
++++ b/include/nlohmann/detail/view/number.hpp
+@@ -19,6 +19,7 @@
+ #include <nlohmann/detail/view/macro_scope.hpp>
+ #include <nlohmann/detail/view/node.hpp>
+ #include <nlohmann/detail/view/scan.hpp>
++#include <nlohmann/detail/view/simd.hpp>
+ 
+ NLOHMANN_JSON_NAMESPACE_BEGIN
+ namespace detail
+@@ -103,12 +104,56 @@ NLOHMANN_VIEW_NOINLINE FloatType float_value(const char* first, const node& n)
+     return convert_float<FloatType>(first, last, dot, mantissa_end);
+ }
+ 
++#if NLOHMANN_VIEW_VECTOR
++/*!
++@brief the value of the first 16 digits of a run of digits with a point after
++int_digits of them (or none, if int_digits >= 16)
++
++The 17 bytes at p are read at once: the bytes after the point move down by one,
++then pairs, quadruples, and octets of digits are combined by multiplications
++(after simdjson). The bytes [p, p + 32) must be readable. Bytes that are not
++digits (only in a damaged image loaded with image_check::bounds) give a wrong
++value, but no undefined behavior.
++*/
++NLOHMANN_VIEW_ALWAYS_INLINE std::uint64_t sixteen_digits(const unsigned char* p, unsigned int_digits) noexcept
++{
++#if NLOHMANN_VIEW_NEON
++    const uint8x16_t low = vld1q_u8(p);
++    const uint8x16_t index = vcombine_u8(vcreate_u8(0x0706050403020100u), vcreate_u8(0x0F0E0D0C0B0A0908u));
++    const uint8x16_t before_point = vcltq_u8(index, vdupq_n_u8(static_cast<std::uint8_t>(int_digits)));
++    const uint8x16_t digits = vsubq_u8(vbslq_u8(before_point, low, vextq_u8(low, vld1q_u8(p + 16), 1)), vdupq_n_u8('0'));
++    const uint16x8_t twos = vpaddlq_u8(vmulq_u8(digits, vreinterpretq_u8_u16(vdupq_n_u16(0x010A))));
++    const uint32x4_t fours = vpaddlq_u16(vmulq_u16(twos, vreinterpretq_u16_u32(vdupq_n_u32(0x00010064))));
++    const uint64x2_t eights = vpaddlq_u32(vmulq_u32(fours, vreinterpretq_u32_u64(vdupq_n_u64(0x0000000100002710u))));
++    return (vgetq_lane_u64(eights, 0) * 100000000u) + vgetq_lane_u64(eights, 1);
++#else
++    // NOLINTBEGIN(portability-simd-intrinsics)
++    const __m128i low = _mm_loadu_si128(static_cast<const __m128i*>(static_cast<const void*>(p))); // NOLINT(bugprone-casting-through-void)
++    const __m128i high = _mm_loadu_si128(static_cast<const __m128i*>(static_cast<const void*>(p + 16))); // NOLINT(bugprone-casting-through-void)
++    const __m128i before_point = _mm_cmpgt_epi8(_mm_set1_epi8(static_cast<char>(int_digits)), _mm_setr_epi8(0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15));
++    const __m128i moved = _mm_or_si128(_mm_srli_si128(low, 1), _mm_slli_si128(high, 15));
++    const __m128i digits = _mm_sub_epi8(_mm_or_si128(_mm_and_si128(before_point, low), _mm_andnot_si128(before_point, moved)), _mm_set1_epi8('0'));
++    // (16-bit lanes: SSE2 has no multiply-add of bytes)
++    const __m128i tens = _mm_setr_epi16(10, 1, 10, 1, 10, 1, 10, 1);
++    const __m128i twos = _mm_packs_epi32(_mm_madd_epi16(_mm_unpacklo_epi8(digits, _mm_setzero_si128()), tens),
++                                         _mm_madd_epi16(_mm_unpackhi_epi8(digits, _mm_setzero_si128()), tens));
++    const __m128i fours = _mm_madd_epi16(twos, _mm_setr_epi16(100, 1, 100, 1, 100, 1, 100, 1));
++    const __m128i eights = _mm_madd_epi16(_mm_packs_epi32(fours, fours), _mm_setr_epi16(10000, 1, 10000, 1, 10000, 1, 10000, 1));
++    const auto upper = static_cast<std::uint32_t>(_mm_cvtsi128_si32(eights));
++    const auto lower = static_cast<std::uint32_t>(_mm_cvtsi128_si32(_mm_srli_si128(eights, 4)));
++    // NOLINTEND(portability-simd-intrinsics)
++    return (std::uint64_t{upper} * 100000000u) + lower;
++#endif
++}
++#endif
++
+ /*!
+ @brief the digits of a float token with at most 19 digits, from its layout
+ 
+ The digit layout recorded while parsing says where the integer digits, the
+ fraction digits, and the exponent are, so the digits are read eight at a
+-time without scanning.
++time without scanning (with SIMD, a token of 16 to 19 digits sixteen at a
++time).
+ 
+ @param[in] p  first character of the token
+ @param[in] e  end of the token
+@@ -118,15 +163,34 @@ NLOHMANN_VIEW_ALWAYS_INLINE float_significand layout_decimal(const unsigned char
+ {
+     const bool negative = *p == '-';
+     p += negative ? 1 : 0;
+-    std::uint64_t w = parse_upto19(p, int_digits, limit);
+-    p += int_digits;
++    std::uint64_t w = 0;
+     std::int64_t q = 0;
+-    if (frac_digits != 0)
++#if NLOHMANN_VIEW_VECTOR
++    const unsigned count = int_digits + frac_digits;
++    if (count >= 16 && limit - p >= 32)
+     {
+-        w = (w * int_pow10(frac_digits)) + parse_upto19(p + 1, frac_digits, limit);
+-        p += 1 + frac_digits;
++        // (the point, if any, follows the integer digits; the digits after
++        // the first 16 are at most three)
++        w = sixteen_digits(p, int_digits);
++        for (unsigned i = 16; i < count; ++i)
++        {
++            w = (w * 10) + static_cast<std::uint64_t>(p[i + (i >= int_digits ? 1 : 0)] - '0');
++        }
++        p += count + (frac_digits != 0 ? 1 : 0);
+         q = -static_cast<std::int64_t>(frac_digits);
+     }
++    else /* NOLINT(readability/braces) */
++#endif
++    {
++        w = parse_upto19(p, int_digits, limit);
++        p += int_digits;
++        if (frac_digits != 0)
++        {
++            w = (w * int_pow10(frac_digits)) + parse_upto19(p + 1, frac_digits, limit);
++            p += 1 + frac_digits;
++            q = -static_cast<std::int64_t>(frac_digits);
++        }
++    }
+     if (p != e)
+     {
+         // [eE][+-]digits; huge exponents saturate (the parser rejected
+@@ -161,12 +225,22 @@ NLOHMANN_VIEW_ALWAYS_INLINE float_significand layout_decimal(const unsigned char
+ The result is correctly rounded by the lexer's conversion
+ (detail::decimal_to_float(): Clinger's fast path where both operands are
+ exact, else the Eisel-Lemire algorithm, which needs no fallback for up to 19
+-digits), so it is the value parse() produces.
++digits), so it is the value parse() produces. Tokens of 16 or more digits go
++to Eisel-Lemire directly: the fast path takes few of them (none of 17 digits),
++and its check is a branch that data like GeoJSON coordinates mispredicts.
+ */
+ template<typename FloatType>
+ NLOHMANN_VIEW_ALWAYS_INLINE FloatType layout_float(const unsigned char* p, const unsigned char* e, unsigned int_digits, unsigned frac_digits, const unsigned char* limit) noexcept
+ {
+-    return decimal_to_float<FloatType>(layout_decimal(p, e, int_digits, frac_digits, limit));
++    const float_significand d = layout_decimal(p, e, int_digits, frac_digits, limit);
++    if (int_digits + frac_digits >= 16)
++    {
++        using format = ieee_binary_format<std::numeric_limits<FloatType>::digits>;
++        native_float_t<FloatType> value{};
++        float_from_bits(eisel_lemire<format>(d.exponent, d.w) | (d.negative ? (std::uint64_t{1} << format::sign_bit()) : 0u), value);
++        return value;
++    }
++    return decimal_to_float<FloatType>(d);
+ }
+ 
+ /// the value of a float set by an edit: its token (the shortest round-trip
+@@ -185,6 +259,80 @@ NLOHMANN_VIEW_NOINLINE FloatType edited_float(const char* token, const node& n)
+     return float_value<FloatType>(token, n);
+ }
+ 
++#if NLOHMANN_VIEW_VECTOR
++/// eisel_lemire() for the token w * 10^q of coordinate_float()
++template<typename Format>
++NLOHMANN_VIEW_ALWAYS_INLINE std::uint64_t coordinate_bits(std::int64_t q, std::uint64_t w, Format /*format*/) noexcept
++{
++    return eisel_lemire<Format>(q, w);
++}
++
++/*!
++@brief (binary64) eisel_lemire() without the cases that tokens of 16 or 17
++digits with 5 or more after the point cannot reach: a value of 0, a
++subnormal, an infinity, or a tie (q < -4)
++*/
++NLOHMANN_VIEW_ALWAYS_INLINE std::uint64_t coordinate_bits(std::int64_t q, std::uint64_t w, ieee_binary_format<53> format) noexcept
++{
++    if (NLOHMANN_VIEW_UNLIKELY(w == 0 || q > -5))
++    {
++        return eisel_lemire<ieee_binary_format<53>>(q, w);
++    }
++    static_cast<void>(format);
++    const int lz = count_leading_zeros(w);
++    const std::uint64_t normalized = w << static_cast<unsigned>(lz);
++    const auto index = static_cast<std::size_t>(2 * (q - pow5_128_smallest_power));
++    const uint128_parts product = full_multiplication(normalized, pow5_128()[index]);
++    std::uint64_t high = product.high;
++    if (NLOHMANN_VIEW_UNLIKELY((high & 0x1FFu) == 0x1FFu))
++    {
++        // (the lower bits may carry into the result)
++        const std::uint64_t second = full_multiplication(normalized, pow5_128()[index + 1]).high;
++        high += product.low + second < product.low ? 1u : 0u;
++    }
++    const auto upperbit = static_cast<unsigned>(high >> 63u);
++    std::uint64_t mantissa = high >> (upperbit + 9);
++    auto power2 = static_cast<std::uint64_t>(((217706 * q) >> 16) + 63 + static_cast<std::int64_t>(upperbit) - lz + 1023);
++    mantissa = (mantissa + (mantissa & 1u)) >> 1u;
++    const bool carry = mantissa >= (std::uint64_t{2} << 52u);
++    mantissa = carry ? (std::uint64_t{1} << 52u) : mantissa;
++    power2 += carry ? 1u : 0u;
++    return (mantissa & ~(std::uint64_t{1} << 52u)) | (power2 << 52u);
++}
++
++/*!
++@brief (binary32 and binary64) the value of a float token of the source with
++16 or 17 digits, a point, and no exponent, the shape of most coordinates
++written with full precision; whether the token of n has this shape
++
++These tokens skip the general layout of layout_decimal(): no digits beyond
++the 17th, no exponent (and Eisel-Lemire directly, as in layout_float()).
++*/
++template<typename FloatType>
++NLOHMANN_VIEW_ALWAYS_INLINE bool coordinate_float(const document_data& d, const node& n, FloatType& value) noexcept
++{
++    const unsigned int_digits = n.extra & 0xFFu;
++    const unsigned frac_digits = n.extra >> 8u;
++    const unsigned count = int_digits + frac_digits;
++    const auto* const first = reinterpret_cast<const unsigned char*>(d.src + n.off); // NOLINT(cppcoreguidelines-pro-type-reinterpret-cast)
++    const unsigned negative = first[0] == '-' ? 1u : 0u;
++    if (count - 16u > 1u || frac_digits == 0 || n.len != negative + count + 1 || d.size - n.off < 33)
++    {
++        return false;
++    }
++    const unsigned char* const digits = first + negative;
++    const std::uint64_t w = sixteen_digits(digits, int_digits);
++    // (the 17th digit follows the point)
++    const std::uint64_t w17 = (w * 10) + static_cast<std::uint64_t>(digits[17] - '0');
++    using format = ieee_binary_format<std::numeric_limits<FloatType>::digits>;
++    native_float_t<FloatType> result{};
++    float_from_bits(coordinate_bits(-static_cast<std::int64_t>(frac_digits), count == 17 ? w17 : w, format{}) | (static_cast<std::uint64_t>(negative) << format::sign_bit()), result);
++    value = result;
++    return true;
++}
++
++#endif
++
+ /// the value of the float token of a node, as parse() converts it; floats and
+ /// doubles with at most 19 digits are converted from the digit layout
+ template<typename FloatType>
+@@ -200,6 +348,13 @@ FloatType float_value(const document_data& d, const node& n)
+ template<typename FloatType>
+ FloatType float_value(const document_data& d, const node& n, std::true_type /*binary32 or binary64*/)
+ {
++#if NLOHMANN_VIEW_VECTOR
++    FloatType value {};
++    if (coordinate_float(d, n, value))
++    {
++        return value;
++    }
++#endif
+     const unsigned int_digits = n.extra & 0xFFu;
+     const unsigned frac_digits = n.extra >> 8u;
+     if (NLOHMANN_VIEW_LIKELY(int_digits + frac_digits <= 19)) // (255 marks "many")
+diff --git a/include/nlohmann/detail/view/serializer.hpp b/include/nlohmann/detail/view/serializer.hpp
+index b41ac683f..2bfa2d2c0 100644
+--- a/include/nlohmann/detail/view/serializer.hpp
++++ b/include/nlohmann/detail/view/serializer.hpp
+@@ -14,7 +14,9 @@
+ #include <cstddef> // size_t
+ #include <cstdint> // uint8_t, uint32_t
+ #include <cstring> // memcpy, memset
++#include <functional> // less
+ #include <limits> // numeric_limits
++#include <memory> // unique_ptr
+ #include <type_traits> // integral_constant
+ #include <vector> // vector
+ 
+@@ -384,6 +386,143 @@ struct depth_counter<false>
+     }
+ };
+ 
++/*!
++@brief where the double x nearest to a token w * 10^q lies, for 10^15 <= w <
++10^17 and -17 <= q <= -1 (Eisel-Lemire, then a fixed-point position)
++
++dump() writes the shortest decimal in the rounding interval of x (the closest
++one if there are several, see zmij::to_shortest()). Its digits are those of a
++multiple of 10^g of the token's last digit, with g = dec_exp + 1 - q for x's
++decimal exponent dec_exp: the multiple of 10^g nearest to x if it lies in the
++interval (at most one does), else the multiple of 10^(g - 1) nearest to x
++(see token_digits_1() and token_digits_2()). For g <= 0, the token itself is
++in the interval.
++
++The position is exact in a 64-bit fixed-point number with 56 bits after the
++point (of the token's last digit): x / 10^q = 2c * 5^-q / 2^t for x = c * 2^e2
++and t = q + 1 - e2, with at most 56 bits after the point here, and |x / 10^q -
++w| is at most half the spacing of the doubles, below 12 units. So only the low
++64 bits of 2c * 5^-q are needed. c and e2 come from Eisel-Lemire's product
++directly (as eisel_lemire() rounds it: no tie is possible for q < -4, and its
++second product is added where it can carry into the result).
++
++@param[out] offset  x / 10^q - w + 32, with 56 bits after the point
++@param[out] radius  half the spacing of the doubles at x, likewise (+ 1 if
++                    the interval is closed)
++@return g; 3 if the digits are not decided here (a power of two, whose
++        interval is not symmetric, or out of range)
++*/
++NLOHMANN_VIEW_ALWAYS_INLINE int locate_token(std::uint64_t w, int q, std::uint64_t& offset, std::uint64_t& radius) noexcept
++{
++    const int lz = count_leading_zeros(w);
++    const std::uint64_t normalized = w << static_cast<unsigned>(lz);
++    const auto index = static_cast<std::size_t>(2 * (q - pow5_128_smallest_power));
++    const uint128_parts product = full_multiplication(normalized, pow5_128()[index]);
++    std::uint64_t high = product.high;
++    if (NLOHMANN_VIEW_UNLIKELY((high & 0x1FFu) == 0x1FFu))
++    {
++        // (as eisel_lemire(): the lower bits may carry into the result)
++        const std::uint64_t second = full_multiplication(normalized, pow5_128()[index + 1]).high;
++        high += product.low + second < product.low ? 1u : 0u;
++    }
++    const auto upperbit = static_cast<unsigned>(high >> 63u);
++    const std::uint64_t mantissa = high >> (upperbit + 9);
++    const std::uint64_t c = (mantissa + (mantissa & 1u)) >> 1u;
++    // e2 as eisel_lemire() computes the exponent (log2(10) ~ 217706 / 2^16)
++    const int e2 = static_cast<int>((217706 * static_cast<std::int64_t>(q)) >> 16) + 63 + static_cast<int>(upperbit) - lz - 52;
++    const int t = q + 1 - e2;
++    const int g = ((e2 * 315653) >> 20) + 1 - q; // (dec_exp as in zmij::to_shortest(), for a regular x)
++    static const std::array<std::uint64_t, 17> fives = {{1u, 5u, 25u, 125u, 625u, 3125u, 15625u, 78125u, 390625u, 1953125u, 9765625u, 48828125u, 244140625u, 1220703125u, 6103515625u, 30517578125u, 152587890625u}};
++    const std::uint64_t five = fives[static_cast<std::size_t>(-q)]; // 5^-q
++    const unsigned s = static_cast<unsigned>(56 - t) & 63u;
++    offset = ((2 * c * five) << s) - (w << 56u) + (std::uint64_t{32} << 56u);
++    radius = (five << s) + ((c & 1u) == 0 ? 1u : 0u);
++    // (c = 2^52: a power of two; c = 2^53: rounded up to one. With 8 to 16
++    // fraction digits, as the batch's tokens have, t is in [15, 40] and g at
++    // most 2. x lies halfway between two candidates only if its distance from
++    // the token is a whole unit (g == 2) or a half (g == 1): such tokens are
++    // left to the full conversion)
++    const bool decided = c - ((std::uint64_t{1} << 52u) + 1) < (std::uint64_t{1} << 52u) - 1
++                         && (offset & ((std::uint64_t{1} << 55u) - 1)) != 0;
++    return decided ? g : 3;
++}
++
++/// all bits set if b, else none
++NLOHMANN_VIEW_ALWAYS_INLINE std::uint64_t mask_if(bool b) noexcept
++{
++    return std::uint64_t{0} - static_cast<std::uint64_t>(b);
++}
++
++/// a if b, else c, without a branch (the conditions of token_digits_1/2() are
++/// as good as random, and GCC compiled their ?: as branches: one misprediction
++/// per float of canada.json on x86-64)
++NLOHMANN_VIEW_ALWAYS_INLINE std::uint64_t select_if(bool b, std::uint64_t a, std::uint64_t c) noexcept
++{
++    return c ^ ((a ^ c) & mask_if(b));
++}
++
++/// the distance of a position (see locate_token()) from the biased point 32
++NLOHMANN_VIEW_ALWAYS_INLINE std::uint64_t biased_distance(std::uint64_t position) noexcept
++{
++    constexpr std::uint64_t center = std::uint64_t{32} << 56u;
++    // |position - center|, without a branch: negated (complemented, plus 1) if below
++    const std::uint64_t below = mask_if(position < center);
++    return ((position - center) ^ below) - below;
++}
++
++/*!
++@brief (g == 1) the digits dump() writes for a token, from the position of its
++double (see locate_token()): the multiple of 10 nearest to x if it is in the
++interval, else w rounded to x (an exact tie between two candidates, like
++754570942.33984373, whose double is 754570942.33984375, is excluded by
++locate_token())
++
++With |x - w| at most the radius, which is below half the spacing of the
++candidates, the multiple of 10 nearest to x is w - r10 or the one above it.
++*/
++NLOHMANN_VIEW_ALWAYS_INLINE std::uint64_t token_digits_1(std::uint64_t w, std::uint64_t offset, std::uint64_t radius, std::uint64_t r10) noexcept
++{
++    constexpr std::uint64_t one = std::uint64_t{1} << 56u;
++    const std::uint64_t from = offset + (r10 * one); // x - (w - r10) (+ 32)
++    const bool up = from > 37 * one;                  // (nearer to the multiple above)
++    const bool shorter = biased_distance(from - (mask_if(up) & (10 * one))) < radius;
++    const std::uint64_t a = w - r10 + (mask_if(up) & 10u);
++    const std::uint64_t b = w + ((offset + (one / 2)) >> 56u) - 32;                // w rounded to x
++    return select_if(shorter, a, b);
++}
++
++/*!
++@brief (g == 2) the digits dump() writes for a token, as token_digits_1(): the
++multiple of 100 nearest to x if it is in the interval, else the multiple of 10
++nearest to x
++*/
++NLOHMANN_VIEW_ALWAYS_INLINE std::uint64_t token_digits_2(std::uint64_t w, std::uint64_t offset, std::uint64_t radius, std::uint64_t r10, std::uint64_t r100) noexcept
++{
++    constexpr std::uint64_t one = std::uint64_t{1} << 56u;
++    const std::uint64_t from = offset + (r100 * one);
++    const bool up = from > 82 * one;
++    const bool shorter = biased_distance(from - (mask_if(up) & (100 * one))) < radius;
++    const std::uint64_t a = w - r100 + (mask_if(up) & 100u);
++    // x - (w - r10), in [-12, 21]: the multiple of 10 nearest to x is that one,
++    // or one or two above, or one below
++    const std::uint64_t y = offset + (r10 * one);
++    const std::uint64_t steps = static_cast<std::uint64_t>(y > 37 * one) + static_cast<std::uint64_t>(y > 47 * one);
++    const bool down = y < 27 * one;
++    const std::uint64_t b = w - r10 + (10 * steps) - (mask_if(down) & 10u);
++    return select_if(shorter, a, b);
++}
++
++/// the four ASCII digits of x < 10^4, the first in the lowest byte (as
++/// little-endian memory holds them)
++NLOHMANN_VIEW_ALWAYS_INLINE std::uint32_t four_digit_text(std::uint32_t x) noexcept
++{
++    const std::uint32_t ab = (x * 5243u) >> 19u; // x / 100
++    std::uint32_t v = ab | ((x - (ab * 100u)) << 16u);
++    const std::uint32_t a = ((v * 103u) >> 10u) & 0x000F000Fu; // / 10 per 16-bit lane
++    v = a | ((v - (a * 10u)) << 8u);
++    return v + 0x30303030u;
++}
++
+ /// how the view's dump() writes a value
+ struct dump_style
+ {
+@@ -711,6 +850,7 @@ class view_serializer
+         std::array<frame, 32> buffer; // NOLINT(cppcoreguidelines-pro-type-member-init,hicpp-member-init): written before read
+         std::vector<frame> heap;
+         small_stack<frame> stack(buffer.data(), buffer.size(), heap);
++        float_batch batch;
+         const char* const src = m_doc.src;
+         const char* const src_end = src + m_doc.size;
+         char* w = m_out.cursor();
+@@ -850,7 +990,7 @@ class view_serializer
+                     else if (enabled(fast_double::value))
+                     {
+                         room(64);
+-                        w = write_double_at(w, *n);
++                        w = write_double_ahead(w, src, n, batch);
+                     }
+                     else
+                     {
+@@ -875,6 +1015,20 @@ class view_serializer
+                 case value_t::array:
+                 {
+                     const bool object = n->kind == node_kind::object;
++                    // (read-only documents, compact output) a pair of floats,
++                    // like the coordinates of GeoJSON, without a frame
++                    if (enabled(!Editable && !Pretty && !SourceNumbers && fast_double::value) && n->next == 3 && n->len == 2
++                            && n[1].kind == node_kind::number_float && n[2].kind == node_kind::number_float)
++                    {
++                        room(2 * 64);
++                        *w++ = '[';
++                        w = write_double_ahead(w, src, n + 1, batch);
++                        *w++ = ',';
++                        w = write_double_ahead(w, src, n + 2, batch);
++                        *w++ = ']';
++                        n += 2; // (the element before the next node)
++                        break;
++                    }
+                     room(8);
+                     if (n->len == 0)
+                     {
+@@ -984,6 +1138,254 @@ class view_serializer
+         }
+     }
+ 
++    /// (float_batch) the mark of digits whose rounding carried beyond the
++    /// token's last four (see mark())
++    static constexpr std::uint64_t carried() noexcept
++    {
++        return std::uint64_t{1} << 63u;
++    }
++
++    /// floats of 16 or 17 digits ahead of the walk, converted together (see
++    /// convert_ahead()), with their digits as mark() keeps them
++    struct float_batch
++    {
++        static constexpr std::size_t capacity() noexcept
++        {
++            return 256;
++        }
++        /// (on the heap, allocated by the first conversion: a frame of more
++        /// than a page made every dump of a small document slower)
++        struct entries
++        {
++            std::array<const node*, 256> at; // NOLINT(cppcoreguidelines-pro-type-member-init,hicpp-member-init): written before read
++            std::array<std::uint64_t, 256> digits; // NOLINT(cppcoreguidelines-pro-type-member-init,hicpp-member-init): written before read
++        };
++        std::unique_ptr<entries> storage{};
++        const node** at = nullptr;
++        std::uint64_t* digits = nullptr;
++        std::size_t count = 0;
++        std::size_t next = 0;
++        const node* scanned = nullptr; ///< where the last scan of the node array ended
++    };
++
++    /// (doubles) the float at n as dump() writes it, at w (64 bytes of room):
++    /// from the batch if it holds n
++    NLOHMANN_VIEW_ALWAYS_INLINE char* write_double_ahead(char* w, const char* src, const node* n, float_batch& batch)
++    {
++#if NLOHMANN_VIEW_VECTOR && NLOHMANN_VIEW_LITTLE_ENDIAN
++        // (digits 0: not written by the batch; carried(): rounding carried
++        // beyond the last four digits)
++        if (batch.next != batch.count && batch.at[batch.next] == n && batch.digits[batch.next] - 1 < carried() - 1)
++        {
++            return write_token_digit
+[... truncated, 11319 more characters]
+```
+
+## Existing upstream tests that call the changed code (for style and API usage)
+// Upstream tests at the PR's parent commit 9c349b1d7 that use the changed code.
+// Names searched (test lines using each): dump (713), materialize (178), get (778), operator== (68), view_serializer (0), layout_decimal (0), dump_text (0), layout_float (0), float_value (0), convert_ahead (0), locate_token (0), sixteen_digits (0), coordinate_bits (0), write_double_beside (0), write_token_digits (0), coordinate_float (0), write_double_ahead (0), token_digits_2 (0), write_carried_digits (0), token_digits_1 (0), four_digit_text (0), biased_distance (0), float_batch (0), mark (0), mask_if (0), select_if (0), carried (0), capacity (14), entries (7), format (57), at (1196), count (215), digits (101), next (50), scanned (0), storage (6)
+
+// ---- tests/src/unit-json_view.cpp:913-959  (uses: at, count, dump, get, materialize, next)
+    SECTION("duplicate keys: lookups find the first member, iteration all")
+    {
+        const json_document d = json_document::parse(R"({"a":1,"b":2,"a":3})");
+        const json_view v = d.root();
+        CHECK(v.size() == 3);
+        CHECK(v["a"].materialize() == 1);
+        CHECK(v.at("a").materialize() == 1);
+        CHECK(v.find("a") == v.begin());
+        CHECK(v.find("a").value().materialize() == 1);
+        CHECK(v.find("b") == std::next(v.begin()));
+        CHECK(v.count("a") == 2); // every member, unlike materialize()
+        CHECK(v.count("b") == 1);
+        CHECK(v.contains("a"));
+        CHECK(v.value("a", 0) == 1);
+        CHECK(v.materialize()["a"] == 3); // materialize() keeps the last value, unlike the lookups
+        // JSON pointers resolve to the first member at every level
+        const json_document dp = json_document::parse(R"({"a":{"b":1},"a":{"b":2,"b":3}})");
+        CHECK(dp.root()[json::json_pointer("/a/b")].materialize() == 1);
+        CHECK(dp.root().at(json::json_pointer("/a/b")).materialize() == 1);
+        CHECK(dp.root().value(json::json_pointer("/a/b"), 0) == 1);
+        CHECK(dp.root().materialize()[json::json_pointer("/a/b")] == 3);
+        // get<map> keeps the last value, as materialize()
+        CHECK((v.get<std::map<std::string, int>>() == std::map<std::string, int> {{"a", 3}, {"b", 2}}));
+        // keys of every length class (the 16-byte short compare and memcmp)
+        for (const std::size_t n :
+                {
+                    0u, 1u, 3u, 7u, 8u, 15u, 16u, 17u, 40u
+                })
+        {
+            const std::string key(n, 'k');
+            const json_document dk = json_document::parse("{\"" + key + "\":1,\"" + key + "x\":2,\"" + key + "\":3,\"" + key + "\":4}"); // NOLINT(performance-inefficient-string-concatenation)
+            CAPTURE(n)
+            CHECK(dk.root()[key].materialize() == 1);
+            CHECK(dk.root().at(key).materialize() == 1);
+            CHECK(dk.root().find(key) == dk.root().begin());
+            CHECK(dk.root().value(key, 0) == 1);
+            CHECK(dk.root()[key + "x"].materialize() == 2);
+        }
+        std::string order;
+        for (auto it = v.begin(); it != v.end(); ++it)
+        {
+            order += std::string(it.key().data(), it.key().size()) + it->materialize().dump();
+        }
+        CHECK(order == "a1b2a3");
+        CHECK(v.back().materialize() == 3);
+        CHECK(v.materialize() == json::parse(R"({"a":1,"b":2,"a":3})")); // the last value, as parse()
+    }
+
+// ---- tests/src/unit-comparison.cpp:912-955  (uses: entries, operator==)
+TEST_CASE("equality of objects whose entries have no fixed order")
+{
+    // Values nested deeper than a bound are compared without the call stack,
+    // entry by entry. That must agree with the object type's own operator==,
+    // which for unordered_object_t (as for std::unordered_map) does not
+    // depend on the order of the entries, and for ordered_map does.
+    REQUIRE(make_unordered_object(true).begin().key() == "9");
+    REQUIRE(make_unordered_object(false).begin().key() == "0");
+
+    for (const std::size_t depth : std::vector<std::size_t> {0, 200})
+    {
+        CAPTURE(depth)
+
+        const unordered_json descending = nest(make_unordered_object(true), depth);
+        const unordered_json ascending = nest(make_unordered_object(false), depth);
+        CHECK(descending == ascending);
+        CHECK_FALSE(descending != ascending);
+
+        // a copy is equal to its original
+        const unordered_json copy = descending; // NOLINT(performance-unnecessary-copy-initialization)
+        CHECK(copy == descending);
+
+        // a different value, a different key, or another entry still count
+        unordered_json other_value = make_unordered_object(true);
+        other_value["5"] = 42;
+        CHECK_FALSE(nest(other_value, depth) == ascending);
+
+        unordered_json other_key = make_unordered_object(true);
+        other_key.erase("5");
+        other_key["50"] = 5;
+        CHECK_FALSE(nest(other_key, depth) == ascending);
+
+        unordered_json more_entries = make_unordered_object(true);
+        more_entries["10"] = 10;
+        CHECK_FALSE(nest(more_entries, depth) == ascending);
+        CHECK_FALSE(ascending == nest(more_entries, depth));
+
+        // ordered_json compares its entries in sequence
+        const nlohmann::ordered_json ab = nest(nlohmann::ordered_json({{"a", 1}, {"b", 2}}), depth);
+        const nlohmann::ordered_json ba = nest(nlohmann::ordered_json({{"b", 2}, {"a", 1}}), depth);
+        CHECK_FALSE(ab == ba);
+        CHECK(ab != ba);
+    }
+}
+
+// ---- tests/src/unit-json_view_dump.cpp:318-336  (uses: capacity, dump)
+    SECTION("the output buffer of a small value is small")
+    {
+        // an escaped key after the value: its node lies in the arena, so the
+        // source extent of the value cannot be read from the next node
+        const std::string big(100000, 'a');
+        const std::string text = R"({"small":1,"list":[1,2,3],"k\n":")" + big + R"("})";
+        const json_document d = json_document::parse(text);
+        const auto small = d.root()["small"].dump();
+        CHECK(small == "1");
+        CHECK(small.capacity() < 4096);
+        const auto list = d.root()["list"].dump();
+        CHECK(list == "[1,2,3]");
+        CHECK(list.capacity() < 4096);
+        CHECK(d.root()["list"].dump(2).capacity() < 4096);
+
+        // the whole document and the large value are unaffected
+        CHECK(d.root().dump() == ordered_json::parse(text).dump());
+        CHECK(d.root()["k\n"].dump() == "\"" + big + "\"");
+    }
+
+// ---- tests/src/unit-json_pointer.cpp:1298-1306  (uses: dump, entries)
+    SECTION("order of the entries of an ordered_json")
+    {
+        const auto value = nlohmann::ordered_json::parse(
+                               R"({"z":"s","a/b":{"~":1,"k":[]},"a":[1,{"c":{},"b":[]},[{"x~/":[true,null],"w":2}]]})");
+
+        const auto flat = value.flatten();
+        CHECK(flat.dump() ==
+              R"({"/z":"s","/a~1b/~0":1,"/a~1b/k":null,"/a/0":1,"/a/1/c":null,"/a/1/b":null,"/a/2/0/x~0~1/0":true,"/a/2/0/x~0~1/1":null,"/a/2/0/w":2})");
+    }
+
+# Task
+Write 20 test programs for this pull request. Return JSON with a "tests" array; each item has "name" (short snake_case), "intent" (one sentence: what behavior it probes) and "code" (the complete C++ program).

@@ -1,0 +1,140 @@
+{
+  "target": "nlohmann-json",
+  "pr": 5931,
+  "model": "gemini-3.5-flash-lite",
+  "prompt_sha256": "743ace102e4fedcaa68aa2426aa752b1e41d063912153e1c2d150326949390a8",
+  "n_requested": 20,
+  "dropped": 0,
+  "usage": {
+    "promptTokenCount": 4655,
+    "candidatesTokenCount": 1583,
+    "totalTokenCount": 6238,
+    "promptTokensDetails": [
+      {
+        "modality": "TEXT",
+        "tokenCount": 4655
+      }
+    ],
+    "serviceTier": "standard"
+  },
+  "tests": [
+    {
+      "file": "gen_01.cpp",
+      "name": "bjdata_read_half_ndarray",
+      "intent": "Verify that BJData ND-arrays with element type 'h' (float16) successfully parse and map to the 'half' type name.",
+      "round": 0,
+      "superseded_by": "gen_11.cpp"
+    },
+    {
+      "file": "gen_02.cpp",
+      "name": "bjdata_char_ndarray_valid_range",
+      "intent": "Verify that BJData ND-arrays of char with values within 0..127 parse successfully.",
+      "round": 0,
+      "superseded_by": "gen_12.cpp"
+    },
+    {
+      "file": "gen_03.cpp",
+      "name": "bjdata_char_ndarray_invalid_range",
+      "intent": "Verify that BJData ND-arrays of char containing values above 127 are rejected with parse_error.113.",
+      "round": 0,
+      "superseded_by": "gen_13.cpp"
+    },
+    {
+      "file": "gen_04.cpp",
+      "name": "bjdata_write_char_ndarray_range_fallback",
+      "intent": "Verify that writing an ND-array with char values exceeding 127 falls back to a plain object instead of a packed array.",
+      "round": 0
+    },
+    {
+      "file": "gen_05.cpp",
+      "name": "bjdata_write_char_ndarray_valid_packed",
+      "intent": "Verify that writing an ND-array with char values fully within 0..127 produces a packed representation.",
+      "round": 0
+    },
+    {
+      "file": "gen_06.cpp",
+      "name": "gen_06",
+      "intent": "Test binary reader bjd_type_name for 'h' yielding 'half'",
+      "round": 1
+    },
+    {
+      "file": "gen_07.cpp",
+      "name": "gen_07",
+      "intent": "Test binary reader parsing ND-array of char within 0..127 range via nd_is_char block",
+      "round": 1
+    },
+    {
+      "file": "gen_08.cpp",
+      "name": "gen_08",
+      "intent": "Test binary reader detecting EOF when parsing ND-array of char",
+      "round": 1
+    },
+    {
+      "file": "gen_09.cpp",
+      "name": "gen_09",
+      "intent": "Test binary reader rejecting char > 127 in ND-array with parse_error.113",
+      "round": 1
+    },
+    {
+      "file": "gen_10.cpp",
+      "name": "gen_10",
+      "intent": "Test binary writer checking element range for 'C' (char) ND-array dtype",
+      "round": 1
+    },
+    {
+      "file": "gen_11.cpp",
+      "name": "bjdata_read_half_ndarray_fixed",
+      "intent": "Verify that BJData ND-arrays with element type 'h' (float16) successfully parse and map to the 'half' type name.",
+      "round": 2,
+      "fixes": "gen_01.cpp",
+      "kind": "compile",
+      "superseded_by": "gen_14.cpp"
+    },
+    {
+      "file": "gen_12.cpp",
+      "name": "bjdata_char_ndarray_valid_range_fixed",
+      "intent": "Verify that BJData ND-arrays of char with values within 0..127 parse successfully.",
+      "round": 2,
+      "fixes": "gen_02.cpp",
+      "kind": "compile",
+      "superseded_by": "gen_15.cpp"
+    },
+    {
+      "file": "gen_13.cpp",
+      "name": "bjdata_char_ndarray_invalid_range_fixed",
+      "intent": "Verify that BJData ND-arrays of char containing values above 127 are rejected with parse_error.113.",
+      "round": 2,
+      "fixes": "gen_03.cpp",
+      "kind": "compile",
+      "superseded_by": "gen_16.cpp"
+    },
+    {
+      "file": "gen_14.cpp",
+      "name": "bjdata_read_half_ndarray_fixed_fixed",
+      "intent": "Verify that BJData ND-arrays with element type 'h' (float16) successfully parse and map to the 'half' type name.",
+      "round": 3,
+      "fixes": "gen_11.cpp",
+      "kind": "compile"
+    },
+    {
+      "file": "gen_15.cpp",
+      "name": "bjdata_char_ndarray_valid_range_fixed_fixed",
+      "intent": "Verify that BJData ND-arrays of char with values within 0..127 parse successfully.",
+      "round": 3,
+      "fixes": "gen_12.cpp",
+      "kind": "compile"
+    },
+    {
+      "file": "gen_16.cpp",
+      "name": "bjdata_char_ndarray_invalid_range_fixed_fixed",
+      "intent": "Verify that BJData ND-arrays of char containing values above 127 are rejected with parse_error.113.",
+      "round": 3,
+      "fixes": "gen_13.cpp",
+      "kind": "compile"
+    }
+  ],
+  "fix": {
+    "rounds_max": 2,
+    "model": "gemini-3.5-flash-lite"
+  }
+}

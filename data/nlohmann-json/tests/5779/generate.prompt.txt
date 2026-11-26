@@ -1,0 +1,347 @@
+[system]
+You write test programs that probe a C++ library for behavioral changes made by one pull request.
+Each program is compiled and run twice, once against the library before the change and once after, and the two
+outputs are compared. Your job is to produce programs whose output reveals whether the change altered behavior,
+including side effects the author did not intend.
+
+Rules for every program:
+- It is standalone: one file with its own int main(), compiled as C++17, printing results to stdout.
+- Use only the library's documented public API. Never include internal headers or use detail/impl namespaces,
+  private members or undocumented macros.
+- Do not judge results (no assert, no expected-value comparisons): just print what the library returns. Print
+  enough to make differences visible, one fact per line.
+- Output must be deterministic. Never print pointers or addresses, uninitialized data, the order of
+  hash-based containers, timings, thread ids, random values, file paths or environment data. Print floating point
+  values with an explicit precision. No input, files, network, threads, clocks or randomness.
+- Wrap calls that may throw in try/catch and print the exception's type and message, so an exception is an
+  observable result. Do not crash on purpose.
+- Aim at the code the diff changes. Prefer calls that compile against both the old and the new library; one or two
+  programs may use an API the PR adds. Cover ordinary inputs and edge cases (empty, minimum and maximum values,
+  boundaries, special values, nesting, unusual types) and also neighbouring behavior the change could disturb.
+- When the diff changes which types or inputs an API accepts or rejects (constraints, overloads, traits,
+  conversions), test it with the detection idiom (std::void_t or requires) and `if constexpr`, so the program
+  compiles against both versions, prints whether the expression is well-formed, and exercises it when it is.
+  Accepting an input is not enough: also use it through every entry point that should follow (const and
+  non-const, read, write, insert, erase, lookup, nested use), because a change that admits new inputs can leave
+  later code unable to handle them.
+- If the changed code is internal (a detail, impl or internal namespace, a trait, a helper), do not name it in the
+  program. Reach it through the public API that depends on it, using detection (as above) where needed.
+- Use the exact types and values the diff is about (the new trait's argument types, the new overload's
+  parameters), not stand-ins.
+- Spread the programs over distinct public entry points and overloads, one main idea per program. Do not write
+  several programs that only rename a type or change a literal.
+- Make the programs differ from each other: different inputs, different entry points, different features.
+
+Rules specific to this library:
+- Include the library with #include <nlohmann/json.hpp>. The public API is nlohmann::json (nlohmann::basic_json), nlohmann::ordered_json, json_pointer, json patch/merge_patch and the documented SAX and conversion interfaces. Never use the detail namespace.
+- It is a header-only library: nothing to link. Programs are compiled as C++17.
+- Print JSON values with dump() (compact) or dump(2). Keys of nlohmann::json objects print in sorted order, so output is deterministic; do not depend on insertion order except with ordered_json.
+
+[user]
+# Pull request #5779: Fix CI on develop after #5585
+
+## Description
+The Ubuntu workflow on develop fails since #5585 (run https://github.com/nlohmann/json/actions/runs/37530611400). This PR fixes the three causes.
+
+- **ci_test_gcc, ci_test_standards_gcc (14):** the new test `test-diagnostics-optimized` is built with `-O3`. At that level, the `-Winline` and `-Wsuggest-attribute=pure` warnings in the `ci_test_gcc` flag set fire on the library's inline functions. The test does not check these warnings, so they are now turned off for this test, together with `-Wsuggest-attribute=const`. The `-O3 -Werror=array-bounds` check for #5742 stays. Reproduced with GCC 16.2 in `gcc:latest`; the test now compiles cleanly.
+- **ci_test_clang, ci_test_standards_clang (11):** the static table in the test's `to_json` triggers `-Wexit-time-destructors`. The warning is now suppressed with `DOCTEST_CLANG_SUPPRESS_WARNING`, as other tests already do.
+- **ci_infer:** 7 false `NULLPTR_DEREFERENCE` findings in `tests/src/unit-pointer_access.cpp`, caused by #5585. `basic_json::replace_value()` calls `destroy()` and then `assert_invariant()`. Together they create more paths than Pulse explores by default (`pulse-max-disjuncts`, 20). Pulse then loses track of the stored type and assumes `get_ptr()` can return null for a value it just constructed. Removing either call made the findings go away, but the library code stays as is. Instead, `.inferconfig` raises `pulse-max-disjuncts` to 40. Checked with Infer 1.3.0 (the CI version) on `test-pointer_access`: 7 findings with the default, none with 40.
+
+- **ci_infer:** `USE_AFTER_DELETE` at `include/nlohmann/ordered_map.hpp:262` (`erase(first, last)`). This is a false positive: Infer models `std::string` as keeping the buffer of a moved-from string, so the loop that destroys and re-creates elements looks like it destroys a buffer twice. It now has an `@infer-ignore USE_AFTER_DELETE` comment, the form already used in `json.hpp` and `binary_reader.hpp`. A full Infer run with `pulse-max-disjuncts` 40 and without this comment reported only this finding.
+
+Two more failures came in with that merge, and both also affect develop:
+
+- **ci_test_standards_clang (14, libstdcxx), ci_static_analysis_clang (ci_test_clang):** with `JSON_NOEXCEPTION`, `JSON_THROW` becomes `std::abort()`, so the parameters of `binary_writer::throw_on_discarded()` (#5761) are unused and `-Wunused-parameter` breaks `test-disabled_exceptions`. They are now cast to `void`. Develop had not shown this yet because these jobs were cancelled there.
+- **ci_cmake_options (ci_test_delete_deprecated_functions):** the #5676 regression test from #5740 calls the deprecated `sax_parse(span_input_adapter&&, ...)`, which `JSON_DELETE_DEPRECATED_FUNCTIONS` deletes. Those two checks are now skipped in that configuration, using the `JSON_TEST_DEPRECATED_FUNCTIONS_DELETED` pattern from `unit-cbor.cpp`.
+
+- **ci_clang_tidy:** this job had been cancelled on develop, so its findings had piled up:
+  - `unit-diagnostics-optimized.cpp` (this PR): `to_json` read past the end of its table for a value it did not contain. It now falls back to the first entry, as `NLOHMANN_JSON_SERIALIZE_ENUM` does. The test still fails with `-Werror=array-bounds` on the headers from before #5585.
+  - `unit-regression2.cpp` (#5762): `const`/`auto` for the `destroy()` test values, and a `NOLINT` for the copy that `check_destroy_edge_case()` makes on purpose.
+  - `unit-serialization.cpp` (#5774): the expected strings are built with `+=` instead of chained `operator+`.
+
+  clang-tidy 22.1.8 (`silkeh/clang:22`, the CI image) was run locally on every test source and now reports nothing.
+
+On the previous push (2e4d84059), `ci_infer` passed ("No issues found"). It took 81 minutes, against 50 on develop. A local run with the same settings took 52 minutes, so most of the difference is probably runner variance.
+
+Develop is merged in (#5740, #5766, #5774-#5777); none of those commits touch the files changed here.
+
+### Public API
+
+No breaking changes. The library changes are a c
+[... truncated, 241 more characters]
+
+## Commit message
+* Fix CI on develop after #5585
+
+- test-diagnostics-optimized: -O3 makes GCC's -Winline and
+  -Wsuggest-attribute=pure/const warnings fire with the ci_test_gcc flag
+  set; turn them off for this test.
+- test-diagnostics-optimized: suppress Clang's -Wexit-time-destructors for
+  the static table in to_json.
+- Infer: raise pulse-max-disjuncts from 20 to 40. With the default,
+  Pulse loses the stored type in basic_json::replace_value() and reports
+  false null dereferences of get_ptr() results in unit-pointer_access.cpp.
+
+Signed-off-by: Niels Lohmann <mail@nlohmann.me>
+
+* Ignore Infer's false USE_AFTER_DELETE in ordered_map::erase
+
+Infer's std::string model keeps the buffer of a moved-from string, so the
+destroy-and-reconstruct loop in erase(first, last) looks like it destroys a
+buffer twice.
+
+Signed-off-by: Niels Lohmann <mail@nlohmann.me>
+
+* Mark throw_on_discarded()'s parameters as used without exceptions
+
+With JSON_NOEXCEPTION, JSON_THROW expands to std::abort(), so Clang's
+-Wunused-parameter breaks test-disabled_exceptions (since #5761).
+
+Signed-off-by: Niels Lohmann <mail@nlohmann.me>
+
+* Skip the span_input_adapter sax_parse checks with deleted deprecated functions
+
+The #5676 regression test (#5740) calls the deprecated
+sax_parse(span_input_adapter&&, ...), which JSON_DELETE_DEPRECATED_FUNCTIONS
+deletes, so ci_test_delete_deprecated_functions failed to build.
+
+Signed-off-by: Niels Lohmann <mail@nlohmann.me>
+
+* Fall back to the first entry in test-diagnostics-optimized's to_json
+
+clang-tidy (clang-analyzer-security.ArrayBound) flagged it->second for a
+value not in the table. Use the same fallback as
+NLOHMANN_JSON_SERIALIZE_ENUM; the test still fails with -Werror=array-bounds
+on the headers from before #5585.
+
+Signed-off-by: Niels Lohmann <mail@nlohmann.me>
+
+* Fix clang-tidy findings in tests from #5762 and #5774
+
+- unit-regression2.cpp (#5762): const/auto for the destroy() test values;
+  NOLINT the intended copy in check_destroy_edge_case().
+- unit-serialization.cp
+[... truncated, 233 more characters]
+
+## Changed functions (from changes.py)
+- nlohmann::detail::binary_writer::throw_on_discarded(const BasicJsonType &, const char *) (private); reached from the public API through: nlohmann::basic_json::to_bjdata(const basic_json<...> &, detail::output_adapter<char>, const bool, const bool, const bjdata_version_t, const error_handler_t), nlohmann::basic_json::to_bjdata(const basic_json<...> &, detail::output_adapter<std::uint8_t>, const bool, const bool, const bjdata_version_t, const error_handler_t), nlohmann::basic_json::to_bon8(const basic_json<...> &, detail::output_adapter<char>), nlohmann::basic_json::to_bon8(const basic_json<...> &, detail::output_adapter<std::uint8_t>), nlohmann::basic_json::to_bson(const basic_json<...> &, detail::output_adapter<char>, const error_handler_t), nlohmann::basic_json::to_bson(const basic_json<...> &, detail::output_adapter<std::uint8_t>, const error_handler_t), nlohmann::basic_json::to_cbor(const basic_json<...> &, detail::output_adapter<char>, const error_handler_t), nlohmann::basic_json::to_cbor(const basic_json<...> &, detail::output_adapter<std::uint8_t>, const error_handler_t), nlohmann::basic_json::to_msgpack(const basic_json<...> &, detail::output_adapter<char>, const error_handler_t), nlohmann::basic_json::to_msgpack(const basic_json<...> &, detail::output_adapter<std::uint8_t>, const error_handler_t)
+- nlohmann::ordered_map::erase(iterator, iterator) (public)
+
+## Diff of the library source (before -> after)
+```diff
+diff --git a/include/nlohmann/detail/output/binary_writer.hpp b/include/nlohmann/detail/output/binary_writer.hpp
+index 8a26a451c..c4adf47a6 100644
+--- a/include/nlohmann/detail/output/binary_writer.hpp
++++ b/include/nlohmann/detail/output/binary_writer.hpp
+@@ -931,6 +931,8 @@ class binary_writer
+     */
+     JSON_HEDLEY_NO_RETURN static void throw_on_discarded(const BasicJsonType& j, const char* format_name)
+     {
++        static_cast<void>(j); // unused when JSON_NOEXCEPTION is defined
++        static_cast<void>(format_name);
+         JSON_THROW(type_error::create(321, concat("cannot serialize discarded value to ", format_name), &j));
+     }
+diff --git a/include/nlohmann/ordered_map.hpp b/include/nlohmann/ordered_map.hpp
+index 2e0970726..74539d376 100644
+--- a/include/nlohmann/ordered_map.hpp
++++ b/include/nlohmann/ordered_map.hpp
+@@ -259,6 +259,9 @@ public:
+ 
+         for (auto it = first; std::next(it, elements_affected) != Container::end(); ++it)
+         {
++            // false positive: Infer's model of std::string keeps the buffer of a
++            // moved-from string, so it assumes a buffer is destroyed twice
++            // @infer-ignore USE_AFTER_DELETE
+             it->~value_type(); // destroy but keep allocation
+             new (&*it) value_type{std::move(*std::next(it, elements_affected))}; // "move" next element to it
+         }
+```
+
+## Existing upstream tests that call the changed code (for style and API usage)
+// Upstream tests at the PR's parent commit 30e542e52 that use the changed code.
+// Names searched (test lines using each): erase (228), to_bjdata (0), to_bon8 (0), to_bson (0), to_cbor (0), to_msgpack (0), throw_on_discarded (0)
+
+// ---- tests/src/unit-class_parser.cpp:2401-2412  (uses: erase)
+        SECTION("for object")
+        {
+            // Create an object with spaces to test the start and end positions. Spaces will not be included in the
+            // JSON object, however, the start and end positions should include the spaces from the input JSON string.
+            const std::string nested_type_json_str =  R"({    "a":       1,"b"      : "test1"})";
+            const std::string root_type_json_str =  R"({    "nested": )" + nested_type_json_str + R"(, "anotherValue": "test2"})";
+            auto expected = json({{"nested", {{"a", 1}, {"b", "test1"}}}, {"anotherValue", "test2"}});
+            auto filteredExpected = expected;
+            filteredExpected["nested"].erase("a");
+
+            SETUP_TESTCASES()
+        }
+
+// ---- tests/src/unit-class_parser.cpp:2424-2438  (uses: erase)
+        SECTION("for array with objects")
+        {
+            const std::string nested_type_json_str =  R"([{"a": 1, "b": "test"}, {"c": 2, "d": "test2"}])";
+            const std::string root_type_json_str =  R"({   "nested": )" + nested_type_json_str + R"(, "anotherValue": "test" })";
+            auto expected = json({{"nested", {{{"a", 1}, {"b", "test"}}, {{"c", 2}, {"d", "test2"}}}}, {"anotherValue", "test"}});
+            auto filteredExpected = expected;
+            filteredExpected["nested"][0].erase("a");
+            SETUP_TESTCASES()
+
+            auto j = json::parse(root_type_json_str);
+            auto nested_array = j["nested"];
+            const auto& nested_obj = nested_array[0];
+            CHECK(nested_type_json_str.substr(1, 21) == root_type_json_str.substr(nested_obj.start_pos(), nested_obj.end_pos() - nested_obj.start_pos()));
+            CHECK(nested_type_json_str.substr(24, 22) == root_type_json_str.substr(nested_array[1].start_pos(), nested_array[1].end_pos() - nested_array[1].start_pos()));
+        }
+
+// ---- tests/src/unit-comparison.cpp:911-954  (uses: erase)
+TEST_CASE("equality of objects whose entries have no fixed order")
+{
+    // Values nested deeper than a bound are compared without the call stack,
+    // entry by entry. That must agree with the object type's own operator==,
+    // which for unordered_object_t (as for std::unordered_map) does not
+    // depend on the order of the entries, and for ordered_map does.
+    REQUIRE(make_unordered_object(true).begin().key() == "9");
+    REQUIRE(make_unordered_object(false).begin().key() == "0");
+
+    for (const std::size_t depth : std::vector<std::size_t> {0, 200})
+    {
+        CAPTURE(depth)
+
+        const unordered_json descending = nest(make_unordered_object(true), depth);
+        const unordered_json ascending = nest(make_unordered_object(false), depth);
+        CHECK(descending == ascending);
+        CHECK_FALSE(descending != ascending);
+
+        // a copy is equal to its original
+        const unordered_json copy = descending; // NOLINT(performance-unnecessary-copy-initialization)
+        CHECK(copy == descending);
+
+        // a different value, a different key, or another entry still count
+        unordered_json other_value = make_unordered_object(true);
+        other_value["5"] = 42;
+        CHECK_FALSE(nest(other_value, depth) == ascending);
+
+        unordered_json other_key = make_unordered_object(true);
+        other_key.erase("5");
+        other_key["50"] = 5;
+        CHECK_FALSE(nest(other_key, depth) == ascending);
+
+        unordered_json more_entries = make_unordered_object(true);
+        more_entries["10"] = 10;
+        CHECK_FALSE(nest(more_entries, depth) == ascending);
+        CHECK_FALSE(ascending == nest(more_entries, depth));
+
+        // ordered_json compares its entries in sequence
+        const nlohmann::ordered_json ab = nest(nlohmann::ordered_json({{"a", 1}, {"b", 2}}), depth);
+        const nlohmann::ordered_json ba = nest(nlohmann::ordered_json({{"b", 2}, {"a", 1}}), depth);
+        CHECK_FALSE(ab == ba);
+        CHECK(ab != ba);
+    }
+}
+
+// ---- tests/src/unit-custom-array-type.cpp:85-106  (uses: erase)
+    SECTION("accessing and modifying elements")
+    {
+        auto j = deque_json::parse(R"([1,2,3])");
+
+        CHECK(j[1] == 2);
+        CHECK(j.at(2) == 3);
+
+        // growing through operator[] fills up with null values
+        j[5] = 6;
+        CHECK(j.size() == 6);
+        CHECK(j[4].is_null());
+        CHECK(j[5] == 6);
+
+        j.erase(0);
+        CHECK(j == deque_json({2, 3, nullptr, nullptr, 6}));
+
+        auto it = j.erase(j.begin());
+        CHECK(*it == 3);
+
+        j.insert(j.begin(), 1);
+        CHECK(j.front() == 1);
+    }
+
+// ---- tests/src/unit-custom-base-class.cpp:368-384  (uses: erase)
+                break;
+            case value_t::binary:
+                str << "binary";
+                break;
+            default:
+                str << "error";
+                break;
+        }
+        str << " - "  << j.dump();
+        CHECK(json.at(p) == j);
+        INFO(str.str());
+        CHECK(expected.count(str.str()) == 1);
+        expected.erase(str.str());
+    }
+        );
+    CHECK(expected.empty());
+}
+
+// ---- tests/src/unit-custom-object-type.cpp:144-168  (uses: erase)
+
+    mapped_type& at(const key_type& key)
+    {
+        return data.at(key);
+    }
+    const mapped_type& at(const key_type& key) const
+    {
+        return data.at(key);
+    }
+
+    iterator erase(iterator pos)
+    {
+        return data.erase(pos);
+    }
+    iterator erase(iterator first, iterator last)
+    {
+        return data.erase(first, last);
+    }
+    size_type erase(const key_type& key)
+    {
+        return data.erase(key);
+    }
+
+    void swap(no_key_compare_map& other) noexcept(noexcept(data.swap(other.data)))
+    {
+
+// ---- tests/src/unit-custom-object-type.cpp:353-377  (uses: erase)
+
+    mapped_type& at(const key_type& key)
+    {
+        return data.at(key);
+    }
+    const mapped_type& at(const key_type& key) const
+    {
+        return data.at(key);
+    }
+
+    iterator erase(iterator pos)
+    {
+        return iterator(data.erase(pos.base()));
+    }
+    iterator erase(iterator first, iterator last)
+    {
+        return iterator(data.erase(first.base(), last.base()));
+    }
+    size_type erase(const key_type& key)
+    {
+        return data.erase(key);
+    }
+
+    void swap(forward_only_map& other) noexcept(noexcept(data.swap(other.data)))
+    {
+
+// ---- tests/src/unit-diagnostics.cpp:62-67  (uses: erase)
+    SECTION("wrong iterator")
+    {
+        json j;
+        j["array"] = json::array();
+        CHECK_THROWS_WITH_AS(j["array"].erase(j.begin()), "[json.exception.invalid_iterator.202] (/array) iterator does not fit current value", json::invalid_iterator);
+    }
+
+# Task
+Write 20 test programs for this pull request. Return JSON with a "tests" array; each item has "name" (short snake_case), "intent" (one sentence: what behavior it probes) and "code" (the complete C++ program).
