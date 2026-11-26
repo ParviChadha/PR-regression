@@ -17,7 +17,7 @@
 Input/output: data/<target>/tests/<key>/*.cpp  ->  coverage.json next to them (same key rule as run.py).
 Only the new version is measured, so a PR that only deletes lines has no changed lines (reported as n/a).
 
-CLI:  python3 pipeline/coverage_loop.py <target> (--pr N | --merge SHA) [--parent SHA] [--docker] [--std c++17]
+CLI:  python3 pipeline/coverage_loop.py <target> (--pr N | --merge SHA) [--parent SHA] [--docker] [--std STD]
           [--timeout 10] [--compile-timeout 180] [--jobs 4] [--tests-dir DIR] [--context]
       --context also prints the refine prompt context. Runs in the same container as run.py with --docker (gcov from the image).
 """
@@ -224,6 +224,14 @@ def loop(env, tests_dir, a, refine=None, rounds=1):
                              "covered": sum(map(len, t["covered"].values()))} for n, t in per_test.items()}}
 
 
+def default_std(target, pr):
+    """The per-PR C++ standard (pipeline/common.pr_std). Imported here, not at the top: workers run this file inside
+    the container, where only pipeline/ is mounted and no target config is needed."""
+    sys.path.insert(0, str(ROOT))
+    from pipeline.common import Target, pr_std
+    return pr_std(Target(target), pr)
+
+
 def main():
     ap = argparse.ArgumentParser(description=__doc__.split("\n\n")[0])
     ap.add_argument("target", nargs="?")
@@ -231,7 +239,7 @@ def main():
     ap.add_argument("--merge")
     ap.add_argument("--parent")
     ap.add_argument("--docker", action="store_true")
-    ap.add_argument("--std", default="c++17")
+    ap.add_argument("--std", help="C++ standard (default: chosen per PR, see common.pr_std)")
     ap.add_argument("--timeout", type=float, default=10)
     ap.add_argument("--compile-timeout", type=float, default=180)
     ap.add_argument("--jobs", type=int, default=4)
@@ -249,6 +257,7 @@ def main():
         return worker(a)
     if not a.target or not (a.pr or a.merge):
         ap.error("need <target> and --pr or --merge")
+    a.std = a.std or default_std(a.target, a.pr)
     from env import prepare
     env = prepare(a.target, a.pr, a.merge, a.parent, a.docker)
     if env.new_lib:

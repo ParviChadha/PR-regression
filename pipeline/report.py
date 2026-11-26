@@ -108,7 +108,8 @@ def collect_pr(tests_dir):
            "differing": status.get("output_diff", 0) + status.get("compile_diff", 0),
            "repairs": sum(1 for e in entries if e.get("fixes")),
            "llm_calls_est": 1 + len(fix_rounds) + len(refine_rounds) + (1 if cls and cls.get("model") else 0),
-           "wall_seconds": res_doc.get("wall_seconds"), "classification": None, "coverage": None}
+           "wall_seconds": res_doc.get("wall_seconds"), "std": res_doc.get("std", "c++17"),
+           "classification": None, "coverage": None}
     if cls:
         rec["classification"] = {"clusters": [{k: c[k] for k in ("id", "status", "failed_on", "programs", "verdict", "confidence", "reason")}
                                               for c in cls["clusters"]],
@@ -164,6 +165,7 @@ def summarize(prs, seeded):
                                           "last_mean": round(100 * sum(c["last"] for c in cov) / len(cov), 1)},
         "llm_calls": {"total_est": sum_("llm_calls_est"), "per_pr_mean": round(sum_("llm_calls_est") / len(prs), 1) if prs else None},
         "wall_seconds_total": round(sum(p["wall_seconds"] or 0 for p in prs), 1),
+        "std": {k: sum(1 for p in prs if p.get("std", "c++17") == k) for k in sorted({p.get("std", "c++17") for p in prs})},
         "seeded": {"rows": seed_rows, "recall": None if not seeded_bad else
                    f"{sum(1 for r in seeded_bad if r['flagged'])}/{len(seeded_bad)}"},
     }
@@ -210,6 +212,9 @@ def render(target, prs, s, ev=None):
     if s["coverage"]:
         L.append(f"| Changed-line coverage before / after the loop (mean over {s['coverage']['prs']} PRs) | "
                  f"{s['coverage']['first_mean']}% / {s['coverage']['last_mean']}% |")
+    if len(s.get("std", {})) > 1:
+        L.append("| C++ standard the programs were compiled with | "
+                 + ", ".join(f"{k}: {n} PR(s)" for k, n in s["std"].items()) + " |")
     L += [f"| LLM calls (estimated) | {s['llm_calls']['total_est']} total, {s['llm_calls']['per_pr_mean']} per PR |",
           f"| Wall time of the run.py stage | {s['wall_seconds_total']} s |", ""]
     by_pr_cov = {p["pr"]: p["coverage"] for p in prs}
@@ -230,7 +235,8 @@ def render(target, prs, s, ev=None):
         verdict = verdict_text(p)
         cov = "n/a" if not p["coverage"] or p["coverage"]["last"] is None else f"{100 * p['coverage']['last']:.0f}% of {p['coverage']['measurable']} lines"
         counts = ", ".join(f"{k} {n}" for k, n in sorted(p["status"].items()))
-        L.append(f"| #{p['pr']} | {p['generated']} ({p['in_use']}) | {p['final_compile_new']}/{p['in_use']} / {p['final_compile_both']}/{p['in_use']} | "
+        std = "" if p.get("std", "c++17") == "c++17" else f" ({p['std']})"
+        L.append(f"| #{p['pr']}{std} | {p['generated']} ({p['in_use']}) | {p['final_compile_new']}/{p['in_use']} / {p['final_compile_both']}/{p['in_use']} | "
                  f"{counts} | {p['differing']} | {verdict} | {cov} | {p['llm_calls_est']} |")
     for p in sorted(prs, key=lambda p: p["pr"]):
         cls = p["classification"]

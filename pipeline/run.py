@@ -15,7 +15,7 @@ Per-test status:
   invalid       fails to compile on both, or times out on both          -> dropped (fix.py may repair compile errors)
 
 CLI:  python3 pipeline/run.py <target> (--pr N | --merge SHA) [--parent SHA] [--docker]
-          [--std c++17] [--runs 3] [--timeout 10] [--compile-timeout 180] [--jobs 4] [--tests-dir DIR]
+          [--std STD] [--runs 3] [--timeout 10] [--compile-timeout 180] [--jobs 4] [--tests-dir DIR]
 --docker runs each version's batch in its own container (image prh-<target>, no network, memory-limited);
 without it the batch runs on the host with host g++ (cmake targets such as duckdb need --docker: their library is built
 in the container, and generated tests link against it). The same file runs inside the container as the worker
@@ -194,6 +194,14 @@ def run_pr(a):
     print(f"summary: {counts}\nwrote {tests_dir / 'results.json'}")
 
 
+def default_std(target, pr):
+    """The per-PR C++ standard (pipeline/common.pr_std). Imported here, not at the top: workers run this file inside
+    the container, where only pipeline/ is mounted and no target config is needed."""
+    sys.path.insert(0, str(ROOT))
+    from pipeline.common import Target, pr_std
+    return pr_std(Target(target), pr)
+
+
 def main():
     ap = argparse.ArgumentParser(description=__doc__.split("\n\n")[0])
     ap.add_argument("target", nargs="?")
@@ -201,7 +209,7 @@ def main():
     ap.add_argument("--merge")
     ap.add_argument("--parent")
     ap.add_argument("--docker", action="store_true")
-    ap.add_argument("--std", default="c++17")
+    ap.add_argument("--std", help="C++ standard (default: chosen per PR, see common.pr_std)")
     ap.add_argument("--runs", type=int, default=3)
     ap.add_argument("--timeout", type=float, default=10)
     ap.add_argument("--compile-timeout", type=float, default=180)
@@ -218,6 +226,7 @@ def main():
         return worker(a)
     if not a.target or not (a.pr or a.merge):
         ap.error("need <target> and --pr or --merge")
+    a.std = a.std or default_std(a.target, a.pr)
     run_pr(a)
 
 

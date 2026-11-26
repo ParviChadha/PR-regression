@@ -38,7 +38,7 @@ HERE = Path(__file__).resolve().parent
 ROOT = HERE.parent
 sys.path.insert(0, str(HERE))
 sys.path.insert(0, str(ROOT))
-from pipeline.common import Target, git, read_jsonl, write_text  # noqa: E402
+from pipeline.common import Target, git, pr_std, read_jsonl, write_text  # noqa: E402
 import llm  # noqa: E402
 
 CAP = {"body": 4000, "comment": 1200, "comments": 6, "issue": 2000, "issues": 3, "diff": 24000, "context": 8000}
@@ -180,14 +180,22 @@ def extra_header_lines(t, rec):
     return ["", "## Headers the programs must include"] + out if out else []
 
 
-def system_prompt(t):
+def std_label(std):
+    """"c++20" -> "C++20" (also gnu++20 -> GNU++20), as the prompt names the standard."""
+    return std.upper()
+
+
+def system_prompt(t, std="c++17"):
+    """The generation system prompt. It names the standard the programs are compiled with (pipeline/common.pr_std);
+    for C++17 the text is exactly the original, so earlier prompts, hashes and cached responses stay valid."""
     notes = (t.get("prompt_notes", "") or "").strip()
-    return SYSTEM + (f"\n\nRules specific to this library:\n{notes}" if notes else "")
+    system = SYSTEM if std == "c++17" else SYSTEM.replace("compiled as C++17", f"compiled as {std_label(std)}")
+    return system + (f"\n\nRules specific to this library:\n{notes}" if notes else "")
 
 
 def build_generate_prompt(t, rec, gh, n):
     section, stats = pr_section(t, rec, gh)
-    return system_prompt(t), (
+    return system_prompt(t, pr_std(t, rec["pr"])), (
         f"{section}\n\n# Task\nWrite {n} test programs for this pull request. Return JSON with a \"tests\" array; each "
         f"item has \"name\" (short snake_case), \"intent\" (one sentence: what behavior it probes) and \"code\" "
         f"(the complete C++ program)."), stats
@@ -196,7 +204,7 @@ def build_generate_prompt(t, rec, gh, n):
 def build_refine_prompt(t, rec, gh, existing, context, k):
     section, _ = pr_section(t, rec, gh)
     have = "\n".join(f"- {e['file']}: {e['intent']}" for e in existing)
-    return system_prompt(t), (
+    return system_prompt(t, pr_std(t, rec["pr"])), (
         f"{section}\n\n# Programs written so far\n{have}\n\n# Changed lines that no program reached\n"
         f"Lines marked >> are changed by the PR and were never executed by the programs above (\"NOT RUN\"), or have no "
         f"generated code at all (\"NO CODE / NOT INSTANTIATED\": for example a template that no program instantiated, or a "
@@ -300,7 +308,7 @@ def generate(t, pr, args, tests_dir=None):
     entries = write_tests(tests_dir, progs, 1, r["model"], pr, 0)
     remove_stale(tests_dir, {e["file"] for e in entries})
     manifest = {"target": t.name, "pr": pr, "model": r["model"], "prompt_sha256": hashlib.sha256(
-        (system + prompt).encode()).hexdigest(), "n_requested": args.n, "dropped": dropped,
+        (system + prompt).encode()).hexdigest(), "n_requested": args.n, "std": pr_std(t, pr), "dropped": dropped,
         "usage": r.get("usage"), "tests": entries}
     save_manifest(tests_dir, manifest)
     print(f"wrote {len(entries)} programs to {tests_dir} ({'cache' if r['cached'] else 'API'}; {dropped} unusable dropped; "
@@ -349,12 +357,13 @@ def main():
                     help="skip generation: run the coverage loop and one refine round on the programs already in the folder")
     ap.add_argument("--refine-n", type=int, default=5)
     ap.add_argument("--docker", action="store_true", help="with --refine/--refine-only: build/measure in the container")
-    ap.add_argument("--std", default="c++17")
+    ap.add_argument("--std", help="C++ standard for the coverage build (default: chosen per PR, see common.pr_std)")
     ap.add_argument("--timeout", type=float, default=10)
     ap.add_argument("--compile-timeout", type=float, default=180)
     ap.add_argument("--jobs", type=int, default=4)
     args = ap.parse_args()
     t = Target(args.target)
+    args.std = args.std or pr_std(t, args.pr)
     try:
         if args.refine_only:
             tests_dir = t.data / "tests" / str(args.pr)

@@ -17,6 +17,10 @@ where it stopped (LLM responses are also cached by request, so an interrupted st
   fix       done when fix.py has run (manifest "fix") or made repairs, or nothing is left to repair
   classify  done when classification.json was made from the current results.json (fingerprint match)
 Once any stage actually runs for a PR, every later stage for that PR runs too (its input changed).
+C++ standard: chosen per PR by common.pr_std (C++20 when every changed entity exists only under -std=c++20, else the
+target's default_std, c++17). Each stage script picks it itself; generated.json, coverage.json and results.json record
+it, and a stage made with a different standard counts as not done, so a PR whose standard changes is redone from
+generate (its programs were written for the other standard).
 
 Each stage runs as its own process (pipeline/<stage>.py), so one PR's failure cannot take the batch down; its output goes
 to cache/logs/<target>/<pr>.log (tail -f it to watch the 503 retries). Exit code 3 from a stage means the daily LLM
@@ -41,7 +45,7 @@ HERE = Path(__file__).resolve().parent
 ROOT = HERE.parent
 sys.path.insert(0, str(HERE))
 sys.path.insert(0, str(ROOT))
-from pipeline.common import Target, read_jsonl  # noqa: E402
+from pipeline.common import Target, pr_std, read_jsonl  # noqa: E402
 import fix  # noqa: E402
 import llm  # noqa: E402
 
@@ -57,16 +61,25 @@ def load(path):
 
 
 # ---------------------------------------------------------------- what is done
-def stage_done(stage, tests_dir):
+def same_std(doc, std):
+    """True when `doc` (generated.json, coverage.json or results.json) was made with C++ standard `std`. Files from
+    before the standard was chosen per PR carry no "std" and were all made as C++17. std None: do not check."""
+    return std is None or (doc or {}).get("std", "c++17") == std
+
+
+def stage_done(stage, tests_dir, std=None):
+    """std: the C++ standard this PR's programs must use (common.pr_std). A stage done with another standard is not
+    done: the programs were written for, or compiled as, the wrong language version."""
     d = Path(tests_dir)
     manifest, results = load(d / "generated.json"), load(d / "results.json")
     if stage == "generate":
-        return manifest is not None
+        return manifest is not None and same_std(manifest, std)
     if stage == "refine":
         cov = load(d / "coverage.json")
-        return bool(manifest and cov and cov.get("history"))
+        return bool(manifest and cov and cov.get("history")) and same_std(cov, std)
     if stage == "run":
-        return bool(manifest and results) and {p.name for p in d.glob("*.cpp")} <= set(results["tests"])
+        return (bool(manifest and results) and {p.name for p in d.glob("*.cpp")} <= set(results["tests"])
+                and same_std(results, std))
     if stage == "fix":
         if not (manifest and results):
             return False
@@ -89,13 +102,13 @@ def nothing_to_fix(tests_dir):
     return not (manifest and results) or not fix.pick(manifest, results["tests"], 1)
 
 
-def pending_stages(tests_dir, redo=(), stages=STAGES):
+def pending_stages(tests_dir, redo=(), stages=STAGES, std=None):
     """Stages that must run for this PR, in order (each stage that runs makes all later ones run)."""
     redo, out, forced = set(redo), [], False
     if "generate" in redo:
         redo |= set(STAGES)
     for st in stages:
-        if forced or st in redo or not stage_done(st, tests_dir):
+        if forced or st in redo or not stage_done(st, tests_dir, std):
             out.append(st)
             forced = True
     return out
@@ -160,12 +173,13 @@ def batch(t, rows, args, runner=run_stage, say=print, data_dir=None, log_dir=Non
         if not args.skip_commit_check and not commits_present(t.repo, r):
             out["skipped"][r["pr"]] = "commit missing locally: git -C repos/<target> fetch origin"
             continue
-        st = pending_stages(td, redo, stages)
+        std = pr_std(t, r["pr"])
+        st = pending_stages(td, redo, stages, std)
         if st:
-            plan.append((r["pr"], td, st))
+            plan.append((r["pr"], td, st, std))
     if args.limit:
         plan = plan[:args.limit]
-    worst = sum(LLM_STAGES.get(s, 0) for _, _, st in plan for s in st)
+    worst = sum(LLM_STAGES.get(s, 0) for _, _, st, _ in plan for s in st)
     left = None
     try:
         left = llm.limits(args.model)[1] - llm.calls_today(args.model)
@@ -176,10 +190,10 @@ def batch(t, rows, args, runner=run_stage, say=print, data_dir=None, log_dir=Non
     for pr, why in out["skipped"].items():
         say(f"  #{pr}: skipped, {why}")
     if args.dry_run:
-        for pr, _, st in plan:
-            say(f"  #{pr}: would run {', '.join(st)}")
+        for pr, _, st, std in plan:
+            say(f"  #{pr}: would run {', '.join(st)}" + (f" (as {std})" if std != t.get("default_std", "c++17") else ""))
         return out
-    for pr, td, st in plan:
+    for pr, td, st, std in plan:
         if len(out["failed"]) >= args.max_failures:
             say(f"stopping: {len(out['failed'])} PRs failed (see cache/logs); fix the cause and rerun")
             break
@@ -201,7 +215,8 @@ def batch(t, rows, args, runner=run_stage, say=print, data_dir=None, log_dir=Non
             done.append(f"{stage} {time.time() - s0:.0f}s")
         else:
             out["ok"].append(pr)
-            say(f"#{pr}: {', '.join(done)} | {verdict_line(td)} ({time.time() - t0:.0f}s)")
+            say(f"#{pr}: {', '.join(done)} | {verdict_line(td)} ({time.time() - t0:.0f}s"
+                + (f", {std}" if std != t.get("default_std", "c++17") else "") + ")")
         out["ran"] += 1
         if out["quota_stop"]:
             break

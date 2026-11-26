@@ -2,7 +2,7 @@
 """Repair pass (pipeline stage "Fix"): make generated programs that are wasted or half-informative useful again.
 
 Usage:  python3 pipeline/fix.py <target> --pr N [--rounds 2] [--max-per-round 15] [--per-signature 4] [--model M] [--dry-run] [--force]
-                                [--docker] [--std c++17] [--runs 3] [--timeout 10] [--compile-timeout 180] [--jobs 4]
+                                [--docker] [--std STD] [--runs 3] [--timeout 10] [--compile-timeout 180] [--jobs 4]
 Run generate.py and run.py first (needs data/<t>/tests/<pr>/generated.json and results.json). Needs GEMINI_API_KEY
 (in .env or exported) unless every response is cached.
 
@@ -33,7 +33,7 @@ HERE = Path(__file__).resolve().parent
 ROOT = HERE.parent
 sys.path.insert(0, str(HERE))
 sys.path.insert(0, str(ROOT))
-from pipeline.common import Target, write_text  # noqa: E402
+from pipeline.common import Target, pr_std, write_text  # noqa: E402
 import generate  # noqa: E402
 import llm  # noqa: E402
 import run  # noqa: E402
@@ -117,7 +117,7 @@ def build_prompt(t, rec, gh, tests_dir, items):
     parts += ["# Task", "Return JSON with a \"fixes\" array: one item per program above, with \"file\" (exactly as given) "
               "and \"code\" (the complete repaired program, standalone, with its own int main). Do not return programs "
               "you cannot repair."]
-    return generate.system_prompt(t), "\n".join(parts)
+    return generate.system_prompt(t, pr_std(t, rec["pr"])), "\n".join(parts)
 
 
 def parse_fixes(text, wanted):
@@ -238,14 +238,16 @@ def main():
     ap.add_argument("--dry-run", action="store_true", help="list candidates and save the prompt, make no request")
     ap.add_argument("--force", action="store_true", help="ignore the response cache (costs a request)")
     ap.add_argument("--docker", action="store_true")
-    ap.add_argument("--std", default="c++17")
+    ap.add_argument("--std", help="C++ standard (default: chosen per PR, see common.pr_std)")
     ap.add_argument("--runs", type=int, default=3)
     ap.add_argument("--timeout", type=float, default=10)
     ap.add_argument("--compile-timeout", type=float, default=180)
     ap.add_argument("--jobs", type=int, default=4)
     args = ap.parse_args()
+    t = Target(args.target)
+    args.std = args.std or pr_std(t, args.pr)
     try:
-        fix(Target(args.target), args.pr, args)
+        fix(t, args.pr, args)
     except llm.QuotaExhausted as e:
         print(f"fix.py: {e}", file=sys.stderr)
         sys.exit(3)

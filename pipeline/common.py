@@ -30,6 +30,28 @@ class Target:
         return self.cfg.get(key, default)
 
 
+def pr_std(t, pr):
+    """The C++ standard to compile PR `pr`'s generated programs with (e.g. "c++17", "c++20").
+
+    changes.py marks changed entities that exist only under an `analysis_variants` flag set containing -std=...
+    ("requires_flags", e.g. code inside `#if JSON_HAS_CPP_20`). When EVERY changed entity needs the same standard, the
+    programs are compiled with it; otherwise (no changes file, no entities, a mix, or nothing marked) the target's
+    `default_std` (default c++17). Without this a C++20-only change compiled as C++17 is never reached, and the PR
+    looks like "no difference" when it was never tested (#6075 in nlohmann/json)."""
+    default = t.get("default_std", "c++17")
+    if pr is None:
+        return default
+    try:
+        funcs = json.loads((t.data / "changes" / f"{pr}.json").read_text(encoding="utf-8")).get("functions", [])
+    except (OSError, ValueError):
+        return default
+    stds = set()
+    for f in funcs:
+        flagged = [x[len("-std="):] for x in f.get("requires_flags", []) if x.startswith("-std=")]
+        stds.add(flagged[0] if flagged else default)
+    return stds.pop() if len(stds) == 1 else default
+
+
 def git(repo, *args, check=True):
     """Run git in repo and return stdout as text."""
     r = subprocess.run(["git", "-C", str(repo), *args], capture_output=True, text=True,
