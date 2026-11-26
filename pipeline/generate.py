@@ -159,6 +159,7 @@ def pr_section(t, rec, gh):
     if kept:
         out += ["", "## Discussion before merge"]
         out += [f"- {c.get('user', {}).get('login', '?')}: {clip(c.get('body', ''), CAP['comment'])}" for c in kept[:CAP["comments"]]]
+    out += extra_header_lines(t, rec)
     out += ["", f"## Changed functions (from {src})"] + [f"- {f}" for f in funcs] if funcs else []
     out += ["", "## Diff of the library source (before -> after)", "```diff", source_diff(t, rec), "```"]
     ctx = t.data / "context" / f"{rec['pr']}.txt"
@@ -166,6 +167,17 @@ def pr_section(t, rec, gh):
         out += ["", "## Existing upstream tests that call the changed code (for style and API usage)",
                 clip(ctx.read_text(encoding="utf-8"), CAP["context"])]
     return "\n".join(out), {"comments_kept": len(kept), "comments_dropped_after_merge": dropped}
+
+
+def extra_header_lines(t, rec):
+    """Prompt lines for target.toml `extra_headers` rules whose `when` (path fragments) match a changed library file.
+    Needed when part of the public API lives in a header the main one does not include (json_view in nlohmann/json)."""
+    files = list(rec.get("main_files", [])) + list(rec.get("deleted_main_files", []))
+    out = []
+    for rule in t.get("extra_headers", []) or []:
+        if any(frag in f for frag in rule["when"] for f in files):
+            out.append(f"- Also write #include <{rule['header']}>. {rule['note']}")
+    return ["", "## Headers the programs must include"] + out if out else []
 
 
 def system_prompt(t):
