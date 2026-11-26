@@ -1,0 +1,25 @@
+// Upstream tests at the PR's parent commit 371dc6d73 that use the changed code.
+// Names searched (test lines using each): duckdb_v2_value_create_decimal (0); no SQL name matched, so SQL tests were picked by the changed files' paths
+
+// ---- test/fuzzer/pedro/first_value_window_crash.test:8-11  (uses: path:value)
+statement ok
+CREATE TABLE t1 (c0 INT);
+
+query I
+SELECT first_value((1 || mode() WITHIN GROUP (ORDER BY 1)) IGNORE NULLS) OVER () FROM t1;
+----
+NULL
+
+// ---- test/fuzzer/sqlsmith/window-list-value.test:9-16  (uses: path:value)
+statement ok
+create table all_types as select * exclude(small_enum, medium_enum, large_enum)
+from test_all_types();
+
+query I
+SELECT first_value(c40) OVER (PARTITION BY c42 ROWS BETWEEN GREATEST(COALESCE(#4, 0), 0) FOLLOWING AND UNBOUNDED FOLLOWING)
+FROM all_types AS t42(c1, c2, c3, c4, c5, c6, c7, c8, c9, c10, c11, c12, c13, c14, c15, c16, c17, c18, c19, c20, c21, c22, c23, c24, c25, c26, c27, c28, c29, c30, c31, c32, c33, c34, c35, c36, c37, c38, c39, c40, c41, c42)
+ORDER BY ALL
+----
+{'a': NULL, 'b': NULL}
+NULL
+NULL

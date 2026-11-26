@@ -1,0 +1,135 @@
+// Upstream tests at the PR's parent commit bb160524c that use the changed code.
+// Names searched (test lines using each): CreateFilterFromJoinStats (0), PropagateStatistics (5), GetFilterColumn (0); no SQL name matched, so SQL tests were picked by the changed files' paths
+
+// ---- test/optimizer/statistics/current_domain_join.test:59-69  (uses: path:join, path:optimizer, path:statistics)
+statement ok
+CREATE TABLE domain_join_large AS SELECT range::INTEGER k FROM range(1000);
+
+statement ok
+CREATE TABLE domain_join_sparse AS SELECT ((range % 100) * 10)::INTEGER k FROM range(1000);
+
+statement ok
+CREATE TABLE domain_join_small AS SELECT ((range % 20) * 50)::INTEGER k FROM range(1000);
+
+query I
+SELECT count(*)
+FROM (
+	SELECT domain_join_large.k
+	FROM domain_join_large
+	JOIN domain_join_sparse USING (k)
+	JOIN domain_join_small USING (k)
+	GROUP BY domain_join_large.k
+) groups;
+----
+20
+
+// ---- test/optimizer/statistics/current_domain_join.test:123-132  (uses: path:join, path:optimizer, path:statistics)
+statement ok
+CREATE TABLE domain_join_null_large AS
+SELECT CASE WHEN range = 0 THEN NULL ELSE range::INTEGER END k FROM range(1000);
+
+statement ok
+CREATE TABLE domain_join_null_small AS
+SELECT CASE WHEN range = 0 THEN NULL ELSE range::INTEGER END k FROM range(101);
+
+query I
+SELECT count(*)
+FROM (
+	SELECT lhs.k
+	FROM domain_join_null_large lhs
+	JOIN domain_join_null_small rhs ON lhs.k = rhs.k
+	GROUP BY lhs.k
+) groups;
+----
+100
+
+// ---- test/optimizer/statistics/positive_join_cardinality.test:22-32  (uses: path:join, path:optimizer, path:statistics)
+statement ok
+CREATE TABLE positive_join_input AS SELECT i::INTEGER k FROM range(100) r(i);
+
+query I
+WITH c AS MATERIALIZED (
+	SELECT a.k
+	FROM positive_join_input a
+	JOIN positive_join_input b USING (k)
+	JOIN positive_join_input c USING (k)
+	WHERE a.k % 10 = 5 AND b.k % 10 = 5 AND c.k % 10 = 5
+)
+SELECT count(*) FROM c c1 JOIN c c2 USING (k);
+----
+10
+
+// ---- test/optimizer/statistics/right_semi_join_filter.test:20-23  (uses: path:join, path:optimizer, path:statistics)
+statement ok
+CREATE TABLE probe(k INTEGER);
+
+statement ok
+INSERT INTO probe VALUES (5), (7), (NULL), (200000);
+
+statement ok
+CREATE TABLE build AS SELECT i::INTEGER AS k FROM range(100000) r(i) UNION ALL SELECT NULL;
+
+query II
+EXPLAIN SELECT count(*) FROM probe WHERE k IN (SELECT k FROM build GROUP BY k);
+----
+physical_plan	<REGEX>:.*RIGHT_SEMI.*Hash Group By.*Filters: k <= 99999.*Filters: k >= 5.*
+
+// ---- test/optimizer/statistics/right_semi_join_filter.test:25-28  (uses: path:join, path:optimizer, path:statistics)
+statement ok
+CREATE TABLE probe(k INTEGER);
+
+statement ok
+INSERT INTO probe VALUES (5), (7), (NULL), (200000);
+
+statement ok
+CREATE TABLE build AS SELECT i::INTEGER AS k FROM range(100000) r(i) UNION ALL SELECT NULL;
+
+query I
+SELECT count(*) FROM probe WHERE k IN (SELECT DISTINCT k FROM build);
+----
+2
+
+// ---- test/optimizer/unchecked_cast.cpp:143-185  (uses: PropagateStatistics)
+TEST_CASE("Cast statistics only specialize proven native integer ranges", "[optimizer][cast]") {
+	auto checked_cast = GetDefaultCast(LogicalType::BIGINT, LogicalType::TINYINT);
+	REQUIRE(checked_cast.HasStatisticsCallback());
+
+	auto safe_stats = CreateNumericStats(LogicalType::BIGINT, Value::BIGINT(-128), Value::BIGINT(127));
+	auto safe_cast = checked_cast.Copy();
+	auto propagated = safe_cast.PropagateStatistics(LogicalType::BIGINT, LogicalType::TINYINT, safe_stats);
+	REQUIRE(propagated);
+	REQUIRE(NumericStats::Min(*propagated) == Value::TINYINT(-128));
+	REQUIRE(NumericStats::Max(*propagated) == Value::TINYINT(127));
+	REQUIRE(safe_cast.Equals(checked_cast) != UNCHECKED_CASTS_ENABLED);
+
+	auto all_null_stats = NumericStats::CreateEmpty(LogicalType::BIGINT);
+	all_null_stats.Set(StatsInfo::CAN_HAVE_NULL_VALUES);
+	auto all_null_cast = checked_cast.Copy();
+	auto all_null_result = all_null_cast.PropagateStatistics(LogicalType::BIGINT, LogicalType::TINYINT, all_null_stats);
+	REQUIRE(all_null_result);
+	REQUIRE(all_null_result->CanHaveNull());
+	REQUIRE(!all_null_result->CanHaveNoNull());
+	REQUIRE(all_null_cast.Equals(checked_cast) != UNCHECKED_CASTS_ENABLED);
+
+	// Re-running propagation with unsafe statistics must restore the checked implementation.
+	auto unsafe_stats = CreateNumericStats(LogicalType::BIGINT, Value::BIGINT(-129), Value::BIGINT(127));
+	REQUIRE(!safe_cast.PropagateStatistics(LogicalType::BIGINT, LogicalType::TINYINT, unsafe_stats));
+	REQUIRE(safe_cast.Equals(checked_cast));
+
+	auto boolean_cast = GetDefaultCast(LogicalType::INTEGER, LogicalType::BOOLEAN);
+	auto boolean_stats = CreateNumericStats(LogicalType::INTEGER, Value::INTEGER(0), Value::INTEGER(1));
+	auto checked_boolean_cast = boolean_cast.Copy();
+	REQUIRE(!boolean_cast.PropagateStatistics(LogicalType::INTEGER, LogicalType::BOOLEAN, boolean_stats));
+	REQUIRE(boolean_cast.Equals(checked_boolean_cast));
+
+	auto hugeint_cast = GetDefaultCast(LogicalType::HUGEINT, LogicalType::TINYINT);
+	REQUIRE(hugeint_cast.HasStatisticsCallback());
+	auto floating_cast = GetDefaultCast(LogicalType::DOUBLE, LogicalType::TINYINT);
+	REQUIRE(floating_cast.HasStatisticsCallback());
+
+	auto copy = checked_cast.Copy();
+	REQUIRE(copy.Equals(checked_cast));
+	copy.SetFunction(DefaultCasts::NopCast);
+	REQUIRE(!copy.HasStatisticsCallback());
+	REQUIRE(!copy.Equals(checked_cast));
+}

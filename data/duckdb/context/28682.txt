@@ -1,0 +1,176 @@
+// Upstream tests at the PR's parent commit e5cad367e that use the changed code.
+// Names searched (test lines using each): Finalize (11), InsertHashesLoop (0), InsertRowToEntry (0), LoadEntryConcurrent (0); no SQL name matched, so SQL tests were picked by the changed files' paths
+
+// ---- test/fuzzer/afl/random_join.test:8-10  (uses: path:join)
+statement ok
+CREATE TABLE t1(c1 INT);
+
+query II
+SELECT * FROM (SELECT 1) JOIN t1 ON random();
+----
+
+// ---- test/fuzzer/duckfuzz/complex_join_cardinality_assert.test:8-10  (uses: path:join)
+statement ok
+create table integers(i int);
+
+query I
+SELECT NULL FROM integers AS t1 RIGHT JOIN integers AS t2 ON (NULL) WHERE EXISTS(SELECT NULL FROM integers AS t3 INNER JOIN integers ON ((t3.i + t1.i)) , (SELECT t2.i AS c0))
+----
+
+// ---- test/api/capi/v1/test_capi_arrow.cpp:250-274  (uses: Finalize)
+			auto data_chunks = std::vector<DataChunk>(num_buffers);
+			for (int i = 0; i < num_buffers; i++) {
+				auto data_chunk = &data_chunks[i];
+				data_chunk->Initialize(allocator, logical_types, STANDARD_VECTOR_SIZE);
+				auto &col = data_chunk->data[0];
+				for (idx_t row = 0; row < STANDARD_VECTOR_SIZE; row++) {
+					col.Append(duckdb::Value(i));
+				}
+				data_chunk->SetChildCardinality(STANDARD_VECTOR_SIZE);
+				appender.Append(*data_chunk, 0, data_chunk->size(), data_chunk->size());
+			}
+
+			*arrow_array_ptr = appender.Finalize();
+
+			// Create the view.
+			string view_name = "foo_table";
+
+			// arrow array scan, destroy out_stream after use
+			ArrowArrayStream *arrow_array_stream;
+			auto out_stream = reinterpret_cast<duckdb_arrow_stream *>(&arrow_array_stream);
+			auto state = duckdb_arrow_array_scan(tester.connection, view_name.c_str(),
+			                                     reinterpret_cast<duckdb_arrow_schema>(arrow_schema_ptr),
+			                                     reinterpret_cast<duckdb_arrow_array>(arrow_array_ptr), out_stream);
+			REQUIRE(state == DuckDBSuccess);
+
+
+// ---- test/api/test_copy_output_lifecycle.cpp:493-517  (uses: Finalize)
+	REQUIRE(sink_first(9) == SinkResultType::NEED_MORE_INPUT);
+	OperatorSinkCombineInput first_combine {*copy.sink_state, *first_local, interrupt};
+	REQUIRE(copy.Combine(first_context, first_combine) == SinkCombineResultType::FINISHED);
+	REQUIRE(second_task->wakeups > 0);
+	REQUIRE(copy.Combine(second_context, second_combine) == SinkCombineResultType::FINISHED);
+
+	auto &executor = Executor::Get(context);
+	auto pipeline = make_shared_ptr<Pipeline>(executor);
+	auto event = make_shared_ptr<BackpressureEvent>(executor);
+	auto completed = make_shared_ptr<BackpressureEvent>(executor);
+	completed->AddDependency(*event);
+	OperatorSinkFinalizeInput finalize_input {*copy.sink_state, interrupt};
+	REQUIRE(copy.Finalize(*pipeline, *event, context, finalize_input) == SinkFinalizeType::READY);
+	event->Finish();
+	while (!completed->IsFinished() && !executor.HasError()) {
+		executor.WorkOnTasks();
+	}
+	if (executor.HasError()) {
+		executor.ThrowException();
+	}
+	std::sort(info->rows.begin(), info->rows.end());
+	REQUIRE(info->rows.size() == 10 * STANDARD_VECTOR_SIZE);
+	for (idx_t i = 0; i < info->rows.size(); i++) {
+		REQUIRE(info->rows[i] == NumericCast<int64_t>(i));
+	}
+
+// ---- test/api/test_retained_result_collection.cpp:64-107  (uses: Finalize)
+TEST_CASE("Combine flushes the local's partial unit and keeps each producer's order", "[api][retained_collection]") {
+	DuckDB db(nullptr);
+	Connection con(db);
+	TestFormat format(1000000);
+	auto format_context = MakeFormatContext(con.context->GetClientProperties(), ResultOrdering::UNORDERED);
+	auto gstate = format.InitGlobal(format_context);
+
+	DefaultRetainedCollection<TestFormat> local_a(format, *gstate);
+	for (idx_t offset = 0; offset < 1000; offset += 250) {
+		auto chunk = MakeChunk(offset, 250);
+		local_a.Append(*chunk, 0);
+	}
+	DefaultRetainedCollection<TestFormat> local_b(format, *gstate);
+	for (idx_t offset = 1000; offset < 2000; offset += 250) {
+		auto chunk = MakeChunk(offset, 250);
+		local_b.Append(*chunk, 0);
+	}
+	// Neither local ever reached the cap, so each still holds its rows as one partial unit
+	REQUIRE(local_a.Count() == 0);
+	REQUIRE(local_b.Count() == 0);
+
+	DefaultRetainedCollection<TestFormat> global(format, *gstate);
+	global.Combine(local_b);
+	global.Combine(local_a);
+	global.Finalize();
+
+	REQUIRE(global.Count() == 2000);
+	// Only the producers built a local state: the global instance never receives a chunk
+	REQUIRE(gstate->Cast<TestFormatGlobalState>().local_states == 2);
+	vector<int64_t> a_values;
+	vector<int64_t> b_values;
+	for (auto &payload : global.Get()) {
+		auto values = PayloadValues(*payload);
+		for (auto value : values) {
+			if (value < 1000) {
+				a_values.push_back(value);
+			} else {
+				b_values.push_back(value);
+			}
+		}
+	}
+	REQUIRE(a_values == Ascending(0, 1000));
+	REQUIRE(b_values == Ascending(1000, 1000));
+}
+
+// ---- test/api/test_retained_result_collection.cpp:109-137  (uses: Finalize)
+TEST_CASE("A batch index change flushes the partial unit under the old batch", "[api][retained_collection]") {
+	DuckDB db(nullptr);
+	Connection con(db);
+	TestFormat format(1000000);
+	auto format_context = MakeFormatContext(con.context->GetClientProperties(), ResultOrdering::BATCH_INDEX_ORDERED);
+	auto gstate = format.InitGlobal(format_context);
+
+	DefaultRetainedCollection<TestFormat> local(format, *gstate);
+	for (auto batch : {0, 1, 2}) {
+		auto base = NumericCast<idx_t>(batch) * 1000;
+		auto chunk1 = MakeChunk(base, 100);
+		local.Append(*chunk1, NumericCast<idx_t>(batch));
+		auto chunk2 = MakeChunk(base + 100, 100);
+		local.Append(*chunk2, NumericCast<idx_t>(batch));
+	}
+
+	DefaultRetainedCollection<TestFormat> global(format, *gstate);
+	global.Combine(local);
+	global.Finalize();
+
+	REQUIRE(global.Count() == 600);
+	auto &payloads = global.Get();
+	REQUIRE(payloads.size() == 3);
+	for (idx_t batch = 0; batch < 3; batch++) {
+		auto base = batch * 1000;
+		REQUIRE(payloads[batch]->row_count == 200);
+		REQUIRE(PayloadValues(*payloads[batch]) == Ascending(base, 200));
+	}
+}
+
+// ---- test/arrow/arrow_output_version_buffers.cpp:64-88  (uses: Finalize)
+	unordered_map<idx_t, const shared_ptr<ArrowTypeExtensionData>> extension_type_cast;
+	ArrowAppender appender(types, STANDARD_VECTOR_SIZE, props, extension_type_cast);
+	idx_t count = 0;
+	while (true) {
+		auto chunk = result->Fetch();
+		if (!chunk || chunk->size() == 0) {
+			break;
+		}
+		count += chunk->size();
+		appender.Append(*chunk, 0, chunk->size(), chunk->size());
+	}
+	REQUIRE(count > 0);
+	ArrowArray array = appender.Finalize();
+
+	REQUIRE(schema.n_children == array.n_children);
+	for (int64_t i = 0; i < schema.n_children; i++) {
+		ValidateField(*schema.children[i], *array.children[i], "col[" + to_string(i) + "]");
+	}
+
+	if (array.release) {
+		array.release(&array);
+	}
+	if (schema.release) {
+		schema.release(&schema);
+	}

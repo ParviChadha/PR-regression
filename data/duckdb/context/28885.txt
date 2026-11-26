@@ -1,0 +1,44 @@
+// Upstream tests at the PR's parent commit dd158c1e4 that use the changed code.
+// Names searched (test lines using each): AutoDetectHiveTypesInternal (0); no SQL name matched, so SQL tests were picked by the changed files' paths
+
+// ---- test/sql/copy/csv/read_ahead/csv_readahead_multi_file.test:27-33  (uses: path:file, path:multi)
+query I
+SELECT count(*) FROM (
+    SELECT i, row_number() OVER () AS rn
+    FROM read_csv(['{TEST_DIR}/csv_ra_0.csv', '{TEST_DIR}/csv_ra_1.csv', '{TEST_DIR}/csv_ra_2.csv', '{TEST_DIR}/csv_ra_3.csv'])
+) WHERE i + 1 <> rn
+----
+0
+
+// ---- test/sql/copy/csv/read_ahead/csv_readahead_multi_file.test:46-49  (uses: path:file, path:multi)
+query II
+SELECT count(*), sum(j) FROM read_csv(['{TEST_DIR}/csv_ra_0.csv', '{TEST_DIR}/csv_ra_union.csv'], union_by_name=true)
+----
+101000	999000
+
+// ---- test/sql/function/table/multi_file_array_parameter.test:29-32  (uses: path:file, path:multi)
+query I
+SELECT * FROM read_csv(['{TEST_DIR}/multi_file_array.csv']::VARCHAR[1]);
+----
+42
+
+// ---- test/common/test_local_file_urls.test:84-87  (uses: path:file)
+query I
+SELECT name FROM which_secret(getvariable('work_dir_triple_slash') || '/data/csv/hive-partitioning/simple/*/*/test.csv', 'http')
+----
+secret_file_url_tripleslash
+
+// ---- test/common/test_local_file_urls.test:89-92  (uses: path:file)
+query I
+SELECT name FROM which_secret(getvariable('work_dir_localhost') || '/data/csv/hive-partitioning/simple/*/*/test.csv', 'http')
+----
+secret_file_url_localhost
+
+// ---- test/issues/fuzz/multi_rollup_assertion.test:8-11  (uses: path:multi)
+statement ok
+create table strings (a VARCHAR, b VARCHAR);
+
+query III
+select b, b, count(*) from strings group by rollup (b, b) order by 1, 2, 3;
+----
+NULL	NULL	0

@@ -10,7 +10,8 @@ For each PR in data/<t>/prs.jsonl (from collect.py):
      cache/analysis/<t>/<sha>/ (the upstream clone is only read).
   2. libclang parses each version: one translation unit including every `analysis_entries` header that exists at
      that commit (default: smoke_header), which reaches every header the library's users see; a changed file the entries do not reach
-     (for example a .cpp of a compiled library) is parsed on its own.
+     (for example a .cpp of a compiled library) is parsed on its own. -I: include_dirs plus `analysis_include_dirs`
+     (headers only the library's own sources use); exported paths: `analysis_paths` (default include_dirs).
   3. Every changed line of the -U0 diff (removed lines on the old side, added lines on the new side) is mapped to the
      innermost declaration around it: function, method, constructor, template, class, type alias, enum, variable
      or macro. Lines outside any declaration (includes, blank space between declarations) are counted as unmapped.
@@ -227,7 +228,9 @@ class Analyzer:
     def __init__(self, t, root, resdir, extra_flags=()):
         self.ci = _clang()
         self.t, self.root, self.resdir = t, Path(root), resdir
-        inc = t.get("include_dirs", t.get("main_source", ["include"]))
+        # analysis_include_dirs: extra -I dirs (relative to the export) that only the library's own .cpp files need,
+        # e.g. duckdb's third_party/*/include; generated tests do not see them, so they are not in include_dirs.
+        inc = list(t.get("include_dirs", t.get("main_source", ["include"]))) + list(t.get("analysis_include_dirs", []))
         self.args = (["-x", "c++", f"-std={t.get('analysis_std', 'c++17')}", "-resource-dir", resdir]
                      + [f"-I{self.root / d}" for d in inc] + list(t.get("analysis_flags", [])) + list(extra_flags))
         self.index = self.ci.Index.create()

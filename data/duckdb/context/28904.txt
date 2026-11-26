@@ -1,0 +1,138 @@
+// Upstream tests at the PR's parent commit ea2dd0a54 that use the changed code.
+// Names searched (test lines using each): RepartitionBatches (0), CorrectSizeForBatch (0), ROW_GROUP_SIZE_BYTES (0), ROW_GROUP_SIZE (94)
+
+// ---- test/optimizer/eager_aggregate_execution.test:11-12  (uses: ROW_GROUP_SIZE)
+statement ok
+ATTACH '{TEST_DIR}/eager_agg.duckdb' AS db (ROW_GROUP_SIZE 2048)
+
+// ---- test/optimizer/eager_aggregate_execution.test:30-31  (uses: ROW_GROUP_SIZE)
+statement ok
+ATTACH '{TEST_DIR}/eager_agg.duckdb' AS db (ROW_GROUP_SIZE 2048)
+
+// ---- test/optimizer/partial_aggregate_precomputation.test:10-11  (uses: ROW_GROUP_SIZE)
+statement ok
+ATTACH '{TEST_DIR}/partial_agg.duckdb' AS db (ROW_GROUP_SIZE 2048)
+
+// ---- test/optimizer/partial_aggregate_precomputation.test:30-31  (uses: ROW_GROUP_SIZE)
+statement ok
+ATTACH '{TEST_DIR}/partial_agg.duckdb' AS db (ROW_GROUP_SIZE 2048)
+
+// ---- test/optimizer/statistics/statistics_filter_pruning.test:357-359  (uses: ROW_GROUP_SIZE)
+# struct_pack always constructs a non-NULL parent, even when a child is NULL.
+statement ok
+ATTACH '{TEST_DIR}/struct_pack_pruning.duckdb' AS struct_pack_db (ROW_GROUP_SIZE 2048)
+
+// ---- test/optimizer/statistics/statistics_numeric_comparison_pruning.test:5-6  (uses: ROW_GROUP_SIZE)
+statement ok
+ATTACH '{TEST_DIR}/numeric_comparison.duckdb' AS db (ROW_GROUP_SIZE 2048);
+
+// ---- test/optimizer/statistics/statistics_try_cast.test:62-63  (uses: ROW_GROUP_SIZE)
+statement ok
+ATTACH '{TEST_DIR}/cast_null_pruning.duckdb' AS rg (ROW_GROUP_SIZE 2048);
+
+// ---- test/optimizer/statistics/statistics_unsigned_arithmetic_pruning.test:5-6  (uses: ROW_GROUP_SIZE)
+statement ok
+ATTACH '{TEST_DIR}/uint_arith_pruning.duckdb' AS db (ROW_GROUP_SIZE 2048);
+
+// ---- test/sql/attach/attach_database_options.test:5-7  (uses: ROW_GROUP_SIZE)
+# attach a new database
+statement ok
+ATTACH DATABASE ':memory:' AS new_database (BLOCK_SIZE 262144, ROW_GROUP_SIZE 2048);
+
+// ---- test/sql/attach/attach_database_options.test:14-17  (uses: ROW_GROUP_SIZE)
+query I
+SELECT options['row_group_size'] from duckdb_databases() where database_name = 'new_database';
+----
+2048
+
+// ---- test/sql/attach/attach_row_group_size.test:5-8  (uses: ROW_GROUP_SIZE)
+statement error
+ATTACH '{TEST_DIR}/attach_row_group_size.db' AS db1 (STORAGE_VERSION 'v1.0.0', ROW_GROUP_SIZE 245760);
+----
+Explicitly specify a newer storage version when creating the database to enable larger row groups
+
+// ---- test/sql/attach/attach_row_group_size.test:20-21  (uses: ROW_GROUP_SIZE)
+statement ok
+ATTACH '{TEST_DIR}/attach_row_group_size.db' AS db1 (STORAGE_VERSION 'v1.2.0', ROW_GROUP_SIZE 245760);
+
+// ---- test/sql/attach/attach_row_group_size_decreasing.test:5-6  (uses: ROW_GROUP_SIZE)
+statement ok
+ATTACH '{TEST_DIR}/attach_row_group_size_decreasing.db' as test (ROW_GROUP_SIZE 4096);
+
+// ---- test/sql/attach/attach_row_group_size_decreasing.test:22-24  (uses: ROW_GROUP_SIZE)
+# Now we re-attach, but with a smaller row group size
+statement ok
+ATTACH '{TEST_DIR}/attach_row_group_size_decreasing.db' as test (ROW_GROUP_SIZE 2048);
+
+// ---- test/sql/function/array/array_inner_product.test:62-64  (uses: ROW_GROUP_SIZE)
+# Strict binary array functions are NULL when either parent array is NULL.
+statement ok
+ATTACH '{TEST_DIR}/array_fold_validity.duckdb' AS array_fold_db (ROW_GROUP_SIZE 2048)
+
+// ---- test/sql/function/list/flatten.test:160-162  (uses: ROW_GROUP_SIZE)
+statement ok
+CREATE TABLE lists AS SELECT i % 4 i, list(j ORDER BY rowid) j FROM nums GROUP BY i
+
+# Output validity follows the outer list, not its inner lists.
+statement ok
+ATTACH '{TEST_DIR}/flatten_validity.duckdb' AS flatten_db (ROW_GROUP_SIZE 2048)
+
+// ---- test/sql/function/string/regex_extract_dictionary.test:5-6  (uses: ROW_GROUP_SIZE)
+statement ok
+ATTACH '{TEST_DIR}/regex_extract_dictionary.db' AS regex_db (ROW_GROUP_SIZE 2048)
+
+// ---- test/sql/join/inner/test_prefix_range_filter_allnull_pruning.test:5-6  (uses: ROW_GROUP_SIZE)
+statement ok
+ATTACH '{TEST_DIR}/prf_allnull_pruning.duckdb' AS prf_allnull (ROW_GROUP_SIZE 2048);
+
+// ---- test/sql/join/inner/test_prefix_range_filter_pushdown.test:365-366  (uses: ROW_GROUP_SIZE)
+statement ok
+ATTACH ':memory:' AS prf_row_group_bug (ROW_GROUP_SIZE 2);
+
+// ---- test/sql/join/inner/test_prefix_range_filter_pushdown_strinline.test:165-166  (uses: ROW_GROUP_SIZE)
+statement ok
+ATTACH '{TEST_DIR}/prf_string_nul_stats.db' AS prf_string_nul_stats (ROW_GROUP_SIZE 2048);
+
+// ---- test/sql/optimizer/aggregate_stats_propagation.test:5-6  (uses: ROW_GROUP_SIZE)
+statement ok
+ATTACH '{TEST_DIR}/aggregate_stats_prune.duckdb' AS db (ROW_GROUP_SIZE 2048);
+
+// ---- test/sql/optimizer/array_extract_row_group_pruning.test:5-6  (uses: ROW_GROUP_SIZE)
+statement ok
+ATTACH '{TEST_DIR}/array_extract_row_group_pruning.duckdb' AS db (ROW_GROUP_SIZE 2048);
+
+// ---- test/sql/optimizer/barrier_row_group_pruning.test:5-6  (uses: ROW_GROUP_SIZE)
+statement ok
+ATTACH '{TEST_DIR}/barrier_row_group_pruning.duckdb' AS db (ROW_GROUP_SIZE 2048);
+
+// ---- test/sql/optimizer/bool_ref_row_group_pruning.test:5-6  (uses: ROW_GROUP_SIZE)
+statement ok
+ATTACH '{TEST_DIR}/bool_ref_pruning.duckdb' AS db (ROW_GROUP_SIZE 2048);
+
+// ---- test/sql/optimizer/boolean_row_group_pruning.test:5-6  (uses: ROW_GROUP_SIZE)
+statement ok
+ATTACH '{TEST_DIR}/bool_prune.duckdb' AS db (ROW_GROUP_SIZE 2048);
+
+// ---- test/sql/optimizer/boolean_wrapper_pushdown.test:7-8  (uses: ROW_GROUP_SIZE)
+statement ok
+ATTACH '{TEST_DIR}/boolean_wrapper_pushdown.duckdb' AS db (ROW_GROUP_SIZE 2048);
+
+// ---- test/sql/optimizer/case_zonemap_pruning.test:5-6  (uses: ROW_GROUP_SIZE)
+statement ok
+ATTACH '{TEST_DIR}/case_zonemap_pruning.duckdb' AS db (ROW_GROUP_SIZE 2048);
+
+// ---- test/sql/optimizer/coalesce_zonemap_pruning.test:5-6  (uses: ROW_GROUP_SIZE)
+statement ok
+ATTACH '{TEST_DIR}/coalesce_zonemap_pruning.duckdb' AS db (ROW_GROUP_SIZE 2048);
+
+// ---- test/sql/optimizer/constant_function_zonemap_pruning.test:5-6  (uses: ROW_GROUP_SIZE)
+statement ok
+ATTACH '{TEST_DIR}/constant_function_pruning.duckdb' AS const_db (ROW_GROUP_SIZE 2048);
+
+// ---- test/sql/optimizer/contains_row_group_pruning.test:5-6  (uses: ROW_GROUP_SIZE)
+statement ok
+ATTACH '{TEST_DIR}/contains_prune.duckdb' AS db (ROW_GROUP_SIZE 2048);
+
+// ---- test/sql/optimizer/cross_column_expression_stats_pruning.test:5-6  (uses: ROW_GROUP_SIZE)
+statement ok
+ATTACH '{TEST_DIR}/cross_column_or_stats_pruning.duckdb' AS rg (ROW_GROUP_SIZE 2048);

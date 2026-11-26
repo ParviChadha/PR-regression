@@ -1,0 +1,181 @@
+// Upstream tests at the PR's parent commit 1d050a840 that use the changed code.
+// Names searched (test lines using each): Deserialize (4), RestoreNamesFromAliases (0), struct_pack (242)
+
+// ---- test/serialize/vector_deserialize_test.cpp:12-36  (uses: Deserialize)
+static unique_ptr<Vector> DeserializeVectorReturn(const LogicalType &type, idx_t count, FUNC write) {
+	Allocator allocator;
+	MemoryStream stream(allocator);
+	BinarySerializer serializer(stream);
+	serializer.Begin();
+	write(serializer);
+	serializer.End();
+	stream.Rewind();
+
+	BinaryDeserializer deserializer(stream);
+	deserializer.Begin();
+	auto result = make_uniq<Vector>(type, MaxValue<idx_t>(count, STANDARD_VECTOR_SIZE));
+	result->Deserialize(deserializer, count);
+	deserializer.End();
+	return result;
+}
+
+//! Deserializes a vector of the given type from data written by write
+template <class FUNC>
+static void DeserializeVector(const LogicalType &type, idx_t count, FUNC write) {
+	DeserializeVectorReturn(type, count, write);
+}
+
+static void WriteFlatHeader(Serializer &serializer, VectorType vector_type = VectorType::FLAT_VECTOR) {
+	serializer.WriteProperty(90, "vector_type", vector_type);
+
+// ---- test/common/test_lazy_vector.cpp:272-287  (uses: Deserialize)
+	SECTION("Empty serialization needs no payload") {
+		MemoryStream stream(Allocator::DefaultAllocator());
+		BinarySerializer serializer(stream);
+		serializer.Begin();
+		source.Serialize(serializer);
+		serializer.End();
+		REQUIRE(allocations.allocations == 0);
+		stream.Rewind();
+		BinaryDeserializer deserializer(stream);
+		deserializer.Begin();
+		Vector result(source.GetType());
+		result.Deserialize(deserializer, 0);
+		deserializer.End();
+		REQUIRE(result.size() == 0);
+		REQUIRE(result.GetType() == source.GetType());
+	}
+
+// ---- test/extension/loadable_extension_optimizer_demo.cpp:119-143  (uses: Deserialize)
+			idx_t chunk_len;
+			ReadChecked(sockfd, &chunk_len, sizeof(idx_t));
+			auto buffer = malloc(chunk_len);
+			D_ASSERT(buffer);
+			ReadChecked(sockfd, buffer, chunk_len);
+
+			MemoryStream source(data_ptr_cast(buffer), chunk_len);
+			DataChunk chunk;
+
+			BinaryDeserializer deserializer(source);
+
+			deserializer.Begin();
+			chunk.Deserialize(deserializer);
+			deserializer.End();
+			chunk_collection->Initialize(chunk.GetTypes());
+			chunk_collection->Append(chunk);
+			free(buffer);
+		}
+
+		auto types = chunk_collection->Types();
+		plan = make_uniq<LogicalColumnDataGet>(TableIndex(0), types, std::move(chunk_collection));
+
+		len = 0;
+		(void)len;
+		WriteChecked(sockfd, &len, sizeof(idx_t));
+
+// ---- test/sql_export/sql_export_expression_functions.cpp:681-719  (uses: Deserialize)
+TEST_CASE("Function deserialization restores enclosing context after callback exceptions",
+          "[sql_export][serialization]") {
+	DuckDB db;
+	Connection connection(db);
+	ExtensionLoader loader(*db.instance, "sql_export_deserialization_context");
+	ScalarFunction function("throwing_deserializer", {LogicalType::INTEGER}, LogicalType::INTEGER,
+	                        ScalarFunction::NopFunction);
+	function.SetSerializeCallback([](Serializer &, const optional_ptr<FunctionData>, const BoundScalarFunction &) {});
+	function.SetDeserializeCallback([](Deserializer &deserializer, BoundScalarFunction &) -> unique_ptr<FunctionData> {
+		REQUIRE(deserializer.Get<const LogicalType &>() == LogicalType::INTEGER);
+		auto &children = deserializer.Get<const const_expression_list_t &>();
+		REQUIRE(children.size() == 1);
+		REQUIRE(children[0].get().GetReturnType() == LogicalType::INTEGER);
+		throw InvalidInputException("Synthetic deserialization failure");
+	});
+	loader.RegisterFunction(std::move(function));
+	connection.BeginTransaction();
+	auto plan = BindExportQuery(connection, "SELECT throwing_deserializer(7::INTEGER)");
+	auto expression = FindExpression(*plan, [](const Expression &candidate) {
+		return candidate.GetExpressionType() == ExpressionType::BOUND_FUNCTION;
+	});
+	REQUIRE(expression);
+	MemoryStream stream(Allocator::Get(*connection.context));
+	BinarySerializer::Serialize(*expression, stream);
+	stream.Rewind();
+	BinaryDeserializer deserializer(stream);
+	bound_parameter_map_t parameters;
+	deserializer.Set<ClientContext &>(*connection.context);
+	deserializer.Set<bound_parameter_map_t &>(parameters);
+	const LogicalType enclosing_type = LogicalType::VARCHAR;
+	auto enclosing_child = Constant(Value::BIGINT(42));
+	const const_expression_list_t enclosing_children {*enclosing_child};
+	deserializer.Set<const LogicalType &>(enclosing_type);
+	deserializer.Set<const const_expression_list_t &>(enclosing_children);
+	REQUIRE_THROWS_AS(deserializer.Deserialize<Expression>(), InvalidInputException);
+	REQUIRE(&deserializer.Get<const LogicalType &>() == &enclosing_type);
+	REQUIRE(&deserializer.Get<const const_expression_list_t &>() == &enclosing_children);
+	connection.Rollback();
+}
+
+// ---- test/common/test_cast_struct.test:5-8  (uses: struct_pack)
+statement error
+SELECT struct_pack(b => 42)::STRUCT(a INT);
+----
+<REGEX>:Binder Error.*STRUCT to STRUCT cast must have at least one matching member.*
+
+// ---- test/common/test_cast_struct.test:10-13  (uses: struct_pack)
+statement error
+SELECT struct_extract(struct_pack(b => 42)::STRUCT(a INT), 'a');
+----
+<REGEX>:Binder Error.*STRUCT to STRUCT cast must have at least one matching member.*
+
+// ---- test/fuzzer/pedro/returning_clause_with_rowid.test:54-55  (uses: struct_pack)
+statement ok
+select struct_pack(row_id := 42);
+
+// ---- test/issues/general/test_21492.test:56-60  (uses: struct_pack)
+# folding is semantics-preserving for struct_pack that is not a table subscript
+query I
+SELECT struct_extract(struct_pack(a := 40, b := 2), 'a')
+----
+40
+
+// ---- test/issues/general/test_21492.test:62-65  (uses: struct_pack)
+query I
+SELECT struct_pack(a := 40, b := 2)['b']
+----
+2
+
+// ---- test/issues/general/test_2416.test:158-159  (uses: struct_pack)
+statement ok
+CREATE MACRO my_specific_struct_extract(field) AS struct_pack(a => 1, b => 2, c => 3, d => 4)[field]
+
+// ---- test/optimizer/materialized_cte_sibling_column_pruning.test:25-43  (uses: struct_pack)
+statement ok
+CREATE TABLE v(id INTEGER PRIMARY KEY);
+
+statement ok
+INSERT INTO v VALUES (1), (2), (3), (4);
+
+query II
+EXPLAIN SELECT b.value
+FROM (SELECT id AS k, 0 AS domain FROM v) a
+JOIN LATERAL (
+    WITH t AS MATERIALIZED (SELECT a.k AS n)
+    SELECT n FROM t
+) q ON true
+JOIN (
+    SELECT b.k, b.domain, b.value
+    FROM (
+        SELECT id AS k, 0 AS domain,
+               struct_pack(id := id) AS unused_payload,
+               id AS value
+        FROM v
+    ) b
+) b ON b.k = q.n AND b.domain IS NOT DISTINCT FROM a.domain
+WHERE a.k = 1;
+----
+logical_opt	<!REGEX>:.*unused_payload.*
+
+// ---- test/sql/order/test_limit_percent.test:217-220  (uses: struct_pack)
+query T
+SELECT STRUCT_PACK(a := 42, b := 43)
+----
+{'a': 42, 'b': 43}

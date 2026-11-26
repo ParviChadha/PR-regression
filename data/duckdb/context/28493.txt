@@ -1,0 +1,139 @@
+// Upstream tests at the PR's parent commit 9a031795d that use the changed code.
+// Names searched (test lines using each): RegisterFunction (69), BindCopyOption (0), BindOrderByNodes (0), ParseOrderByColumns (0), BindContext (0), BindScalarFunctionInput (0), GetBinder (0), BeginSubqueryBind (0), CreateBinder (0), RegisterEntryRead (0), CTEBindState (0), PlanIndexInput (0), FindByName (0), RegisterIndexType (1), GetIndexTypes (1), CastFunctionSet (0), Get (45), GetConfig (0), EnableLogging (0), BindCopyOptions (0), GetFullCopyOptionsList (0), CreatePlan (42), enable_logging (121), warnings_as_errors (0)
+
+// ---- test/sql/storage/wal_checkpoint_unknown_index_type.cpp:7-31  (uses: GetIndexTypes, RegisterIndexType)
+#include "test_helpers.hpp"
+
+using namespace duckdb;
+
+namespace {
+
+constexpr const char *TEST_INDEX_TYPE = "TEST_EXTENSION_INDEX";
+
+//! Models an index type provided by an extension, by registering ART under another name.
+void RegisterTestIndexType(DuckDB &db) {
+	auto index_type = ART::GetARTIndexType();
+	index_type.name = TEST_INDEX_TYPE;
+	DBConfig::GetConfig(*db.instance).GetIndexTypes().RegisterIndexType(index_type);
+}
+
+//! Reading the WAL file while the database is open is not portable, so we go through the database size.
+void RequireWALEmpty(Connection &con, const bool empty) {
+	auto result = con.Query("SELECT wal_size = '0 bytes' FROM pragma_database_size()");
+	REQUIRE(CHECK_COLUMN(result, 0, {Value::BOOLEAN(empty)}));
+}
+
+} // namespace
+
+TEST_CASE("Checkpoint buffered replays of an index type that is not loaded", "[storage][wal]") {
+	auto config = GetTestConfig();
+
+// ---- test/optimizer/expression_type_serialization.cpp:105-147  (uses: CreatePlan, RegisterFunction)
+TEST_CASE("Deserialized bind-expression replacements retain result annotations", "[serialization][expression_types]") {
+	DuckDB db(nullptr);
+	Connection connection(db);
+	ExtensionLoader loader(*db.instance, "expression_type_copy");
+	ScalarFunction function("copy_string", {LogicalType::VARCHAR}, LogicalType::VARCHAR, ScalarFunction::NopFunction);
+	function.SetBindCallback(
+	    [](BindScalarFunctionInput &) -> unique_ptr<FunctionData> { return make_uniq<ReplacementBindData>(false); });
+	function.SetSerializeCallback([](Serializer &, const optional_ptr<FunctionData>, const BoundScalarFunction &) {});
+	function.SetDeserializeCallback([](Deserializer &, BoundScalarFunction &) -> unique_ptr<FunctionData> {
+		return make_uniq<ReplacementBindData>(true);
+	});
+	function.SetBindExpressionCallback([](FunctionBindExpressionInput &input) -> unique_ptr<Expression> {
+		if (!input.bind_data->Cast<ReplacementBindData>().replace) {
+			return nullptr;
+		}
+		if (input.children[0]->Cast<BoundConstantExpression>().GetValue() == Value("42")) {
+			return make_uniq<BoundConstantExpression>(Value::INTEGER(42));
+		}
+		return input.children[0]->Copy();
+	});
+	loader.RegisterFunction(std::move(function));
+	connection.BeginTransaction();
+	Parser parser(*connection.context);
+	parser.ParseQuery("SELECT copy_string('A') COLLATE nocase AS annotated");
+	Planner planner(*connection.context);
+	planner.CreatePlan(std::move(parser.statements[0]));
+	auto &expression = *planner.plan->expressions[0];
+	REQUIRE(expression.GetExpressionClass() == ExpressionClass::BOUND_FUNCTION);
+	CheckExpressionTypes(*connection.context, expression);
+	auto copy = CopyExpression(*connection.context, expression, StorageCompatibility::Latest());
+	REQUIRE(copy->GetExpressionClass() == ExpressionClass::BOUND_CONSTANT);
+	REQUIRE(copy->Cast<BoundConstantExpression>().GetValue() == Value("A"));
+	parser.statements.clear();
+	parser.ParseQuery("SELECT copy_string('42') COLLATE nocase AS annotated");
+	Planner cast_planner(*connection.context);
+	cast_planner.CreatePlan(std::move(parser.statements[0]));
+	auto &cast_expression = *cast_planner.plan->expressions[0];
+	CheckExpressionTypes(*connection.context, cast_expression);
+	auto cast_copy = CopyExpression(*connection.context, cast_expression, StorageCompatibility::Latest());
+	REQUIRE(cast_copy->GetExpressionType() == ExpressionType::OPERATOR_CAST);
+
+	connection.Rollback();
+}
+
+// ---- test/optimizer/pushdown/join_filter_pushdown_integer_chain.test:31-32  (uses: enable_logging)
+statement ok
+CALL enable_logging('PhysicalOperator');
+
+// ---- test/sql/attach/external_resource_attach_failure.test:5-6  (uses: enable_logging)
+statement ok
+CALL enable_logging('ExternalResource', storage='memory');
+
+// ---- test/sql/attach/external_resource_option_collision.test:5-6  (uses: enable_logging)
+statement ok
+CALL enable_logging('ExternalResource', storage='memory');
+
+// ---- test/sql/catalog/function/default_macro_shadowing_logging.test:8-9  (uses: enable_logging)
+statement ok
+CALL enable_logging('QueryLog', storage = 'memory');
+
+// ---- test/sql/cte/materialized/cte_buffered_consumer_cycle_demotion.test:14-15  (uses: enable_logging)
+statement ok
+CALL enable_logging('PhysicalOperator', storage='memory');
+
+// ---- test/sql/cte/recursive_cte_invariant_build_logging.test:11-13  (uses: enable_logging)
+# Unseeded sampling is non-repeatable and cannot be frozen in an invariant build.
+statement ok
+CALL enable_logging('PhysicalOperator');
+
+// ---- test/sql/cte/recursive_cte_invariant_build_logging.test:57-58  (uses: enable_logging)
+statement ok
+CALL enable_logging('PhysicalOperator');
+
+// ---- test/sql/cte/recursive_cte_key_finalize_owned_state.test:21-22  (uses: enable_logging)
+statement ok
+CALL enable_logging('PhysicalOperator');
+
+// ---- test/sql/cte/recursive_cte_logging.test:30-31  (uses: enable_logging)
+statement ok
+CALL enable_logging('PhysicalOperator');
+
+// ---- test/sql/cte/recursive_cte_logging.test:80-81  (uses: enable_logging)
+statement ok
+CALL enable_logging('PhysicalOperator');
+
+// ---- test/sql/cte/recursive_cte_parallel_output_publication.test:13-14  (uses: enable_logging)
+statement ok
+CALL enable_logging('PhysicalOperator');
+
+// ---- test/sql/join/external/null_safe_runtime_filter_external.test:32-33  (uses: enable_logging)
+statement ok
+CALL enable_logging('PhysicalOperator');
+
+// ---- test/sql/logging/enable_logging_file_keeps_path.test:11-13  (uses: enable_logging)
+# a switch to another storage that fails puts back the file storage with its path
+statement ok
+CALL enable_logging(storage = 'file', storage_config = {'path': '{TEMP_DIR}/keeps_path_switch'});
+
+// ---- test/sql/logging/enable_logging_file_keeps_path.test:18-21  (uses: enable_logging)
+statement error
+CALL enable_logging(storage = 'memory', storage_config = {'delim': '|'});
+----
+delim
+
+// ---- test/sql/logging/enable_logging_file_no_path.test:7-9  (uses: enable_logging)
+# Normalize to in-memory storage
+statement ok
+CALL enable_logging(storage='memory')

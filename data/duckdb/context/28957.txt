@@ -1,0 +1,146 @@
+// Upstream tests at the PR's parent commit 4c06db4d5 that use the changed code.
+// Names searched (test lines using each): ApplyFiltersToFileList (0), GetValue (805), PartitionFilter (0), columns (174), expr (91), types (590), PartitionFilterResult (0), PreparePartitionFilter (0), EvaluatePartitionFilter (0), LoadPartitionColumn (0), EvaluatePartitionFilterChunk (0), ReplaceTableColumns (0), TryGetPartitionString (0), ConvertKnownColRefToConstants (0); no SQL name matched, so SQL tests were picked by the changed files' paths
+
+// ---- test/sql/copy/csv/parallel/parallel_csv_hive_partitioning.test:16-20  (uses: path:hive, path:partitioning)
+query IIII
+select id, value, part, date from read_csv_auto('{DATA_DIR}/csv/hive-partitioning/simple/*/*/test.csv', HIVE_PARTITIONING=1) order by id
+----
+1	value1	a	2012-01-01
+2	value2	b	2013-01-01
+
+// ---- test/sql/copy/csv/parallel/parallel_csv_hive_partitioning.test:22-26  (uses: path:hive, path:partitioning)
+query III
+select part, value, date from read_csv_auto('{DATA_DIR}/csv/hive-partitioning/simple/*/*/test.csv', HIVE_PARTITIONING=1) order by 1
+----
+a	value1	2012-01-01
+b	value2	2013-01-01
+
+// ---- test/sql/copy/csv/csv_hive.test:48-51  (uses: path:hive)
+statement ok
+CREATE TABLE test AS SELECT 1 as id, 'value1' as value;
+CREATE TABLE test2 AS SELECT 2 as id, 'value2' as value;
+
+query IIII
+select id, value, part, date from read_csv_auto('{DATA_DIR}/csv/hive-partitioning/different_order/*/*/test.csv', HIVE_PARTITIONING=1) where part='b'
+----
+2	value2	b	2013-01-01
+
+// ---- test/sql/copy/csv/csv_hive.test:53-56  (uses: path:hive)
+statement ok
+CREATE TABLE test AS SELECT 1 as id, 'value1' as value;
+CREATE TABLE test2 AS SELECT 2 as id, 'value2' as value;
+
+query IIII
+select id, value, CAST(part AS INT) as part_cast, CAST(date AS DATE) as date_cast from read_csv_auto('{DATA_DIR}/csv/hive-partitioning/types/*/*/test.csv', HIVE_PARTITIONING=1) where part_cast > 0 and part_cast < 5000;
+----
+1	value1	1000	2012-01-01
+
+// ---- test/sql/copy/csv/csv_hive_filename_union.test:12-16  (uses: path:hive)
+query III
+select part, filename.replace('\', '/').split('/')[-2], value from read_csv_auto('{DATA_DIR}/csv/hive-partitioning/simple/*/*/test.csv', HIVE_PARTITIONING=1,  FILENAME=1)  order by 1
+----
+a	date=2012-01-01	value1
+b	date=2013-01-01	value2
+
+// ---- test/sql/copy/csv/csv_hive_filename_union.test:18-22  (uses: path:hive)
+query III
+select part, filename.replace('\', '/').split('/')[-2], value from read_csv_auto('{DATA_DIR}/csv/hive-partitioning/simple/*/*/test.csv', HIVE_PARTITIONING=1,  FILENAME=1, UNION_BY_NAME=1)  order by 1
+----
+a	date=2012-01-01	value1
+b	date=2013-01-01	value2
+
+// ---- test/optimizer/filter_pushdown_alias.cpp:26-72  (uses: GetValue, expr, types)
+TEST_CASE("Filter pushdown rewrites BoundColumnRef alias to the scan column name", "[optimizer][filter_pushdown]") {
+	DuckDB db(nullptr);
+	Connection con(db);
+
+	TableFunction tf(
+	    "alias_inspect", {}, [](auto &, auto &, auto &out) { out.SetChildCardinality(0); },
+	    [](auto &, auto &, auto &types, auto &names) -> unique_ptr<FunctionData> {
+		    types.emplace_back(LogicalType::INTEGER);
+		    names.emplace_back("col");
+		    return make_uniq<BindData>();
+	    },
+	    [](auto &, auto &) -> unique_ptr<GlobalTableFunctionState> { return {}; });
+
+	tf.pushdown_complex_filter = [](auto &, auto &get, auto *bind_data_p, auto &filters) {
+		auto &data = bind_data_p->template Cast<BindData>();
+		for (auto &expr : filters) {
+			ExpressionIterator::VisitExpressionMutable<BoundColumnRefExpression>(expr, [&](auto &ref, auto &) {
+				if (ref.Binding().table_index == get.table_index && data.alias.empty()) {
+					data.alias = ref.GetAlias().GetIdentifierName();
+				}
+			});
+		}
+	};
+	tf.to_string = [](auto &input) {
+		InsertionOrderPreservingMap<string> result;
+		result["FilterAlias"] = input.bind_data->template Cast<BindData>().alias;
+		return result;
+	};
+
+	ExtensionInfo ext_info {};
+	ExtensionActiveLoad load_info {*db.instance, ext_info, "test_extension", ""};
+	ExtensionLoader loader {load_info};
+	loader.RegisterFunction(tf);
+
+	REQUIRE_NO_FAIL(con.Query("PRAGMA explain_output='optimized_only'"));
+	auto result =
+	    con.Query("EXPLAIN SELECT * FROM (SELECT col AS other FROM alias_inspect()) sub WHERE other IS NOT NULL");
+	REQUIRE_NO_FAIL(*result);
+
+	string explain;
+	for (idx_t row = 0; row < result->RowCount(); row++) {
+		for (idx_t col = 0; col < result->ColumnCount(); col++) {
+			explain += result->Collection().GetValue(col, row).ToString();
+		}
+	}
+	REQUIRE(StringUtil::Contains(explain, "FilterAlias: col"));
+}
+
+// ---- test/optimizer/expression_type_serialization.cpp:149-188  (uses: expr, types)
+TEST_CASE("Expression rewrites preserve compatible result annotations", "[expression_rewriter][expression_types]") {
+	DuckDB db(nullptr);
+	Connection connection(db);
+	REQUIRE_NO_FAIL(connection.Query(
+	    "CREATE TABLE rewrite_values(v VARCHAR); INSERT INTO rewrite_values VALUES ('A'),('a'),(NULL)"));
+	connection.BeginTransaction();
+	for (const auto &expression :
+	     {"(v || '') COLLATE nocase", "('' || v) COLLATE nocase", "replace(v,'x','x') COLLATE nocase",
+	      "CASE WHEN true THEN v ELSE NULL END COLLATE nocase", "CASE WHEN false THEN NULL ELSE v END COLLATE nocase",
+	      "coalesce(v,NULL) COLLATE nocase", "least(v,v) COLLATE nocase", "greatest(v,v) COLLATE nocase",
+	      "('A' || '') COLLATE nocase", "CASE WHEN true THEN [[v]] ELSE [['A' COLLATE nocase]] END",
+	      "CAST(12.5 AS DECIMAL(9,2))+CAST(0 AS DECIMAL(9,2))"}) {
+		CAPTURE(expression);
+		Parser parser(*connection.context);
+		parser.ParseQuery(string("SELECT ") + expression + " AS result FROM rewrite_values");
+		Planner planner(*connection.context);
+		planner.CreatePlan(std::move(parser.statements[0]));
+		planner.plan->ResolveOperatorTypes();
+		auto type = planner.plan->types[0];
+		Optimizer optimizer(*planner.binder, *connection.context);
+		auto plan = optimizer.Optimize(std::move(planner.plan));
+		plan->ResolveOperatorTypes();
+		REQUIRE(plan->types[0] == type);
+		REQUIRE(GetCollations(plan->types[0]) == GetCollations(type));
+		std::function<void(LogicalOperator &)> check_rewrites = [&](LogicalOperator &op) {
+			LogicalOperatorVisitor::EnumerateExpressions(op, [&](unique_ptr<Expression> *expr) {
+				ExpressionIterator::VisitExpression<BoundFunctionExpression>(
+				    **expr, [&](const BoundFunctionExpression &function) {
+					    REQUIRE(function.Function().GetName() != "||");
+					    REQUIRE(function.Function().GetName() != "replace");
+				    });
+			});
+			for (auto &child : op.children) {
+				check_rewrites(*child);
+			}
+		};
+		check_rewrites(*plan);
+	}
+	connection.Rollback();
+}
+
+// ---- test/sql_export/sql_export_row_id_selection.cpp:265-267  (uses: columns)
+	SECTION("UPDATE keys the trailing logical row id among three row-id columns") {
+		run_update(trailing_three_layout);
+	}

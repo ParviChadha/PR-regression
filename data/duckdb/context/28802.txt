@@ -1,0 +1,86 @@
+// Upstream tests at the PR's parent commit 8e057babf that use the changed code.
+// Names searched (test lines using each): ToSQL (0); no SQL name matched, so SQL tests were picked by the changed files' paths
+
+// ---- test/sql/catalog/dependencies/add_column_to_table_referenced_by_view.test:13-16  (uses: path:catalog, path:view)
+statement ok
+create table tbl(a varchar default 'abc');
+
+statement ok
+insert into tbl values(DEFAULT);
+
+statement ok
+create view vw as select * from tbl;
+
+query I
+select * from vw;
+----
+abc
+
+// ---- test/sql/catalog/dependencies/add_column_to_table_referenced_by_view.test:21-24  (uses: path:catalog, path:view)
+statement ok
+create table tbl(a varchar default 'abc');
+
+statement ok
+insert into tbl values(DEFAULT);
+
+statement ok
+create view vw as select * from tbl;
+
+query II
+select * from vw;
+----
+abc	5
+
+// ---- test/sql/catalog/nested_schema/nested_view_attached.test:27-30  (uses: path:catalog, path:view)
+statement ok
+CREATE TABLE db.s1.s2.t AS SELECT 42 AS i;
+
+statement ok
+CREATE VIEW db.s1.s2.v AS SELECT i FROM db.s1.s2.t;
+
+query I
+SELECT * FROM db.s1.s2.v;
+----
+42
+
+// ---- test/sql/catalog/nested_schema/nested_view_attached.test:42-45  (uses: path:catalog, path:view)
+statement ok
+CREATE TABLE db.s1.s2.t AS SELECT 42 AS i;
+
+statement ok
+CREATE VIEW db.s1.s2.v AS SELECT i FROM db.s1.s2.t;
+
+statement ok
+CREATE TABLE s1.s2.t AS SELECT 1 AS i;
+
+query I
+SELECT * FROM db.s1.s2.v;
+----
+42
+
+// ---- test/sql/catalog/nested_schema/nested_view_function_attached.test:40-43  (uses: path:catalog, path:view)
+statement ok
+CREATE VIEW db.p.s.v_table_function AS SELECT z FROM p.s.tf();
+
+query I
+SELECT z FROM db.p.s.v_table_function;
+----
+7
+
+// ---- test/sql/catalog/nested_schema/nested_view_function_attached.test:45-48  (uses: path:catalog, path:view)
+statement ok
+CREATE MACRO db.p.s.f() AS 11;
+
+statement ok
+CREATE TABLE db.p.s.t AS SELECT 5 AS x;
+
+statement ok
+CREATE VIEW db.p.s.v_table AS SELECT x FROM p.s.t;
+
+statement ok
+CREATE VIEW db.p.s.v_function AS SELECT p.s.f() AS y;
+
+query II
+SELECT (SELECT x FROM db.p.s.v_table), (SELECT y FROM db.p.s.v_function);
+----
+5	11

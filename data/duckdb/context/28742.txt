@@ -1,0 +1,215 @@
+// Upstream tests at the PR's parent commit 05872c5a6 that use the changed code.
+// Names searched (test lines using each): Append (146); no SQL name matched, so SQL tests were picked by the changed files' paths
+
+// ---- test/sql/storage/revert_append_after_checkpoint_new_row_group.test:56-59  (uses: path:group, path:row, path:storage)
+statement ok
+CREATE TABLE v (i INTEGER, x VARIANT)
+
+statement ok
+INSERT INTO v SELECT i, i::VARIANT FROM range(100000) r(i)
+
+statement ok
+INSERT INTO v VALUES (-2, 'b'::VARIANT)
+
+query III
+SELECT count(*), sum(i), count(*) FILTER (WHERE x::VARCHAR = 'b') FROM v
+----
+100001	4999949998	1
+
+// ---- test/sql/storage/revert_append_after_checkpoint_new_row_group.test:61-64  (uses: path:group, path:row, path:storage)
+statement ok
+CREATE TABLE g (i INTEGER, p GEOMETRY)
+
+statement ok
+INSERT INTO g SELECT i, ('POINT(' || i || ' ' || i || ')')::GEOMETRY FROM range(100000) r(i)
+
+statement ok
+INSERT INTO g VALUES (-2, 'POINT(-2 -2)'::GEOMETRY)
+
+query III
+SELECT count(*), sum(i), count(*) FILTER (WHERE p::VARCHAR = 'POINT (-2 -2)') FROM g
+----
+100001	4999949998	1
+
+// ---- test/sql/storage/row_group_fetch_bulk.test:116-122  (uses: path:group, path:row, path:storage)
+statement ok
+INSERT INTO big SELECT
+    range::INTEGER,
+    (range * 10)::BIGINT,
+    'val_' || range::VARCHAR,
+    CASE WHEN range % 7 = 0 THEN NULL ELSE range::INTEGER END
+FROM range(500000);
+
+query II
+SELECT k, v FROM big WHERE k IN (500, 501, 502, 503, 504, 505, 506) ORDER BY k;
+----
+500	5000
+502	5020
+504	5040
+506	5060
+
+// ---- test/sql/storage/row_group_fetch_bulk.test:127-131  (uses: path:group, path:row, path:storage)
+statement ok
+INSERT INTO big SELECT
+    range::INTEGER,
+    (range * 10)::BIGINT,
+    'val_' || range::VARCHAR,
+    CASE WHEN range % 7 = 0 THEN NULL ELSE range::INTEGER END
+FROM range(500000);
+
+query II
+SELECT k, v FROM big WHERE k IN (200000, 200001, 200002, 200003) ORDER BY k;
+----
+200001	2000010
+200003	2000030
+
+// ---- test/sql/storage/rowid_gaps/indexed_checkpoint_drop_row_group.test:33-36  (uses: path:group, path:row, path:storage)
+statement ok
+CREATE TABLE rowid_gap_vacuum_idx.t AS SELECT i FROM range(6144) tbl(i);
+
+query III
+SELECT min(rowid), max(rowid), count(*) FROM rowid_gap_vacuum_idx.t;
+----
+0	6143	4096
+
+// ---- test/sql/storage/rowid_gaps/indexed_checkpoint_drop_row_group.test:38-41  (uses: path:group, path:row, path:storage)
+statement ok
+CREATE TABLE rowid_gap_vacuum_idx.t AS SELECT i FROM range(6144) tbl(i);
+
+query III
+SELECT min(rowid), max(rowid), count(*) FROM rowid_gap_vacuum_idx.t WHERE i >= 4096;
+----
+4096	6143	2048
+
+// ---- test/api/test_appender_api.cpp:6-30  (uses: Append)
+using namespace duckdb;
+
+template <class SRC>
+void TestAppendingSingleDecimalValue(SRC value, Value expected_result, uint8_t width, uint8_t scale) {
+	auto db = make_uniq<DuckDB>(nullptr);
+	auto conn = make_uniq<Connection>(*db);
+	duckdb::unique_ptr<Appender> appender;
+	duckdb::unique_ptr<QueryResult> result;
+	REQUIRE_NO_FAIL(conn->Query(StringUtil::Format("CREATE TABLE decimals(i DECIMAL(%d,%d))", width, scale)));
+	appender = make_uniq<Appender>(*conn, "decimals");
+
+	appender->BeginRow();
+	appender->Append<SRC>(value);
+	appender->EndRow();
+
+	appender->Flush();
+
+	result = conn->Query("SELECT * FROM decimals");
+	REQUIRE(CHECK_COLUMN(result, 0, {expected_result}));
+}
+
+TEST_CASE("Test appending to a decimal column", "[api]") {
+	TestAppendingSingleDecimalValue<int32_t>(1, Value::DECIMAL(1000, 4, 3), 4, 3);
+	TestAppendingSingleDecimalValue<int16_t>(-9999, Value::DECIMAL(-9999, 4, 0), 4, 0);
+	TestAppendingSingleDecimalValue<int16_t>(9999, Value::DECIMAL(9999, 4, 0), 4, 0);
+
+// ---- test/api/test_appender_api.cpp:50-79  (uses: Append)
+TEST_CASE("Test using appender after connection is gone", "[api]") {
+	auto db = make_uniq<DuckDB>(nullptr);
+	auto conn = make_uniq<Connection>(*db);
+	duckdb::unique_ptr<Appender> appender;
+	duckdb::unique_ptr<QueryResult> result;
+	// create an appender for a non-existing table fails
+	REQUIRE_THROWS(make_uniq<Appender>(*conn, "integers"));
+	// now create the table and create the appender
+	REQUIRE_NO_FAIL(conn->Query("CREATE TABLE integers(i INTEGER)"));
+	appender = make_uniq<Appender>(*conn, "integers");
+
+	// we can use the appender
+	appender->BeginRow();
+	appender->Append<int32_t>(1);
+	appender->EndRow();
+
+	appender->Flush();
+
+	result = conn->Query("SELECT * FROM integers");
+	REQUIRE(CHECK_COLUMN(result, 0, {1}));
+
+	// removing the connection invalidates the appender
+	conn.reset();
+	appender->BeginRow();
+	appender->Append<int32_t>(2);
+	appender->EndRow();
+
+	// the connection is gone
+	REQUIRE_THROWS(appender->Flush());
+}
+
+// ---- test/appender/test_appender.cpp:18-42  (uses: Append)
+	duckdb::unique_ptr<QueryResult> result;
+	DuckDB db(nullptr);
+	Connection con(db);
+
+	// create a table to append to
+	REQUIRE_NO_FAIL(con.Query("CREATE TABLE integers(i INTEGER)"));
+
+	// append a bunch of values
+	{
+		Appender appender(con, "integers");
+		for (idx_t i = 0; i < 2000; i++) {
+			appender.BeginRow();
+			appender.Append<int32_t>(1);
+			appender.EndRow();
+		}
+		appender.Close();
+	}
+
+	con.Query("BEGIN TRANSACTION");
+
+	// check that the values have been added to the database
+	result = con.Query("SELECT SUM(i) FROM integers");
+	REQUIRE(CHECK_COLUMN(result, 0, {2000}));
+
+	// test a rollback of the appender
+
+// ---- test/appender/test_appender.cpp:56-80  (uses: Append)
+	result = con.Query("SELECT SUM(i) FROM integers");
+	REQUIRE(CHECK_COLUMN(result, 0, {2000}));
+
+	// test different types
+	REQUIRE_NO_FAIL(con.Query("CREATE TABLE vals(i TINYINT, j SMALLINT, k BIGINT, l VARCHAR, m DECIMAL)"));
+
+	// now append a bunch of values
+	{
+		Appender appender(con, "vals");
+
+		for (idx_t i = 0; i < 2000; i++) {
+			appender.BeginRow();
+			appender.Append<int8_t>(1);
+			appender.Append<int16_t>(1);
+			appender.Append<int64_t>(1);
+			appender.Append<const char *>("hello");
+			appender.Append<double>(3.33);
+			appender.EndRow();
+		}
+	}
+
+	// check that the values have been added to the database
+	result = con.Query("SELECT l, SUM(k) FROM vals GROUP BY l");
+	REQUIRE(CHECK_COLUMN(result, 0, {"hello"}));
+	REQUIRE(CHECK_COLUMN(result, 1, {2000}));
+
+// ---- test/appender/test_appender_abort.cpp:9-26  (uses: Append)
+TEST_CASE("Abort appender due to primary key conflict", "[appender]") {
+	duckdb::unique_ptr<QueryResult> result;
+	DuckDB db(nullptr);
+	Connection con(db);
+
+	REQUIRE_NO_FAIL(con.Query("CREATE TABLE integers(i INTEGER PRIMARY KEY)"));
+	REQUIRE_NO_FAIL(con.Query("INSERT INTO integers VALUES (1)"));
+
+	Appender appender(con, "integers");
+	appender.BeginRow();
+	appender.Append<int32_t>(1);
+	appender.EndRow();
+	// this should fail!
+	REQUIRE_THROWS(appender.Flush());
+
+	result = con.Query("SELECT * FROM integers");
+	REQUIRE(CHECK_COLUMN(result, 0, {1}));
+}

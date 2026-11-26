@@ -1,0 +1,120 @@
+// Upstream tests at the PR's parent commit 6c8e177cf that use the changed code.
+// Names searched (test lines using each): ImplicitCast (0), ImplicitCastTimestampTz (0), TIMESTAMPTZ_NS (43)
+
+// ---- test/sql/aggregate/aggregates/approx_quantile_ns_infinity.test:5-8  (uses: TIMESTAMPTZ_NS)
+query III
+SELECT approx_quantile(TIMESTAMP_NS '-infinity', 0.5), approx_quantile(TIMESTAMPTZ_NS '-infinity', 0.5), approx_quantile(TIMESTAMP '-infinity', 0.5);
+----
+-infinity	-infinity	-infinity
+
+// ---- test/sql/aggregate/aggregates/approx_quantile_ns_infinity.test:21-24  (uses: TIMESTAMPTZ_NS)
+query II
+SELECT approx_quantile(TIMESTAMPTZ_NS 'infinity', 0.5), approx_quantile(TIMESTAMPTZ_NS '-infinity', 0.5) = TIMESTAMPTZ_NS '-infinity';
+----
+infinity	true
+
+// ---- test/sql/cast/common_operator_coverage.test:14-22  (uses: TIMESTAMPTZ_NS)
+statement ok
+CREATE TABLE temporal_cast_input(id INTEGER, value VARCHAR)
+
+statement ok
+INSERT INTO temporal_cast_input VALUES
+	(1, 'not-a-temporal-value'),
+	(2, '294247-01-10 04:00:54.775806'),
+	(3, '24:00:00.000000001')
+
+query III
+SELECT
+	TRY_CAST(value AS TIMESTAMP_S) IS NULL,
+	TRY_CAST(value AS TIMESTAMP_MS) IS NULL,
+	TRY_CAST(value AS TIMESTAMPTZ_NS) IS NULL
+FROM temporal_cast_input
+WHERE id = 1
+----
+true	true	true
+
+// ---- test/sql/cast/common_operator_coverage.test:24-29  (uses: TIMESTAMPTZ_NS)
+statement ok
+CREATE TABLE temporal_cast_input(id INTEGER, value VARCHAR)
+
+statement ok
+INSERT INTO temporal_cast_input VALUES
+	(1, 'not-a-temporal-value'),
+	(2, '294247-01-10 04:00:54.775806'),
+	(3, '24:00:00.000000001')
+
+query I
+SELECT TRY_CAST(value AS TIMESTAMPTZ_NS) IS NULL
+FROM temporal_cast_input
+WHERE id = 2
+----
+true
+
+// ---- test/sql/cast/timestamp_casts.test:44-47  (uses: TIMESTAMPTZ_NS)
+statement error
+SELECT CAST(TIMESTAMP '2262-04-11 23:47:16.854776' AS TIMESTAMPTZ_NS);
+----
+Could not convert Timestamp to higher precision.
+
+// ---- test/sql/cast/timestamp_casts.test:54-57  (uses: TIMESTAMPTZ_NS)
+statement error
+SELECT CAST(TIMESTAMPTZ '2262-04-11 23:47:16.854776+00' AS TIMESTAMPTZ_NS);
+----
+Could not convert Timestamp to higher precision.
+
+// ---- test/sql/function/timestamp/test_date_part.test:958-958  (uses: TIMESTAMPTZ_NS)
+foreach type TIMESTAMP_NS TIMESTAMPTZ_NS
+
+// ---- test/sql/function/variant/variant_cast_roundtrip.test:70-74  (uses: TIMESTAMPTZ_NS)
+query I
+SELECT ((TIMESTAMPTZ_NS '2025-01-02 03:04:05.123456789+02')::VARIANT)::TIMESTAMPTZ_NS =
+       TIMESTAMPTZ_NS '2025-01-02 03:04:05.123456789+02';
+----
+true
+
+// ---- test/sql/function/variant/variant_normalize.test:5-13  (uses: TIMESTAMPTZ_NS)
+query III
+SELECT
+	variant_normalize('12:34:56.123456789'::TIME_NS::VARIANT) = '12:34:56.123456789'::TIME_NS::VARIANT,
+	variant_normalize('2020-01-01 12:00:00.123456789+00'::TIMESTAMPTZ_NS::VARIANT) =
+		'2020-01-01 12:00:00.123456789+00'::TIMESTAMPTZ_NS::VARIANT,
+	variant_normalize('123456789012345678901234567890'::BIGNUM::VARIANT) =
+		'123456789012345678901234567890'::BIGNUM::VARIANT;
+----
+true	true	true
+
+// ---- test/sql/optimizer/timestamp_unit_cast_zonemap_pruning.test:99-102  (uses: TIMESTAMPTZ_NS)
+# TZ -> TZ unit conversion: casting a TIMESTAMPTZ_NS column to TIMESTAMPTZ. Both types store
+# UTC instants, so the cast is a pure unit conversion independent of the session time zone.
+statement ok
+CREATE TABLE ts_tz_ns AS SELECT (TIMESTAMP '2000-01-01' + to_seconds(range))::TIMESTAMPTZ_NS AS ts FROM range(10240);
+
+// ---- test/sql/show_select/test_summarize_temporal_ns.test:16-18  (uses: TIMESTAMPTZ_NS)
+# avg() over TIMESTAMPTZ_NS (previously a hard Binder Error) must now bind
+statement ok
+SELECT avg(x) FROM (SELECT TIMESTAMPTZ_NS '2026-01-01 10:00:00+10:00' AS x);
+
+// ---- test/sql/show_select/test_summarize_temporal_ns.test:33-36  (uses: TIMESTAMPTZ_NS)
+query T
+SELECT typeof(approx_quantile(x, 0.5)) FROM (SELECT TIMESTAMPTZ_NS '2026-01-01 00:00:00+00:00' AS x);
+----
+TIMESTAMPTZ_NS
+
+// ---- test/sql/types/timestamp/timestamptz_ns_casts.test:5-15  (uses: TIMESTAMPTZ_NS)
+# an inline relation rather than a table: a persisted TIMESTAMPTZ_NS column cannot be read by
+# older DuckDB versions, which the storage compatibility run checks
+query TTT
+SELECT CAST(t AS TIMESTAMP), CAST(t AS TIMESTAMP_MS), CAST(t AS TIMESTAMP_S)
+FROM (VALUES (CAST('2020-01-02 03:04:05.123456789+00' AS TIMESTAMPTZ_NS)),
+             (CAST('1969-12-31 23:59:59.123456789+00' AS TIMESTAMPTZ_NS)),
+             (NULL::TIMESTAMPTZ_NS)) ts(t)
+----
+2020-01-02 03:04:05.123457	2020-01-02 03:04:05.123	2020-01-02 03:04:05
+1969-12-31 23:59:59.123457	1969-12-31 23:59:59.123	1969-12-31 23:59:59
+NULL	NULL	NULL
+
+// ---- test/sql/types/timestamp/timestamptz_ns_casts.test:17-20  (uses: TIMESTAMPTZ_NS)
+query TT
+SELECT CAST('infinity'::TIMESTAMPTZ_NS AS TIMESTAMP_MS), CAST('infinity'::TIMESTAMPTZ_NS AS TIMESTAMP)
+----
+infinity	infinity

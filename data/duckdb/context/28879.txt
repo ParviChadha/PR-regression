@@ -1,0 +1,130 @@
+// Upstream tests at the PR's parent commit 11b97ab2f that use the changed code.
+// Names searched (test lines using each): PushdownExtractMapping (0), NULL_VALUE (3), PUSHDOWN (0), WHOLE_COLUMN (0), CreateMapping (6), CreateColumnMappingByMapper (0), MapColumnStruct (0), GetPushdownExtractMapping (0), GetPushdownExtractMappingByName (0), ApplyPushdownExtract (0), GetExtractedFieldType (0); no SQL name matched, so SQL tests were picked by the changed files' paths
+
+// ---- test/sql/aggregate/group/test_group_by_multi_column.test:11-16  (uses: path:column, path:multi)
+statement ok
+CREATE TABLE integers(i INTEGER, j INTEGER, k INTEGER);
+
+statement ok
+INSERT INTO integers VALUES (1, 1, 2), (1, 2, 2), (1, 1, 2), (2, 1, 2), (1, 2, 4), (1, 2, NULL);
+
+query IIRII
+SELECT i, j, SUM(k), COUNT(*), COUNT(k) FROM integers GROUP BY i, j ORDER BY 1, 2
+----
+1	1	4.000000	2	2
+1	2	6.000000	3	2
+2	1	2.000000	1	1
+
+// ---- test/sql/alter/alter_type/test_alter_type_multi_column.test:14-20  (uses: path:column, path:multi)
+statement ok
+CREATE TABLE test(i INTEGER, j INTEGER)
+
+statement ok
+INSERT INTO test VALUES (1, 1), (2, 2)
+
+query II
+SELECT * FROM test
+----
+4
+1
+8
+2
+
+// ---- test/sql/constraints/primarykey/test_pk_multi_column.test:11-15  (uses: path:column, path:multi)
+statement ok
+CREATE TABLE integers(i INTEGER, j VARCHAR, PRIMARY KEY(i, j))
+
+statement ok
+INSERT INTO integers VALUES (3, 'hello'), (3, 'world')
+
+query IT
+SELECT * FROM integers
+----
+3	hello
+3	world
+
+// ---- test/sql/constraints/primarykey/test_pk_multi_column.test:24-29  (uses: path:column, path:multi)
+statement ok
+CREATE TABLE integers(i INTEGER, j VARCHAR, PRIMARY KEY(i, j))
+
+statement ok
+INSERT INTO integers VALUES (3, 'hello'), (3, 'world')
+
+statement ok
+INSERT INTO integers VALUES (6, 'bla');
+
+query IT
+SELECT * FROM integers
+----
+3	hello
+3	world
+6	bla
+
+// ---- test/api/capi/v2/test_capi_v2_stats.cpp:630-654  (uses: NULL_VALUE)
+		rc = duckdb_v2_stats_set_value(stats, value, err);
+	}
+	duckdb_v2_value_destroy(&value);
+	return rc;
+}
+
+struct ValueField;
+
+// A value spelled as a tree, the compact way to write a nested statistics struct in a test case; BuildValue turns it
+// into a value with the typed constructors, duckdb_v2_value_create_struct, duckdb_v2_value_create_tuple and
+// duckdb_v2_value_create_list.
+struct ValueSpec {
+	enum class Kind { NULL_VALUE, BOOL, INT, DOUBLE, TEXT, STRUCT, TUPLE, LIST };
+	Kind kind = Kind::NULL_VALUE;
+	bool b = false;
+	int32_t i = 0;
+	double d = 0;
+	const char *s = nullptr;
+	std::vector<ValueField> fields;
+	std::vector<ValueSpec> items;
+};
+
+// A named struct field of a ValueSpec, complete only here so the vector above never holds a pair of an incomplete type.
+struct ValueField {
+	const char *name;
+
+// ---- test/api/capi/v2/test_capi_v2_stats.cpp:701-725  (uses: NULL_VALUE)
+	return spec;
+}
+
+// The owned value a spec describes, or null when it cannot be built; a NULL is an INTEGER NULL, a list takes the type
+// of its first item.
+duckdb_v2_value_handle BuildValue(duckdb_v2_factory_handle factory, const ValueSpec &spec,
+                                  duckdb_v2_error_info_handle *err) {
+	duckdb_v2_value_handle value = nullptr;
+	duckdb_v2_logical_type_handle type = nullptr;
+	StrArray names;
+	std::vector<duckdb_v2_value_handle> children;
+	switch (spec.kind) {
+	case ValueSpec::Kind::NULL_VALUE:
+		if (duckdb_v2_factory_create_type_from_id(factory, DUCKDB_V2_LOGICAL_TYPE_ID_INTEGER, nullptr, nullptr, nullptr,
+		                                          0, &type, err) == DUCKDB_V2_ERROR_NONE) {
+			duckdb_v2_value_create_null(factory, type, &value, err);
+		}
+		break;
+	case ValueSpec::Kind::BOOL:
+		duckdb_v2_value_create_bool(factory, spec.b, &value, err);
+		break;
+	case ValueSpec::Kind::INT:
+		duckdb_v2_value_create_int(factory, spec.i, &value, err);
+		break;
+	case ValueSpec::Kind::DOUBLE:
+
+// ---- test/api/test_multi_file_column_mapper.cpp:52-57  (uses: CreateMapping)
+	SECTION("Missing field without a default raises a recoverable error") {
+		REQUIRE_THROWS_AS(mapper.CreateMapping(MultiFileColumnMappingMode::BY_FIELD_ID), InvalidInputException);
+		REQUIRE_THROWS_WITH(
+		    mapper.CreateMapping(MultiFileColumnMappingMode::BY_FIELD_ID),
+		    Catch::Contains("(field id 42) is missing from the file schema and has no default expression"));
+	}
+
+// ---- test/api/test_multi_file_column_mapper.cpp:58-62  (uses: CreateMapping)
+	SECTION("Matching field does not need a default") {
+		reader->columns.push_back(Field("file_field", LogicalType::INTEGER, 42));
+		REQUIRE(mapper.CreateMapping(MultiFileColumnMappingMode::BY_FIELD_ID) == ReaderInitializeType::INITIALIZED);
+		REQUIRE(reader->column_ids.size() == 1);
+	}

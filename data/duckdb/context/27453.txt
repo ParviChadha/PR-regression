@@ -1,0 +1,146 @@
+// Upstream tests at the PR's parent commit 6145a8699 that use the changed code.
+// Names searched (test lines using each): TokenizeInput (9), TokenizeInputInternal (0); no SQL name matched, so SQL tests were picked by the changed files' paths
+
+// ---- test/sql/peg_parser/binary_type.test:11-14  (uses: path:parser, path:peg)
+statement ok
+CREATE TABLE t(b binary, c blob, d varbinary);
+
+statement ok
+INSERT INTO t VALUES (NULL, NULL, NULL);
+
+query III
+SELECT typeof(b), typeof(c), typeof(d) FROM t;
+----
+BLOB	BLOB	BLOB
+
+// ---- test/sql/peg_parser/deep_nesting.test:8-11  (uses: path:parser, path:peg)
+query I
+FROM query('SELECT ' || repeat('(', 10000) || '1' || repeat(')', 10000));
+----
+1
+
+// ---- test/sql/peg_parser/deep_nesting.test:19-22  (uses: path:parser, path:peg)
+query I
+FROM query('SELECT (' || repeat('[', {depth}) || '1' || repeat(']', {depth}) || ') IS NOT NULL');
+----
+1
+
+// ---- test/sql/peg_parser/escape_string.test:5-8  (uses: path:parser, path:peg)
+query I
+SELECT E'it\'s a test' = 'it''s a test';
+----
+true
+
+// ---- test/sql/peg_parser/escape_string.test:10-13  (uses: path:parser, path:peg)
+query I
+SELECT e'it\'s a test' = 'it''s a test';
+----
+true
+
+// ---- test/api/test_dialect_extension.cpp:49-73  (uses: TokenizeInput)
+		behavior.PushToken(start, start + 1, TokenType::OPERATOR);
+		behavior.PushToken(start + 1, end, TokenType::OPERATOR);
+	}
+
+private:
+	bool strings;
+	bool backticks;
+	bool split_operators;
+};
+
+static vector<MatcherToken> Tokenize(const Tokenizer &tokenizer, const string &sql) {
+	TokenizerBehavior behavior(sql);
+	tokenizer.TokenizeInput(behavior);
+	return std::move(behavior.tokens);
+}
+
+TEST_CASE("Register and select a dialect extension", "[api][dialect_extension]") {
+	DBConfig config;
+	DialectExtension::Register(config, make_uniq<DialectExtension>("test"));
+
+	DuckDB db(nullptr, &config);
+	Connection con(db);
+
+	auto dialects = con.Query("SELECT dialect_name FROM duckdb_dialects() ORDER BY dialect_name");
+	REQUIRE_NO_FAIL(*dialects);
+
+// ---- test/api/test_dialect_extension.cpp:129-153  (uses: TokenizeInput)
+	EmptyKeywordHelper helper;
+	Tokenizer tokenizer(helper);
+	HookTokenizer escaped_tokenizer(helper, true, true, false);
+	for (idx_t length : {0, 1, 7, 8, 9, 31, 32, 33, 39, 40, 41, 63, 64, 65, 127, 128, 129, 4096}) {
+		const string padding(length, 'a');
+		for (bool autocomplete : {false, true}) {
+			const auto terminator = autocomplete ? TokenType::END_OF_INPUT_AUTOCOMPLETE : TokenType::END_OF_INPUT;
+			for (auto &literal : {"'" + padding + "''b'", "E'" + padding + "\\'b'", "\"" + padding + "\"\"b\"",
+			                      "`" + padding + "``b`", "$tag$" + padding + "$wrong$b$tag$"}) {
+				auto sql = literal + " 42";
+				TerminatorTokenizerBehavior behavior(sql, autocomplete);
+				auto &tokens = behavior.tokens;
+				REQUIRE(tokenizer.TokenizeInput(behavior) == autocomplete);
+				REQUIRE(tokens.size() == 3);
+				REQUIRE(tokens[0].text == literal);
+				REQUIRE(tokens[0].offset == 0);
+				REQUIRE(tokens[0].length == literal.size());
+				REQUIRE_FALSE(tokens[0].unterminated);
+				REQUIRE(tokens[1].text == "42");
+				REQUIRE(tokens[1].offset == literal.size() + 1);
+				REQUIRE(tokens[2].type == terminator);
+			}
+			{
+				auto sql = "'" + padding + "\\'b' 42";
+				TerminatorTokenizerBehavior behavior(sql, autocomplete);
+
+// ---- test/api/test_grammar_extension.cpp:2119-2143  (uses: TokenizeInput)
+		REQUIRE_THROWS_AS(lists.back()->MatchParseResult(state), InvalidInputException);
+	} else {
+		REQUIRE(lists.back()->MatchParseResult(state).IsSuccess());
+	}
+	REQUIRE(processes.SizeInBytes() == 0);
+	REQUIRE(lifetime.active == 0);
+	REQUIRE(lifetime.state_valid);
+	REQUIRE(lifetime.destroyed == vector<idx_t> {3, 2, 1});
+}
+
+static vector<MatcherToken> TokenizeFirstSetTestInput(const CompiledGrammar &grammar, const string &sql) {
+	ParserTokenizerBehavior behavior(sql);
+	grammar.GetTokenizer().TokenizeInput(behavior);
+	return std::move(behavior.tokens);
+}
+
+TEST_CASE("Tokenizer assigns FIRST set token classes", "[api][grammar_extension]") {
+	DuckDB db(nullptr);
+	Connection con(db);
+	auto grammar = CompiledGrammar::Get(*con.context);
+	auto token_class = [&](const string &sql) {
+		auto tokens = TokenizeFirstSetTestInput(*grammar, sql);
+		REQUIRE(tokens.size() == 2);
+		return tokens[0].token_class;
+	};
+
+// ---- test/api/test_passthrough_token_matcher.cpp:10-34  (uses: TokenizeInput)
+namespace {
+
+struct MatchOutcome {
+	bool success;
+	idx_t consumed;
+	string text;
+};
+
+//! Match the matcher once against the token at `position` of the tokenized query
+MatchOutcome MatchTokenAt(const string &query, idx_t position) {
+	auto compiled = CompiledGrammar::Create();
+	ParserTokenizerBehavior behavior(query);
+	compiled->GetTokenizer().TokenizeInput(behavior);
+
+	TokenIterator iterator(behavior);
+	iterator.SetPosition(position);
+
+	vector<MatcherSuggestion> suggestions;
+	ParseResultAllocator parse_results;
+	ArenaAllocator packrat_allocator(Allocator::DefaultAllocator());
+	ParserPackratCache packrat(packrat_allocator);
+	idx_t max_position = 0;
+	ArenaAllocator process_allocator(Allocator::DefaultAllocator());
+	MatchContext context(suggestions, parse_results, process_allocator, max_position, MatchMode::BUILD_PARSE_RESULT,
+	                     IdentifierCaseMode::PRESERVE_CASE, &packrat);

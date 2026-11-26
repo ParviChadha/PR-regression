@@ -1,0 +1,164 @@
+// Upstream tests at the PR's parent commit 51c781504 that use the changed code.
+// Names searched (test lines using each): CheckpointWriter (0), CreateCheckpoint (0), GetContext (127), GetCheckpointContext (0), checkpoint_context (0), context (2015); no SQL name matched, so SQL tests were picked by the changed files' paths
+
+// ---- test/sql/storage/partial_blocks/in_memory_checkpoint_abort.test:54-57  (uses: path:checkpoint, path:memory, path:storage)
+statement ok
+CREATE TABLE m.a(k BIGINT PRIMARY KEY, v VARCHAR);
+
+statement ok
+INSERT INTO m.a SELECT range, 'value-' || range::VARCHAR FROM range(128);
+
+statement ok
+CREATE TABLE m.a AS SELECT range AS k FROM range(128);
+
+query II
+SELECT count(*), sum(k) FROM m.a;
+----
+128	8128
+
+// ---- test/sql/storage/partial_blocks/in_memory_checkpoint_publication.test:65-68  (uses: path:checkpoint, path:memory, path:storage)
+statement ok
+CREATE TABLE m.a(k INTEGER, s VARCHAR);
+
+statement ok
+INSERT INTO m.a SELECT range, 'value-' || range::VARCHAR FROM range(122880);
+
+statement ok
+INSERT INTO m.a SELECT range, 'value-' || range::VARCHAR FROM range(122880,123880);
+
+query II
+SELECT count(*), sum(k) FROM m.a;
+----
+122880	7672565760
+
+// ---- test/sql/storage/partial_blocks/in_memory_checkpoint_publication.test:70-73  (uses: path:checkpoint, path:memory, path:storage)
+statement ok
+CREATE TABLE m.a(k INTEGER, s VARCHAR);
+
+statement ok
+INSERT INTO m.a SELECT range, 'value-' || range::VARCHAR FROM range(122880);
+
+statement ok
+INSERT INTO m.a SELECT range, 'value-' || range::VARCHAR FROM range(122880,123880);
+
+query I
+SELECT count(DISTINCT row_group_id) FROM pragma_storage_info('m.a');
+----
+1
+
+// ---- test/sql/index/art/storage/test_art_allocator_bitmap_checkpoint.test:44-47  (uses: path:checkpoint, path:storage)
+query I
+SELECT count(*) FROM bitmap_db.t WHERE k=0
+----
+0
+
+// ---- test/sql/index/art/storage/test_art_allocator_bitmap_checkpoint.test:62-65  (uses: path:checkpoint, path:storage)
+query III
+SELECT count(*), min(id), max(id) FROM bitmap_db.t WHERE k=0
+----
+256	21760	22015
+
+// ---- test/api/test_context.cpp:20-35  (uses: GetContext, context)
+	SECTION("services owned by a ClientContext") {
+		auto &context = con.context->GetContext();
+		REQUIRE(context.IsClient());
+		REQUIRE(context.TryGetClientContext().get() == con.context.get());
+		REQUIRE(&context.GetDatabase() == db.instance.get());
+		REQUIRE(context.TryGetQueryProfiler());
+		REQUIRE(context.TryGetFileOpener());
+		REQUIRE(&context.GetClientConfig() == &ClientConfig::GetConfig(*con.context));
+		REQUIRE(&context.GetLogger() == &con.context->GetLogger());
+		(void)context.GetTaskScheduler();
+		Value result;
+		auto lookup = context.TryGetCurrentSetting(Identifier("max_execution_time"), result);
+		bool found = lookup;
+		REQUIRE(found);
+		REQUIRE(result.GetValue<int64_t>() == 12345);
+	}
+
+// ---- test/api/test_context.cpp:59-68  (uses: GetContext, context)
+	SECTION("QueryContext holds services") {
+		QueryContext invalid;
+		REQUIRE(!invalid.Valid());
+		REQUIRE(!invalid.GetContext());
+		QueryContext valid(*con.context);
+		REQUIRE(valid.Valid());
+		REQUIRE(valid.GetContext().get() == &con.context->GetContext());
+		QueryContext from_ptr(optional_ptr<ClientContext>(con.context.get()));
+		REQUIRE(from_ptr.GetContext().get() == &con.context->GetContext());
+	}
+
+// ---- test/api/capi/v2/test_capi_v2_result.cpp:1153-1167  (uses: GetContext, context)
+TEST_CASE("V2: a cancel requested while a statement is submitted cancels it", "[capi_v2][query_result]") {
+	EnvFixture fx;
+	auto &con = *reinterpret_cast<duckdb::Connection *>(fx.conn);
+	con.context->GetContext().GetRegisteredState().Insert("cancel_while_planning",
+	                                                      duckdb::make_shared_ptr<CancelWhilePlanning>(fx.conn));
+	duckdb_v2_result_handle result = nullptr;
+	REQUIRE(Query(fx.conn, "SELECT 42", &result) == DUCKDB_V2_ERROR_NONE);
+	con.context->GetContext().GetRegisteredState().Remove("cancel_while_planning");
+
+	duckdb_v2_data_chunk_handle chunk = nullptr;
+	auto status = DUCKDB_V2_RESULT_STEP_STATUS_WAITING;
+	REQUIRE(duckdb_v2_result_step(result, &chunk, &status, nullptr) == DUCKDB_V2_ERROR_NONE);
+	REQUIRE(status == DUCKDB_V2_RESULT_STEP_STATUS_CANCELLED);
+	duckdb_v2_result_destroy(&result);
+}
+
+// ---- test/api/test_expanding_statements.cpp:1095-1107  (uses: GetContext, context)
+TEST_CASE("Registered states see one QueryBegin and QueryEnd per group", "[api][expanding_statements]") {
+	DuckDB db(nullptr);
+	Connection con(db);
+	CreateSales(con);
+	auto counter =
+	    con.context->GetContext().GetRegisteredState().GetOrCreate<QueryCounter>("expanding_statements_query_counter");
+
+	auto handle = SubmitGroup(con, SALES_PIVOT);
+	handle->Complete();
+	REQUIRE_NO_FAIL(*handle);
+	REQUIRE(counter->begins == 1);
+	REQUIRE(counter->ends == 1);
+}
+
+// ---- test/api/test_expanding_statements.cpp:1109-1133  (uses: GetContext, context)
+TEST_CASE("Registered states see a StatementBegin and StatementEnd per statement", "[api][expanding_statements]") {
+	DuckDB db(nullptr);
+	Connection con(db);
+	REQUIRE_NO_FAIL(con.Query(SYNTACTIC_ERRORS_POLICY));
+	CreateSales(con);
+	CreateNumbers(con, 10);
+	auto recorder =
+	    con.context->GetContext().GetRegisteredState().GetOrCreate<StatementRecorder>("expanding_statements_recorder");
+
+	SECTION("a single statement") {
+		REQUIRE_NO_FAIL(con.Query("SELECT 42"));
+		REQUIRE(recorder->events ==
+		        vector<string> {"QueryBegin", "StatementBegin last", "StatementEnd last", "QueryEnd"});
+	}
+	SECTION("a statement that expands") {
+		REQUIRE_NO_FAIL(con.Query(SALES_PIVOT));
+		REQUIRE(recorder->events == vector<string> {"QueryBegin", "StatementBegin", "StatementEnd",
+		                                            "StatementBegin last", "StatementEnd last", "QueryEnd"});
+	}
+	SECTION("a statement that expands and fails before its last statement") {
+		REQUIRE_FAIL(con.Query(FAILING_DEFAULT));
+		REQUIRE(recorder->events == vector<string> {"QueryBegin", "StatementBegin", "StatementEnd", "StatementBegin",
+		                                            "StatementEnd error", "QueryEnd error"});
+	}
+}
+
+// ---- test/api/test_live_query_metrics.cpp:80-93  (uses: GetContext, context)
+TEST_CASE("Test live query metrics keep the memory a statement allocates before it is planned", "[api]") {
+	DuckDB db(nullptr);
+	Connection con(db);
+	con.context->GetContext().GetRegisteredState().Insert("allocate_at_query_begin",
+	                                                      make_shared_ptr<AllocateAtQueryBeginState>());
+
+	SECTION("profiling disabled") {
+	}
+	SECTION("profiling enabled") {
+		REQUIRE_NO_FAIL(con.Query("PRAGMA enable_profiling = 'no_output'"));
+	}
+	REQUIRE_NO_FAIL(con.Query("SELECT 42"));
+	REQUIRE(LiveMetric(con, MetricSystemTotalMemoryAllocated::Name) >= AllocateAtQueryBeginState::ALLOCATION_SIZE);
+}

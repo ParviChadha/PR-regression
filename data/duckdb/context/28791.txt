@@ -1,0 +1,147 @@
+// Upstream tests at the PR's parent commit 98f3ef433 that use the changed code.
+// Names searched (test lines using each): JoinTypeIsSupported (0), VisitOperator (17), CanGenerateJoinFilters (0); no SQL name matched, so SQL tests were picked by the changed files' paths
+
+// ---- test/optimizer/pushdown/join_filter_pushdown.test:31-44  (uses: path:filter, path:join, path:optimizer, path:pushdown)
+statement ok
+CREATE TABLE jfpp_comment AS SELECT (i + 1000)::BIGINT AS messageid FROM range(1, 1001) t(i);
+
+query II
+EXPLAIN ANALYZE
+WITH limited(label, messageid) AS MATERIALIZED (
+	VALUES ('Post', 11::BIGINT), ('Post', 101::BIGINT), ('Comment', 1503::BIGINT), ('Comment', 1907::BIGINT)
+)
+SELECT COUNT(*)
+FROM limited l
+JOIN (
+	SELECT 'Post' AS label, messageid FROM jfpp_post
+	UNION ALL
+	SELECT 'Comment' AS label, messageid FROM jfpp_comment
+) x ON x.label = l.label AND x.messageid = l.messageid;
+----
+analyzed_plan	<REGEX>:.*Dynamic Filters:.*messageid IN.*
+
+// ---- test/optimizer/pushdown/join_filter_pushdown.test:46-58  (uses: path:filter, path:join, path:optimizer, path:pushdown)
+statement ok
+CREATE TABLE jfpp_comment AS SELECT (i + 1000)::BIGINT AS messageid FROM range(1, 1001) t(i);
+
+query I
+WITH limited(label, messageid) AS MATERIALIZED (
+	VALUES ('Post', 11::BIGINT), ('Post', 101::BIGINT), ('Comment', 1503::BIGINT), ('Comment', 1907::BIGINT)
+)
+SELECT COUNT(*)
+FROM limited l
+JOIN (
+	SELECT 'Post' AS label, messageid FROM jfpp_post
+	UNION ALL
+	SELECT 'Comment' AS label, messageid FROM jfpp_comment
+) x ON x.label = l.label AND x.messageid = l.messageid;
+----
+4
+
+// ---- test/optimizer/pushdown/join_filter_pushdown_bloom_cast.test:26-29  (uses: path:filter, path:join, path:optimizer, path:pushdown)
+statement ok
+CREATE TABLE build AS SELECT (i * 1000000)::INTEGER AS k FROM range(0, 2000, 5) t(i);
+
+query II
+EXPLAIN ANALYZE SELECT count(*) FROM probe p JOIN build b ON CAST(p.k AS INTEGER)=b.k;
+----
+analyzed_plan	<REGEX>:.*IN BF.*
+
+// ---- test/optimizer/pushdown/join_filter_pushdown_bloom_cast.test:31-34  (uses: path:filter, path:join, path:optimizer, path:pushdown)
+statement ok
+CREATE TABLE build AS SELECT (i * 1000000)::INTEGER AS k FROM range(0, 2000, 5) t(i);
+
+query I
+SELECT count(*) FROM probe p JOIN build b ON CAST(p.k AS INTEGER)=b.k;
+----
+4000
+
+// ---- test/optimizer/pushdown/join_filter_pushdown_cast.test:22-25  (uses: path:filter, path:join, path:optimizer, path:pushdown)
+statement ok
+CREATE TABLE build_bigint AS SELECT b::BIGINT AS b FROM (VALUES (10), (20), (30), (50)) t(b);
+
+query II
+EXPLAIN ANALYZE SELECT COUNT(*) FROM (SELECT a::BIGINT AS a FROM probe_int) t JOIN build_bigint ON t.a = build_bigint.b;
+----
+analyzed_plan	<REGEX>:.*Dynamic Filters.*
+
+// ---- test/optimizer/pushdown/join_filter_pushdown_cast.test:27-30  (uses: path:filter, path:join, path:optimizer, path:pushdown)
+statement ok
+CREATE TABLE build_bigint AS SELECT b::BIGINT AS b FROM (VALUES (10), (20), (30), (50)) t(b);
+
+query I
+SELECT COUNT(*) FROM (SELECT a::BIGINT AS a FROM probe_int) t JOIN build_bigint ON t.a = build_bigint.b;
+----
+4
+
+// ---- test/optimizer/pushdown/join_filter_pushdown_cast_variant.test:61-64  (uses: path:filter, path:join, path:optimizer, path:pushdown)
+statement ok
+CREATE TABLE build_direct_variant AS SELECT b::VARIANT AS b FROM (VALUES (10), (20), (30), (50)) t(b);
+
+query II
+EXPLAIN ANALYZE SELECT COUNT(*) FROM probe_direct_variant JOIN build_direct_variant ON probe_direct_variant.a = build_direct_variant.b;
+----
+analyzed_plan	<REGEX>:.*Dynamic Filters.*
+
+// ---- test/optimizer/pushdown/join_filter_pushdown_cast_variant.test:66-69  (uses: path:filter, path:join, path:optimizer, path:pushdown)
+statement ok
+CREATE TABLE build_direct_variant AS SELECT b::VARIANT AS b FROM (VALUES (10), (20), (30), (50)) t(b);
+
+query I
+SELECT COUNT(*) FROM probe_direct_variant JOIN build_direct_variant ON probe_direct_variant.a = build_direct_variant.b;
+----
+4
+
+// ---- test/optimizer/build_probe_side_optimizer.cpp:75-99  (uses: VisitOperator)
+		projection_expressions.push_back(
+		    make_uniq<BoundColumnRefExpression>(anchor_cross->types[column_idx], anchor_bindings[column_idx]));
+	}
+	auto anchor_projection = make_uniq<LogicalProjection>(TableIndex(1000), std::move(projection_expressions));
+	anchor_projection->children.push_back(std::move(anchor));
+	recursive_cte->children[0] = std::move(anchor_projection);
+
+	SetAsymmetricCrossProductEstimates(*anchor_cross);
+	SetAsymmetricCrossProductEstimates(*nested_cross);
+	auto anchor_domain = anchor_cross->children[1].get();
+	auto nested_left = nested_cross->children[0].get();
+	BuildProbeSideOptimizer recursive_optimizer(*connection.context, *recursive_plan);
+	recursive_optimizer.VisitOperator(*recursive_plan);
+	REQUIRE(anchor_cross->children[1].get() == anchor_domain);
+	REQUIRE(nested_cross->children[1].get() == nested_left);
+	auto correlated_result = connection.Query(correlated_query);
+	REQUIRE_NO_FAIL(*correlated_result);
+	CHECK_COLUMN(correlated_result, 0, {2, 3});
+	CHECK_COLUMN(correlated_result, 1, {3000, 4000});
+
+	const string recursive_query = R"(
+		WITH RECURSIVE t(i, j) AS (
+			SELECT i, j FROM (VALUES (1)) a(i), range(1000) b(j)
+			UNION ALL
+			SELECT i, j FROM t WHERE false
+
+// ---- test/optimizer/build_probe_side_optimizer.cpp:100-124  (uses: VisitOperator)
+		)
+		SELECT * FROM t
+	)";
+	auto uncorrelated_plan = PlanBuildProbeQuery(connection, recursive_query);
+	auto uncorrelated_cte = FindBuildProbeOperator(*uncorrelated_plan, LogicalOperatorType::LOGICAL_RECURSIVE_CTE);
+	REQUIRE(uncorrelated_cte);
+	auto uncorrelated_cross =
+	    FindBuildProbeOperator(*uncorrelated_cte->children[0], LogicalOperatorType::LOGICAL_CROSS_PRODUCT);
+	REQUIRE(uncorrelated_cross);
+	SetAsymmetricCrossProductEstimates(*uncorrelated_cross);
+	auto uncorrelated_left = uncorrelated_cross->children[0].get();
+	BuildProbeSideOptimizer uncorrelated_optimizer(*connection.context, *uncorrelated_plan);
+	uncorrelated_optimizer.VisitOperator(*uncorrelated_plan);
+	REQUIRE(uncorrelated_cross->children[1].get() == uncorrelated_left);
+
+	auto ordinary_plan = PlanBuildProbeQuery(connection, "SELECT * FROM (VALUES (1)) a(i), range(1000) b(j)");
+	auto ordinary_cross = FindBuildProbeOperator(*ordinary_plan, LogicalOperatorType::LOGICAL_CROSS_PRODUCT);
+	REQUIRE(ordinary_cross);
+	SetAsymmetricCrossProductEstimates(*ordinary_cross);
+	auto ordinary_left = ordinary_cross->children[0].get();
+	BuildProbeSideOptimizer ordinary_optimizer(*connection.context, *ordinary_plan);
+	ordinary_optimizer.VisitOperator(*ordinary_plan);
+	REQUIRE(ordinary_cross->children[1].get() == ordinary_left);
+
+	connection.Rollback();

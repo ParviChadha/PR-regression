@@ -1,0 +1,17 @@
+// Upstream tests at the PR's parent commit 9d73b7d19 that use the changed code.
+// Names searched (test lines using each): ExpressionsToList (0), RemoveTableQualification (0), RemoveTableQualificationRecursive (0); no SQL name matched, so SQL tests were picked by the changed files' paths
+
+// ---- test/sql/alter/add_pk/test_add_pk_concurrent_create_index.test:37-40  (uses: path:create, path:index)
+statement ok
+CREATE TABLE t (id BIGINT, c INTEGER);
+
+statement ok
+INSERT INTO t SELECT range, range % 10 FROM range(2000);
+
+statement ok
+INSERT INTO t VALUES (5000, 1);
+
+query I
+SELECT count(*) FROM t WHERE c = 1;
+----
+201

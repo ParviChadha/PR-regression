@@ -1,0 +1,18 @@
+// Upstream tests at the PR's parent commit b468c567f that use the changed code.
+// Names searched (test lines using each): BuildDictionaryArrays (0), CanUseDictionaryEmission (0), ComputeBuildPayloadBytes (0), GatherRHS (0), GetDictSurvivingIndexWidth (0), MAX_BUILD_PAYLOAD_BYTES (0), DictionaryEmissionActivation (0), MIN_PROBE_ROWS (0), SelectionCoversDictionary (0), HasNestedDictionary (0); no SQL name matched, so SQL tests were picked by the changed files' paths
+
+// ---- test/fuzzer/afl/random_join.test:8-10  (uses: path:join)
+statement ok
+CREATE TABLE t1(c1 INT);
+
+query II
+SELECT * FROM (SELECT 1) JOIN t1 ON random();
+----
+
+// ---- test/fuzzer/duckfuzz/complex_join_cardinality_assert.test:8-10  (uses: path:join)
+statement ok
+create table integers(i int);
+
+query I
+SELECT NULL FROM integers AS t1 RIGHT JOIN integers AS t2 ON (NULL) WHERE EXISTS(SELECT NULL FROM integers AS t3 INNER JOIN integers ON ((t3.i + t1.i)) , (SELECT t2.i AS c0))
+----

@@ -1,0 +1,150 @@
+// Upstream tests at the PR's parent commit 4f44dd14b that use the changed code.
+// Names searched (test lines using each): Sink (42), TryGrow (0), MaybeRepartition (0), ResetForReuse (1), MemoryPressure (0), SpillableLimit (0), SpillableSize (0), RadixHTGlobalSinkState (2), RadixHTLocalSinkState (2), size_after_abandon (0), StatePressureExceeded (3), local_sink_capacity (7), RadixHTConfig (0), ExternalRadixBits (0); no SQL name matched, so SQL tests were picked by the changed files' paths
+
+// ---- test/common/test_radix_ht_sink.cpp:194-233  (uses: Sink, StatePressureExceeded)
+TEST_CASE("Arena pressure requests enough reservation to keep aggregate states resident", "[radix_ht_sink]") {
+	for (const bool combine_other_worker : {false, true}) {
+		CAPTURE(combine_other_worker);
+		RadixSinkFixture fixture("1GB", true);
+		fixture.Keys(0, STANDARD_VECTOR_SIZE);
+		fixture.Sink();
+		if (combine_other_worker) {
+			fixture.Sink(1);
+			fixture.Combine(1);
+		}
+		auto &local = fixture.Local();
+		auto &global = fixture.Global();
+		auto &ht = *local.ht;
+		const Value payload(string(8 * 1024 * 1024 / STANDARD_VECTOR_SIZE, 'p'));
+		fixture.SetPayload(payload);
+		// Grow real states on hits, stopping before the sink makes its pressure decision.
+		ht.AddChunk(fixture.chunk, fixture.payload, fixture.filter);
+		const auto total_size = ht.GetSizeInBytes();
+		const auto arena_size = ht.GetAggregateAllocator()->AllocationSize();
+		REQUIRE(arena_size * 5 > total_size * 4);
+		REQUIRE(ht.Count() + STANDARD_VECTOR_SIZE < ht.ResizeThreshold());
+		global.temporary_memory_state->SetRemainingSizeAndUpdateReservation(
+		    fixture.con.context->GetContext(), 3 * global.number_of_threads * total_size / 2);
+		const auto old_limit = global.GetThreadLimit();
+		REQUIRE(total_size <= old_limit);
+		REQUIRE(global.StatePressureExceeded(ht));
+
+		fixture.SetPayload(Value(LogicalType::VARCHAR));
+		fixture.Sink();
+		REQUIRE(global.GetThreadLimit() > old_limit);
+		REQUIRE_FALSE(global.StatePressureExceeded(ht));
+		REQUIRE_FALSE(global.external);
+		REQUIRE_FALSE(local.spilling);
+		REQUIRE(local.abandoned_exported_data.empty());
+		REQUIRE(ht.Count() == STANDARD_VECTOR_SIZE);
+		REQUIRE(ht.GetAdaptivityState().HLLEnabled());
+		fixture.Combine(0);
+		REQUIRE(fixture.ScanGroupCount(payload) == STANDARD_VECTOR_SIZE);
+	}
+}
+
+// ---- test/common/test_radix_ht_sink.cpp:235-263  (uses: Sink, StatePressureExceeded)
+TEST_CASE("Arena pressure still exports when the reservation cannot grow enough", "[radix_ht_sink]") {
+	for (const bool force_external : {false, true}) {
+		CAPTURE(force_external);
+		RadixSinkFixture fixture("64MB", true);
+		if (force_external) {
+			REQUIRE_NO_FAIL(fixture.con.Query("SET debug_force_external=true"));
+		}
+		fixture.Keys(0, STANDARD_VECTOR_SIZE);
+		fixture.Sink();
+		auto &local = fixture.Local();
+		auto &global = fixture.Global();
+		auto &ht = *local.ht;
+		const Value payload(string(8 * 1024 * 1024 / STANDARD_VECTOR_SIZE, 'p'));
+		fixture.SetPayload(payload);
+		ht.AddChunk(fixture.chunk, fixture.payload, fixture.filter);
+		REQUIRE(ht.Count() + STANDARD_VECTOR_SIZE < ht.ResizeThreshold());
+		REQUIRE(global.StatePressureExceeded(ht));
+
+		fixture.SetPayload(Value(LogicalType::VARCHAR));
+		fixture.Sink();
+		REQUIRE(global.temporary_memory_state->GetReservation() < global.temporary_memory_state->GetRemainingSize());
+		REQUIRE(global.external);
+		REQUIRE(local.spilling);
+		REQUIRE_FALSE(local.abandoned_exported_data.empty());
+		REQUIRE(ht.GetAggregateAllocator()->AllocationSize() == 0);
+		fixture.Combine(0);
+		REQUIRE(fixture.ScanGroupCount(payload) == STANDARD_VECTOR_SIZE);
+	}
+}
+
+// ---- test/common/test_column_data_compact.cpp:786-810  (uses: ResetForReuse)
+		moved_constant_bytes += moved_segment->constant_metadata_size;
+		moved_dictionaries += moved_segment->dictionaries.size();
+	}
+	REQUIRE(moved_constant_bytes == sizeof(ColumnDataConstantValue));
+	REQUIRE(moved_dictionaries == 1);
+
+	ColumnDataCollection swapped(buffer_manager, {LogicalType::VARCHAR});
+	swapped.Swap(first);
+	REQUIRE(swapped.Count() == 2 * STANDARD_VECTOR_SIZE);
+	REQUIRE(swapped.GetValue(0, 0) == Value(payload));
+
+	// reuse after a reset starts from clean per-segment dictionary state
+	swapped.ResetForReuse();
+	REQUIRE(swapped.Count() == 0);
+	REQUIRE(swapped.GetSegments()[0]->dictionaries.empty());
+	REQUIRE(swapped.GetSegments()[0]->constant_metadata_size == 0);
+	ColumnDataAppendState reuse_append;
+	swapped.InitializeAppend(reuse_append);
+	AppendDictionaryChunk(swapped, reuse_append, MakeStringDictionary(50, "reused_dictionary_payload_", false), 50,
+	                      100);
+	// the dictionary is materialized again for the reused segment
+	REQUIRE(swapped.GetSegments()[0]->dictionaries.size() == 1);
+	AppendConstantChunk(swapped, reuse_append, Value(payload), 100);
+	REQUIRE(swapped.Count() == 200);
+	REQUIRE(swapped.GetValue(0, 1) == Value("reused_dictionary_payload_1"));
+
+// ---- test/optimizer/partitioned_execution_coverage.test:28-31  (uses: path:execution, path:partitioned)
+query II
+EXPLAIN SELECT i FROM test ORDER BY i ASC;
+----
+logical_opt	<REGEX>:.*UNION.*
+
+// ---- test/optimizer/partitioned_execution_coverage.test:33-36  (uses: path:execution, path:partitioned)
+query II
+EXPLAIN SELECT i FROM test ORDER BY i DESC;
+----
+logical_opt	<REGEX>:.*UNION.*
+
+// ---- test/optimizer/eager_aggregate_execution.test:39-42  (uses: path:execution)
+statement ok
+CREATE TABLE t AS (SELECT * FROM range(8192) _(i), LATERAL (select (i*2) as j));
+
+query II
+EXPLAIN SELECT count(*), min(i), max(i) FROM t
+----
+physical_plan	<!REGEX>:.*AGGREGATE.*
+
+// ---- test/optimizer/eager_aggregate_execution.test:44-47  (uses: path:execution)
+statement ok
+CREATE TABLE t AS (SELECT * FROM range(8192) _(i), LATERAL (select (i*2) as j));
+
+query II
+EXPLAIN SELECT count(*), min(i), max(i) FROM t GROUP BY i
+----
+physical_plan	<REGEX>:.*GROUP_BY.*
+
+// ---- test/sql/aggregate/aggregate_state_export/aggregate_state_union.test:14-17  (uses: path:state)
+query I
+SELECT typeof(s) FROM (SELECT sum(1) AS s UNION ALL SELECT sum(1) EXPORT_STATE) t LIMIT 1;
+----
+HUGEINT
+
+// ---- test/sql/aggregate/aggregate_state_export/approx_quantile_export_state.test:11-14  (uses: path:state)
+query I
+SELECT finalize(approx_quantile(i, 0.5) EXPORT_STATE) FROM (SELECT 1 AS i WHERE false) t;
+----
+NULL
+
+// ---- test/sql/aggregate/aggregate_state_export/approx_quantile_export_state.test:22-25  (uses: path:state)
+query I
+SELECT finalize(approx_quantile(i, [0.1, 0.5, 0.9]) EXPORT_STATE) = approx_quantile(i, [0.1, 0.5, 0.9]) FROM range(1, 10001) t(i);
+----
+true

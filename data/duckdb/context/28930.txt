@@ -1,0 +1,221 @@
+// Upstream tests at the PR's parent commit 8cf74e4e0 that use the changed code.
+// Names searched (test lines using each): Read (68), ReadBlock (0), ReadBlocks (0), GetBlockLocation (0); no SQL name matched, so SQL tests were picked by the changed files' paths
+
+// ---- test/sql/storage/metadata/partial_column_metadata_reuse_small_block.test:41-44  (uses: path:block, path:metadata, path:storage)
+statement ok
+CREATE TABLE wide_tbl AS SELECT
+    i AS c0, i AS c1, i AS c2, i AS c3, i AS c4,
+    i AS c5, i AS c6, i AS c7, i AS c8, i AS c9,
+    i AS c10, i AS c11, i AS c12, i AS c13, i AS c14, i AS c15
+FROM range(500000) t(i)
+
+query II
+SELECT COUNT(*), SUM(c0) FROM wide_tbl
+----
+500000	124999750000
+
+// ---- test/sql/storage/storage_exceeds_single_block.test:24-27  (uses: path:block, path:single, path:storage)
+statement ok
+CREATE TABLE test (a INTEGER, b INTEGER);
+
+statement ok
+INSERT INTO test VALUES (11, 22), (13, 22), (12, 21), (NULL, NULL)
+
+statement ok
+INSERT INTO test FROM test
+
+query I
+SELECT SUM(a) + SUM(b) FROM test
+----
+6619136
+
+// ---- test/sql/storage/storage_exceeds_single_block.test:31-34  (uses: path:block, path:single, path:storage)
+statement ok
+CREATE TABLE test (a INTEGER, b INTEGER);
+
+statement ok
+INSERT INTO test VALUES (11, 22), (13, 22), (12, 21), (NULL, NULL)
+
+statement ok
+INSERT INTO test FROM test
+
+query I
+SELECT SUM(a) + SUM(b) FROM test
+----
+6619136
+
+// ---- test/sql/storage/storage_exceeds_single_block_strings.test:24-31  (uses: path:block, path:single, path:storage)
+statement ok
+CREATE TABLE test (a VARCHAR);
+
+statement ok
+INSERT INTO test VALUES ('a'), ('bb'), ('ccc'), ('dddd'), ('eeeee')
+
+statement ok
+INSERT INTO test FROM test
+
+query II
+SELECT a, COUNT(*) FROM test GROUP BY a ORDER BY a
+----
+a	16384
+bb	16384
+ccc	16384
+dddd	16384
+eeeee	16384
+
+// ---- test/sql/storage/storage_exceeds_single_block_strings.test:35-42  (uses: path:block, path:single, path:storage)
+statement ok
+CREATE TABLE test (a VARCHAR);
+
+statement ok
+INSERT INTO test VALUES ('a'), ('bb'), ('ccc'), ('dddd'), ('eeeee')
+
+statement ok
+INSERT INTO test FROM test
+
+query II
+SELECT a, COUNT(*) FROM test GROUP BY a ORDER BY a
+----
+a	16384
+bb	16384
+ccc	16384
+dddd	16384
+eeeee	16384
+
+// ---- test/sql/storage/storage_exceeds_single_block_types.test:24-27  (uses: path:block, path:single, path:storage)
+statement ok
+CREATE TABLE test (a INTEGER, b BIGINT);
+
+statement ok
+INSERT INTO test VALUES (11, 22), (13, 22), (12, 21), (NULL, NULL)
+
+statement ok
+INSERT INTO test FROM test
+
+query I
+SELECT SUM(a) + SUM(b) FROM test
+----
+6619136
+
+// ---- test/sql/storage/storage_exceeds_single_block_types.test:31-34  (uses: path:block, path:single, path:storage)
+statement ok
+CREATE TABLE test (a INTEGER, b BIGINT);
+
+statement ok
+INSERT INTO test VALUES (11, 22), (13, 22), (12, 21), (NULL, NULL)
+
+statement ok
+INSERT INTO test FROM test
+
+query I
+SELECT SUM(a) + SUM(b) FROM test
+----
+6619136
+
+// ---- test/api/test_extension_repositories.cpp:628-652  (uses: Read)
+                                     const string &folder_repository, const string &repository_name,
+                                     const string &version) {
+	auto fs = FileSystem::CreateLocal();
+	string dir = ExtensionHelper::ExtensionDirectory(db, *fs);
+	if (!folder_repository.empty()) {
+		dir = fs->JoinPath(fs->JoinPath(dir, "repositories"), folder_repository);
+	}
+	fs->CreateDirectoriesRecursive(dir);
+
+	auto source_handle = fs->OpenFile(source, FileFlags::FILE_FLAGS_READ);
+	auto size = source_handle->GetFileSize();
+	auto buffer = make_unsafe_uniq_array<data_t>(size);
+	source_handle->Read(buffer.get(), size);
+	string ext_path = fs->JoinPath(dir, name + ".duckdb_extension");
+	WriteExtensionFile(*fs, ext_path, buffer.get(), size);
+
+	MemoryStream stream;
+	BinarySerializer::Serialize(UserRepositoryInstallInfo(repository_name, version), stream);
+	WriteExtensionFile(*fs, ext_path + ".info", stream.GetData(), stream.GetPosition());
+	return ext_path;
+}
+
+// "in_repository_folder|loaded" per row, the flat row first
+static vector<string> LoadedRows(Connection &con, const string &name) {
+	auto result = con.Query("SELECT loaded, "
+
+// ---- test/api/test_extension_repositories.cpp:721-745  (uses: Read)
+		auto db = make_db();
+		Connection con(*db);
+		REQUIRE_NO_FAIL(con.Query(StringUtil::Format("LOAD '%s'", repository_path)));
+		REQUIRE(LoadedRows(con, name) == vector<string> {"false|false", "true|true"});
+	}
+}
+
+// Copy a file into the reserved '.duckdb_extension' domain, as an install does
+static void CopyExtensionFile(FileSystem &fs, const string &source, const string &target) {
+	auto handle = fs.OpenFile(source, FileFlags::FILE_FLAGS_READ);
+	auto size = handle->GetFileSize();
+	auto buffer = make_unsafe_uniq_array<data_t>(size);
+	handle->Read(buffer.get(), size, 0);
+	WriteExtensionFile(fs, target, buffer.get(), size);
+}
+
+// One "extension|repository|result|previous version|current version" string per row
+static vector<string> UpdateRows(Connection &con, const string &statement) {
+	auto result = con.Query(statement);
+	REQUIRE_NO_FAIL(*result);
+	vector<string> rows;
+	for (auto &row : result->Collection().Rows()) {
+		vector<string> values;
+		for (idx_t c = 0; c < result->ColumnCount(); c++) {
+			values.push_back(row.GetValue(c).ToString());
+
+// ---- test/common/test_async_file_writer.cpp:858-882  (uses: Read)
+private:
+	idx_t task_count;
+	BlockingAsyncTaskState state;
+	TaskExecutor executor;
+	bool released = false;
+};
+
+static string ReadFile(const string &path) {
+	LocalFileSystem fs;
+	auto handle = fs.OpenFile(path, FileFlags::FILE_FLAGS_READ);
+	auto file_size = NumericCast<idx_t>(handle->GetFileSize());
+	string result(file_size, '\0');
+	handle->Read(data_ptr_cast(result.data()), file_size);
+	return result;
+}
+
+static string CaptureException(const std::function<void()> &action) {
+	try {
+		action();
+	} catch (const std::exception &ex) {
+		return ex.what();
+	} catch (...) {
+		return "unknown exception";
+	}
+	return string();
+
+// ---- test/common/test_caching_file_system_wrapper.cpp:341-365  (uses: Read)
+
+	string buffer(100, '\0');
+
+	// Test 1: Basic seek and read
+	handle->Read(QueryContext(), &buffer[0], /*nr_bytes=*/5, /*location=*/0);
+	REQUIRE(buffer.substr(0, 5) == "01234");
+
+	// Seek to position 10
+	caching_wrapper->Seek(*handle, /*location=*/10);
+	REQUIRE(caching_wrapper->SeekPosition(*handle) == 10);
+
+	// Read from position 10
+	handle->Read(QueryContext(), &buffer[0], /*nr_bytes=*/5, /*location=*/10);
+	REQUIRE(buffer.substr(0, 5) == "ABCDE");
+
+	// Seek to position 5
+	caching_wrapper->Seek(*handle, /*location=*/5);
+	REQUIRE(caching_wrapper->SeekPosition(*handle) == 5);
+
+	// Read from position 5
+	handle->Read(QueryContext(), &buffer[0], /*nr_bytes=*/5, /*location=*/5);
+	REQUIRE(buffer.substr(0, 5) == "56789");
+
+	// Test 2: Reset.
+	caching_wrapper->Reset(*handle);

@@ -1,0 +1,143 @@
+// Upstream tests at the PR's parent commit 00e01c291 that use the changed code.
+// Names searched (test lines using each): VariantObjectIterator (0), GetOrderedEntries (0), GetFunction (3), variant_comparator (17)
+
+// ---- test/sql/aggregate/variant/variant_group_object.test:77-85  (uses: variant_comparator)
+statement ok
+create table base (k VARCHAR, v VARIANT);
+
+statement ok
+insert into base values ('duck', {'nested': 12}::VARIANT), ('goose', [1,2,3,4]::VARIANT), ('pond', 26::VARIANT);
+
+query I
+select variant_comparator(variant_group_object(k, v)) = variant_comparator({
+    'duck': {'nested': 12},
+    'goose': [1, 2, 3, 4],
+    'pond': 26
+}::VARIANT)
+from base;
+----
+true
+
+// ---- test/sql/aggregate/variant/variant_group_object.test:89-103  (uses: variant_comparator)
+query I
+select count(*)
+from (
+    select g, variant_group_object(k, v) as obj
+    from (values
+        (1, 'z', 10::VARIANT),
+        (1, 'a', 20::VARIANT),
+        (2, 'a', 30::VARIANT)
+    ) t(g, k, v)
+    group by g
+) grouped
+where (g = 1 and variant_comparator(obj) = variant_comparator({'a': 20, 'z': 10}::VARIANT))
+   or (g = 2 and variant_comparator(obj) = variant_comparator({'a': 30}::VARIANT));
+----
+2
+
+// ---- test/sql/aggregate/variant/variant_group_object_shredded.test:33-42  (uses: variant_comparator)
+statement ok
+CREATE TABLE shredded_values(id INTEGER, k VARCHAR, v VARIANT);
+
+statement ok
+INSERT INTO shredded_values VALUES
+    (1, 'first', {'a': 1, 'b': 2}::VARIANT),
+    (2, 'second', {'a': 3}::VARIANT),
+    (3, 'null_root', NULL::VARIANT),
+    (4, 'scalar', 42::VARIANT);
+
+query I
+SELECT variant_comparator(variant_group_object(k, v)) = variant_comparator({
+    'first': {'a': 1, 'b': 2},
+    'second': {'a': 3},
+    'null_root': NULL,
+    'scalar': 42
+}::VARIANT)
+FROM shredded_values;
+----
+true
+
+// ---- test/sql/storage/types/variant/variant_comparator_stats.test:29-37  (uses: variant_comparator)
+statement ok
+CREATE TABLE ints(col VARIANT);
+
+statement ok
+INSERT INTO ints SELECT (i + 1)::INTEGER FROM range(100) t(i);
+
+# the comparator stats push the bucket (type-rank prefix) and the typed min/max, so the BLOB min/max
+# are exactly the comparator sort keys of the typed extremes (1 and 100)
+query II
+SELECT
+	s.min::VARCHAR = variant_comparator(1::INTEGER::VARIANT)::VARCHAR,
+	s.max::VARCHAR = variant_comparator(100::INTEGER::VARIANT)::VARCHAR
+FROM (SELECT stats(variant_comparator(col)) s FROM ints LIMIT 1);
+----
+true	true
+
+// ---- test/sql/storage/types/variant/variant_comparator_stats.test:72-78  (uses: variant_comparator)
+statement ok
+CREATE TABLE strs(col VARIANT);
+
+statement ok
+INSERT INTO strs VALUES ('apple'::VARIANT), ('mango'::VARIANT), ('cherry'::VARIANT);
+
+# the bucket + bounds are derived (the exact max can be a rounded-up valid upper bound when the typed
+# string stats are stored truncated - so we assert the bounds exist and filter correctly instead)
+query II
+SELECT s.min IS NOT NULL, s.max IS NOT NULL
+FROM (SELECT stats(variant_comparator(col)) s FROM strs LIMIT 1);
+----
+true	true
+
+// ---- test/api/test_function_binding.cpp:118-141  (uses: GetFunction)
+TEST_CASE("Overload selection keeps cheaper later matches and equal-cost ambiguities", "[api][function_binding]") {
+	DuckDB db(nullptr);
+	Connection con(db);
+	ScalarFunctionSet set("costs");
+	for (auto &type : {LogicalType::BIGINT, LogicalType::INTEGER, LogicalType::DOUBLE}) {
+		FunctionSignature sig;
+		sig.AddParameter("a", type);
+		sig.SetReturnType(type);
+		set.AddFunction(ScalarFunction("costs", std::move(sig), NoopExec));
+	}
+	auto selection = FunctionBinder::SelectFunction(*con.context, set, {LogicalType::INTEGER});
+	REQUIRE(selection.IsSuccess());
+	REQUIRE(selection.GetBinding().GetOverloadIndex() == 1);
+	REQUIRE(selection.GetBinding().GetFunction().GetSignature().GetReturnType() == LogicalType::INTEGER);
+
+	// A later equally good overload must still be retained.
+	FunctionSignature sig;
+	sig.AddParameter("a", LogicalType::INTEGER);
+	sig.SetReturnType(LogicalType::BIGINT);
+	set.AddFunction(ScalarFunction("costs", std::move(sig), NoopExec));
+	selection = FunctionBinder::SelectFunction(*con.context, set, {LogicalType::INTEGER});
+	REQUIRE(!selection.IsSuccess());
+	REQUIRE(selection.GetError().GetType() == FunctionBindError::Type::AMBIGUOUS_MATCH);
+}
+
+// ---- test/sql_export/sql_export_expression_functions.cpp:202-226  (uses: GetFunction)
+	Connection source(source_db);
+	Connection target(target_db);
+	const Identifier name("incremental_sql_identity");
+	auto make_function = [&](const LogicalType &type) {
+		auto function = ScalarFunction(name, {type}, type, ScalarFunction::NopFunction);
+		function.SetCatalogName(Identifier("unowned_catalog"));
+		function.SetSchemaName(Identifier("unowned_schema"));
+		return function;
+	};
+	auto register_functions = [&](DuckDB &db) {
+		ExtensionLoader loader(*db.instance, "incremental_sql_identity_extension");
+		loader.RegisterFunction(make_function(LogicalType::INTEGER));
+		auto initial = loader.GetFunction(name).functions.GetFunctionByOffset(0);
+		loader.AddFunctionOverload(make_function(LogicalType::BIGINT));
+		ScalarFunctionSet additions(name);
+		additions.AddFunction(make_function(LogicalType::SMALLINT));
+		auto renamed = make_function(LogicalType::VARCHAR);
+		renamed.SetName(Identifier("noncanonical_name"));
+		additions.AddFunction(std::move(renamed));
+		loader.AddFunctionOverload(std::move(additions));
+		auto &functions = loader.GetFunction(name).functions;
+		REQUIRE(functions.Size() == 4);
+		REQUIRE(functions.GetFunctionByOffset(0) == initial);
+		idx_t index = 0;
+		for (auto &type : {LogicalType::INTEGER, LogicalType::BIGINT, LogicalType::SMALLINT, LogicalType::VARCHAR}) {

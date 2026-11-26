@@ -227,6 +227,30 @@ class WithLibclang(unittest.TestCase):
         with self.assertRaisesRegex(RuntimeError, "fatal parse error"):
             an.entities_in("include/lib/broken.hpp")
 
+    def test_analysis_include_dirs_reach_headers_only_library_sources_use(self):
+        """A compiled library's .cpp includes vendored headers (duckdb: third_party/fmt/include) that are not in
+        include_dirs; analysis_include_dirs makes them reachable, so the .cpp parses without a fatal error."""
+        from pipeline.changes import Analyzer
+        (self.tmp / "vendor" / "inc").mkdir(parents=True, exist_ok=True)
+        (self.tmp / "vendor" / "inc" / "vend.hpp").write_text("inline int vend() { return 7; }\n")
+        (self.tmp / "src").mkdir(exist_ok=True)
+        (self.tmp / "src" / "impl.cpp").write_text('#include "vend.hpp"\n#include <lib/box.hpp>\nint impl_fn() { return vend(); }\n')
+        without = Analyzer(self.an.t, self.tmp, self.an.resdir)
+        with self.assertRaisesRegex(RuntimeError, "fatal parse error"):
+            without.entities_in("src/impl.cpp")
+
+        class T2:
+            name = "unit"
+            cfg = {**self.an.t.cfg, "analysis_include_dirs": ["vendor/inc"]}
+
+            def get(self, k, d=None):
+                return self.cfg.get(k, d)
+
+        an = Analyzer(T2(), self.tmp, self.an.resdir)
+        self.assertEqual([a for a in an.args if a.startswith("-I")],
+                         [f"-I{self.tmp / 'include'}", f"-I{self.tmp / 'vendor' / 'inc'}"])
+        self.assertIn("impl_fn()", [an.describe(e["cursor"])["name"] for e in an.entities_in("src/impl.cpp")])
+
     def test_public_and_private_members(self):
         self.assertEqual(self.at_line("    int size() const { return n; }")["access"], "public")
         d = self.at_line("    int grow() { return ++n; }")

@@ -1,0 +1,63 @@
+// Upstream tests at the PR's parent commit e3a462b51 that use the changed code.
+// Names searched (test lines using each): InvokeCloseIfLastReference (0); no SQL name matched, so SQL tests were picked by the changed files' paths
+
+// ---- test/sql/copy/copy_to_attached_database_path.test:30-33  (uses: path:attached, path:database)
+statement ok
+CREATE TABLE ca.t AS SELECT range i FROM range(1000);
+
+query I
+SELECT sum(i) FROM ca.t;
+----
+499500
+
+// ---- test/sql/copy/copy_to_attached_database_path.test:49-52  (uses: path:attached, path:database)
+statement ok
+CREATE TABLE m AS SELECT 42 i;
+
+query I
+SELECT i FROM m;
+----
+42
+
+// ---- test/sql/alter/test_alter_database_rename.test:11-14  (uses: path:database)
+statement ok
+CREATE TABLE test_db.sample AS SELECT i FROM range(100) t(i);
+
+query I
+SELECT COUNT(*) FROM test_db.sample
+----
+100
+
+// ---- test/sql/alter/test_alter_database_rename.test:19-22  (uses: path:database)
+statement ok
+CREATE TABLE test_db.sample AS SELECT i FROM range(100) t(i);
+
+query I
+SELECT COUNT(*) FROM renamed_db.sample
+----
+100
+
+// ---- test/sql/attach/attach_database_options.test:9-12  (uses: path:database)
+query I
+SELECT options['block_size'] from duckdb_databases() where database_name = 'new_database';
+----
+262144
+
+// ---- test/sql/attach/attach_database_options.test:14-17  (uses: path:database)
+query I
+SELECT options['row_group_size'] from duckdb_databases() where database_name = 'new_database';
+----
+2048
+
+// ---- test/sql/attach/attach_database_size.test:8-11  (uses: path:database)
+query I
+SELECT database_name FROM pragma_database_size() WHERE database_name = 'db1';
+----
+db1
+
+// ---- test/sql/attach/attach_database_size.test:16-20  (uses: path:database)
+query I
+SELECT database_name FROM pragma_database_size() WHERE database_name = 'db1' OR database_name = 'db2' ORDER BY ALL;
+----
+db1
+db2

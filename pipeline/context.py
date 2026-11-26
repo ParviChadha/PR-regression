@@ -23,6 +23,22 @@ For each PR with data/<t>/changes/<pr>.json (from changes.py):
      file is named after what is searched (unit-comparison.cpp for operator==), and taken best first until the
      character budget (generate.py truncates context at 8000), at most 2 blocks per test file.
 
+SQL tests (targets with `sql_test_ext`, e.g. duckdb, whose tests are mostly sqllogictest scripts test/sql/**/*.test):
+  6. A changed or reaching C++ entity inside a struct that declares `static constexpr const char *Name = "avg"` (duckdb's
+     function and setting registry: AvgFun, ThreadsSetting) names the SQL function or setting it implements; aliases
+     (`using ALIAS = AvgFun;` in MeanFun -> "mean") count too. The structs are read at the parent commit from
+     `sql_name_paths`. Each SQL name is searched in the .test files (a call `avg(` for functions, the word for settings).
+  7. A use is widened to its sqllogictest record (the lines between blank lines: `statement ok` / `query I` with its
+     SQL and expected result), and the CREATE / INSERT statements earlier in the file that define the tables, views,
+     sequences, macros or types it uses are put in front, so the example runs on its own.
+  8. Files that `require` an extension the build leaves out (`sql_missing_requires`, e.g. parquet, json, icu) are
+     skipped: their examples would fail for reasons unrelated to the PR.
+     The PR title adds names too: calls ("contains(list_column, '')"), snake_case SQL names ("struct_update"),
+     UPPER_SNAKE type and option names ("TIMESTAMPTZ_NS", "NEW_LINE"): authors often name what the PR changes.
+  9. When no SQL name is found or used (optimizer, storage and planner PRs implement no named function), records are
+     taken from the test files whose path shares the most words with the changed files' paths (cte_filter_pusher.cpp
+     -> test/optimizer/cte/...); the .json says "fallback": "path". C++ test files (Catch) are searched as before.
+
 Writes data/<t>/context/<pr>.txt (what generate.py reads) and data/<t>/context/<pr>.json (names searched, hits per
 name, blocks chosen and why). A PR whose changed code no test uses gets no .txt, and the .json says why.
 """
@@ -211,12 +227,241 @@ def select_blocks(blocks, budget, per_file=MAX_PER_FILE):
     return chosen
 
 
+# ---------- SQL (sqllogictest) tests ----------
+
+SQL_NAME_RE = re.compile(r'struct\s+(\w+)\s*(?:final\s*)?\{(?P<body>(?:(?!\bstruct\b).){0,600}?)'
+                         r'static\s+constexpr\s+const\s+char\s*\*\s*Name\s*=\s*"([^"]+)"', re.S)
+ALIAS_RE = re.compile(r"using\s+ALIAS\s*=\s*(\w+)\s*;")
+SQL_DEF_RE = re.compile(r"(?:CREATE\s+(?:OR\s+REPLACE\s+)?(?:TEMP(?:ORARY)?\s+)?(?:TABLE|VIEW|SEQUENCE|MACRO|TYPE)\s+"
+                        r"(?:IF\s+NOT\s+EXISTS\s+)?|INSERT\s+(?:OR\s+\w+\s+)?INTO\s+)([\w.\"]+)", re.I)
+SQL_SETUP_BUDGET = 1200
+PATH_STOP = {"src", "include", "duckdb", "common", "main", "function", "functions", "core", "extension", "test", "sql",
+             "core_functions", "cpp", "hpp", "scalar", "aggregate", "table", "types", "util", "utils", "the", "and",
+             "operator", "impl", "helper", "helpers", "base", "data", "info"}
+
+
+def sql_name_map(texts):
+    """{C++ struct name: [SQL names]} from headers declaring `static constexpr const char *Name = "..."`, with each
+    alias struct's name (`using ALIAS = AvgFun;` in MeanFun) added to the struct it aliases."""
+    own, alias_of = {}, {}
+    for text in texts.values():
+        for m in SQL_NAME_RE.finditer(text):
+            struct, body, name = m.group(1), m.group("body"), m.group(3)
+            a = ALIAS_RE.search(body)
+            if a:
+                alias_of.setdefault(a.group(1), []).append(name)
+            own.setdefault(struct, []).append(name)
+    out = {}
+    for struct, names in own.items():
+        out[struct] = list(dict.fromkeys(names + alias_of.get(struct, [])))
+    return out
+
+
+def scope_parts(qualified):
+    """'duckdb::AvgFun::GetFunctions()' -> ['duckdb', 'AvgFun', 'GetFunctions']."""
+    q = qualified.replace("(anonymous)", "\0anon\0")          # not the start of the argument list
+    head = q.split("(", 1)[0] if "operator" not in q else re.sub(r"\(.*$", "", q)
+    return [re.sub(r"<.*$", "", p).strip().replace("\0anon\0", "(anonymous)") for p in head.split("::") if p.strip()]
+
+
+def sql_search_terms(changes, name_map):
+    """SQL names implemented by the changed code: [{name, role, kind ('sql' or 'setting'), from}]."""
+    terms, seen = [], set()
+    for f in changes.get("functions", []):
+        for q, role in [(f["name"], "changed")] + [(v["name"], "reached") for v in f.get("reached_via", [])]:
+            for part in scope_parts(q):
+                for name in name_map.get(part, []):
+                    if name.lower() not in seen:
+                        seen.add(name.lower())
+                        terms.append({"name": name, "role": f"SQL name of {part} ({role})",
+                                      "kind": "setting" if part.endswith("Setting") else "sql", "from": f["name"]})
+    return terms
+
+
+TITLE_CALL_RE = re.compile(r"(?<![\w.])([a-z_][a-z0-9_]*)\(")     # no space: "types (TIMESTAMP_NS)" is prose
+COMMIT_PREFIXES = {"fix", "feat", "chore", "refactor", "perf", "test", "tests", "docs", "ci", "build", "style", "revert"}
+TITLE_SNAKE_RE = re.compile(r"(?<![\w.])([a-z][a-z0-9]*(?:_[a-z0-9]+)+)(?![\w(])")
+TITLE_UPPER_RE = re.compile(r"(?<![\w.])([A-Z][A-Z0-9]*(?:_[A-Z0-9]+)+)(?!\w)")
+TITLE_TICK_RE = re.compile(r"`([A-Za-z_][\w ]{1,40}?)`")
+
+
+def title_terms(title, known, have=()):
+    """SQL names the PR title spells out: calls ("contains(list, '')"), snake_case names ("struct_update"),
+    UPPER_SNAKE type or option names ("TIMESTAMPTZ_NS", "NEW_LINE") and `backticked` lowercase words. Calls and known
+    SQL function names are searched as calls, the rest as words. `known`: every SQL name of the registry (lowercase)."""
+    terms, seen = [], {h.lower() for h in have}
+
+    def add(name, kind):
+        if name.lower() not in seen and len(name) >= 3:
+            seen.add(name.lower())
+            terms.append({"name": name, "role": "named in the PR title", "kind": kind, "from": "title"})
+
+    for m in TITLE_CALL_RE.finditer(title or ""):
+        if m.group(1) not in COMMIT_PREFIXES:                   # "fix(join-condition): ..." is a commit-style prefix
+            add(m.group(1), "sql")
+    for m in TITLE_SNAKE_RE.finditer(title or ""):
+        add(m.group(1), "sql" if m.group(1) in known else "word")
+    for m in TITLE_UPPER_RE.finditer(title or ""):
+        add(m.group(1), "word")
+    for m in TITLE_TICK_RE.finditer(title or ""):
+        w = m.group(1).strip()
+        if w.islower() and " " not in w:
+            add(w, "sql" if w in known else "word")
+    return terms
+
+
+def sql_term_regex(term):
+    n = re.escape(term["name"])
+    if term["kind"] in ("setting", "word"):
+        return re.compile(r"(?<![\w.])" + n + r"(?!\w)", re.I)
+    return re.compile(r"(?<![\w.])" + n + r"\s*\(", re.I)
+
+
+def is_sql_test(t, path):
+    return any(path.endswith(e) for e in t.get("sql_test_ext", []))
+
+
+def sql_skipped(t, text):
+    """The `require`d extension that rules this file out, or None."""
+    missing = set(t.get("sql_missing_requires", []))
+    for line in text.splitlines():
+        m = re.match(r"\s*require\s+(\w+)", line)
+        if m and m.group(1) in missing:
+            return m.group(1)
+    return None
+
+
+def sql_record_around(lines, idx):
+    """(start, end) 0-based inclusive: the sqllogictest record (between blank lines) around line idx."""
+    s = idx
+    while s > 0 and lines[s - 1].strip():
+        s -= 1
+    e = idx
+    while e + 1 < len(lines) and lines[e + 1].strip():
+        e += 1
+    if e - s + 1 > MAX_BLOCK_LINES:
+        return max(s, idx - AROUND), min(e, idx + AROUND)
+    return s, e
+
+
+def sql_records(lines):
+    """[(start, end)] of every record in a sqllogictest file."""
+    out, i = [], 0
+    while i < len(lines):
+        if lines[i].strip():
+            s, e = i, i
+            while e + 1 < len(lines) and lines[e + 1].strip():
+                e += 1
+            out.append((s, e))
+            i = e + 1
+        else:
+            i += 1
+    return out
+
+
+def sql_setup(lines, start, end):
+    """The `statement ok` records before `start` that create or fill a table/view/sequence/macro/type the record at
+    start..end uses (two passes, so a view's table comes along), joined, within SQL_SETUP_BUDGET characters."""
+    body = "\n".join(lines[start:end + 1]).lower()
+    defs = []
+    for s, e in sql_records(lines[:start]):
+        if not lines[s].lstrip().startswith("statement ok"):
+            continue
+        rec = "\n".join(lines[s:e + 1])
+        names = [m.group(1).strip('"').split(".")[-1].lower() for m in SQL_DEF_RE.finditer(rec)]
+        if names:
+            defs.append((rec, names))
+    keep, wanted = [], body
+    for _ in range(2):
+        for rec, names in defs:
+            if rec not in keep and any(re.search(r"(?<!\w)" + re.escape(n) + r"(?!\w)", wanted) for n in names):
+                keep.append(rec)
+        wanted = body + "\n" + "\n".join(keep).lower()
+    keep = [rec for rec, _ in defs if rec in keep]             # file order
+    out, used = [], 0
+    for rec in keep:
+        if used + len(rec) > SQL_SETUP_BUDGET:
+            break
+        out.append(rec)
+        used += len(rec) + 2
+    return "\n\n".join(out)
+
+
+def path_words(path):
+    words = set()
+    for part in re.split(r"[/_.\-]+", path.lower()):
+        if len(part) >= 3 and part not in PATH_STOP and not part.isdigit():
+            words.add(part)
+    return words
+
+
+def sql_blocks(t, rec, changes, sql_texts, name_map):
+    """Candidate blocks from SQL test files: (blocks, terms, fallback or None). Blocks have file/start/end (0-based)/
+    names/text like the C++ ones, text already including the setup the record needs."""
+    terms = sql_search_terms(changes, name_map)
+    known = {n.lower() for names in name_map.values() for n in names}
+    terms += title_terms(rec.get("title") or rec.get("subject") or "", known, [x["name"] for x in terms])
+    usable = {p: x for p, x in sql_texts.items() if not sql_skipped(t, x)}
+    hits = defaultdict(list)
+    regs = [(term, sql_term_regex(term)) for term in terms]
+    for path, text in usable.items():
+        for i, line in enumerate(text.splitlines()):
+            if line.lstrip().startswith("#"):
+                continue
+            for term, rx in regs:
+                if rx.search(line):
+                    hits[term["name"]].append((path, i))
+    for term in terms:
+        term["hits"] = len(hits[term["name"]])
+    blocks = {}
+    for name, locs in hits.items():
+        for path, i in locs:
+            lines = usable[path].splitlines()
+            s, e = sql_record_around(lines, i)
+            b = blocks.setdefault((path, s, e), {"file": path, "start": s, "end": e, "names": set()})
+            b["names"].add(name)
+    fallback = None
+    if not blocks:
+        changed = [w for f in changes.get("files", []) or rec.get("main_files", []) for w in path_words(f)]
+        want = set(changed)
+        scored = sorted(((len(want & path_words(p)), p) for p in usable if want & path_words(p)),
+                        key=lambda x: (-x[0], x[1]))[:4]
+        for n, path in scored:
+            lines = usable[path].splitlines()
+            got = 0
+            for s, e in sql_records(lines):
+                if lines[s].lstrip().startswith("query") and got < MAX_PER_FILE and e - s + 1 <= MAX_BLOCK_LINES:
+                    words = sorted(want & path_words(path))
+                    blocks[(path, s, e)] = {"file": path, "start": s, "end": e,
+                                            "names": {"path:" + w for w in words}, "path_score": n}
+                    got += 1
+        if blocks:
+            fallback = "path"
+    out = []
+    for (path, s, e), b in blocks.items():
+        lines = usable[path].splitlines()
+        setup = sql_setup(lines, s, e)
+        text = (setup + "\n\n" if setup else "") + "\n".join(lines[s:e + 1])
+        out.append({**b, "text": text})
+    return out, terms, fallback
+
+
 # ---------- git side ----------
 
 def test_files(t, sha):
     paths = t.get("test_paths", ["tests", "test"])
     out = git(t.repo, "ls-tree", "-r", "--name-only", sha, "--", *paths)
-    return [p for p in out.splitlines() if Path(p).suffix.lower() in TEST_EXT]
+    sql_ext = tuple(t.get("sql_test_ext", []))
+    return [p for p in out.splitlines() if Path(p).suffix.lower() in TEST_EXT or (sql_ext and p.endswith(sql_ext))]
+
+
+def name_headers(t, sha):
+    """{path: text} of the headers under `sql_name_paths` at `sha` (SQL function/setting registry)."""
+    paths = t.get("sql_name_paths", [])
+    if not paths:
+        return {}
+    out = git(t.repo, "ls-tree", "-r", "--name-only", sha, "--", *paths)
+    return read_blobs(t, sha, [p for p in out.splitlines() if p.endswith((".hpp", ".h"))])
 
 
 def read_blobs(t, sha, paths):
@@ -237,17 +482,29 @@ def read_blobs(t, sha, paths):
     return res
 
 
+_NAME_MAPS = {}
+
+
+def name_map(t, sha):
+    if (t.name, sha) not in _NAME_MAPS:
+        _NAME_MAPS[(t.name, sha)] = sql_name_map(name_headers(t, sha))
+    return _NAME_MAPS[(t.name, sha)]
+
+
 # ---------- per PR ----------
 
 def build_context(t, rec, changes, budget):
     terms = search_terms(changes)
+    sql_mode = bool(t.get("sql_test_ext"))
     meta = {"pr": rec["pr"], "tests_at": rec["sha_old"], "terms": terms, "blocks": []}
-    if not terms:
+    if not terms and not sql_mode:
         meta["skipped"] = "no searchable names (only operators or nothing mapped)"
         return None, meta
     block_re = re.compile(t.get("test_block_re", DEFAULT_TEST_BLOCK_RE))
     files = test_files(t, rec["sha_old"])
     texts = read_blobs(t, rec["sha_old"], files)
+    sql_texts = {p: x for p, x in texts.items() if is_sql_test(t, p)}
+    texts = {p: x for p, x in texts.items() if p not in sql_texts}
     regs = [(term, term_regex(term, block_re)) for term in terms]
     hits = defaultdict(list)                    # name -> [(file, line index)]
     for path, text in texts.items():
@@ -259,12 +516,22 @@ def build_context(t, rec, changes, budget):
                     hits[term["name"]].append((path, i))
     for term in terms:
         term["hits"] = len(hits[term["name"]])
-    if not any(hits.values()):
-        meta["skipped"] = "no upstream test uses the changed code's names"
+    sblocks, sterms, fallback = ([], [], None)
+    if sql_mode:
+        sblocks, sterms, fallback = sql_blocks(t, rec, changes, sql_texts, name_map(t, rec["sha_old"]))
+        meta["sql_terms"] = sterms
+        meta["sql_files"] = len(sql_texts)
+        if fallback:
+            meta["fallback"] = fallback
+    if not any(hits.values()) and not sblocks:
+        meta["skipped"] = ("no upstream test uses the changed code's names"
+                           + (" or the SQL names it implements, and no SQL test file matches its path" if sql_mode else ""))
         return None, meta
 
-    w = {term["name"]: weight(term["hits"]) * (1.5 if term["role"].startswith("changed") else 1.0)
+    cpp_w = float(t.get("cpp_term_weight", 1.0))   # duckdb: 0.5, C++ names like Read/Optimize say less than SQL names
+    w = {term["name"]: weight(term["hits"]) * (1.5 if term["role"].startswith("changed") else 1.0) * cpp_w
          for term in terms}
+    w.update({term["name"]: weight(term["hits"]) * 1.5 for term in sterms})   # a named SQL entry point is direct evidence
     blocks = {}
     for name, locs in hits.items():
         for path, i in locs:
@@ -276,10 +543,19 @@ def build_context(t, rec, changes, budget):
     for (path, s, e), b in blocks.items():
         lines = texts[path].splitlines()
         text = "\n".join(lines[s:e + 1])
-        score = sum(w[n] for n in b["names"]) + file_affinity(path, [x for x in terms if x["name"] in b["names"]])
+        score = sum(w[n] for n in b["names"]) + cpp_w * file_affinity(path, [x for x in terms if x["name"] in b["names"]])
         out_blocks.append({"file": path, "start": s + 1, "end": e + 1, "names": sorted(b["names"]),
                            "score": round(score, 3), "text": text})
-    searched = ", ".join(f"{x['name']} ({x['hits']})" for x in terms)
+    for b in sblocks:
+        if b.get("path_score") is not None:
+            score = 0.2 + 0.1 * b["path_score"]                    # weaker than any name match
+        else:
+            score = sum(w[n] for n in b["names"])
+        out_blocks.append({"file": b["file"], "start": b["start"] + 1, "end": b["end"] + 1, "names": sorted(b["names"]),
+                           "score": round(score, 3), "text": b["text"]})
+    searched = ", ".join(f"{x['name']} ({x['hits']})" for x in terms + sterms)
+    if fallback:
+        searched += "; no SQL name matched, so SQL tests were picked by the changed files' paths"
     parts = [f"// Upstream tests at the PR's parent commit {rec['sha_old'][:9]} that use the changed code.",
              f"// Names searched (test lines using each): {searched}"]
     header = len("\n".join(parts))

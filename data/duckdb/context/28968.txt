@@ -1,0 +1,111 @@
+// Upstream tests at the PR's parent commit 3c557aebf that use the changed code.
+// Names searched (test lines using each): RLEFilter (0), RLEScanPartialInternal (0), ProcessPreparedScan (0), RLEScanState (0), VisitSelectedRows (0), GetSelectionBuffer (0), selected_rows (7), run_indices (0); no SQL name matched, so SQL tests were picked by the changed files' paths
+
+// ---- test/sql/storage/compression/bitpacking/bitpacking_corrupt_group_offset.test:14-17  (uses: path:compression, path:group, path:storage)
+query I
+SELECT compression FROM pragma_storage_info('t') WHERE column_name='a' AND compression='BitPacking';
+----
+BitPacking
+
+// ---- test/sql/storage/compression/chimp/chimp_corrupt_group_count.test:14-17  (uses: path:compression, path:group, path:storage)
+query I
+SELECT compression FROM pragma_storage_info('t') WHERE segment_type='DOUBLE' LIMIT 1;
+----
+Chimp
+
+// ---- test/sql/storage/compression/chimp/chimp_fetch_row.test:13-18  (uses: path:compression, path:row, path:storage)
+query T
+SELECT temperature::VARCHAR FROM temperatures_double LIMIT 3;
+----
+49.4
+48.8
+46.4
+
+// ---- test/sql/storage/compression/chimp/chimp_fetch_row.test:20-25  (uses: path:compression, path:row, path:storage)
+query T
+SELECT temperature::VARCHAR FROM temperatures_float LIMIT 3;
+----
+49.4
+48.8
+46.4
+
+// ---- test/common/test_tuple_data_allocation.cpp:29-53  (uses: selected_rows)
+		keys.WriteValue(1);
+		keys.WriteValue(2);
+		keys.WriteNull();
+		keys.WriteValue(99);
+		keys.WriteValue(-1);
+	}
+	source.Append(source_state, chunk);
+
+	IntegerPartitionedTupleData target(buffer_manager, layout, MemoryTag::ORDER_BY, 0, Value::BIGINT(0), 3);
+	PartitionedTupleDataAppendState target_state;
+	target.InitializeAppendState(target_state);
+	SelectionVector selection(5);
+	const idx_t selected_rows[] = {4, 2, 3, 5, 2};
+	for (idx_t i = 0; i < 5; i++) {
+		selection.set_index(i, selected_rows[i]);
+	}
+	target.Append(target_state, source_state.chunk_state, 5, selection);
+	target.FlushAppendState(target_state);
+	REQUIRE(target.Count() == 5);
+
+	vector<vector<Value>> expected {{},
+	                                {},
+	                                {Value::BIGINT(2), Value::BIGINT(2)},
+	                                {Value(LogicalType::BIGINT)},
+	                                {Value::BIGINT(99), Value::BIGINT(-1)}};
+
+// ---- test/sql/filter/adaptive_filter_cache.cpp:235-259  (uses: selected_rows)
+	}
+	for (const bool incoming : {false, true}) {
+		auto state = TableFilterState::Initialize(*con.context, filter);
+		auto oracle = TableFilterState::Initialize(*con.context, filter);
+		auto cache = state->CreateCache(dictionary, dictionary.size());
+		for (idx_t batch = 0; batch < vectors * 6; batch++) {
+			const idx_t count = STANDARD_VECTOR_SIZE - batch % 2;
+			vector<idx_t> lengths {count - 1, 1};
+			if (batch % 2) {
+				std::swap(lengths[0], lengths[1]);
+			}
+			const idx_t first_code = batch < vectors ? 1 : 0;
+			SelectionVector run_codes(2), codes(count), selected_runs, selected_rows, expected;
+			run_codes.set_index(0, first_code);
+			run_codes.set_index(1, 1 - first_code);
+			Vector input(LogicalType::BIGINT, count);
+			{
+				auto writer = FlatVector::Writer<int64_t>(input, count);
+				for (idx_t row = 0; row < count; row++) {
+					const auto code = row < lengths[0] ? first_code : 1 - first_code;
+					codes.set_index(row, code);
+					writer.WriteValue(code == 0 ? 1 : 3000);
+				}
+			}
+			idx_t run_count = 2, expected_count = count;
+
+// ---- test/sql/filter/adaptive_filter_cache.cpp:265-289  (uses: selected_rows)
+				expected.Initialize(count);
+				selected_rows.Initialize(count);
+				for (idx_t row = 0; row < expected_count; row++) {
+					expected.set_index(row, row);
+					selected_rows.set_index(row, row);
+				}
+			}
+			const auto before_count = expected_count;
+			ColumnSegment::FilterSelection(expected, input, *oracle, count, expected_count);
+			vector<idx_t> actual;
+			if (batch % 2) {
+				idx_t selected_count = before_count;
+				ColumnSegment::FilterSelection(selected_rows, input, *state, count, selected_count);
+				for (idx_t row = 0; row < selected_count; row++) {
+					actual.push_back(selected_rows.get_index(row));
+				}
+			} else {
+				cache->FilterRuns(run_codes, array_ptr<const idx_t>(lengths.data(), lengths.size()), selected_runs,
+				                  run_count);
+				for (idx_t i = 0; i < run_count; i++) {
+					const auto run = selected_runs.get_index(i);
+					const auto offset = run == 0 ? 0 : lengths[0];
+					for (idx_t row = 0; row < lengths[run]; row++) {
+						actual.push_back(offset + row);
+					}

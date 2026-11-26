@@ -1,0 +1,181 @@
+// Upstream tests at the PR's parent commit 993183469 that use the changed code.
+// Names searched (test lines using each): VisitOperator (17), TryPushdownAggregate (0), CapLowerAggregateCardinality (0), CreateLowerAggregate (0); no SQL name matched, so SQL tests were picked by the changed files' paths
+
+// ---- test/optimizer/partial_aggregate_pushdown.test:26-33  (uses: path:optimizer, path:partial, path:pushdown)
+statement ok
+CREATE TABLE fact AS SELECT
+  i % 1000 AS dim_key,
+  (i * 17) % 100 AS measure
+FROM range(100000) _(i);
+
+statement ok
+CREATE TABLE dim AS SELECT
+  i AS dim_key,
+  (i % 7)  AS d_a,
+  (i % 11) AS d_b,
+  (i % 13) AS d_c,
+  (i % 17) AS d_d
+FROM range(1000) _(i);
+
+query I
+SELECT round(sum(s)::DOUBLE) FROM (
+  SELECT d_a, d_b, d_c, d_d, sum(measure) AS s
+  FROM fact JOIN dim USING (dim_key)
+  GROUP BY d_a, d_b, d_c, d_d
+)
+----
+4950000
+
+// ---- test/optimizer/partial_aggregate_pushdown.test:35-42  (uses: path:optimizer, path:partial, path:pushdown)
+statement ok
+CREATE TABLE fact AS SELECT
+  i % 1000 AS dim_key,
+  (i * 17) % 100 AS measure
+FROM range(100000) _(i);
+
+statement ok
+CREATE TABLE dim AS SELECT
+  i AS dim_key,
+  (i % 7)  AS d_a,
+  (i % 11) AS d_b,
+  (i % 13) AS d_c,
+  (i % 17) AS d_d
+FROM range(1000) _(i);
+
+query I
+SELECT count(*) FROM (
+  SELECT d_a, d_b, d_c, d_d, sum(measure) AS s
+  FROM fact JOIN dim USING (dim_key)
+  GROUP BY d_a, d_b, d_c, d_d
+)
+----
+1000
+
+// ---- test/optimizer/partial_aggregate_pushdown_serialized_plan.test:30-33  (uses: path:optimizer, path:partial, path:pushdown)
+query I
+SELECT content LIKE '%combine_aggr%' FROM read_text('{TEST_DIR}/serialized_plan.json')
+----
+true
+
+// ---- test/optimizer/partial_aggregate_pushdown_throwing_argument.test:44-61  (uses: path:optimizer, path:partial, path:pushdown)
+statement ok
+CREATE TABLE dim AS SELECT i AS id, i % 5 AS a, i % 3 AS b FROM range(100) t(i) WHERE i <> 50;
+
+query III
+SELECT a, b, sum(TRY_CAST(v AS INTEGER)) FROM fact JOIN dim ON fact.id = dim.id GROUP BY a, b ORDER BY a, b
+----
+0	0	2100
+0	1	1800
+0	2	1802
+1	0	2100
+1	1	2100
+1	2	1798
+2	0	1796
+2	1	2100
+2	2	2100
+3	0	2100
+3	1	1801
+3	2	2100
+4	0	2100
+4	1	2100
+4	2	1799
+
+// ---- test/optimizer/partial_aggregate_pushdown_throwing_argument.test:74-91  (uses: path:optimizer, path:partial, path:pushdown)
+statement ok
+CREATE TABLE dim AS SELECT i AS id, i % 5 AS a, i % 3 AS b FROM range(100) t(i) WHERE i <> 50;
+
+query III
+SELECT a, b, sum(v * 2) FROM fact_wide JOIN dim ON fact_wide.id = dim.id GROUP BY a, b ORDER BY a, b
+----
+0	0	630
+0	1	570
+0	2	600
+1	0	714
+1	1	644
+1	2	582
+2	0	594
+2	1	728
+2	2	658
+3	0	672
+3	1	606
+3	2	742
+4	0	756
+4	1	686
+4	2	618
+
+// ---- test/optimizer/csv_pushdown.test:58-64  (uses: path:optimizer, path:pushdown)
+query III
+SELECT l_orderkey, l_partkey, l_extendedprice FROM read_csv('{DATA_DIR}/csv/real/lineitem_sample.csv', delim='|', columns={'l_orderkey': 'INTEGER','l_partkey': 'INTEGER','l_suppkey': 'INTEGER','l_linenumber': 'INTEGER','l_quantity': 'INTEGER','l_extendedprice': 'SMALLINT','l_discount': 'DECIMAL(15,2)','l_tax': 'DECIMAL(15,2)','l_returnflag': 'VARCHAR','l_linestatus': 'VARCHAR','l_shipdate': 'DATE','l_commitdate': 'DATE','l_receiptdate': 'DATE','l_shipinstruct': 'DATE','l_shipmode': 'VARCHAR','l_comment': 'VARCHAR'}, ignore_errors=true, header = 0);
+----
+1	15519	24387
+1	6370	10211
+1	214	31198
+1	2403	31330
+
+// ---- test/optimizer/csv_pushdown.test:71-82  (uses: path:optimizer, path:pushdown)
+query III
+SELECT l_orderkey, l_partkey, l_extendedprice FROM read_csv('{DATA_DIR}/csv/real/lineitem_sample.csv', delim='|', columns={'l_orderkey': 'INTEGER','l_partkey': 'INTEGER','l_suppkey': 'INTEGER','l_linenumber': 'INTEGER','l_quantity': 'INTEGER','l_extendedprice': 'USMALLINT','l_discount': 'DECIMAL(15,2)','l_tax': 'DECIMAL(15,2)','l_returnflag': 'VARCHAR','l_linestatus': 'VARCHAR','l_shipdate': 'DATE','l_commitdate': 'DATE','l_receiptdate': 'DATE','l_shipinstruct': 'DATE','l_shipmode': 'VARCHAR','l_comment': 'VARCHAR'}, ignore_errors=true, header = 0);
+----
+1	15519	24387
+1	6731	58958
+1	6370	10211
+1	214	31198
+1	2403	31330
+1	1564	46898
+2	10617	58049
+3	430	59869
+3	12845	47462
+
+// ---- test/optimizer/build_probe_side_optimizer.cpp:75-99  (uses: VisitOperator)
+		projection_expressions.push_back(
+		    make_uniq<BoundColumnRefExpression>(anchor_cross->types[column_idx], anchor_bindings[column_idx]));
+	}
+	auto anchor_projection = make_uniq<LogicalProjection>(TableIndex(1000), std::move(projection_expressions));
+	anchor_projection->children.push_back(std::move(anchor));
+	recursive_cte->children[0] = std::move(anchor_projection);
+
+	SetAsymmetricCrossProductEstimates(*anchor_cross);
+	SetAsymmetricCrossProductEstimates(*nested_cross);
+	auto anchor_domain = anchor_cross->children[1].get();
+	auto nested_left = nested_cross->children[0].get();
+	BuildProbeSideOptimizer recursive_optimizer(*connection.context, *recursive_plan);
+	recursive_optimizer.VisitOperator(*recursive_plan);
+	REQUIRE(anchor_cross->children[1].get() == anchor_domain);
+	REQUIRE(nested_cross->children[1].get() == nested_left);
+	auto correlated_result = connection.Query(correlated_query);
+	REQUIRE_NO_FAIL(*correlated_result);
+	CHECK_COLUMN(correlated_result, 0, {2, 3});
+	CHECK_COLUMN(correlated_result, 1, {3000, 4000});
+
+	const string recursive_query = R"(
+		WITH RECURSIVE t(i, j) AS (
+			SELECT i, j FROM (VALUES (1)) a(i), range(1000) b(j)
+			UNION ALL
+			SELECT i, j FROM t WHERE false
+
+// ---- test/optimizer/build_probe_side_optimizer.cpp:100-124  (uses: VisitOperator)
+		)
+		SELECT * FROM t
+	)";
+	auto uncorrelated_plan = PlanBuildProbeQuery(connection, recursive_query);
+	auto uncorrelated_cte = FindBuildProbeOperator(*uncorrelated_plan, LogicalOperatorType::LOGICAL_RECURSIVE_CTE);
+	REQUIRE(uncorrelated_cte);
+	auto uncorrelated_cross =
+	    FindBuildProbeOperator(*uncorrelated_cte->children[0], LogicalOperatorType::LOGICAL_CROSS_PRODUCT);
+	REQUIRE(uncorrelated_cross);
+	SetAsymmetricCrossProductEstimates(*uncorrelated_cross);
+	auto uncorrelated_left = uncorrelated_cross->children[0].get();
+	BuildProbeSideOptimizer uncorrelated_optimizer(*connection.context, *uncorrelated_plan);
+	uncorrelated_optimizer.VisitOperator(*uncorrelated_plan);
+	REQUIRE(uncorrelated_cross->children[1].get() == uncorrelated_left);
+
+	auto ordinary_plan = PlanBuildProbeQuery(connection, "SELECT * FROM (VALUES (1)) a(i), range(1000) b(j)");
+	auto ordinary_cross = FindBuildProbeOperator(*ordinary_plan, LogicalOperatorType::LOGICAL_CROSS_PRODUCT);
+	REQUIRE(ordinary_cross);
+	SetAsymmetricCrossProductEstimates(*ordinary_cross);
+	auto ordinary_left = ordinary_cross->children[0].get();
+	BuildProbeSideOptimizer ordinary_optimizer(*connection.context, *ordinary_plan);
+	ordinary_optimizer.VisitOperator(*ordinary_plan);
+	REQUIRE(ordinary_cross->children[1].get() == ordinary_left);
+
+	connection.Rollback();

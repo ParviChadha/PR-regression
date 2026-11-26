@@ -1,0 +1,224 @@
+// Upstream tests at the PR's parent commit 7d1154712 that use the changed code.
+// Names searched (test lines using each): Optimize (27); no SQL name matched, so SQL tests were picked by the changed files' paths
+
+// ---- test/optimizer/projection_placement.test:50-55  (uses: path:optimizer, path:placement, path:projection)
+statement ok
+CREATE TABLE placement_dimension AS
+SELECT i::INTEGER AS i, (i % 10)::INTEGER AS k, lpad(i::VARCHAR, 100, 'x') AS v
+FROM range(100) t(i);
+
+statement ok
+CREATE TABLE placement_fact AS
+SELECT (i % 100)::INTEGER AS i
+FROM range(100000) t(i);
+
+query II
+EXPLAIN SELECT s
+FROM (SELECT i, substring_grapheme(v, 1, 20) AS s FROM placement_dimension) d
+JOIN placement_fact USING (i);
+----
+logical_opt	<REGEX>:.*JOIN.*PROJECTION.*Expressions:([^\n]*\n){0,8}[^\n]*[ ,]s[ ,│].*
+
+// ---- test/optimizer/projection_placement.test:61-66  (uses: path:optimizer, path:placement, path:projection)
+statement ok
+CREATE TABLE placement_dimension AS
+SELECT i::INTEGER AS i, (i % 10)::INTEGER AS k, lpad(i::VARCHAR, 100, 'x') AS v
+FROM range(100) t(i);
+
+statement ok
+CREATE TABLE placement_fact AS
+SELECT (i % 100)::INTEGER AS i
+FROM range(100000) t(i);
+
+query II
+EXPLAIN SELECT s
+FROM (SELECT i, substring(v, 1, 20) AS s FROM placement_dimension) d
+JOIN placement_fact USING (i);
+----
+logical_opt	<!REGEX>:.*JOIN.*PROJECTION.*Expressions:([^\n]*\n){0,8}[^\n]*[ ,]s[ ,│].*
+
+// ---- test/optimizer/projection_placement_results.test:15-20  (uses: path:optimizer, path:placement, path:projection)
+statement ok
+CREATE TABLE placement_result_dimension AS
+SELECT i::INTEGER AS i, (i % 10)::INTEGER AS k, lpad(i::VARCHAR, 100, 'x') AS v
+FROM range(100) t(i);
+
+statement ok
+CREATE TABLE placement_result_fact AS
+SELECT (i % 100)::INTEGER AS i
+FROM range(1000) t(i);
+
+query I
+SELECT sum(length(s))
+FROM (SELECT i, substring(v, 1, 20) AS s FROM placement_result_dimension) d
+JOIN placement_result_fact USING (i);
+----
+20000
+
+// ---- test/optimizer/projection_placement_results.test:22-30  (uses: path:optimizer, path:placement, path:projection)
+statement ok
+CREATE TABLE placement_result_dimension AS
+SELECT i::INTEGER AS i, (i % 10)::INTEGER AS k, lpad(i::VARCHAR, 100, 'x') AS v
+FROM range(100) t(i);
+
+query II
+SELECT sum(length(ls)), sum(length(rs))
+FROM (
+	SELECT substring(l.v, 1, 20) AS ls, substring(r.v, 1, 30) AS rs
+	FROM placement_result_dimension l
+	JOIN placement_result_dimension r USING (k)
+);
+----
+20000	30000
+
+// ---- test/optimizer/common_subplan_projection_map.test:30-34  (uses: path:optimizer, path:projection)
+statement ok
+create table amt(id int, amount decimal(15,2));
+
+statement ok
+insert into amt values (1,10),(2,20),(3,1),(4,2);
+
+statement ok
+create table a(id int);
+
+statement ok
+insert into a values (1),(3);
+
+statement ok
+create table b(id int);
+
+statement ok
+insert into b values (2),(4);
+
+statement ok
+create view v as select amt.id,
+  case when a.id is not null then 'A' when b.id is not null then 'B' end as typ,
+  case when a.id is not null then amount end as a_amt,
+  case when b.id is not null then amount end as b_amt
+  from amt left join a on a.id = amt.id left join b on b.id = amt.id;
+
+query II
+select (select sum(a_amt) from v where typ in ('A','B')),
+       (select sum(b_amt) from v where typ in ('A','B'));
+----
+11.00	22.00
+
+// ---- test/optimizer/common_subplan_projection_map.test:36-40  (uses: path:optimizer, path:projection)
+statement ok
+create table amt(id int, amount decimal(15,2));
+
+statement ok
+insert into amt values (1,10),(2,20),(3,1),(4,2);
+
+statement ok
+create table a(id int);
+
+statement ok
+insert into a values (1),(3);
+
+statement ok
+create table b(id int);
+
+statement ok
+insert into b values (2),(4);
+
+statement ok
+create view v as select amt.id,
+  case when a.id is not null then 'A' when b.id is not null then 'B' end as typ,
+  case when a.id is not null then amount end as a_amt,
+  case when b.id is not null then amount end as b_amt
+  from amt left join a on a.id = amt.id left join b on b.id = amt.id;
+
+query II
+select (select sum(b_amt) from v where typ in ('A','B')),
+       (select sum(a_amt) from v where typ in ('A','B'));
+----
+22.00	11.00
+
+// ---- test/optimizer/joins/filter_projection_map_reconstruction.test:17-25  (uses: path:optimizer, path:projection)
+statement ok
+CREATE TABLE t(i INTEGER, b BOOLEAN);
+
+statement ok
+INSERT INTO t VALUES (1, TRUE), (2, FALSE), (NULL, NULL);
+
+statement ok
+CREATE TABLE s(i INTEGER);
+
+statement ok
+INSERT INTO s VALUES (1), (3);
+
+query I
+SELECT count(*) FROM (
+	SELECT b.i <> ANY (SELECT i FROM s)
+	FROM t AS a
+	LEFT JOIN t AS b ON a.b = b.b AND b.i IN (SELECT i FROM s)
+	WHERE (SELECT 3) = 3 OR a.i IS NULL
+);
+----
+3
+
+// ---- test/optimizer/joins/filter_projection_map_reconstruction.test:27-35  (uses: path:optimizer, path:projection)
+statement ok
+CREATE TABLE t(i INTEGER, b BOOLEAN);
+
+statement ok
+INSERT INTO t VALUES (1, TRUE), (2, FALSE), (NULL, NULL);
+
+statement ok
+CREATE TABLE s(i INTEGER);
+
+statement ok
+INSERT INTO s VALUES (1), (3);
+
+query II rowsort
+SELECT a.i, b.i <> ANY (SELECT i FROM s)
+FROM t AS a
+LEFT JOIN t AS b ON a.b = b.b AND b.i IN (SELECT i FROM s)
+WHERE (SELECT 3) = 3 OR a.i IS NULL;
+----
+1	true
+2	NULL
+NULL	NULL
+
+// ---- test/api/serialized_plans/test_plan_serialization_bwc.cpp:102-141  (uses: Optimize)
+TEST_CASE("Generate specific serialized plans", "[.][serialization]") {
+	auto cases = std::getenv("GEN_PLAN_CASES");
+	if (cases == nullptr) {
+		return;
+	}
+	DuckDB db;
+
+	auto &fs = db.GetFileSystem();
+	auto dir_location = get_full_file_name("cases");
+
+	for (auto &name : StringUtil::Split(string(cases), ',')) {
+		auto statements = read_case_statements(fs.JoinPath(dir_location, name + ".sql"));
+		REQUIRE(!statements.empty());
+
+		Connection con(db);
+		con.BeginTransaction();
+		for (idx_t i = 0; i < statements.size() - 1; i++) {
+			REQUIRE_NO_FAIL(con.Query(statements[i]));
+		}
+
+		Parser p(*con.context);
+		p.ParseQuery(statements.back());
+		Planner planner(*con.context);
+		planner.CreatePlan(std::move(p.statements[0]));
+		auto plan = std::move(planner.plan);
+		if (StringUtil::StartsWith(name, "optimized_")) {
+			Optimizer optimizer(*planner.binder, *con.context);
+			plan = optimizer.Optimize(std::move(plan));
+		}
+
+		BufferedFileWriter target(fs, fs.JoinPath(dir_location, name + ".bin"));
+		BinarySerializer serializer(target);
+		serializer.Begin();
+		plan->Serialize(serializer);
+		serializer.End();
+		target.Sync();
+
+		con.Rollback();
+	}
+}

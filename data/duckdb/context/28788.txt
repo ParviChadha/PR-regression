@@ -1,0 +1,97 @@
+// Upstream tests at the PR's parent commit 50f9bb47f that use the changed code.
+// Names searched (test lines using each): GetInfo (3), BindUpdateConstraints (0), GetConstraints (0); no SQL name matched, so SQL tests were picked by the changed files' paths
+
+// ---- test/sql/catalog/system_functions/system_catalog_entry_pushdown.test:120-124  (uses: path:catalog, path:entry)
+query III
+SELECT database_name, schema_name, view_name FROM duckdb_views() WHERE view_name = 'v1' ORDER BY ALL;
+----
+db1	s1	v1
+db2	s1	v1
+
+// ---- test/sql/catalog/system_functions/system_catalog_entry_pushdown.test:126-129  (uses: path:catalog, path:entry)
+query I
+SELECT count(*) FROM duckdb_views() WHERE lower(view_name) = 'v1';
+----
+2
+
+// ---- test/api/test_copy_output_lifecycle.cpp:194-218  (uses: GetInfo)
+unique_ptr<FunctionData> LifecycleCopyBind(ClientContext &, CopyFunctionBindInput &input, const vector<Identifier> &,
+                                           const vector<LogicalType> &) {
+	return make_uniq<LifecycleCopyBindData>(input.function_info);
+}
+
+unique_ptr<LocalFunctionData> LifecycleCopyInitializeLocal(ExecutionContext &, FunctionData &) {
+	return make_uniq<LifecycleCopyLocalData>();
+}
+
+unique_ptr<GlobalFunctionData> LifecycleCopyInitializeGlobal(ClientContext &context, FunctionData &bind_data,
+                                                             const string &path) {
+	auto state = make_uniq<LifecycleCopyGlobalData>(context, path);
+	auto &info = bind_data.Cast<LifecycleCopyBindData>().GetInfo();
+	lock_guard<mutex> guard(info.lock);
+	info.initialized_paths.push_back(path);
+	return std::move(state);
+}
+
+void LifecycleCopySink(ExecutionContext &, FunctionData &, GlobalFunctionData &, LocalFunctionData &, DataChunk &) {
+}
+
+void LifecycleCopyCombine(ExecutionContext &, FunctionData &, GlobalFunctionData &, LocalFunctionData &) {
+}
+
+void LifecycleCopyFinalize(ClientContext &, FunctionData &bind_data, GlobalFunctionData &global_data) {
+
+// ---- test/arrow/arrow_roundtrip.cpp:596-620  (uses: GetInfo)
+	for (idx_t i = 0; i < count; i++) {
+		if (FlatVector::IsNull(source, i) || FlatVector::IsNull(packed, i)) {
+			FlatVector::SetNull(result, i, true);
+		}
+	}
+}
+
+// Declares the STORAGE schema (struct<packed: struct<a, b>>) tagged with the extension name. All names
+// and formats are string literals (static storage), so no ownership registration is needed.
+void PairPopulateSchema(DuckDBArrowSchemaHolder &root_holder, ArrowSchema &schema, const LogicalType &, ClientContext &,
+                        const ArrowTypeExtension &extension) {
+	++pair_populate_calls;
+	const auto metadata = ArrowSchemaMetadata::ArrowCanonicalType(extension.GetInfo().GetExtensionName());
+	root_holder.metadata_info.emplace_back(metadata.SerializeMetadata());
+	schema.metadata = root_holder.metadata_info.back().get();
+
+	auto release_child = [](ArrowSchema *child) {
+		child->release = nullptr;
+	};
+
+	schema.format = "+s";
+	schema.n_children = 1;
+	root_holder.nested_children.emplace_back();
+	root_holder.nested_children.back().resize(1);
+	root_holder.nested_children_ptr.emplace_back();
+
+// ---- test/optimizer/catalog_function_binding.test:25-30  (uses: path:catalog)
+statement ok
+CREATE TABLE strings(s VARCHAR)
+
+statement ok
+INSERT INTO strings VALUES ('abc'), ('cab'), (NULL)
+
+query I
+SELECT s LIKE '%abc' FROM strings ORDER BY ALL
+----
+0
+1
+NULL
+
+// ---- test/optimizer/catalog_function_binding.test:32-37  (uses: path:catalog)
+statement ok
+CREATE TABLE strings(s VARCHAR)
+
+statement ok
+INSERT INTO strings VALUES ('abc'), ('cab'), (NULL)
+
+query I
+SELECT s LIKE '%b%' FROM strings ORDER BY ALL
+----
+1
+1
+NULL

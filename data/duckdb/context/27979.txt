@@ -1,0 +1,204 @@
+// Upstream tests at the PR's parent commit 736e1d504 that use the changed code.
+// Names searched (test lines using each): Execute (268), AppendToCache (0); no SQL name matched, so SQL tests were picked by the changed files' paths
+
+// ---- test/sql/execution/physical_verify_vector.test:8-15  (uses: path:execution, path:physical)
+query II
+SELECT i, CASE WHEN i % 2 = 0 THEN NULL ELSE i::VARCHAR END
+FROM range(4) t(i)
+----
+0	NULL
+1	1
+2	NULL
+3	3
+
+// ---- test/sql/execution/physical_verify_vector.test:20-27  (uses: path:execution, path:physical)
+query II
+SELECT i, i % 2
+FROM range(4) t(i)
+----
+0	0
+1	1
+2	0
+3	1
+
+// ---- test/optimizer/eager_aggregate_execution.test:39-42  (uses: path:execution)
+statement ok
+CREATE TABLE t AS (SELECT * FROM range(8192) _(i), LATERAL (select (i*2) as j));
+
+query II
+EXPLAIN SELECT count(*), min(i), max(i) FROM t
+----
+physical_plan	<!REGEX>:.*AGGREGATE.*
+
+// ---- test/optimizer/eager_aggregate_execution.test:44-47  (uses: path:execution)
+statement ok
+CREATE TABLE t AS (SELECT * FROM range(8192) _(i), LATERAL (select (i*2) as j));
+
+query II
+EXPLAIN SELECT count(*), min(i), max(i) FROM t GROUP BY i
+----
+physical_plan	<REGEX>:.*GROUP_BY.*
+
+// ---- test/optimizer/partitioned_execution_coverage.test:28-31  (uses: path:execution)
+query II
+EXPLAIN SELECT i FROM test ORDER BY i ASC;
+----
+logical_opt	<REGEX>:.*UNION.*
+
+// ---- test/optimizer/partitioned_execution_coverage.test:33-36  (uses: path:execution)
+query II
+EXPLAIN SELECT i FROM test ORDER BY i DESC;
+----
+logical_opt	<REGEX>:.*UNION.*
+
+// ---- test/sql/aggregate/count_execution_paths.test:16-19  (uses: path:execution)
+statement ok
+CREATE TABLE count_validity AS
+SELECT i,
+       CASE
+           WHEN i < 64 THEN i
+           WHEN i < 128 THEN NULL
+           WHEN i % 2 = 0 THEN i
+           ELSE NULL
+       END AS v
+FROM range(192) t(i);
+
+query I
+SELECT count(v) FROM count_validity;
+----
+96
+
+// ---- test/sql/aggregate/count_execution_paths.test:21-29  (uses: path:execution)
+query I
+SELECT sum(c) FROM (
+    SELECT count(*) FILTER (WHERE i % 3 = 0) OVER (
+        ORDER BY i ROWS BETWEEN 2 PRECEDING AND 2 FOLLOWING EXCLUDE CURRENT ROW
+    ) AS c
+    FROM range(10) t(i)
+);
+----
+12
+
+// ---- test/api/capi/v1/test_capi_pending.cpp:7-30  (uses: Execute)
+TEST_CASE("Test pending statements in C API", "[capi]") {
+	CAPITester tester;
+	CAPIPrepared prepared;
+	CAPIPending pending;
+	duckdb::unique_ptr<CAPIResult> result;
+
+	// open the database in in-memory mode
+	REQUIRE(tester.OpenDatabase(nullptr));
+	REQUIRE(prepared.Prepare(tester, "SELECT SUM(i) FROM range(1000000) tbl(i)"));
+	REQUIRE(pending.Pending(prepared));
+
+	while (true) {
+		auto state = pending.ExecuteTask();
+		REQUIRE(state != DUCKDB_PENDING_ERROR);
+		if (duckdb_pending_execution_is_finished(state)) {
+			break;
+		}
+	}
+
+	result = pending.Execute();
+	REQUIRE(result);
+	REQUIRE(!result->HasError());
+	REQUIRE(result->Fetch<int64_t>(0, 0) == 499999500000LL);
+}
+
+// ---- test/api/capi/v1/test_capi_pending.cpp:32-57  (uses: Execute)
+TEST_CASE("Test polling a pending statement that the workers already finished", "[capi]") {
+	// A statement whose store is retained at submission finishes without the consumer stepping it.
+	// Polling it then reports the result as ready, not as an error
+	CAPITester tester;
+	CAPIPrepared prepared;
+	CAPIPending pending;
+
+	REQUIRE(tester.OpenDatabase(nullptr));
+	REQUIRE(prepared.Prepare(tester, "CREATE TABLE polled AS SELECT i FROM range(10) t(i)"));
+	REQUIRE(pending.Pending(prepared));
+
+	// Bounded: a state that never becomes ready fails the test instead of hanging the suite
+	duckdb_pending_state state = DUCKDB_PENDING_RESULT_NOT_READY;
+	for (idx_t i = 0; i < 1000000 && state != DUCKDB_PENDING_RESULT_READY; i++) {
+		state = pending.CheckState();
+		REQUIRE(state != DUCKDB_PENDING_ERROR);
+	}
+	REQUIRE(state == DUCKDB_PENDING_RESULT_READY);
+
+	auto result = pending.Execute();
+	REQUIRE(result);
+	REQUIRE(!result->HasError());
+
+	result = tester.Query("SELECT count(*) FROM polled");
+	REQUIRE(result->Fetch<int64_t>(0, 0) == 10);
+}
+
+// ---- test/api/capi/v1/test_capi_prepared.cpp:938-962  (uses: Execute)
+	REQUIRE(result.Fetch<string>(0, 0) == "ams");
+	REQUIRE(result.Fetch<int64_t>(1, 0) == 10);
+	REQUIRE(result.Fetch<int64_t>(2, 1) == 40);
+}
+
+static void RequirePendingPivotRows(CAPIPending &pending) {
+	Deadline deadline;
+	duckdb_pending_state state;
+	while (!duckdb_pending_execution_is_finished(state = pending.ExecuteTask())) {
+		REQUIRE(!deadline.Passed());
+	}
+	REQUIRE(state == DUCKDB_PENDING_RESULT_READY);
+	RequirePivotRows(*pending.Execute());
+}
+
+TEST_CASE("Preparing a dynamic PIVOT in the C API", "[capi][expanding_statements]") {
+	CAPITester tester;
+	CAPIPrepared prepared;
+	REQUIRE(tester.OpenDatabase(nullptr));
+	CreateSales(tester);
+
+	REQUIRE(prepared.Prepare(tester, SALES_PIVOT));
+	REQUIRE(duckdb_prepared_statement_type(prepared.prepared) == DUCKDB_STATEMENT_TYPE_MULTI);
+	REQUIRE(duckdb_prepared_statement_column_count(prepared.prepared) == 1);
+	REQUIRE(duckdb_prepared_statement_column_type(prepared.prepared, 0) == DUCKDB_TYPE_INVALID);
+
+// ---- test/api/capi/v1/test_capi_profiling.cpp:270-299  (uses: Execute)
+TEST_CASE("Test profiling after throwing an error", "[capi]") {
+	CAPITester tester;
+	auto main_db = TestCreatePath("profiling_error.db");
+	REQUIRE(tester.OpenDatabase(main_db.c_str()));
+
+	auto path = TestCreatePath("profiling_error.db");
+	REQUIRE_NO_FAIL(tester.Query("ATTACH IF NOT EXISTS '" + path + "' (TYPE DUCKDB)"));
+	REQUIRE_NO_FAIL(tester.Query("CREATE TABLE profiling_error.tbl AS SELECT range AS id FROM range(10)"));
+
+	REQUIRE_NO_FAIL(tester.Query("SET enable_profiling = 'no_output'"));
+	REQUIRE_NO_FAIL(tester.Query("SET profiling_mode = 'standard'"));
+
+	CAPIPrepared prepared_q1;
+	CAPIPending pending_q1;
+	REQUIRE(prepared_q1.Prepare(tester, "SELECT * FROM profiling_error.tbl"));
+	REQUIRE(pending_q1.Pending(prepared_q1));
+	auto result = pending_q1.Execute();
+	REQUIRE(result);
+	REQUIRE(!result->HasError());
+
+	auto info = duckdb_get_profiling_info(tester.connection);
+	REQUIRE(info != nullptr);
+
+	CAPIPrepared prepared_q2;
+	REQUIRE(!prepared_q2.Prepare(tester, "SELECT * FROM profiling_error.does_not_exist"));
+	info = duckdb_get_profiling_info(tester.connection);
+	REQUIRE(info == nullptr);
+
+	tester.Cleanup();
+}
+
+// ---- test/api/test_expanding_statements.cpp:1628-1636  (uses: Execute)
+	SECTION("a PIVOT") {
+		auto result = PrepareGroup(con, SALES_PIVOT)->Execute();
+		REQUIRE_NO_FAIL(*result);
+		REQUIRE(result->GetStatementType() == StatementType::MULTI_STATEMENT);
+		REQUIRE(Names(*result) == vector<string> {"city", "2023", "2024"});
+		REQUIRE(CHECK_COLUMN(result, 0, {"ams", "rtm"}));
+		REQUIRE(CHECK_COLUMN(result, 1, {10, 30}));
+		REQUIRE(CHECK_COLUMN(result, 2, {20, 40}));
+	}

@@ -1,0 +1,179 @@
+// Upstream tests at the PR's parent commit ba3b07bff that use the changed code.
+// Names searched (test lines using each): RegisterFunction (61), GrammarExtensionNameData (0), ActiveGrammarExtensionFun (0), active (69), name (991), description (33), DuckDBGrammarExtensionsBind (0), DuckDBGrammarExtensionsFunction (0), RegisterSQLiteFunctions (0), DuckDBGrammarExtensionsInit (0), BindGrammarExtensionName (0), RemoveGrammarExtension (0), AddGrammarExtension (0), IsActiveGrammarExtension (0), SetActiveGrammarExtensions (0); no SQL name matched, so SQL tests were picked by the changed files' paths
+
+// ---- test/extension/test_loadable_grammar_extension.test:24-34  (uses: path:grammar)
+statement ok
+CREATE OR REPLACE TABLE produce(item VARCHAR, category VARCHAR, sales INTEGER);
+
+statement ok
+INSERT INTO produce VALUES
+    ('apples', 'fruit', 10),
+    ('apples', 'fruit', 15),
+    ('bananas', 'fruit', 20),
+    ('cashews', 'nut', 30),
+    ('carrots', 'vegetable', 40);
+
+query TII
+FROM produce
+  |> WHERE
+        item != 'bananas'
+        AND category IN ('fruit', 'nut')
+  |> AGGREGATE COUNT(*) AS num_items, SUM(sales) AS total_sales
+     GROUP BY item
+  |> ORDER BY item DESC;
+----
+cashews	1	30
+apples	2	25
+
+// ---- test/extension/test_loadable_grammar_extension.test:36-44  (uses: path:grammar)
+statement ok
+CREATE OR REPLACE TABLE produce(item VARCHAR, category VARCHAR, sales INTEGER);
+
+statement ok
+INSERT INTO produce VALUES
+    ('apples', 'fruit', 10),
+    ('apples', 'fruit', 15),
+    ('bananas', 'fruit', 20),
+    ('cashews', 'nut', 30),
+    ('carrots', 'vegetable', 40);
+
+query I
+FROM produce
+  |> WHERE category = 'fruit'
+  |> SELECT item
+  |> DISTINCT
+  |> ORDER BY item
+  |> LIMIT 1;
+----
+apples
+
+// ---- test/extension/update_extensions.test:32-35  (uses: path:extensions)
+query IIIII
+UPDATE EXTENSIONS;
+----
+json	<REGEX>:.*	NO_UPDATE_AVAILABLE	<REGEX>:.*	<REGEX>:.*
+
+// ---- test/extension/update_extensions.test:37-40  (uses: path:extensions)
+query IIIII
+UPDATE EXTENSIONS (json);
+----
+json	<REGEX>:.*	NO_UPDATE_AVAILABLE	<REGEX>:.*	<REGEX>:.*
+
+// ---- test/sql/catalog/system_functions/system_catalog_scanner.test:96-99  (uses: path:system)
+query I
+SELECT DISTINCT database_name FROM duckdb_tables WHERE database_name = current_database();
+----
+memory
+
+// ---- test/sql/catalog/system_functions/system_catalog_scanner.test:138-142  (uses: path:system)
+query I
+SELECT view_name FROM duckdb_views WHERE schema_name = 's1' AND NOT internal ORDER BY database_name;
+----
+v1
+v1
+
+// ---- test/api/capi/v1/test_capi.cpp:533-556  (uses: description, name)
+TEST_CASE("Test C API config", "[capi]") {
+	duckdb_database db = nullptr;
+	duckdb_connection con = nullptr;
+	duckdb_config config = nullptr;
+	duckdb_result result;
+
+	// enumerate config options
+	auto config_count = duckdb_config_count();
+	for (size_t i = 0; i < config_count; i++) {
+		const char *name = nullptr;
+		const char *description = nullptr;
+		duckdb_get_config_flag(i, &name, &description);
+		REQUIRE(strlen(name) > 0);
+		REQUIRE(strlen(description) > 0);
+	}
+
+	// test config creation
+	REQUIRE(duckdb_create_config(&config) == DuckDBSuccess);
+	REQUIRE(duckdb_set_config(config, "access_mode", "invalid_access_mode") == DuckDBError);
+	REQUIRE(duckdb_set_config(config, "access_mode", "read_only") == DuckDBSuccess);
+
+	auto dbdir = TestCreatePath("capi_read_only_db");
+
+	// open the database & connection
+
+// ---- test/api/capi/v1/test_capi_table_description.cpp:6-18  (uses: description)
+TEST_CASE("Test the table description in the C API", "[capi]") {
+	CAPITester tester;
+	REQUIRE(tester.OpenDatabase(nullptr));
+	duckdb_table_description table_description = nullptr;
+	tester.Query("SET threads=1;");
+
+	// Test a non-existent table.
+	auto status = duckdb_table_description_create(tester.connection, nullptr, "test", &table_description);
+	REQUIRE(status == DuckDBError);
+	duckdb_table_description_destroy(&table_description);
+
+	status = duckdb_table_description_create_ext(tester.connection, "hello", "world", "test", &table_description);
+	REQUIRE(status == DuckDBError);
+
+// ---- test/api/test_copy_output_lifecycle.cpp:197-221  (uses: RegisterFunction, name)
+	function.flush_batch = LifecycleCopyFlushBatch;
+	function.file_size_bytes = LifecycleCopyFileSize;
+	function.extension = "test";
+	function.function_info = info;
+	return function;
+}
+
+void RegisterLifecycleCopyFunction(DuckDB &db, const string &name, const shared_ptr<LifecycleCopyInfo> &info,
+                                   bool batch_mode = false) {
+	ExtensionInfo extension_info {};
+	ExtensionActiveLoad load_info {*db.instance, extension_info, "copy_output_lifecycle_test", ""};
+	ExtensionLoader loader {load_info};
+	loader.RegisterFunction(CreateLifecycleCopyFunction(name, info, batch_mode));
+}
+
+void RemoveDirectoryIfPresent(FileSystem &fs, const string &path) {
+	if (fs.DirectoryExists(path)) {
+		fs.RemoveDirectoryExtended(path, {RemoveDirectoryMode::RECURSIVE});
+	}
+}
+
+} // namespace
+
+#ifndef DUCKDB_NO_THREADS
+namespace {
+
+// ---- test/api/test_extension_schema_api.cpp:81-116  (uses: RegisterFunction, name)
+TEST_CASE("Table function registration retains canonical qualification", "[api][table_function_qualification]") {
+	bool incremental = true;
+	SECTION("Incremental overload registration") {
+	}
+	SECTION("Catalog overload merge") {
+		incremental = false;
+	}
+	DuckDB db(nullptr);
+	Connection connection(db);
+	ExtensionLoader loader(*db.instance, "function_qualification");
+	REQUIRE_NO_FAIL(
+	    connection.Query("CREATE SCHEMA shadow; CREATE MACRO shadow.qualified_range(x) AS TABLE SELECT 99"));
+	REQUIRE_NO_FAIL(connection.Query("SET search_path='shadow,main'"));
+	auto shadow = connection.Query("SELECT * FROM qualified_range(2)");
+	REQUIRE_NO_FAIL(*shadow);
+	REQUIRE(shadow->Collection().GetValue(0, 0) == Value::INTEGER(99));
+	connection.BeginTransaction();
+	auto &range =
+	    Catalog::GetEntry<TableFunctionCatalogEntry>(*connection.context, QualifiedName("system", "main", "range"));
+	auto one = *range.functions.GetFunctionByArguments(*connection.context, {LogicalType::BIGINT});
+	auto two = *range.functions.GetFunctionByArguments(*connection.context, {LogicalType::BIGINT, LogicalType::BIGINT});
+	for (auto &function : vector<reference<TableFunction>> {one, two}) {
+		function.get().SetQualifiedName(QualifiedName("qualified_range"));
+	}
+	loader.RegisterFunction(one);
+	if (incremental) {
+		loader.AddFunctionOverload(TableFunctionSet(two));
+	} else {
+		loader.RegisterFunction(two);
+	}
+	const QualifiedName name("system", "main", "qualified_range");
+	REQUIRE(Catalog::GetEntry<TableFunctionCatalogEntry>(*connection.context, name).internal);
+	CheckTableFunctionQualification(connection, "SELECT * FROM system.main.qualified_range(2)", name, 0);
+	CheckTableFunctionQualification(connection, "SELECT * FROM system.main.qualified_range(2,4)", name, 2);
+	connection.Rollback();
+}

@@ -1,0 +1,78 @@
+// Upstream tests at the PR's parent commit df642fc94 that use the changed code.
+// Names searched (test lines using each): CreateExpression (0); no SQL name matched, so SQL tests were picked by the changed files' paths
+
+// ---- test/planner/projection_binding.test:16-18  (uses: path:planner)
+statement ok
+CREATE TABLE a (i INTEGER, j INTEGER);
+
+query I nosort orderbinder
+EXPLAIN SELECT a.i FROM a ORDER BY i
+----
+
+// ---- test/planner/projection_binding.test:20-22  (uses: path:planner)
+statement ok
+CREATE TABLE a (i INTEGER, j INTEGER);
+
+query I nosort orderbinder
+EXPLAIN SELECT i FROM a ORDER BY a.i
+----
+
+// ---- test/sql/upsert/postgres/planner_preprocessing.test:68-72  (uses: path:planner)
+statement ok
+create table capitals (
+	name		text,
+	population	float8,
+	altitude	int,
+	state		char(2),
+	unique (name)
+);
+
+statement ok
+insert into capitals values ('Sacramento', 3.694E+5, 30, 'CA');
+
+statement ok
+insert into capitals values ('Madison', 1.913E+5, 845, 'WI');
+
+statement ok
+insert into capitals values ('Sacramento', 4664.E+5, 30, 'CA') on conflict (name) do update set population = excluded.population;
+# Wrong "Sacramento", so do nothing:
+
+statement ok
+insert into capitals values ('Sacramento', 50, 2267, 'NE') on conflict (name) do nothing;
+
+query IIII
+select * from capitals;
+----
+Sacramento	466400000.0	30	CA
+Madison	191300.0	845	WI
+
+// ---- test/sql/upsert/postgres/planner_preprocessing.test:77-82  (uses: path:planner)
+statement ok
+create table cities (
+	name		text,
+	population	float8,
+	altitude	int,
+	unique (name)
+);
+
+statement ok
+insert into cities values ('San Francisco', 7.24E+5, 63);
+
+statement ok
+insert into cities values ('Las Vegas', 2.583E+5, 2174);
+
+statement ok
+insert into cities values ('Mariposa', 1200, 1953);
+
+statement ok
+insert into cities values ('Las Vegas', 2.583E+5, 2174) on conflict do nothing;
+
+statement ok
+insert into cities values ('Las Vegas', 5.83E+5, 2001) on conflict (name) do update set population = excluded.population, altitude = excluded.altitude;
+
+query IIII
+select rowid, * from cities;
+----
+0	San Francisco	724000.0	63
+1	Las Vegas	583000.0	2001
+2	Mariposa	1200.0	1953

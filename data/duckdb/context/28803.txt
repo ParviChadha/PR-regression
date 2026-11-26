@@ -1,0 +1,66 @@
+// Upstream tests at the PR's parent commit 0c600273f that use the changed code.
+// Names searched (test lines using each): ExtractProjectionStats (0), ExtractAggregationStats (0), ExtractAggregationStatsInternal (0); no SQL name matched, so SQL tests were picked by the changed files' paths
+
+// ---- test/optimizer/joins/relation_statistics_bindings.test:86-92  (uses: path:optimizer, path:relation, path:statistics)
+statement ok
+INSERT INTO rs_pivot_input VALUES (1, 'a', 10), (1, 'b', 20), (2, 'a', 30);
+
+statement ok
+CREATE TABLE rs_pivot_lookup(id INTEGER, label VARCHAR);
+
+statement ok
+INSERT INTO rs_pivot_lookup VALUES (1, 'x'), (2, 'y');
+
+query IIIT rowsort
+SELECT pivoted.id, pivoted.a, pivoted.b, rs_pivot_lookup.label
+FROM (PIVOT rs_pivot_input ON category USING sum(v) GROUP BY id) pivoted
+JOIN rs_pivot_lookup USING (id);
+----
+1	10	20	x
+2	30	NULL	y
+
+// ---- test/optimizer/cte_statistics_propagation.test:38-41  (uses: path:optimizer, path:statistics)
+statement ok
+CREATE TABLE t(i INTEGER, j INTEGER);
+
+statement ok
+INSERT INTO t VALUES (1, 10), (2, 20), (3, 30);
+
+query I
+WITH c AS MATERIALIZED (SELECT * FROM t) SELECT count(*) FROM t l JOIN c ON l.i + c.i > 1000
+----
+0
+
+// ---- test/optimizer/cte_statistics_propagation.test:53-56  (uses: path:optimizer, path:statistics)
+statement ok
+INSERT INTO small_vals SELECT (i * 1000000000)::BIGINT FROM range(1000) s(i);
+
+query I
+WITH c AS MATERIALIZED (SELECT v FROM small_vals) SELECT sum(v) FROM c
+----
+499500000000000
+
+// ---- test/optimizer/statistics/constant_or_null_conjunction.test:23-26  (uses: path:optimizer, path:statistics)
+statement ok
+CREATE TABLE quantities AS SELECT i::INTEGER AS q FROM range(1, 101) t(i);
+
+statement ok
+INSERT INTO quantities VALUES (NULL);
+
+query II
+EXPLAIN SELECT count(*) FROM quantities WHERE q BETWEEN 81 AND 100;
+----
+logical_opt	<!REGEX>:.*constant_or_null\(.*
+
+// ---- test/optimizer/statistics/constant_or_null_conjunction.test:28-32  (uses: path:optimizer, path:statistics)
+statement ok
+CREATE TABLE quantities AS SELECT i::INTEGER AS q FROM range(1, 101) t(i);
+
+statement ok
+INSERT INTO quantities VALUES (NULL);
+
+query II
+SELECT (SELECT count(*) FROM quantities WHERE q BETWEEN 1 AND 20),
+       (SELECT count(*) FROM quantities WHERE q BETWEEN 81 AND 100);
+----
+20	20

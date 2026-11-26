@@ -1,0 +1,63 @@
+// Upstream tests at the PR's parent commit d729ed014 that use the changed code.
+// Names searched (test lines using each): GetMetadata (0); no SQL name matched, so SQL tests were picked by the changed files' paths
+
+// ---- test/optimizer/compressed_materialization_variant.test:59-62  (uses: path:variant)
+query II
+EXPLAIN (FORMAT yaml) SELECT v FROM tv ORDER BY payload
+----
+logical_opt	<REGEX>:.*AS VARIANT.*
+
+// ---- test/optimizer/compressed_materialization_variant.test:64-72  (uses: path:variant)
+query I
+SELECT v FROM tv ORDER BY payload LIMIT 6
+----
+0
+1
+2
+3
+NULL
+5
+
+// ---- test/optimizer/pushdown/join_filter_pushdown_cast_variant.test:61-64  (uses: path:variant)
+statement ok
+CREATE TABLE build_direct_variant AS SELECT b::VARIANT AS b FROM (VALUES (10), (20), (30), (50)) t(b);
+
+query II
+EXPLAIN ANALYZE SELECT COUNT(*) FROM probe_direct_variant JOIN build_direct_variant ON probe_direct_variant.a = build_direct_variant.b;
+----
+analyzed_plan	<REGEX>:.*Dynamic Filters.*
+
+// ---- test/optimizer/pushdown/join_filter_pushdown_cast_variant.test:66-69  (uses: path:variant)
+statement ok
+CREATE TABLE build_direct_variant AS SELECT b::VARIANT AS b FROM (VALUES (10), (20), (30), (50)) t(b);
+
+query I
+SELECT COUNT(*) FROM probe_direct_variant JOIN build_direct_variant ON probe_direct_variant.a = build_direct_variant.b;
+----
+4
+
+// ---- test/sql/aggregate/variant/variant_group_object.test:6-9  (uses: path:variant)
+query I
+select variant_group_object('duck', 'goose'::VARIANT);
+----
+{'duck': goose}
+
+// ---- test/sql/aggregate/variant/variant_group_object.test:11-14  (uses: path:variant)
+query I
+select variant_group_object('duck', NULL::VARIANT);
+----
+{'duck': NULL}
+
+// ---- test/sql/aggregate/variant/variant_group_object_fallible.test:32-37  (uses: path:variant)
+query I rowsort
+SELECT variant_group_object(k, v::VARIANT) OVER (ROWS BETWEEN CURRENT ROW AND CURRENT ROW)
+FROM (VALUES ('a', 1), ('b', 2)) t(k, v);
+----
+{'a': 1}
+{'b': 2}
+
+// ---- test/sql/aggregate/variant/variant_group_object_fallible.test:44-47  (uses: path:variant)
+query I
+SELECT variant_group_object(k, v::VARIANT) FROM (VALUES ('a', 1), ('b', 2)) t(k, v);
+----
+{'a': 1, 'b': 2}

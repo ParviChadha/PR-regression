@@ -1,0 +1,57 @@
+// Upstream tests at the PR's parent commit 181615215 that use the changed code.
+// Names searched (test lines using each): RunRequestWithRetry (0), AppendToRequestError (0); no SQL name matched, so SQL tests were picked by the changed files' paths
+
+// ---- test/sql/logging/http_response_log_redaction.test:28-38  (uses: path:http)
+query TI rowsort
+SELECT lower(entry.key), bool_and(CASE lower(entry.key)
+    WHEN 'location' THEN entry.value = 'redacted'
+    WHEN 'content-length' THEN TRY_CAST(entry.value AS BIGINT) >= 0
+END)
+FROM duckdb_logs_parsed('HTTP'), UNNEST(map_entries(response.headers)) AS headers(entry)
+WHERE lower(entry.key) IN ('location', 'content-length')
+GROUP BY lower(entry.key);
+----
+content-length	true
+location	true
+
+// ---- test/sql/logging/http_response_log_redaction.test:50-55  (uses: path:http)
+query I
+SELECT count(*) > 0 AND bool_and(entry.value = 'https://github.com/duckdb/duckdb')
+FROM duckdb_logs_parsed('HTTP'), UNNEST(map_entries(response.headers)) AS headers(entry)
+WHERE lower(entry.key) = 'location';
+----
+true
+
+// ---- test/sql/logging/http_url_log_redaction.test:36-40  (uses: path:http)
+query I
+SELECT count(*) > 0 AND bool_and(request.url = 'http://github.com/duckdb/duckdb')
+FROM duckdb_logs_parsed('HTTP');
+----
+true
+
+// ---- test/sql/logging/http_url_log_redaction.test:50-57  (uses: path:http)
+query I
+SELECT count(*) > 0 AND bool_and(request.url = CASE WHEN {redact}
+    THEN 'http://github.com/duckdb/duckdb?redacted'
+    ELSE 'http://github.com/duckdb/duckdb?custom_token=dummy-token&email=dummy@example.com'
+END)
+FROM duckdb_logs_parsed('HTTP');
+----
+true
+
+// ---- test/sql/secrets/http_env_scope_lookup.test:24-32  (uses: path:http)
+query TIII
+SELECT provider,
+       secret_string LIKE '%http_proxy=http://proxy/%',
+       secret_string LIKE '%http_proxy_password=redacted%',
+       secret_string LIKE '%bearer_token=redacted%'
+FROM duckdb_secrets()
+WHERE name = 'env_secret'
+----
+env	true	true	true
+
+// ---- test/sql/secrets/http_env_scope_lookup.test:50-53  (uses: path:http)
+query T
+SELECT name FROM which_secret('https://example.com/data/nested/file.csv', 'http')
+----
+nested

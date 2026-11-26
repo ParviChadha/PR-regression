@@ -1,0 +1,161 @@
+// Upstream tests at the PR's parent commit 609fa5ac2 that use the changed code.
+// Names searched (test lines using each): GetBufferPool (25), BufferPool (0), GetAllocatorBulkDeallocationFlushThreshold (0), GetEvictionQueueInfo (7), GetMaxMemory (5), GetOperatorMemoryLimit (0), GetTemporaryMemoryManager (0), GetUsedMemory (102), SetAllocatorBulkDeallocationFlushThreshold (0), SetLimit (17), AddToEvictionQueue (0); no SQL name matched, so SQL tests were picked by the changed files' paths
+
+// ---- test/api/test_buffer_pool_eviction.cpp:316-341  (uses: GetBufferPool, GetEvictionQueueInfo, GetUsedMemory, SetLimit)
+TEST_CASE("Hash buffer eviction entries survive reuse and queue purging", "[storage][buffer_pool]") {
+	DuckDB db;
+	auto &manager = BufferManager::GetBufferManager(*db.instance);
+	auto &pool = manager.GetBufferPool();
+	const auto initial_memory = pool.GetUsedMemory();
+	const idx_t size = 64 * 1024;
+	auto pin = manager.Allocate(MemoryTag::HASH_TABLE, size, true);
+	auto block = pin.GetBlockHandle();
+	pin.Destroy();
+	const auto sequence = block->GetMemory().GetEvictionSequenceNumber();
+	for (idx_t i = 0; i < 100; i++) {
+		auto repinned = manager.Pin(block);
+	}
+	REQUIRE(block->GetMemory().GetEvictionSequenceNumber() == sequence);
+	pin = manager.Pin(block);
+	// Exceed the 32768-entry purge threshold while keeping this live entry pinned.
+	for (idx_t i = 0; i < 40000; i++) {
+		auto transient = manager.Allocate(MemoryTag::HASH_TABLE, size, true);
+	}
+	const auto info = pool.GetEvictionQueueInfo();
+	REQUIRE(SumApproxSize(info) < 40000);
+	REQUIRE(SumDeadNodes(info) < SumApproxSize(info));
+	pin.Destroy();
+	pool.SetLimit(initial_memory, EXCEPTION_POSTSCRIPT);
+	REQUIRE(block->GetMemory().GetState() == BlockState::BLOCK_UNLOADED);
+}
+
+// ---- test/api/test_buffer_pool_eviction.cpp:466-511  (uses: GetBufferPool, GetEvictionQueueInfo, GetUsedMemory, SetLimit)
+TEST_CASE("Test eviction queue: dead_nodes invariants hold under destroyable block churn", "[storage][buffer_pool]") {
+	DuckDB db;
+	Connection con(db);
+	auto &context = *con.context;
+	auto &buffer_manager = BufferManager::GetBufferManager(context);
+	auto &buffer_pool = DatabaseInstance::GetDatabase(context).GetBufferPool();
+	const idx_t initial_memory = buffer_pool.GetUsedMemory();
+
+	constexpr idx_t buffer_size = 64 * 1024; // 64 KiB - smaller buffers so we can churn many of them
+	constexpr idx_t resident_buffers = 32;
+	constexpr idx_t churn_iterations = 20000; // > INSERT_INTERVAL (4096) to trigger purges
+	const idx_t actual_alloc_size = BufferManager::GetAllocSize(buffer_size + Storage::DEFAULT_BLOCK_HEADER_SIZE);
+
+	const idx_t memory_limit = initial_memory + resident_buffers * actual_alloc_size;
+	buffer_pool.SetLimit(memory_limit, EXCEPTION_POSTSCRIPT);
+
+	// Keep a small set of pinned buffers that stay resident throughout the test.
+	// Their queue entries (after each unpin/repin cycle below) are alive, latest-version,
+	// and currently unevictable - exactly the case the old PurgeIteration mishandled.
+	vector<BufferHandle> pinned_resident;
+	pinned_resident.reserve(resident_buffers / 4);
+	for (idx_t i = 0; i < resident_buffers / 4; ++i) {
+		pinned_resident.emplace_back(buffer_manager.Allocate(MemoryTag::EXTENSION, buffer_size, /*can_destroy=*/true));
+	}
+
+	// Drive churn: allocate, briefly hold, release. Each unpin enqueues a node; many of
+	// them go stale immediately when the BlockHandle is dropped, generating dead nodes.
+	for (idx_t i = 0; i < churn_iterations; ++i) {
+		auto pin = buffer_manager.Allocate(MemoryTag::EXTENSION, buffer_size, /*can_destroy=*/true);
+		// pin destroyed -> enqueue; BlockHandle dropped -> BlockMemory destroyed -> dead++
+	}
+
+	const auto info = buffer_pool.GetEvictionQueueInfo();
+	const idx_t dead = SumDeadNodes(info);
+	const idx_t approx_size = SumApproxSize(info);
+
+	// Underflow check: total_dead_nodes is an unsigned atomic. If the old PurgeIteration
+	// over-decremented (treating pinned-but-current entries as dead), the counter would wrap
+	// to a value far larger than any plausible queue size.
+	REQUIRE(dead < approx_size + churn_iterations);
+
+	// Every queue must individually satisfy dead_nodes <= total_insertions.
+	for (const auto &q : info) {
+		REQUIRE(q.dead_nodes <= q.total_insertions);
+	}
+}
+
+// ---- test/sql/index/art/storage/art_reloaded_buffer_initialization.test:43-46  (uses: path:buffer, path:storage)
+query I
+SELECT strpos(hex(content), repeat(hex('Q'), 5)) FROM read_blob('{TEST_DIR}/art_reloaded_buffer_initialization.db')
+----
+0
+
+// ---- test/sql/index/art/storage/art_reloaded_buffer_initialization.test:51-54  (uses: path:buffer, path:storage)
+statement ok
+CREATE TABLE db.keys (k BIGINT PRIMARY KEY)
+
+statement ok
+INSERT INTO db.keys SELECT i * 7919 FROM range(50000) r(i)
+
+statement ok
+INSERT INTO db.keys SELECT (i + 100000) * 7919 FROM range(5000) r(i)
+
+query II
+SELECT count(*), count(DISTINCT k) FROM db.keys
+----
+55000	55000
+
+// ---- test/sql/index/art/storage/test_art_wal_replay_with_buffer.test:32-36  (uses: path:buffer, path:storage)
+statement ok
+CREATE TABLE tbl (u_2 UNION("string" VARCHAR, "bool" BOOLEAN))
+
+statement ok
+INSERT INTO tbl VALUES ('helloo');
+
+statement ok
+INSERT INTO tbl VALUES ('hellooo');
+
+query I
+SELECT * FROM tbl ORDER BY ALL;
+----
+helloo
+hellooo
+
+// ---- test/sql/index/art/storage/test_art_wal_replay_with_buffer_concurrent.test:48-61  (uses: path:buffer, path:storage)
+statement ok
+CREATE TABLE tbl (u_2 UNION("string" VARCHAR, "bool" BOOLEAN))
+
+statement ok
+INSERT INTO tbl VALUES ('helloo');
+
+statement ok
+INSERT INTO tbl VALUES ('hellooo_{threadid}');
+
+query I
+SELECT * FROM tbl ORDER BY ALL;
+----
+helloo
+hellooo_0
+hellooo_1
+hellooo_2
+hellooo_3
+hellooo_4
+hellooo_5
+hellooo_6
+hellooo_7
+hellooo_8
+hellooo_9
+
+// ---- test/api/test_object_cache.cpp:87-105  (uses: GetBufferPool, GetUsedMemory)
+TEST_CASE("Test ObjectCache memory accounting", "[api][object_cache]") {
+	DuckDB db;
+	Connection con(db);
+	auto &context = *con.context;
+	auto &cache = ObjectCache::GetObjectCache(context);
+	auto &buffer_pool = DatabaseInstance::GetDatabase(context).GetBufferPool();
+	const idx_t initial_memory = buffer_pool.GetUsedMemory();
+
+	// Put and check accountable memory for buffer pool.
+	constexpr idx_t obj_size = 1024 * 1024;
+	cache.Put("evictable1", make_shared_ptr<EvictableTestObject>(1, obj_size));
+	const idx_t after_put_memory = buffer_pool.GetUsedMemory();
+	REQUIRE(after_put_memory == initial_memory + obj_size);
+
+	// Delete and check accountable memory for buffer pool.
+	cache.Delete("evictable1");
+	const idx_t after_delete_memory = buffer_pool.GetUsedMemory();
+	REQUIRE(after_delete_memory == initial_memory);
+}

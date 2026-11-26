@@ -1,0 +1,24 @@
+// Upstream tests at the PR's parent commit 0df17a77c that use the changed code.
+// Names searched (test lines using each): GetInvalidMetadataError (5)
+
+// ---- test/api/capi/v2/test_capi_v2_extension_footer.cpp:26-45  (uses: GetInvalidMetadataError)
+TEST_CASE("V2: an extension loads only when pinned to this DuckDB version", "[capi_v2]") {
+	auto pinned = FooterFor(ExtensionABIType::C_STRUCT_UNSTABLE, ExtensionHelper::GetVersionDirectoryName());
+	REQUIRE(pinned.GetInvalidMetadataError() == "");
+
+	auto other_build = FooterFor(ExtensionABIType::C_STRUCT_UNSTABLE, "v0.0.0-not-this-build");
+	REQUIRE(StringUtil::Contains(other_build.GetInvalidMetadataError(), "built specifically for DuckDB version"));
+
+	for (auto version : {"v2.0.0", "v2.0.1", "v2.9.0"}) {
+		auto versioned = FooterFor(ExtensionABIType::C_STRUCT, version);
+		auto error = versioned.GetInvalidMetadataError();
+		REQUIRE(StringUtil::Contains(error, "the V2 C API has no stable surface yet"));
+		REQUIRE(!StringUtil::Contains(error, "and lower"));
+	}
+
+	auto v1 = FooterFor(ExtensionABIType::C_STRUCT, "v1.2.0");
+	REQUIRE(v1.GetInvalidMetadataError() == "");
+
+	auto v3 = FooterFor(ExtensionABIType::C_STRUCT, "v3.0.0");
+	REQUIRE(StringUtil::Contains(v3.GetInvalidMetadataError(), "we can only load extensions built for DuckDB C API"));
+}

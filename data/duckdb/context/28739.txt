@@ -1,0 +1,97 @@
+// Upstream tests at the PR's parent commit ef9940dae that use the changed code.
+// Names searched (test lines using each): PlanMergeInto (0), PlanGenericMergeIntoAction (0); no SQL name matched, so SQL tests were picked by the changed files' paths
+
+// ---- test/sql/execution/physical_verify_vector.test:8-15  (uses: path:execution, path:physical)
+query II
+SELECT i, CASE WHEN i % 2 = 0 THEN NULL ELSE i::VARCHAR END
+FROM range(4) t(i)
+----
+0	NULL
+1	1
+2	NULL
+3	3
+
+// ---- test/sql/execution/physical_verify_vector.test:20-27  (uses: path:execution, path:physical)
+query II
+SELECT i, i % 2
+FROM range(4) t(i)
+----
+0	0
+1	1
+2	0
+3	1
+
+// ---- test/sql/merge/merge_into.test:34-38  (uses: path:into, path:merge)
+statement ok
+CREATE TABLE Stock(item_id int, balance int);
+
+query II
+FROM Stock ORDER BY item_id
+----
+10	2200
+20	1900
+
+// ---- test/sql/merge/merge_into.test:48-53  (uses: path:into, path:merge)
+statement ok
+CREATE TABLE Stock(item_id int, balance int);
+
+query II
+FROM Stock ORDER BY item_id
+----
+10	3200
+20	1900
+30	300
+
+// ---- test/sql/merge/merge_into_bind_matching_columns.test:30-34  (uses: path:into, path:merge)
+statement ok
+CREATE TABLE dest (id INTEGER, val INTEGER);
+
+statement ok
+INSERT INTO dest VALUES (1, 10);
+
+query II
+SELECT * FROM dest order by all
+----
+1	100
+2	200
+
+// ---- test/sql/merge/merge_into_bind_matching_columns.test:59-63  (uses: path:into, path:merge)
+statement ok
+CREATE TABLE dest (id INTEGER, val INTEGER);
+
+statement ok
+INSERT INTO dest VALUES (1, 10);
+
+statement ok
+INSERT INTO dest VALUES (1, 10), (2, 20);
+
+query II
+SELECT * FROM dest order by all
+----
+1	100
+2	21
+
+// ---- test/sql/merge/merge_into_by_source.test:23-27  (uses: path:into, path:merge)
+statement ok
+CREATE TABLE Stock(item_id int, balance int);
+
+statement ok
+INSERT INTO Stock VALUES (5, 10), (10, 20), (20, 30);
+
+query II
+FROM Stock ORDER BY ALL
+----
+5	20
+10	30
+
+// ---- test/sql/merge/merge_into_by_source.test:36-39  (uses: path:into, path:merge)
+statement ok
+CREATE TABLE Stock(item_id int, balance int);
+
+statement ok
+INSERT INTO Stock VALUES (5, 10), (10, 20), (20, 30);
+
+query II
+FROM Stock ORDER BY ALL
+----
+10	30

@@ -1,0 +1,52 @@
+// Upstream tests at the PR's parent commit 988d97f31 that use the changed code.
+// Names searched (test lines using each): TransformSelectSetOpChain (0); no SQL name matched, so SQL tests were picked by the changed files' paths
+
+// ---- test/sql/peg_parser/transformer/alter_statement.test:24-28  (uses: path:parser, path:peg, path:transformer)
+statement ok
+CREATE TABLE test(s STRUCT(i INTEGER, j INTEGER)[])
+
+statement ok
+INSERT INTO test VALUES ([ROW(1, 1)]), ([ROW(2, 2)])
+
+query I
+SELECT * FROM test;
+----
+[{'i': 1, 'j': 1, 'k': NULL}]
+[{'i': 2, 'j': 2, 'k': NULL}]
+
+// ---- test/sql/peg_parser/transformer/alter_statement.test:52-55  (uses: path:parser, path:peg, path:transformer)
+statement ok
+CREATE TYPE mood AS ENUM (
+	'sad',
+	'ok',
+	'happy'
+);
+
+statement ok
+CREATE TABLE person (
+	id INTEGER,
+	c STRUCT(
+		name text,
+		current_mood mood
+    )
+);
+
+statement ok
+INSERT INTO person VALUES (0, ('Bob', 'happy'))
+
+query III
+select * from person;
+----
+0	{'name': Bob, 'current_mood': happy}	5
+
+// ---- test/sql/peg_parser/transformer/between_asymmetric.test:5-8  (uses: path:parser, path:peg, path:transformer)
+query I
+SELECT 5 BETWEEN ASYMMETRIC 1 AND 10;
+----
+true
+
+// ---- test/sql/peg_parser/transformer/between_asymmetric.test:10-13  (uses: path:parser, path:peg, path:transformer)
+query I
+SELECT 5 NOT BETWEEN ASYMMETRIC 1 AND 10;
+----
+false

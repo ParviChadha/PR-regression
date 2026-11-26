@@ -1,0 +1,175 @@
+// Upstream tests at the PR's parent commit 8a5afae55 that use the changed code.
+// Names searched (test lines using each): Rescale (0), TryRescale (0), Operation (0), DecimalHelper (0), BignumDecimalScaleInput (0), GetPowerOfTen (0), RescaleState (0), rescale_state (0), arithmetic (5), heap (53), context (2100), RescaleBignum (0), TryStoreRescaledDecimal (0), cached_exponent (0), cached_power (0); no SQL name matched, so SQL tests were picked by the changed files' paths
+
+// ---- test/fuzzer/pedro/overflow_varchar_decimal_cast.test:9-12  (uses: path:cast, path:decimal)
+query I
+SELECT '552.123242346e+11'::DECIMAL;
+----
+55212324234600.000
+
+// ---- test/fuzzer/pedro/overflow_varchar_decimal_cast.test:14-17  (uses: path:cast, path:decimal)
+query I
+SELECT '-3.4028234663852886e+16'::DECIMAL(30);
+----
+-34028234663852886
+
+// ---- test/optimizer/test_try_cast_decimal.test:11-14  (uses: path:cast, path:decimal)
+statement ok
+CREATE  TABLE  t0(c0 INT , c1 BOOLEAN , PRIMARY KEY(c0));
+
+statement ok
+INSERT INTO t0(c0, c1) VALUES (890608529, false);
+
+query I
+SELECT (true AND((TRY_CAST(t0.c0 AS DECIMAL(10,2)) > 0))) AS r FROM t0;
+----
+NULL
+
+// ---- test/optimizer/test_try_cast_decimal.test:16-19  (uses: path:cast, path:decimal)
+statement ok
+CREATE  TABLE  t0(c0 INT , c1 BOOLEAN , PRIMARY KEY(c0));
+
+statement ok
+INSERT INTO t0(c0, c1) VALUES (890608529, false);
+
+query I
+SELECT (((TRY_CAST(t0.c0 AS DECIMAL(10,2)) > 0))) AS r FROM t0;
+----
+NULL
+
+// ---- test/sql/cast/boolean_to_decimal_cast.test:13-16  (uses: path:cast, path:decimal)
+query II
+SELECT TRY_CAST(true AS DECIMAL({width}, {width})) IS NULL, false::DECIMAL({width}, {width}) = 0
+----
+true	true
+
+// ---- test/sql/cast/boolean_to_decimal_cast.test:35-40  (uses: path:cast, path:decimal)
+query IIIII
+SELECT count(*), count(TRY_CAST(b AS DECIMAL(4,4))), count(TRY_CAST(b AS DECIMAL(18,18))),
+       count(TRY_CAST(b AS DECIMAL(38,38))), sum(TRY_CAST(b AS DECIMAL(9,9))) = 0
+FROM bools
+----
+5000	1666	1666	1666	true
+
+// ---- test/sql/cast/decimal_cast.test:5-8  (uses: path:cast, path:decimal)
+query I
+SELECT '9.90'::DECIMAL(4,3)::DECIMAL(3,2);
+----
+9.90
+
+// ---- test/sql/cast/decimal_cast.test:10-13  (uses: path:cast, path:decimal)
+query I
+SELECT '1.10'::DECIMAL(4,3)::DECIMAL(3,2);
+----
+1.10
+
+// ---- test/common/test_checked_integer.cpp:129-141  (uses: arithmetic)
+TEST_CASE("CheckedInteger cross-type arithmetic", "[checked_integer]") {
+	const uint64_t U64_MAX = NumericLimits<uint64_t>::Maximum();
+	const int64_t I64_MAX = NumericLimits<int64_t>::Maximum();
+	const int64_t I64_MIN = NumericLimits<int64_t>::Minimum();
+
+	SECTION("happy path matches native") {
+		// binary: one case per op, hitting different sign/width pairings
+		cu16 a(100);
+		auto r1 = a + int8_t(-30); // unsigned + negative-signed
+		REQUIRE(r1.GetValue() == 70u);
+
+		ci64 b(10);
+		auto r2 = b - uint32_t(30); // signed - unsigned
+
+// ---- test/common/test_hugeint_constexpr.cpp:76-105  (uses: arithmetic)
+TEST_CASE("HUGEINT constexpr and runtime arithmetic agree at boundaries", "[hugeint]") {
+	using namespace hugeint_constexpr_test;
+	for (const auto &test : divisions) {
+		const auto lhs = RuntimeValue(test.lhs);
+		const auto rhs = RuntimeValue(test.rhs);
+		hugeint_t remainder;
+		REQUIRE(lhs / rhs == test.quotient);
+		REQUIRE(Hugeint::DivMod(lhs, rhs, remainder) == test.quotient);
+		REQUIRE(remainder == test.remainder);
+		REQUIRE(lhs % rhs == test.remainder);
+	}
+	const auto min = RuntimeValue(minimum);
+	const auto max = RuntimeValue(maximum);
+	REQUIRE(min * 1 == min);
+	REQUIRE(min * -1 == min);
+	REQUIRE(-min == min);
+	REQUIRE(max + 1 == min);
+	REQUIRE(min - 1 == max);
+
+	const hugeint_t operands[] = {minimum, minimum + 1, -limb, -1, 0, 1, limb, maximum};
+	for (auto lhs : operands) {
+		for (auto rhs : operands) {
+			lhs = RuntimeValue(lhs);
+			rhs = RuntimeValue(rhs);
+			auto product = lhs;
+			product *= rhs;
+			REQUIRE(product == lhs * rhs);
+		}
+	}
+}
+
+// ---- test/optimizer/relation_statistics.cpp:585-597  (uses: arithmetic)
+TEST_CASE("SEMI and ANTI estimator arithmetic preserves fractional inputs and outputs",
+          "[optimizer][relation_statistics][cardinality_arithmetic]") {
+	for (bool fractional_input : {false, true}) {
+		for (auto join_type : {JoinType::SEMI, JoinType::ANTI}) {
+			for (idx_t rhs_rows : {idx_t(0), idx_t(1)}) {
+				CAPTURE(fractional_input, join_type, rhs_rows);
+				JoinRelationSetManager sets;
+				auto &left = sets.GetJoinRelation(RelationIndex(0));
+				auto &second = sets.GetJoinRelation(RelationIndex(1));
+				auto &rhs = sets.GetJoinRelation(RelationIndex(2));
+				auto &pair = sets.Union(left, second);
+				auto &preserved = fractional_input ? pair : left;
+				auto &root = sets.Union(preserved, rhs);
+
+// ---- test/sql_export/sql_export_plan_relations.cpp:270-294  (uses: arithmetic)
+	DuckDB db(nullptr);
+	Connection connection(db);
+	connection.BeginTransaction();
+	auto plan = OptimizeLogicalPlanExportQuery(
+	    connection, "SELECT sum(x) OVER (ORDER BY x RANGE BETWEEN 1 PRECEDING AND CURRENT ROW) "
+	                "FROM (VALUES (1),(2),(4)) t(x)");
+	auto op = FindLogicalPlanExportOperator(*plan, LogicalOperatorType::LOGICAL_WINDOW);
+	REQUIRE(op);
+	auto &window = op->expressions[0]->Cast<BoundWindowExpression>();
+	auto endpoint = window.StartExpr()->Copy();
+	for (bool missing_offset : {false, true}) {
+		window.StartExprMutable() = endpoint->Copy();
+		auto &arithmetic = window.StartExprMutable()->Cast<BoundFunctionExpression>();
+		if (missing_offset) {
+			window.StartExprMutable() = window.OrderBy()[0].expression->Copy();
+		} else {
+			arithmetic.GetChildrenMutable()[0] = make_uniq<BoundConstantExpression>(Value::INTEGER(100));
+		}
+		auto exported = LogicalPlanSQLExporter::Export(*connection.context, *plan);
+		REQUIRE(exported.HasError());
+		REQUIRE(exported.GetIssues()[0].code == LogicalPlanVerificationIssueCode::UNSUPPORTED_EXPORT_FEATURE);
+		REQUIRE(exported.GetIssues()[0].construct->identifier == "window_range_offset");
+	}
+	for (idx_t recovery = 0; recovery < 3; recovery++) {
+		window.StartExprMutable() = endpoint->Copy();
+
+// ---- test/api/test_context.cpp:1-20  (uses: context)
+#include "catch.hpp"
+#include "duckdb.hpp"
+#include "test_helpers.hpp"
+#include "duckdb/common/query_context.hpp"
+#include "duckdb/main/client_config.hpp"
+#include "duckdb/main/client_context.hpp"
+#include "duckdb/main/database.hpp"
+#include "duckdb/main/context.hpp"
+#include "duckdb/main/query_profiler.hpp"
+#include "duckdb/parallel/task_executor.hpp"
+#include "duckdb/storage/temporary_memory_manager.hpp"
+
+using namespace duckdb;
+
+TEST_CASE("Test Context", "[api]") {
+	DuckDB db(nullptr);
+	Connection con(db);
+	REQUIRE_NO_FAIL(con.Query("SET max_execution_time=12345"));
+
+	SECTION("services owned by a ClientContext") {

@@ -1,0 +1,64 @@
+// Upstream tests at the PR's parent commit e2f9f75da that use the changed code.
+// Names searched (test lines using each): FilterSource (0), small_build_only (0), stage_idx (0), AddRuntimeFilterScheduleDependencies (0), ClearRuntimeFilters (0), ScheduleRuntimeFilters (0), ScheduleRuntimeFiltersInternal (0), IsSmallBuild (0); no SQL name matched, so SQL tests were picked by the changed files' paths
+
+// ---- test/sql/cte/materialized/cte_runtime_filter_effects.test:32-36  (uses: path:filter, path:runtime)
+query I rowsort
+EXECUTE changing_builds;
+----
+1
+2
+
+// ---- test/sql/cte/materialized/cte_runtime_filter_effects.test:52-56  (uses: path:filter, path:runtime)
+query I rowsort
+EXECUTE changing_builds;
+----
+2
+3
+
+// ---- test/sql/cte/materialized/cte_runtime_filter_modes.test:38-44  (uses: path:filter, path:runtime)
+statement ok
+CREATE TABLE facts AS SELECT i AS k,repeat('x',64) AS payload FROM range(50000) t(i);
+
+statement ok
+CREATE TABLE b AS SELECT * FROM (VALUES (1),(3)) t(k);
+
+statement ok
+CREATE TABLE c AS SELECT * FROM (VALUES (3),(5)) t(k);
+
+query II
+EXPLAIN (ANALYZE, FORMAT JSON)
+WITH p AS MATERIALIZED (SELECT * FROM facts)
+SELECT (SELECT sum(length(payload)) FROM p JOIN b USING(k)),
+       (SELECT count(*) FROM p JOIN c USING(k));
+----
+analyzed_plan	<REGEX>:(?s).*"Fanout Mode": "DIRECT".*"Table": "[^"]*[.]facts"[^}]*"Dynamic Filters": "[^"]* OR [^"]*"[^}]*},\s*"intermediate_rows": 3,.*
+
+// ---- test/sql/cte/materialized/cte_runtime_filter_modes.test:54-60  (uses: path:filter, path:runtime)
+statement ok
+CREATE TABLE facts AS SELECT i AS k,repeat('x',64) AS payload FROM range(50000) t(i);
+
+statement ok
+CREATE TABLE b AS SELECT * FROM (VALUES (1),(3)) t(k);
+
+statement ok
+CREATE TABLE c AS SELECT * FROM (VALUES (3),(5)) t(k);
+
+query II
+EXPLAIN (ANALYZE, FORMAT JSON)
+WITH p AS MATERIALIZED (SELECT * FROM facts)
+SELECT (SELECT count(*) FROM (SELECT k FROM p JOIN b USING(k) LIMIT 1) t),
+       (SELECT count(*) FROM (SELECT k FROM p JOIN c USING(k) LIMIT 1) t);
+----
+analyzed_plan	<REGEX>:(?s).*"Fanout Mode": "BUFFERED".*"Table": "[^"]*[.]facts".*
+
+// ---- test/sql/cte/materialized/cte_runtime_filter_sibling_dependencies.test:36-39  (uses: path:filter, path:runtime)
+query II
+EXECUTE consumers;
+----
+3879980000	4039980000
+
+// ---- test/sql/cte/materialized/cte_runtime_filter_sibling_dependencies.test:75-78  (uses: path:filter, path:runtime)
+query II
+EXECUTE consumers;
+----
+3879980000	4039980000

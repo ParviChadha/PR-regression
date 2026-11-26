@@ -1,0 +1,174 @@
+// Upstream tests at the PR's parent commit 613c530ff that use the changed code.
+// Names searched (test lines using each): BlockAllocator (97), FreeData (102), AllocateData (93), ReallocateData (16), FlushForAllocation (13), TryFlushDeallocated (11), GetBlockAllocatorThreadLocalState (0), Block (0), DecayDelay (2), FlushAll (20), FlushOnShutdown (1), Free (0), Allocate (66), Clear (9), Get (50), FileBuffer (0), CastFunctionSet (0), GetConfig (2), InitializePool (1), TrimCachedMemory (0), FreeContiguousBlocks (0), VerifyBlockID (0), TryReturnTouched (0), ProtectVirtualMemory (0), ProtectPoolGuards (0), GetGuardBlockCount (0), GetUsableBlockCount (0), IsGuardBlock (0), IsInPool (2); no SQL name matched, so SQL tests were picked by the changed files' paths
+
+// ---- test/api/test_block_allocator_tls.cpp:775-809  (uses: AllocateData, BlockAllocator, FlushAll, FlushForAllocation, FreeData, TryFlushDeallocated)
+TEST_CASE("Allocation cache pressure accounts for fixed backing and preserves live allocations",
+          "[api][allocation_cache]") {
+	constexpr idx_t BLOCK_SIZE = 256 * 1024;
+	constexpr idx_t SIZE = 2 * BLOCK_SIZE;
+	atomic<idx_t> live_bytes {0};
+	Allocator fallback(CacheTestAllocate, CacheTestFree, CacheTestReallocate,
+	                   make_uniq<AllocationCacheTestData>(live_bytes));
+	BlockAllocator allocator(fallback, BLOCK_SIZE, 4 * BLOCK_SIZE);
+	auto pooled = allocator.AllocateData(BLOCK_SIZE);
+	auto small = allocator.AllocateData(SIZE);
+	auto large = allocator.AllocateData(2 * SIZE);
+	auto live = allocator.AllocateData(4 * SIZE);
+	live[0] = 42;
+	live[4 * SIZE - 1] = 84;
+	allocator.FreeData(pooled, BLOCK_SIZE);
+	allocator.FreeData(small, SIZE);
+	allocator.FreeData(large, 2 * SIZE);
+	REQUIRE(allocator.GetCachedMemory() == BLOCK_SIZE + 3 * SIZE);
+	REQUIRE(BlockAllocatorTestHelper::Deallocated(allocator) == 0);
+
+	CHECK_FALSE(allocator.TryFlushDeallocated(1, BLOCK_SIZE + 3 * SIZE));
+	CHECK(allocator.TryFlushDeallocated(NumericLimits<idx_t>::Maximum(), BLOCK_SIZE + SIZE));
+	CHECK(allocator.GetCachedMemory() == BLOCK_SIZE + SIZE);
+	CHECK(live_bytes.load() == 5 * SIZE);
+	CHECK(live[0] == 42);
+	CHECK(live[4 * SIZE - 1] == 84);
+	allocator.FlushForAllocation(NumericLimits<idx_t>::Maximum(), 0);
+	CHECK(allocator.GetCachedMemory() == 0);
+	CHECK(live_bytes.load() == 4 * SIZE);
+	CHECK(live[0] == 42);
+	CHECK(live[4 * SIZE - 1] == 84);
+	allocator.FreeData(live, 4 * SIZE);
+	allocator.FlushAll();
+	CHECK(live_bytes.load() == 0);
+}
+
+// ---- test/api/block_allocator_fault_injection.cpp:78-102  (uses: InitializePool)
+	}
+	return __real_mmap(address, length, protection, flags, fd, offset);
+}
+}
+
+namespace duckdb {
+class BlockAllocatorTestHelper {
+public:
+	static bool IsInPool(const BlockAllocator &allocator, data_ptr_t pointer) {
+		return allocator.IsInPool(pointer);
+	}
+	static bool InitializePool(const BlockAllocator &allocator) {
+		return allocator.InitializePool();
+	}
+};
+} // namespace duckdb
+
+static void Check(bool condition, const char *message) {
+	if (!condition) {
+		std::fprintf(stderr, "BlockAllocator fault injection: %s\n", message);
+		std::abort();
+	}
+}
+
+template <class FUNC>
+
+// ---- test/api/test_block_allocator_tls.cpp:1316-1356  (uses: AllocateData, BlockAllocator, FlushForAllocation, FreeData)
+TEST_CASE("BlockAllocator concurrent trimming preserves the cache target", "[api][block_allocator]") {
+	constexpr idx_t BLOCK_SIZE = 65536;
+	constexpr idx_t BLOCK_COUNT = 256;
+	constexpr idx_t TARGET_BLOCKS = 32;
+	Allocator fallback;
+	BlockAllocator allocator(fallback, BLOCK_SIZE, BLOCK_COUNT * BLOCK_SIZE);
+	vector<data_ptr_t> blocks;
+	for (idx_t i = 0; i < BLOCK_COUNT; i++) {
+		auto block = allocator.AllocateData(BLOCK_SIZE);
+		block[0] = 42;
+		blocks.push_back(block);
+	}
+	for (auto block : blocks) {
+		allocator.FreeData(block, BLOCK_SIZE);
+	}
+	allocator.ThreadFlush(false, 0, 1);
+	CHECK(allocator.GetCachedMemory() == BLOCK_COUNT * BLOCK_SIZE);
+	atomic<idx_t> ready {0};
+	atomic<bool> start {false};
+	vector<std::thread> workers;
+	for (idx_t t = 0; t < 4; t++) {
+		workers.emplace_back([&]() {
+			ready++;
+			while (!start) {
+				std::this_thread::yield();
+			}
+			allocator.FlushForAllocation(NumericLimits<idx_t>::Maximum(), TARGET_BLOCKS * BLOCK_SIZE);
+		});
+	}
+	while (ready != workers.size()) {
+		std::this_thread::yield();
+	}
+	start = true;
+	for (auto &worker : workers) {
+		worker.join();
+	}
+	CHECK(allocator.GetCachedMemory() == TARGET_BLOCKS * BLOCK_SIZE);
+	CHECK(BlockAllocatorTestHelper::FreeBlocks(allocator) == TARGET_BLOCKS);
+	allocator.FlushForAllocation(NumericLimits<idx_t>::Maximum(), 0);
+	CHECK(allocator.GetCachedMemory() == 0);
+}
+
+// ---- test/sql/index/art/storage/test_art_allocator_bitmap_checkpoint.test:44-47  (uses: path:allocator, path:storage)
+query I
+SELECT count(*) FROM bitmap_db.t WHERE k=0
+----
+0
+
+// ---- test/sql/index/art/storage/test_art_allocator_bitmap_checkpoint.test:62-65  (uses: path:allocator, path:storage)
+query III
+SELECT count(*), min(id), max(id) FROM bitmap_db.t WHERE k=0
+----
+256	21760	22015
+
+// ---- test/sql/index/art/storage/test_art_mixed_block_memory_tags.test:41-44  (uses: path:block, path:storage)
+query I
+SELECT memory_usage_bytes > 0 FROM duckdb_memory() WHERE tag='BASE_TABLE';
+----
+true
+
+// ---- test/sql/index/art/storage/test_art_mixed_block_memory_tags.test:49-52  (uses: path:block, path:storage)
+statement ok
+INSERT INTO child SELECT range % 128, range FROM range(1024);
+
+query I
+SELECT sum(payload) FROM child;
+----
+523776
+
+// ---- test/sql/parallelism/block_allocator_thread_settings.test:22-25  (uses: path:allocator, path:block)
+statement ok
+CREATE TABLE blocks AS SELECT i, repeat('a', 100) AS s FROM range(10000) t(i)
+
+query II
+SELECT sum(i), sum(length(s)) FROM blocks
+----
+49995000	1000000
+
+// ---- test/sql/settings/enable_block_allocator.test:7-9  (uses: path:allocator, path:block)
+query I nosort allocator_default
+SELECT current_setting('enable_block_allocator')
+----
+
+// ---- test/sql/settings/enable_block_allocator.test:20-23  (uses: path:allocator, path:block)
+query I con1
+SELECT current_setting('enable_block_allocator')
+----
+false
+
+// ---- test/common/test_allocator_debug_info.cpp:32-39  (uses: FreeData, ReallocateData)
+	SECTION("ReallocateData with nullptr debug_info") {
+		data_ptr_t ptr = Allocator::DefaultAllocate(nullptr, 64);
+		REQUIRE(ptr != nullptr);
+		data_ptr_t new_ptr = nullptr;
+		REQUIRE_NOTHROW(new_ptr = alloc.ReallocateData(ptr, 64, 128));
+		REQUIRE(new_ptr != nullptr);
+		alloc.FreeData(new_ptr, 128);
+	}
+
+// ---- test/common/test_allocator_debug_info.cpp:25-30  (uses: AllocateData, FreeData)
+	SECTION("AllocateData with nullptr debug_info") {
+		data_ptr_t ptr = nullptr;
+		REQUIRE_NOTHROW(ptr = alloc.AllocateData(64));
+		REQUIRE(ptr != nullptr);
+		alloc.FreeData(ptr, 64);
+	}

@@ -1,0 +1,161 @@
+// Upstream tests at the PR's parent commit 570472871 that use the changed code.
+// Names searched (test lines using each): AcquireJob (2), ScanReadAhead (2), Create (19), ReleaseMemoryReservation (0), ClaimJob (0); no SQL name matched, so SQL tests were picked by the changed files' paths
+
+// ---- test/sql/storage/prefetch/async_native_scan_read_ahead.test:31-34  (uses: path:ahead, path:read, path:scan)
+statement ok
+CREATE TABLE integers AS SELECT range AS i FROM range(1000000);
+
+query II
+SELECT count(*), sum(i) FROM integers
+----
+900000	450000000000
+
+// ---- test/sql/storage/prefetch/async_native_scan_read_ahead.test:64-67  (uses: path:ahead, path:read, path:scan)
+statement ok
+CREATE TABLE integers AS SELECT range AS i FROM range(1000000);
+
+statement ok
+INSERT INTO integers SELECT range FROM range(5)
+
+query II
+SELECT count(*), sum(i) FROM integers
+----
+900005	450000000010
+
+// ---- test/sql/storage/prefetch/async_native_scan_read_ahead_concurrent.test:47-50  (uses: path:ahead, path:read, path:scan)
+statement ok
+CREATE TABLE integers AS SELECT range AS i FROM range(500000);
+
+query I
+SELECT count(*) FROM integers
+----
+600000
+
+// ---- test/sql/storage/prefetch/async_native_scan_read_ahead_pruning.test:40-43  (uses: path:ahead, path:read, path:scan)
+statement ok
+CREATE TEMPORARY TABLE before AS SELECT memory_usage_bytes AS bytes FROM duckdb_memory() WHERE tag = 'BASE_TABLE'
+
+query I
+SELECT memory_usage_bytes - (SELECT bytes FROM before) <= 262144 FROM duckdb_memory() WHERE tag = 'BASE_TABLE'
+----
+true
+
+// ---- test/sql/storage/prefetch/async_native_scan_read_ahead_pruning.test:56-59  (uses: path:ahead, path:read, path:scan)
+statement ok
+CREATE TABLE integers AS SELECT (range * 1000000 + (hash(range) % 1000000))::BIGINT AS i FROM range(1000000);
+
+query I
+SELECT count(*) FROM integers WHERE i BETWEEN 10000000 AND 20999999
+----
+11
+
+// ---- test/sql/copy/csv/read_ahead/csv_readahead_gzip.test:24-30  (uses: path:ahead, path:read)
+query I
+SELECT count(*) FROM (
+    SELECT i, row_number() OVER () AS rn
+    FROM read_csv(['{TEST_DIR}/csv_ra_0.csv.gz', '{TEST_DIR}/csv_ra_1.csv.gz', '{TEST_DIR}/csv_ra_2.csv.gz'])
+) WHERE i + 1 <> rn
+----
+0
+
+// ---- test/api/test_read_ahead_progress.cpp:86-100  (uses: ScanReadAhead)
+TEST_CASE("Read-ahead settles a file open that never runs", "[api]") {
+	DuckDB db(nullptr);
+	Connection con(db);
+
+	std::atomic<bool> opened {false};
+	std::atomic<bool> settled {false};
+	{
+		ScanReadAhead read_ahead(*con.context, 1, nullptr);
+		read_ahead.PushError(ErrorData("injected read-ahead error"));
+		read_ahead.ScheduleFileOpen([&]() { opened = true; }, [&]() { settled = true; });
+		// leaving the scope cancels and drains, retiring the open without running it
+	}
+	REQUIRE(settled);
+	REQUIRE(!opened);
+}
+
+// ---- test/api/test_read_ahead_progress.cpp:110-134  (uses: ScanReadAhead)
+
+	bool expect_overlap = true;
+	SECTION("Two scan threads") {
+	}
+	SECTION("One scan thread") {
+		REQUIRE_NO_FAIL(con.Query("SET threads=1"));
+	}
+	SECTION("Low memory limits the backlog") {
+		REQUIRE_NO_FAIL(con.Query("SET memory_limit='32MB'"));
+		expect_overlap = false;
+	}
+
+	auto read_ahead = ScanReadAhead::Create(*con.context);
+	REQUIRE(read_ahead);
+	struct JobState {};
+	const idx_t job_count = 32;
+	idx_t produced = 0;
+	auto produce = [&](duckdb::vector<duckdb::unique_ptr<AsyncTask>> &) -> duckdb::unique_ptr<ScanReadAheadJob> {
+		if (produced == job_count) {
+			return nullptr;
+		}
+		auto job = make_uniq<ScanReadAheadJobWrapper<JobState>>();
+		job->batch_index = produced++;
+		return std::move(job);
+	};
+
+// ---- test/api/test_relation_api.cpp:478-491  (uses: Create)
+	REQUIRE(CHECK_COLUMN(result, 0, {2, 3, 4, 11, 12, 13}));
+
+	REQUIRE_NOTHROW(tbl->Project("i + 1")->CreateView("test1"));
+	REQUIRE_NOTHROW(tbl->Project("i + 10")->CreateView("test2"));
+	result = con.Query("SELECT * FROM test1 UNION SELECT * FROM test2 ORDER BY 1");
+	REQUIRE(CHECK_COLUMN(result, 0, {2, 3, 4, 11, 12, 13}));
+
+	// project <> alias column count mismatch
+	REQUIRE_THROWS(proj->Project("i + 1, i + 2", "i"));
+	// view already exists
+	REQUIRE_THROWS(tbl->Project("i + 10")->CreateView("test2", false));
+	// table already exists
+	REQUIRE_THROWS(tbl->Project("i + 10")->Create("test2"));
+}
+
+// ---- test/api/test_relation_api.cpp:493-532  (uses: Create)
+TEST_CASE("Test table creations using the relation API", "[relation_api]") {
+	DuckDB db(nullptr);
+	Connection con(db);
+
+	duckdb::unique_ptr<QueryResult> result;
+	duckdb::shared_ptr<Relation> values;
+
+	// create a table from a Values statement
+	REQUIRE_NOTHROW(values = con.Values({{1, 10}, {2, 5}, {3, 4}}, {"i", "j"}));
+	REQUIRE_NOTHROW(values->Create("integers"));
+
+	result = con.Query("SELECT * FROM integers ORDER BY i");
+	REQUIRE(CHECK_COLUMN(result, 0, {1, 2, 3}));
+	REQUIRE(CHECK_COLUMN(result, 1, {10, 5, 4}));
+
+	// insert from a set of values
+	REQUIRE_NOTHROW(con.Values({{4, 7}, {5, 8}})->Insert("integers"));
+
+	result = con.Query("SELECT * FROM integers ORDER BY i");
+	REQUIRE(CHECK_COLUMN(result, 0, {1, 2, 3, 4, 5}));
+	REQUIRE(CHECK_COLUMN(result, 1, {10, 5, 4, 7, 8}));
+
+	// create a table from a query
+	REQUIRE_NOTHROW(
+	    con.Table("integers")->Filter("i BETWEEN 3 AND 4")->Project("i + 1 AS k, 'hello' AS l")->Create("new_values"));
+
+	result = con.Query("SELECT * FROM new_values ORDER BY k");
+	REQUIRE(CHECK_COLUMN(result, 0, {4, 5}));
+	REQUIRE(CHECK_COLUMN(result, 1, {"hello", "hello"}));
+
+	// create a table in an attached db and insert values
+	auto test_dir = TestDirectoryPath();
+	string db_path = test_dir + "/my_db.db";
+	REQUIRE_NO_FAIL(con.Query("ATTACH '" + db_path + "' AS my_db;"));
+	REQUIRE_NOTHROW(values = con.Values({{1, 10}, {2, 5}, {3, 4}}, {"i", "j"}));
+	REQUIRE_NOTHROW(values->Create(Identifier("my_db"), Identifier(), Identifier("integers")));
+	result = con.Query("SELECT * FROM my_db.integers ORDER BY i");
+	REQUIRE(CHECK_COLUMN(result, 0, {1, 2, 3}));
+	REQUIRE(CHECK_COLUMN(result, 1, {10, 5, 4}));
+}

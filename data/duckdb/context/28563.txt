@@ -1,0 +1,209 @@
+// Upstream tests at the PR's parent commit dd24e4297 that use the changed code.
+// Names searched (test lines using each): Apply (0), contains (147), list_column (0)
+
+// ---- test/issues/general/test_24328.test:8-17  (uses: contains)
+query IIIIIII
+SELECT map_contains(MAP {'Apple': 1}, 'apple' COLLATE NOCASE),
+       contains(MAP {'Apple': 1}, 'apple' COLLATE NOCASE),
+       map_contains(map(['Apple' COLLATE NOCASE], [1]), 'apple'),
+       map_contains(MAP {'Apple': 1}, 'banana' COLLATE NOCASE),
+       map_contains(map([['Apple' COLLATE NOCASE]], [1]), ['apple']),
+       map_contains(map([array_value('Apple' COLLATE NOCASE)], [1]), array_value('apple')),
+       map_contains(NULL::MAP(VARCHAR, INTEGER), 'apple' COLLATE NOCASE);
+----
+true	true	true	false	true	true	NULL
+
+// ---- test/issues/general/test_27715.test:60-64  (uses: contains)
+statement ok
+INSERT INTO s VALUES ('a'), (NULL), ('a');
+
+query I
+SELECT * FROM s WHERE contains(v, 'a');
+----
+a
+a
+
+// ---- test/issues/general/test_27715.test:71-74  (uses: contains)
+statement ok
+INSERT INTO s VALUES ('a'), (NULL), ('a');
+
+query II
+EXPLAIN SELECT * FROM s WHERE contains(v, 'a');
+----
+physical_plan	<REGEX>:.*IS NOT NULL.*
+
+// ---- test/optimizer/constant_argument_errors.test:23-25  (uses: contains)
+statement ok
+CREATE TABLE t(s VARCHAR);
+
+query I
+SELECT contains(s, ''::DOUBLE::VARCHAR) FROM t;
+----
+
+// ---- test/optimizer/contains_to_in_clause.test:65-68  (uses: contains)
+statement ok
+CREATE TABLE t AS SELECT * FROM (VALUES (1), (2), (NULL::INTEGER)) v(a);
+
+query II
+EXPLAIN SELECT * FROM t WHERE contains([], a)
+----
+physical_plan	<REGEX>:.*EMPTY_RESULT.*
+
+// ---- test/optimizer/joins/unsupported_conjunct_selectivity.test:14-17  (uses: contains)
+statement ok
+CREATE TABLE input AS SELECT i AS k, i::VARCHAR AS s FROM range(1000) r(i);
+
+query II
+EXPLAIN (FORMAT JSON) SELECT * FROM input WHERE contains(s, '1');
+----
+logical_opt	<REGEX>:.*"name":\s*"SEQ_SCAN".*"Estimated Cardinality":\s*"200".*
+
+// ---- test/optimizer/joins/unsupported_conjunct_selectivity.test:19-23  (uses: contains)
+statement ok
+CREATE TABLE input AS SELECT i AS k, i::VARCHAR AS s FROM range(1000) r(i);
+
+# Adding a weak supported conjunct cannot raise the fallback estimate.
+query II
+EXPLAIN (FORMAT JSON) SELECT * FROM input WHERE contains(s, '1') AND k != 0;
+----
+logical_opt	<REGEX>:.*"name":\s*"SEQ_SCAN".*"Estimated Cardinality":\s*"200".*
+
+// ---- test/optimizer/like_optimizer.test:54-56  (uses: contains)
+statement ok
+CREATE TABLE test(S VARCHAR);
+
+statement ok
+INSERT INTO test VALUES ('aaa');
+
+query I nosort contains
+EXPLAIN SELECT contains(S, 'aaa') FROM test
+----
+
+// ---- test/optimizer/like_optimizer.test:103-105  (uses: contains)
+statement ok
+CREATE TABLE test(S VARCHAR);
+
+statement ok
+INSERT INTO test VALUES ('aaa');
+
+query I nosort notlikecontains
+EXPLAIN SELECT NOT(contains(S, 'aaa')) FROM test
+----
+
+// ---- test/optimizer/needle_optimizer.test:16-18  (uses: contains)
+statement ok
+CREATE TABLE test(S VARCHAR);
+
+query I nosort no_output
+EXPLAIN SELECT CONTAINS(S, '') FROM test
+----
+
+// ---- test/optimizer/pushdown/non_inner_join_subquery_pushdown.test:16-25  (uses: contains)
+statement ok
+CREATE TABLE dim AS SELECT i AS id, i % 50 AS grp FROM range(1000) t(i);
+
+statement ok
+CREATE TABLE fact AS
+SELECT i AS id, i % 1000 AS dim_id, TIMESTAMP '2024-01-01 00:00:00' + INTERVAL (i) SECOND AS ts, 'b' || i AS payload
+FROM range(1000000) t(i);
+
+statement ok
+CREATE TABLE q AS SELECT i, 'b' || (i * 7919) AS f FROM range(80) t(i);
+
+# the IN subquery becomes a SEMI join below the outer join and the range becomes a scan filter
+query II
+EXPLAIN (FORMAT compact) SELECT q.i, count(c.id) AS matches
+FROM q LEFT JOIN fact c
+  ON c.dim_id IN (SELECT id FROM dim WHERE grp IN (1, 2))
+ AND c.ts >= TIMESTAMP '2024-01-10 00:00:00' AND c.ts < TIMESTAMP '2024-01-11 00:00:00'
+ AND contains(c.payload, q.f)
+GROUP BY 1;
+----
+physical_plan	<REGEX>:.*Condition: contains\(payload, f\)\n.*Join Type: SEMI;.*\n *SEQ_SCAN [^\n]*Table: [^\n]*\.fact;[^\n]*Filters: [^\n]*ts >= [^\n]*ts < .*
+
+// ---- test/optimizer/pushdown/non_inner_join_subquery_pushdown.test:27-37  (uses: contains)
+statement ok
+CREATE TABLE dim AS SELECT i AS id, i % 50 AS grp FROM range(1000) t(i);
+
+statement ok
+CREATE TABLE fact AS
+SELECT i AS id, i % 1000 AS dim_id, TIMESTAMP '2024-01-01 00:00:00' + INTERVAL (i) SECOND AS ts, 'b' || i AS payload
+FROM range(1000000) t(i);
+
+statement ok
+CREATE TABLE q AS SELECT i, 'b' || (i * 7919) AS f FROM range(80) t(i);
+
+query III
+SELECT count(*), count(*) FILTER (WHERE matches > 0), sum(matches) FROM (
+	SELECT q.i, count(c.id) AS matches
+	FROM q LEFT JOIN fact c
+	  ON c.dim_id IN (SELECT id FROM dim WHERE grp IN (1, 2))
+	 AND c.ts >= TIMESTAMP '2024-01-10 00:00:00' AND c.ts < TIMESTAMP '2024-01-11 00:00:00'
+	 AND contains(c.payload, q.f)
+	GROUP BY 1
+);
+----
+80	2	6
+
+// ---- test/optimizer/regex_optimizer.test:19-21  (uses: contains)
+statement ok
+CREATE TABLE test(s VARCHAR);
+
+statement ok
+INSERT INTO test VALUES ('aaa');
+
+query I nosort regexconstantpattern
+EXPLAIN SELECT contains(s, 'aa') FROM test
+----
+
+// ---- test/optimizer/regex_optimizer.test:29-31  (uses: contains)
+statement ok
+CREATE TABLE test(s VARCHAR);
+
+statement ok
+INSERT INTO test VALUES ('aaa');
+
+query I nosort regexconstantsinglechar
+EXPLAIN SELECT contains(s, 'a') FROM test
+----
+
+// ---- test/optimizer/regex_optimizer_coverage.test:14-16  (uses: contains)
+statement ok
+CREATE TABLE test(word VARCHAR);
+
+statement ok
+INSERT INTO test VALUES ('FLASH'), ('TOAST'), ('BELL');
+
+query I nosort correct_result
+select contains(word, 'AS') from test;
+----
+
+// ---- test/optimizer/statistics/statistics_contains.test:10-15  (uses: contains)
+statement ok
+CREATE TABLE contains_pruning AS
+SELECT CASE WHEN i < 122880 THEN 'short' ELSE repeat('x', 50) END AS s
+FROM range(245760) tbl(i);
+
+# The first row group's maximum string length is shorter than the constant needle
+query II
+EXPLAIN ANALYZE
+SELECT count(*) FROM contains_pruning WHERE contains(s, 'xxxxxxxxxxxxxxxxxxxxxxxxxxxxxx');
+----
+analyzed_plan	<REGEX>:.*Row Groups Scanned: 1 / 2.*
+
+// ---- test/optimizer/statistics/statistics_contains.test:17-20  (uses: contains)
+statement ok
+CREATE TABLE contains_pruning AS
+SELECT CASE WHEN i < 122880 THEN 'short' ELSE repeat('x', 50) END AS s
+FROM range(245760) tbl(i);
+
+query I
+SELECT count(*) FROM contains_pruning WHERE contains(s, 'xxxxxxxxxxxxxxxxxxxxxxxxxxxxxx');
+----
+122880
+
+// ---- test/sql/attach/attach_ducklake_metadata_warning.test:31-34  (uses: contains)
+query I
+SELECT count(*) FROM duckdb_logs WHERE log_level = 'WARNING' AND contains(message, 'is a DuckLake metadata catalog')
+----
+1

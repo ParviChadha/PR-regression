@@ -1,0 +1,67 @@
+// Upstream tests at the PR's parent commit 8f86e172a that use the changed code.
+// Names searched (test lines using each): CreateIntegralCastCompress (0), MarkCast (0), CreateStatsAwareCast (0), GetIntegralCastType (0), PropagateCastStatistics (0), ValuePreservingCastFits (0), CreateDefaultStatsAwareCast (0), PropagateDefaultCastStatistics (0), Export (0), Compress (0), CompressedMaterialization (0), ExportCast (0), CreateRestoreExpression (0), GetIntegralCompress (0); no SQL name matched, so SQL tests were picked by the changed files' paths
+
+// ---- test/optimizer/compressed_materialization_geometry.test:57-60  (uses: path:compressed, path:materialization, path:optimizer)
+query II
+EXPLAIN (FORMAT yaml) SELECT g FROM pts ORDER BY payload
+----
+logical_opt	<REGEX>:.*__internal_decompress_geometry_point.*
+
+// ---- test/optimizer/compressed_materialization_geometry.test:68-71  (uses: path:compressed, path:materialization, path:optimizer)
+query II
+EXPLAIN (FORMAT yaml) SELECT g FROM xyz ORDER BY payload
+----
+logical_opt	<!REGEX>:.*__internal_compress_geometry_point.*
+
+// ---- test/optimizer/compressed_materialization_grouping_sets.test:14-22  (uses: path:compressed, path:materialization, path:optimizer)
+statement ok
+create table grouping_set_cm(a integer not null, b varchar not null, v integer)
+
+statement ok
+insert into grouping_set_cm values (1, 'aa', 10), (1, 'bb', 20), (2, 'aa', 30)
+
+query ITI
+select a, b, sum(v)::bigint as s from grouping_set_cm group by rollup(a, b) order by a nulls first, b nulls first, s
+----
+NULL	NULL	60
+1	NULL	30
+1	aa	10
+1	bb	20
+2	NULL	30
+2	aa	30
+
+// ---- test/optimizer/compressed_materialization_grouping_sets.test:24-27  (uses: path:compressed, path:materialization, path:optimizer)
+statement ok
+create table grouping_set_cm(a integer not null, b varchar not null, v integer)
+
+statement ok
+insert into grouping_set_cm values (1, 'aa', 10), (1, 'bb', 20), (2, 'aa', 30)
+
+query I
+select count(*) from (select a, b, sum(v)::bigint as s from grouping_set_cm group by rollup(a, b)) x where a is null
+----
+1
+
+// ---- test/optimizer/compressed_materialization_join_nulls.test:14-17  (uses: path:compressed, path:materialization, path:optimizer)
+statement ok
+CREATE TABLE no_nulls AS SELECT * FROM (VALUES (4), (5), (6)) t(i);
+
+statement ok
+CREATE TABLE with_nulls AS SELECT * FROM (VALUES (4), (5), (NULL)) t(i);
+
+query II
+EXPLAIN SELECT i IS NULL FROM (SELECT * FROM no_nulls ANTI JOIN with_nulls ON no_nulls.i IS NOT DISTINCT FROM with_nulls.i) t(i);
+----
+logical_opt	<!REGEX>:.*IS NULL.*
+
+// ---- test/optimizer/compressed_materialization_join_nulls.test:19-22  (uses: path:compressed, path:materialization, path:optimizer)
+statement ok
+CREATE TABLE no_nulls AS SELECT * FROM (VALUES (4), (5), (6)) t(i);
+
+statement ok
+CREATE TABLE with_nulls AS SELECT * FROM (VALUES (4), (5), (NULL)) t(i);
+
+query II
+SELECT i, i IS NULL FROM (SELECT * FROM no_nulls ANTI JOIN with_nulls ON no_nulls.i IS NOT DISTINCT FROM with_nulls.i) t(i);
+----
+6	false

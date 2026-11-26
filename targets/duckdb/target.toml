@@ -58,10 +58,42 @@ collect_head = "4c0adf6440aa4aa6cac81bfedae264cfe5324863"   # = pinned_sha (main
 # (#24878 double-quoted identifiers and #27761 DROP TYPE are cleaner stories but change 83 and 8 main files.)
 seed_prs = [27903, 27289]
 
+# ---- change analysis (pipeline/changes.py) and test context (pipeline/context.py) ----
+# Most duckdb PRs change .cpp files, which changes.py parses one by one (duckdb.hpp, the entry, covers the headers users
+# see). Those .cpp files need the include dirs of duckdb's CMakeLists.txt (include_directories, lines ~1129-1150):
+# core_functions and the vendored third_party libraries. Only what -I needs is exported per commit (~60 MB).
+analysis_entries = ["duckdb.hpp"]
+analysis_paths = ["src", "extension/core_functions", "third_party"]
+analysis_include_dirs = [
+  "extension/core_functions/include",
+  "third_party/fsst", "third_party/fmt/include", "third_party/hyperloglog", "third_party/fastpforlib",
+  "third_party/skiplist", "third_party/ska_sort", "third_party/fast_float", "third_party/re2", "third_party/miniz",
+  "third_party/utf8proc/include", "third_party/concurrentqueue", "third_party/pcg", "third_party/pdqsort",
+  "third_party/tdigest", "third_party/mbedtls/include", "third_party/httplib", "third_party/jaro_winkler",
+  "third_party/vergesort", "third_party/yyjson/include", "third_party/zstd/include",
+]
+analysis_std = "c++17"                  # duckdb's CMAKE_CXX_STANDARD (minimum 17)
+# duckdb has no detail namespaces: internal helpers live in anonymous namespaces or are static (both private by rule).
+private_namespaces = ["detail", "details", "impl", "internal"]
+# Upstream tests: C++ Catch tests (test/api, test/...) and sqllogictest scripts (test/sql/**/*.test), read by context.py.
+test_paths = ["test"]
+sql_test_ext = [".test"]                # sqllogictest; .test_slow files are skipped (long, and mostly the same SQL)
+# Headers with the SQL function/setting registry: struct AvgFun { static constexpr const char *Name = "avg"; ... }
+sql_name_paths = ["extension/core_functions/include", "src/include/duckdb/function", "src/include/duckdb/main"]
+# C++ name matches (generic method names like Read, Optimize, Deserialize in test/*.cpp) count half as much as SQL
+# name matches: the generated programs drive the engine through SQL.
+cpp_term_weight = 0.5
+# Test files that `require` one of these are skipped: the build has no such extension (cmake_args SKIP_EXTENSIONS and
+# DUCKDB_CAPABILITIES=none), so their examples would fail for reasons unrelated to the PR.
+sql_missing_requires = ["parquet", "json", "icu", "autocomplete", "httpfs", "tpch", "tpcds", "sqlite_scanner", "inet",
+                        "quack", "encodings", "fts", "excel", "spatial", "delta", "iceberg", "aws", "azure",
+                        "mysql_scanner", "postgres_scanner", "allow_unsigned_extensions", "debug_fs"]
+
 # Used by pipeline/generate.py: library-specific rules appended to the test-generation prompt.
 prompt_notes = '''
 - Include the library with #include "duckdb.hpp" and use its C++ API: duckdb::DuckDB db(nullptr); duckdb::Connection con(db); auto result = con.Query("..."); always check result->HasError() and print result->GetError() instead of crashing.
 - Use only an in-memory database. No files, no network, no extensions: the icu, json and parquet extensions are NOT available, only the core engine and core_functions (so no time zone or JSON/Parquet functions).
 - Row order is not guaranteed without ORDER BY: give every query that can return more than one row a total ORDER BY. Do not print timings, memory or thread counts, or the version or commit hash.
 - Print results with result->ToString(), or iterate rows with result->GetValue(column, row).ToString(). Use fixed precision for floating point.
+- The upstream test examples in the prompt are sqllogictest records: "statement ok" or "query <column types>", then the SQL, then "----" and the expected result. Use their SQL (and the CREATE/INSERT statements before them) through con.Query(...) in your C++ program; do not write sqllogictest, and do not print or compare against the expected results shown after "----".
 '''

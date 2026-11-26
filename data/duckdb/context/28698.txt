@@ -1,0 +1,256 @@
+// Upstream tests at the PR's parent commit 5b97627c8 that use the changed code.
+// Names searched (test lines using each): DecorrelateIndependent (0), DecorrelateSubtreeInternal (0); no SQL name matched, so SQL tests were picked by the changed files' paths
+
+// ---- test/sql/join/pair_dependent_full_outer_join_subquery.test:42-57  (uses: path:dependent, path:join, path:subquery)
+statement ok
+CREATE TABLE pair_l(a INTEGER, x INTEGER);
+
+statement ok
+CREATE TABLE pair_r(b INTEGER, y INTEGER);
+
+statement ok
+CREATE TABLE pair_s(a INTEGER, b INTEGER);
+
+statement ok
+INSERT INTO pair_l VALUES (1, 10), (1, 11), (2, 20), (3, 30);
+
+statement ok
+INSERT INTO pair_r VALUES (10, 100), (20, 200), (30, 300), (40, 400);
+
+statement ok
+INSERT INTO pair_s VALUES (1, 10), (1, 20), (2, 20), (NULL, 30), (3, NULL);
+
+query II
+SELECT l.a, r.b
+FROM pair_l l
+FULL OUTER JOIN pair_r r ON r.b IN (
+	SELECT s.b FROM pair_s s WHERE s.a = l.a
+)
+ORDER BY l.a NULLS LAST, r.b NULLS LAST;
+----
+1	10
+1	10
+1	20
+1	20
+2	20
+3	NULL
+NULL	30
+NULL	40
+
+// ---- test/sql/join/pair_dependent_full_outer_join_subquery.test:59-74  (uses: path:dependent, path:join, path:subquery)
+statement ok
+CREATE TABLE pair_l(a INTEGER, x INTEGER);
+
+statement ok
+CREATE TABLE pair_r(b INTEGER, y INTEGER);
+
+statement ok
+CREATE TABLE pair_s(a INTEGER, b INTEGER);
+
+statement ok
+INSERT INTO pair_l VALUES (1, 10), (1, 11), (2, 20), (3, 30);
+
+statement ok
+INSERT INTO pair_r VALUES (10, 100), (20, 200), (30, 300), (40, 400);
+
+statement ok
+INSERT INTO pair_s VALUES (1, 10), (1, 20), (2, 20), (NULL, 30), (3, NULL);
+
+query II
+SELECT l.a, r.b
+FROM pair_l l
+FULL OUTER JOIN pair_r r ON r.b = ANY (
+	SELECT s.b FROM pair_s s WHERE s.a = l.a
+)
+ORDER BY l.a NULLS LAST, r.b NULLS LAST;
+----
+1	10
+1	10
+1	20
+1	20
+2	20
+3	NULL
+NULL	30
+NULL	40
+
+// ---- test/sql/join/pair_dependent_full_outer_join_subquery_bindings.test:31-46  (uses: path:dependent, path:join, path:subquery)
+statement ok
+CREATE TABLE pair_multi_l2(c INTEGER);
+
+statement ok
+CREATE TABLE pair_multi_r(b INTEGER);
+
+statement ok
+CREATE TABLE pair_multi_s(a INTEGER, b INTEGER, c INTEGER);
+
+statement ok
+INSERT INTO pair_multi_l VALUES (1), (2);
+
+statement ok
+INSERT INTO pair_multi_l2 VALUES (5);
+
+statement ok
+INSERT INTO pair_multi_r VALUES (10), (20), (30);
+
+statement ok
+INSERT INTO pair_multi_s VALUES (1, 10, 5), (2, 20, 5);
+
+query III
+SELECT l.a, l2.c, r.b
+FROM pair_multi_l l
+JOIN pair_multi_l2 l2 ON true
+FULL OUTER JOIN pair_multi_r r ON EXISTS (
+	SELECT 1
+	FROM pair_multi_s s
+	WHERE s.a = l.a
+	  AND s.b = r.b
+	  AND s.c = l2.c
+)
+ORDER BY ALL;
+----
+1	5	10
+2	5	20
+NULL	NULL	30
+
+// ---- test/sql/join/pair_dependent_full_outer_join_subquery_bindings.test:48-63  (uses: path:dependent, path:join, path:subquery)
+statement ok
+CREATE TABLE pair_multi_l2(c INTEGER);
+
+statement ok
+CREATE TABLE pair_multi_r(b INTEGER);
+
+statement ok
+CREATE TABLE pair_multi_s(a INTEGER, b INTEGER, c INTEGER);
+
+statement ok
+INSERT INTO pair_multi_l VALUES (1), (2);
+
+statement ok
+INSERT INTO pair_multi_l2 VALUES (5);
+
+statement ok
+INSERT INTO pair_multi_r VALUES (10), (20), (30);
+
+statement ok
+INSERT INTO pair_multi_s VALUES (1, 10, 5), (2, 20, 5);
+
+query III
+SELECT *
+FROM pair_multi_l l
+JOIN pair_multi_l2 l2 ON true
+FULL OUTER JOIN pair_multi_r r ON EXISTS (
+	SELECT 1
+	FROM pair_multi_s s
+	WHERE s.a = l.a
+	  AND s.b = r.b
+	  AND s.c = l2.c
+)
+ORDER BY ALL;
+----
+1	5	10
+2	5	20
+NULL	NULL	30
+
+// ---- test/sql/join/pair_dependent_full_outer_join_subquery_cte.test:38-45  (uses: path:dependent, path:join, path:subquery)
+query II
+EXECUTE pair_prepared_full(20, 2);
+----
+2	20
+3	NULL
+NULL	10
+NULL	30
+NULL	40
+
+// ---- test/sql/join/pair_dependent_full_outer_join_subquery_cte.test:64-74  (uses: path:dependent, path:join, path:subquery)
+statement ok
+CREATE TABLE pair_effect_l(a INTEGER);
+
+statement ok
+CREATE TABLE pair_effect_r(b BIGINT);
+
+statement ok
+INSERT INTO pair_effect_l VALUES (1), (2);
+
+statement ok
+INSERT INTO pair_effect_r VALUES (1), (2), (3);
+
+query II
+WITH q AS (
+	SELECT count(*)::INTEGER AS count_value
+	FROM (SELECT a, nextval('pair_effect_seq') AS v FROM pair_effect_l) l
+	FULL OUTER JOIN pair_effect_r r ON EXISTS (
+		SELECT 1 WHERE l.v = r.b
+	)
+)
+SELECT count_value, currval('pair_effect_seq') FROM q;
+----
+3	2
+
+// ---- test/sql/join/pair_dependent_join_subquery.test:46-60  (uses: path:dependent, path:join, path:subquery)
+statement ok
+CREATE TABLE pair_l(a INTEGER, x INTEGER);
+
+statement ok
+CREATE TABLE pair_r(b INTEGER, y INTEGER);
+
+statement ok
+CREATE TABLE pair_s(a INTEGER, b INTEGER);
+
+statement ok
+INSERT INTO pair_l VALUES (1, 10), (1, 11), (2, 20), (3, 30);
+
+statement ok
+INSERT INTO pair_r VALUES (10, 100), (20, 200), (30, 300), (40, 400);
+
+statement ok
+INSERT INTO pair_s VALUES (1, 10), (1, 20), (2, 20), (NULL, 30), (3, NULL);
+
+query IIII
+SELECT l.a, l.x, r.b, r.y
+FROM pair_l l
+RIGHT JOIN pair_r r ON EXISTS (
+	SELECT 1 FROM pair_s s WHERE s.a = l.a AND s.b = r.b
+)
+ORDER BY ALL;
+----
+1	10	10	100
+1	10	20	200
+1	11	10	100
+1	11	20	200
+2	20	20	200
+NULL	NULL	30	300
+NULL	NULL	40	400
+
+// ---- test/sql/join/pair_dependent_join_subquery.test:81-94  (uses: path:dependent, path:join, path:subquery)
+statement ok
+CREATE TABLE pair_l(a INTEGER, x INTEGER);
+
+statement ok
+CREATE TABLE pair_r(b INTEGER, y INTEGER);
+
+statement ok
+CREATE TABLE pair_s(a INTEGER, b INTEGER);
+
+statement ok
+INSERT INTO pair_l VALUES (1, 10), (1, 11), (2, 20), (3, 30);
+
+statement ok
+INSERT INTO pair_r VALUES (10, 100), (20, 200), (30, 300), (40, 400);
+
+statement ok
+INSERT INTO pair_s VALUES (1, 10), (1, 20), (2, 20), (NULL, 30), (3, NULL);
+
+query III
+SELECT l.a, l.x, r.b
+FROM pair_l l
+LEFT JOIN pair_r r ON r.b IN (
+	SELECT s.b FROM pair_s s WHERE s.a = l.a
+)
+ORDER BY l.x, r.b NULLS LAST;
+----
+1	10	10
+1	10	20
+1	11	10
+1	11	20
+2	20	20
+3	30	NULL

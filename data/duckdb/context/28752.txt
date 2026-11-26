@@ -1,0 +1,87 @@
+// Upstream tests at the PR's parent commit 5d254ad87 that use the changed code.
+// Names searched (test lines using each): RelaunchThreads (3), TaskSchedulerThread (0); no SQL name matched, so SQL tests were picked by the changed files' paths
+
+// ---- test/api/test_block_allocator_tls.cpp:1866-1890  (uses: RelaunchThreads)
+	for (auto block : blocks) {
+		allocator.FreeData(block, BLOCK_SIZE);
+	}
+	blocks.clear();
+	auto other_producer = scheduler.CreateProducer();
+	BlockAllocatorTestHelper::Expire(allocator);
+	allocator.ThreadExit();
+	CHECK(scheduler.GetNumberOfTasks() == 0);
+	for (idx_t i = 0; i < 4; i++) {
+		allocator.ThreadIdle();
+	}
+	CHECK(scheduler.GetNumberOfTasks() == 1);
+	scheduler.RelaunchThreads();
+	allocator.ThreadIdle();
+	CHECK(scheduler.GetNumberOfTasks() == 1);
+	atomic<bool> execute {true};
+	REQUIRE(scheduler.ExecuteTasks(&execute, 1) == 1);
+	CHECK(scheduler.GetNumberOfTasks() == 1);
+	CHECK(BlockAllocatorTestHelper::FreeBlocks(allocator) > 0);
+	CHECK(BlockAllocatorTestHelper::FreeBlocks(allocator) < BLOCK_COUNT);
+
+	SECTION("One task leaves warm blocks available for reuse") {
+		idx_t reclaimed = 0;
+		for (idx_t i = 0; i < BLOCK_COUNT; i++) {
+			auto block = allocator.AllocateData(BLOCK_SIZE);
+
+// ---- test/api/test_block_allocator_tls.cpp:1983-1994  (uses: RelaunchThreads)
+		SECTION("Queued work remains executable after removing the worker") {
+			scheduler.SetAsyncThreads(0);
+			scheduler.RelaunchThreads();
+			CHECK(scheduler.NumberOfAsyncThreads() == 0);
+			atomic<bool> execute {true};
+			scheduler.ExecuteTasks(&execute, 128);
+			allocator.ThreadIdle();
+			CHECK(BlockAllocatorTestHelper::Drained(allocator));
+			scheduler.SetAsyncThreads(1);
+			scheduler.RelaunchThreads();
+			CHECK(scheduler.NumberOfAsyncThreads() == 1);
+		}
+
+// ---- test/sql/aggregate/aggregates/approx_quantile_parallel_finalize.test:19-22  (uses: path:parallel)
+statement ok
+CREATE TABLE t AS SELECT i % 5000 AS g, (i * 7919) % 997 AS v FROM range(120000) r(i);
+
+query I
+SELECT count(*) FROM (SELECT approx_quantile(v, 0.5) AS q FROM t GROUP BY g) WHERE q IS NOT NULL;
+----
+5000
+
+// ---- test/sql/aggregate/aggregates/approx_quantile_parallel_finalize.test:24-27  (uses: path:parallel)
+statement ok
+CREATE TABLE t AS SELECT i % 5000 AS g, (i * 7919) % 997 AS v FROM range(120000) r(i);
+
+query I
+SELECT count(*) FROM (SELECT approx_quantile(v, 0.99) AS q, approx_quantile(v, 0.5) AS q2 FROM t GROUP BY g) WHERE q >= q2;
+----
+5000
+
+// ---- test/sql/copy/csv/parallel/csv_parallel_buffer_size.test:9-12  (uses: path:parallel)
+query III
+SELECT sum(a), sum(b), sum(c) FROM read_csv('{DATA_DIR}/csv/test/multi_column_integer.csv',  COLUMNS=STRUCT_PACK(a := 'INTEGER', b := 'INTEGER', c := 'INTEGER'), auto_detect='true', delim = '|', buffer_size=30)
+----
+111111111	51866	3195
+
+// ---- test/sql/copy/csv/parallel/csv_parallel_buffer_size.test:14-17  (uses: path:parallel)
+query I
+SELECT sum(a) FROM read_csv('{DATA_DIR}/csv/test/multi_column_integer.csv',  COLUMNS=STRUCT_PACK(a := 'INTEGER', b := 'INTEGER', c := 'INTEGER'), auto_detect='true', delim = '|', buffer_size=30)
+----
+111111111
+
+// ---- test/sql/copy/csv/parallel/parallel_csv_hive_partitioning.test:16-20  (uses: path:parallel)
+query IIII
+select id, value, part, date from read_csv_auto('{DATA_DIR}/csv/hive-partitioning/simple/*/*/test.csv', HIVE_PARTITIONING=1) order by id
+----
+1	value1	a	2012-01-01
+2	value2	b	2013-01-01
+
+// ---- test/sql/copy/csv/parallel/parallel_csv_hive_partitioning.test:22-26  (uses: path:parallel)
+query III
+select part, value, date from read_csv_auto('{DATA_DIR}/csv/hive-partitioning/simple/*/*/test.csv', HIVE_PARTITIONING=1) order by 1
+----
+a	value1	2012-01-01
+b	value2	2013-01-01

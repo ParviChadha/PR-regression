@@ -1,0 +1,190 @@
+// Upstream tests at the PR's parent commit 23d0a7a15 that use the changed code.
+// Names searched (test lines using each): Optimize (27), CTEFilterPusher (0), GuaranteedColumnFilters (0), GenerateSemiJoinFilters (0), FilteringJoin (0), AddColumnFilters (0), PlainColumn (0), HasBinding (0), IsEquality (0), MAX_SEARCH_STEPS (0), FindCandidates (0); no SQL name matched, so SQL tests were picked by the changed files' paths
+
+// ---- test/optimizer/statistics/right_semi_join_filter.test:20-23  (uses: path:filter, path:join, path:optimizer, path:semi)
+statement ok
+CREATE TABLE probe(k INTEGER);
+
+statement ok
+INSERT INTO probe VALUES (5), (7), (NULL), (200000);
+
+statement ok
+CREATE TABLE build AS SELECT i::INTEGER AS k FROM range(100000) r(i) UNION ALL SELECT NULL;
+
+query II
+EXPLAIN SELECT count(*) FROM probe WHERE k IN (SELECT k FROM build GROUP BY k);
+----
+physical_plan	<REGEX>:.*RIGHT_SEMI.*Hash Group By.*Filters: k <= 99999.*Filters: k >= 5.*
+
+// ---- test/optimizer/statistics/right_semi_join_filter.test:25-28  (uses: path:filter, path:join, path:optimizer, path:semi)
+statement ok
+CREATE TABLE probe(k INTEGER);
+
+statement ok
+INSERT INTO probe VALUES (5), (7), (NULL), (200000);
+
+statement ok
+CREATE TABLE build AS SELECT i::INTEGER AS k FROM range(100000) r(i) UNION ALL SELECT NULL;
+
+query I
+SELECT count(*) FROM probe WHERE k IN (SELECT DISTINCT k FROM build);
+----
+2
+
+// ---- test/optimizer/outer_join_simplification_anti_on_filter.test:11-15  (uses: path:filter, path:join, path:optimizer)
+statement ok
+CREATE TABLE t(i INT, n INT);
+
+statement ok
+INSERT INTO t VALUES (1,1),(2,NULL),(3,3);
+
+query I
+SELECT a.i FROM t a LEFT JOIN (SELECT * FROM t LIMIT 100) b ON a.i=b.i AND b.n IS NULL WHERE b.i IS NULL ORDER BY 1;
+----
+1
+3
+
+// ---- test/optimizer/outer_join_simplification_anti_on_filter.test:17-21  (uses: path:filter, path:join, path:optimizer)
+statement ok
+CREATE TABLE t(i INT, n INT);
+
+statement ok
+INSERT INTO t VALUES (1,1),(2,NULL),(3,3);
+
+query I
+SELECT a.i FROM t a LEFT JOIN t b ON a.i=b.i AND b.n IS NULL WHERE b.i IS NULL ORDER BY 1;
+----
+1
+3
+
+// ---- test/optimizer/pushdown/join_filter_pushdown.test:31-44  (uses: path:filter, path:join, path:optimizer)
+statement ok
+CREATE TABLE jfpp_comment AS SELECT (i + 1000)::BIGINT AS messageid FROM range(1, 1001) t(i);
+
+query II
+EXPLAIN ANALYZE
+WITH limited(label, messageid) AS MATERIALIZED (
+	VALUES ('Post', 11::BIGINT), ('Post', 101::BIGINT), ('Comment', 1503::BIGINT), ('Comment', 1907::BIGINT)
+)
+SELECT COUNT(*)
+FROM limited l
+JOIN (
+	SELECT 'Post' AS label, messageid FROM jfpp_post
+	UNION ALL
+	SELECT 'Comment' AS label, messageid FROM jfpp_comment
+) x ON x.label = l.label AND x.messageid = l.messageid;
+----
+analyzed_plan	<REGEX>:.*Dynamic Filters:.*messageid IN.*
+
+// ---- test/optimizer/pushdown/join_filter_pushdown.test:46-58  (uses: path:filter, path:join, path:optimizer)
+statement ok
+CREATE TABLE jfpp_comment AS SELECT (i + 1000)::BIGINT AS messageid FROM range(1, 1001) t(i);
+
+query I
+WITH limited(label, messageid) AS MATERIALIZED (
+	VALUES ('Post', 11::BIGINT), ('Post', 101::BIGINT), ('Comment', 1503::BIGINT), ('Comment', 1907::BIGINT)
+)
+SELECT COUNT(*)
+FROM limited l
+JOIN (
+	SELECT 'Post' AS label, messageid FROM jfpp_post
+	UNION ALL
+	SELECT 'Comment' AS label, messageid FROM jfpp_comment
+) x ON x.label = l.label AND x.messageid = l.messageid;
+----
+4
+
+// ---- test/api/serialized_plans/test_plan_serialization_bwc.cpp:102-141  (uses: Optimize)
+TEST_CASE("Generate specific serialized plans", "[.][serialization]") {
+	auto cases = std::getenv("GEN_PLAN_CASES");
+	if (cases == nullptr) {
+		return;
+	}
+	DuckDB db;
+
+	auto &fs = db.GetFileSystem();
+	auto dir_location = get_full_file_name("cases");
+
+	for (auto &name : StringUtil::Split(string(cases), ',')) {
+		auto statements = read_case_statements(fs.JoinPath(dir_location, name + ".sql"));
+		REQUIRE(!statements.empty());
+
+		Connection con(db);
+		con.BeginTransaction();
+		for (idx_t i = 0; i < statements.size() - 1; i++) {
+			REQUIRE_NO_FAIL(con.Query(statements[i]));
+		}
+
+		Parser p(*con.context);
+		p.ParseQuery(statements.back());
+		Planner planner(*con.context);
+		planner.CreatePlan(std::move(p.statements[0]));
+		auto plan = std::move(planner.plan);
+		if (StringUtil::StartsWith(name, "optimized_")) {
+			Optimizer optimizer(*planner.binder, *con.context);
+			plan = optimizer.Optimize(std::move(plan));
+		}
+
+		BufferedFileWriter target(fs, fs.JoinPath(dir_location, name + ".bin"));
+		BinarySerializer serializer(target);
+		serializer.Begin();
+		plan->Serialize(serializer);
+		serializer.End();
+		target.Sync();
+
+		con.Rollback();
+	}
+}
+
+// ---- test/api/serialized_plans/test_plan_serialization_bwc.cpp:205-229  (uses: Optimize)
+		for (idx_t i = 0; i < statements.size() - 1; i++) {
+			REQUIRE_NO_FAIL(con.Query(statements[i]));
+		}
+
+		// Now execute the original statement as well and compare results
+		Parser p(*con.context);
+		p.ParseQuery(target_stmt);
+		Planner planner(*con.context);
+		planner.CreatePlan(std::move(p.statements[0]));
+		auto expected_plan = std::move(planner.plan);
+		if (StringUtil::StartsWith(fs.ExtractName(bin_file), "optimized_")) {
+			Optimizer optimizer(*planner.binder, *con.context);
+			expected_plan = optimizer.Optimize(std::move(expected_plan));
+		}
+		expected_plan->ResolveOperatorTypes();
+		auto expected_results = con.Query(target_stmt);
+		REQUIRE_NO_FAIL(*expected_results);
+
+		// ignore names
+		if (!deserialized_results->Equals(*expected_results, false)) {
+			fprintf(stderr, "-----------------------------------\n");
+			fprintf(stderr, "Deserialized result does not match!\n");
+			fprintf(stderr, "-----------------------------------\n");
+			fprintf(stderr, "Query: %s\n", target_stmt.c_str());
+			fprintf(stderr, "-------------Deserialized----------\n");
+
+// ---- test/api/test_api.cpp:945-968  (uses: Optimize)
+TEST_CASE("Test executing an optimized plan with a flipped delim join", "[api]") {
+	DuckDB db(nullptr);
+	Connection con(db);
+	REQUIRE_NO_FAIL(con.Query("CREATE TABLE integers(i INTEGER)"));
+	REQUIRE_NO_FAIL(con.Query("INSERT INTO integers VALUES (1), (2), (3), (NULL)"));
+
+	REQUIRE_NO_FAIL(con.Query("SET delim_join_as_cte = false"));
+	con.BeginTransaction();
+	Parser parser(*con.context);
+	parser.ParseQuery(
+	    "SELECT a.i, b.i, x FROM integers a, integers b JOIN LATERAL (VALUES (a.i)) ss(x) ON (true) ORDER BY ALL");
+	Planner planner(*con.context);
+	planner.CreatePlan(std::move(parser.statements[0]));
+	Optimizer optimizer(*planner.binder, *con.context);
+	auto plan = optimizer.Optimize(std::move(planner.plan));
+	con.Commit();
+	REQUIRE(HasFlippedDelimJoin(*plan));
+	REQUIRE_NO_FAIL(con.Query("SET delim_join_as_cte = true"));
+
+	REQUIRE_NO_FAIL(con.Query("PRAGMA disable_optimizer"));
+	auto result = con.Query(make_uniq<LogicalPlanStatement>(std::move(plan)));
+	REQUIRE_NO_FAIL(*result);
+	REQUIRE(result->RowCount() == 16);
+}

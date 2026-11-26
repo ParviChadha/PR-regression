@@ -1,0 +1,155 @@
+// Upstream tests at the PR's parent commit 4acf2e06a that use the changed code.
+// Names searched (test lines using each): AlpFinalAnalyze (0), AlpInitAnalyze (0), AlpConstants (0), AlpAnalyzeState (0), compression_data (0), has_fallback (0), MIN_BLOCK_SIZE (8), HasEnoughSpace (0), FlushSegment (0), FlushVector (0), TotalUsedBytes (0), current_bytes_used_in_segment (0), storage_version (12), total_bytes_used (0); no SQL name matched, so SQL tests were picked by the changed files' paths
+
+// ---- test/sql/storage/compression/alp/alp_corrupt_count.test:14-17  (uses: path:alp, path:compression, path:storage)
+query I
+SELECT compression FROM pragma_storage_info('t') WHERE column_name='a' AND compression='ALP';
+----
+ALP
+
+// ---- test/sql/storage/compression/alp/alp_corrupt_exception_position.test:14-17  (uses: path:alp, path:compression, path:storage)
+query I
+SELECT compression FROM pragma_storage_info('two_alp') WHERE compression='ALP';
+----
+ALP
+
+// ---- test/sql/storage/compression/alp/alp_corrupt_exponent.test:14-17  (uses: path:alp, path:compression, path:storage)
+query I
+SELECT compression FROM pragma_storage_info('t') WHERE column_name='a' AND compression='ALP';
+----
+ALP
+
+// ---- test/sql/storage/compression/alp/alp_corrupt_file.test:14-17  (uses: path:alp, path:compression, path:storage)
+query I
+SELECT compression FROM pragma_storage_info('alp') WHERE compression='ALP';
+----
+ALP
+
+// ---- test/common/test_external_file_cache.cpp:572-605  (uses: MIN_BLOCK_SIZE)
+TEST_CASE("Reads of remote files are rounded out to the minimum blocks around them", "[external_file_cache]") {
+	DuckDB db = MakeCacheLocalFilesDB();
+	auto &db_instance = *db.instance;
+	auto remote_fs = make_uniq<EFCTrackingFileSystem>();
+
+	const idx_t MAX_BLOCK_SIZE = 16384;
+	Connection con(db);
+	con.Query(StringUtil::Format("SET external_file_cache_remote_max_block_size=%llu", MAX_BLOCK_SIZE));
+	const idx_t MIN_BLOCK_SIZE = 4096;
+	const idx_t FILE_SIZE = 16 * MIN_BLOCK_SIZE + 100;
+	auto content = MakeTestContent(FILE_SIZE);
+	EFCTestFileGuard test_file("test_efc_min_block.bin", content);
+
+	CachingFileSystem cfs(*remote_fs, db_instance);
+	auto handle =
+	    cfs.OpenFile(MakeTestOpenFileInfo(CACHING_TEST_REMOTE_PREFIX + test_file.GetPath()), ReaderSizedFlags());
+
+	REQUIRE(ReadFull(*handle, 1, 5000) == content.substr(5000, 1));
+	REQUIRE(remote_fs->TakeReads() == vector<pair<idx_t, idx_t>> {{MIN_BLOCK_SIZE, MIN_BLOCK_SIZE}});
+
+	REQUIRE(ReadFull(*handle, 10, 6000) == content.substr(6000, 10));
+	REQUIRE(remote_fs->TakeReads().empty());
+
+	REQUIRE(ReadFull(*handle, 100, 2 * MIN_BLOCK_SIZE - 50) == content.substr(2 * MIN_BLOCK_SIZE - 50, 100));
+	REQUIRE(remote_fs->TakeReads() == vector<pair<idx_t, idx_t>> {{2 * MIN_BLOCK_SIZE, MIN_BLOCK_SIZE}});
+
+	const idx_t long_read = 5 * MIN_BLOCK_SIZE + 10;
+	REQUIRE(ReadFull(*handle, MAX_BLOCK_SIZE + 1, long_read) == content.substr(long_read, MAX_BLOCK_SIZE + 1));
+	REQUIRE(remote_fs->TakeReads() ==
+	        vector<pair<idx_t, idx_t>> {{5 * MIN_BLOCK_SIZE, MAX_BLOCK_SIZE}, {9 * MIN_BLOCK_SIZE, MIN_BLOCK_SIZE}});
+
+	REQUIRE(ReadFull(*handle, 10, FILE_SIZE - 10) == content.substr(FILE_SIZE - 10, 10));
+	REQUIRE(remote_fs->TakeReads() == vector<pair<idx_t, idx_t>> {{16 * MIN_BLOCK_SIZE, 100}});
+}
+
+// ---- test/api/test_metadata_chain_old_readers.cpp:72-118  (uses: storage_version)
+TEST_CASE("Metadata of a file for older versions has no next pointers into free blocks", "[storage]") {
+	// every storage format below v1.5.0
+	auto storage_version = GENERATE(as<string> {}, "v1.0.0", "v1.2.0", "v1.3.0", "v1.4.0");
+	INFO("storage version " << storage_version);
+	auto path = TestCreatePath("metadata_chain_old_readers.db");
+	DeleteDatabase(path);
+	auto config = GetTestConfig();
+	config->SetOptionByName("storage_compatibility_version", Value(storage_version));
+	// only the explicit checkpoints below write the file, automatic ones would rewrite the tables this relies on
+	config->options.checkpoint_wal_size = idx_t(1) << 40;
+	config->SetOption(CheckpointOnShutdownSetting::SettingIndex, Value::BOOLEAN(false));
+	const idx_t table_count = 9;
+	// the database that creates the file drops the first tables, the database that opens it again drops the others
+	const idx_t dropped_before_reopen = 4;
+	{
+		DuckDB db(path, config.get());
+		Connection con(db);
+		REQUIRE_NO_FAIL(con.Query("CREATE TEMP TABLE wide AS PIVOT (SELECT i, j, i * j AS v FROM range(1000) t(i), "
+		                          "range(100) s(j)) ON j USING first(v) ORDER BY i"));
+		REQUIRE_NO_FAIL(con.Query("CREATE TEMP TABLE narrow AS SELECT i, i * 2 AS b, i * 3 AS c, i * 4 AS d, i * 5 AS "
+		                          "e FROM range(1000) t(i)"));
+		for (idx_t i = 0; i < table_count; i++) {
+			auto suffix = std::to_string(i);
+			REQUIRE_NO_FAIL(con.Query("CREATE TABLE candles_" + suffix + " AS FROM narrow"));
+			REQUIRE_NO_FAIL(con.Query("CREATE TABLE other_" + suffix + " AS FROM wide"));
+			REQUIRE_NO_FAIL(con.Query("CHECKPOINT"));
+		}
+		for (idx_t i = 0; i < dropped_before_reopen; i++) {
+			REQUIRE_NO_FAIL(con.Query("DROP TABLE other_" + std::to_string(i)));
+		}
+		REQUIRE_NO_FAIL(con.Query("CHECKPOINT"));
+	}
+	{
+		DuckDB db(path, config.get());
+		Connection con(db);
+		for (idx_t i = dropped_before_reopen; i < table_count; i++) {
+			REQUIRE_NO_FAIL(con.Query("DROP TABLE other_" + std::to_string(i)));
+		}
+		REQUIRE_NO_FAIL(con.Query("CHECKPOINT"));
+	}
+	DuckDB db(path, config.get());
+	Connection con(db);
+	auto result = con.Query("SELECT count(*) FROM duckdb_tables()");
+	REQUIRE(CHECK_COLUMN(result, 0, {Value::UBIGINT(table_count)}));
+	REQUIRE(CountNextPointersToFreeBlocks(con, table_count) == 0);
+	DeleteDatabase(path);
+}
+
+// ---- test/common/test_hyperlog.cpp:56-97  (uses: storage_version)
+TEST_CASE("Test different hyperloglog version serialization", "[hyperloglog]") {
+	Allocator allocator;
+	MemoryStream stream(allocator);
+	SerializationOptions options;
+	options.storage_compatibility.storage_version = StorageVersion::V1_0_0;
+
+	// Add 100M values to a NEW HyperLogLog
+	HyperLogLog original_log;
+	for (size_t i = 0; i < 100000000; i++) {
+		original_log.InsertElement(Hash(i));
+
+		switch (i + 1) {
+		case 1:
+		case 10:
+		case 100:
+		case 1000:
+		case 10000:
+		case 100000:
+		case 1000000:
+		case 10000000:
+		case 100000000:
+			break; // We roundtrip the serialization every order of magnitude
+		default:
+			continue;
+		}
+
+		// Grab the count
+		const auto original_count = original_log.Count();
+
+		// Serialize it as an OLD HyperLogLog
+		stream.Rewind();
+		BinarySerializer::Serialize(original_log, stream, options);
+
+		// Deserialize it, creating a NEW HyperLogLog from the OLD one
+		stream.Rewind();
+		auto deserialized_log = BinaryDeserializer::Deserialize<HyperLogLog>(stream);
+
+		// Verify that the deserialized count is equal
+		const auto deserialized_count = deserialized_log->Count();
+		REQUIRE(original_count == deserialized_count);
+	}
+}
