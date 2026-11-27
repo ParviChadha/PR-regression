@@ -1,0 +1,116 @@
+{
+  "target": "nlohmann-json",
+  "pr": 5866,
+  "model": "gemini-3.5-flash-lite",
+  "prompt_sha256": "29fb4ec0aca32d48a127d24b95772ff5bc7f055993b791ed1cc7186cd431b84b",
+  "n_requested": 20,
+  "dropped": 0,
+  "usage": {
+    "promptTokenCount": 6488,
+    "candidatesTokenCount": 747,
+    "totalTokenCount": 7235,
+    "promptTokensDetails": [
+      {
+        "modality": "TEXT",
+        "tokenCount": 6488
+      }
+    ],
+    "serviceTier": "standard"
+  },
+  "tests": [
+    {
+      "file": "gen_01.cpp",
+      "name": "qt_keywords_unflatten",
+      "intent": "Verify that json unflattening compiles and executes successfully when Qt keyword macros such as slots, signals, emit, foreach, and forever are defined.",
+      "round": 0,
+      "superseded_by": "gen_10.cpp"
+    },
+    {
+      "file": "gen_02.cpp",
+      "name": "json_pointer_growth_and_lookup",
+      "intent": "Verify prefix tree growth and collision handling during deep nested JSON pointer construction and lookups.",
+      "round": 0
+    },
+    {
+      "file": "gen_03.cpp",
+      "name": "json_pointer_operators",
+      "intent": "Verify json_pointer concatenation via operator/ with strings and indices under Qt macro definitions.",
+      "round": 0,
+      "superseded_by": "gen_11.cpp"
+    },
+    {
+      "file": "gen_04.cpp",
+      "name": "qt_keywords_patch",
+      "intent": "Verify JSON patch application using paths that trigger prefix tree creation when Qt macros are defined.",
+      "round": 0
+    },
+    {
+      "file": "gen_05.cpp",
+      "name": "gen_05",
+      "intent": "Trigger prefix_tree::grow by inserting many unique children into an unflatten structure, exercising table vector allocation and rehashing.",
+      "round": 1
+    },
+    {
+      "file": "gen_06.cpp",
+      "name": "gen_06",
+      "intent": "Exercise prefix_tree table lookups and matching existing child nodes with identical hashes or collisions during unflatten operations.",
+      "round": 1
+    },
+    {
+      "file": "gen_07.cpp",
+      "name": "gen_07",
+      "intent": "Explicitly instantiate and utilize json_pointer prefix tree construction via deeply nested unflatten paths requiring initial table capacity and load factor checks.",
+      "round": 1
+    },
+    {
+      "file": "gen_08.cpp",
+      "name": "gen_08",
+      "intent": "Test prefix tree rehashing and slot indexing mask calculations by executing unflatten on a json patch containing multiple colliding hash keys.",
+      "round": 1
+    },
+    {
+      "file": "gen_09.cpp",
+      "name": "gen_09",
+      "intent": "Trigger table size expansion (grow) path during unflattening by supplying a large number of distinct deeply-nested keys under Qt keyword macro definitions.",
+      "round": 1
+    },
+    {
+      "file": "gen_10.cpp",
+      "name": "qt_keywords_unflatten_fixed",
+      "intent": "Verify that json unflattening compiles and executes successfully when Qt keyword macros such as slots, signals, emit, foreach, and forever are defined.",
+      "round": 2,
+      "fixes": "gen_01.cpp",
+      "kind": "detect",
+      "superseded_by": "gen_12.cpp"
+    },
+    {
+      "file": "gen_11.cpp",
+      "name": "json_pointer_operators_fixed",
+      "intent": "Verify json_pointer concatenation via operator/ with strings and indices under Qt macro definitions.",
+      "round": 2,
+      "fixes": "gen_03.cpp",
+      "kind": "detect",
+      "superseded_by": "gen_13.cpp"
+    },
+    {
+      "file": "gen_12.cpp",
+      "name": "qt_keywords_unflatten_fixed_fixed",
+      "intent": "Verify that json unflattening compiles and executes successfully when Qt keyword macros such as slots, signals, emit, foreach, and forever are defined.",
+      "round": 3,
+      "fixes": "gen_10.cpp",
+      "kind": "detect"
+    },
+    {
+      "file": "gen_13.cpp",
+      "name": "json_pointer_operators_fixed_fixed",
+      "intent": "Verify json_pointer concatenation via operator/ with strings and indices under Qt macro definitions.",
+      "round": 3,
+      "fixes": "gen_11.cpp",
+      "kind": "detect"
+    }
+  ],
+  "fix": {
+    "rounds_max": 2,
+    "model": "gemini-3.5-flash-lite"
+  }
+}

@@ -1,0 +1,95 @@
+{
+  "target": "nlohmann-json",
+  "pr": 5760,
+  "model": "gemini-3.5-flash-lite",
+  "prompt_sha256": "0824eab634ea0a00ab8ee1de0021bafa83a220893f4a2d5cb1d86f4933d2edfc",
+  "results_sha256": "7517c486c0ba9dcc05dad699237da26e20df5da98a75c29ab293c5cba2a2ef56",
+  "clusters": [
+    {
+      "id": "C1",
+      "status": "output_diff",
+      "failed_on": null,
+      "programs": [
+        "gen_01.cpp",
+        "gen_02.cpp",
+        "gen_13.cpp",
+        "gen_14.cpp"
+      ],
+      "verdict": "intended",
+      "confidence": "high",
+      "reason": "The PR explicitly states that NUL bytes inside UBJSON/BJData high-precision number payloads should be rejected with parse_error.115 rather than being accepted based on a prefix."
+    },
+    {
+      "id": "C2",
+      "status": "output_diff",
+      "failed_on": null,
+      "programs": [
+        "gen_05.cpp",
+        "gen_06.cpp"
+      ],
+      "verdict": "intended",
+      "confidence": "high",
+      "reason": "This case tests a high-precision number payload containing a trailing NUL byte, which the PR description specifically lists as a regression case now correctly rejected with parse_error.115."
+    },
+    {
+      "id": "C3",
+      "status": "output_diff",
+      "failed_on": null,
+      "programs": [
+        "gen_07.cpp",
+        "gen_08.cpp"
+      ],
+      "verdict": "intended",
+      "confidence": "high",
+      "reason": "The PR ensures that a NUL encountered within a high-precision payload reports the exact byte offset of the NUL (byte 4) rather than treating it as a standard end of input check after lexing."
+    },
+    {
+      "id": "C4",
+      "status": "output_diff",
+      "failed_on": null,
+      "programs": [
+        "gen_09.cpp",
+        "gen_10.cpp"
+      ],
+      "verdict": "intended",
+      "confidence": "high",
+      "reason": "This is a nested array regression case mentioned in the PR description, correctly rejected when containing a malformed high-precision number with a NUL byte."
+    },
+    {
+      "id": "C5",
+      "status": "output_diff",
+      "failed_on": null,
+      "programs": [
+        "gen_17.cpp",
+        "gen_18.cpp"
+      ],
+      "verdict": "intended",
+      "confidence": "high",
+      "reason": "The PR changes the high-precision payload reading loop to detect NUL bytes immediately during reading, causing it to report parse_error.115 at the NUL byte instead of reaching a later end-of-input error."
+    }
+  ],
+  "clusters_not_shown": 0,
+  "counts": {
+    "same": 6,
+    "invalid": 2,
+    "flaky": 0,
+    "superseded": 4,
+    "missing": 0
+  },
+  "pr_verdict": {
+    "regression_candidate": false,
+    "unintended_clusters": []
+  },
+  "usage": {
+    "promptTokenCount": 6460,
+    "candidatesTokenCount": 399,
+    "totalTokenCount": 6859,
+    "promptTokensDetails": [
+      {
+        "modality": "TEXT",
+        "tokenCount": 6460
+      }
+    ],
+    "serviceTier": "standard"
+  }
+}

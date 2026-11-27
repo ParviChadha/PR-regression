@@ -1,0 +1,185 @@
+{
+  "target": "nlohmann-json",
+  "pr": 5878,
+  "model": "gemini-3.5-flash-lite",
+  "prompt_sha256": "154d8e715626b0c04ca5978d344673fa3b51b596e5c017c09e74ff9086bdcf7c",
+  "n_requested": 20,
+  "dropped": 0,
+  "usage": {
+    "promptTokenCount": 7368,
+    "candidatesTokenCount": 3081,
+    "totalTokenCount": 10449,
+    "promptTokensDetails": [
+      {
+        "modality": "TEXT",
+        "tokenCount": 7368
+      }
+    ],
+    "serviceTier": "standard"
+  },
+  "tests": [
+    {
+      "file": "gen_01.cpp",
+      "name": "short_ascii_strings_boundary_32",
+      "intent": "Verify serialization output of printable ASCII strings exactly at, below, and above the 32-byte threshold.",
+      "round": 0
+    },
+    {
+      "file": "gen_02.cpp",
+      "name": "short_strings_with_escapes",
+      "intent": "Verify serialization of short strings containing characters that require escaping like quotes and backslashes.",
+      "round": 0
+    },
+    {
+      "file": "gen_03.cpp",
+      "name": "short_strings_ensure_ascii",
+      "intent": "Verify short strings serialization with ensure_ascii set to true containing both plain and non-ASCII characters.",
+      "round": 0
+    },
+    {
+      "file": "gen_04.cpp",
+      "name": "object_keys_short_string_optimization",
+      "intent": "Verify that object keys around the 32-byte boundary serialize correctly under compact and pretty formats.",
+      "round": 0
+    },
+    {
+      "file": "gen_05.cpp",
+      "name": "empty_and_single_char_strings",
+      "intent": "Verify edge cases of empty and single character strings for dump optimization.",
+      "round": 0
+    },
+    {
+      "file": "gen_06.cpp",
+      "name": "ascii_control_characters_in_short_strings",
+      "intent": "Verify that control characters embedded in short strings correctly trigger escaping mechanisms.",
+      "round": 0
+    },
+    {
+      "file": "gen_07.cpp",
+      "name": "pretty_printing_indentation_inlining",
+      "intent": "Verify that pretty printing with specific indentation levels works correctly with short string optimization.",
+      "round": 0
+    },
+    {
+      "file": "gen_08.cpp",
+      "name": "ordered_json_short_strings",
+      "intent": "Verify nlohmann::ordered_json correctly dumps short strings and preserves insertion order.",
+      "round": 0
+    },
+    {
+      "file": "gen_09.cpp",
+      "name": "mixed_length_array_dump",
+      "intent": "Verify serialization of an array containing strings of varied lengths spanning above and below the 32-byte boundary.",
+      "round": 0
+    },
+    {
+      "file": "gen_10.cpp",
+      "name": "high_ascii_bytes_serialization",
+      "intent": "Verify handling of bytes in the upper range (128-255) within short strings.",
+      "round": 0
+    },
+    {
+      "file": "gen_11.cpp",
+      "name": "serializer_direct_dump_escaped",
+      "intent": "Directly exercise serializer::dump_escaped through an output stream adapter.",
+      "round": 0,
+      "superseded_by": "gen_26.cpp"
+    },
+    {
+      "file": "gen_12.cpp",
+      "name": "deeply_nested_short_strings",
+      "intent": "Verify correct dumping of short strings inside deeply nested JSON structures.",
+      "round": 0
+    },
+    {
+      "file": "gen_13.cpp",
+      "name": "stream_operator_dump_short_strings",
+      "intent": "Verify output streaming operators with JSON objects containing short strings.",
+      "round": 0
+    },
+    {
+      "file": "gen_14.cpp",
+      "name": "to_string_free_function",
+      "intent": "Verify nlohmann::to_string works identically with optimized short string serialization.",
+      "round": 0
+    },
+    {
+      "file": "gen_15.cpp",
+      "name": "unprintable_ascii_boundary_test",
+      "intent": "Verify strings containing characters just below space (0x20) and just above tilde (0x7E).",
+      "round": 0
+    },
+    {
+      "file": "gen_16.cpp",
+      "name": "multibyte_utf8_sequence_short_string",
+      "intent": "Verify handling of multi-byte UTF-8 sequences within the 32-byte short string path.",
+      "round": 0
+    },
+    {
+      "file": "gen_17.cpp",
+      "name": "huge_number_of_short_strings",
+      "intent": "Verify batch serialization of many short strings in an array performs correctly.",
+      "round": 0
+    },
+    {
+      "file": "gen_18.cpp",
+      "name": "string_view_like_inputs",
+      "intent": "Verify json construction and dumping from string types and literals.",
+      "round": 0
+    },
+    {
+      "file": "gen_19.cpp",
+      "name": "null_bytes_inside_short_strings",
+      "intent": "Verify serialization of short strings containing embedded null characters.",
+      "round": 0
+    },
+    {
+      "file": "gen_20.cpp",
+      "name": "exact_32_byte_printable_string",
+      "intent": "Verify a string precisely 32 bytes long containing only copyable ASCII characters.",
+      "round": 0
+    },
+    {
+      "file": "gen_21.cpp",
+      "name": "gen_21",
+      "intent": "Exercise put_indent by pretty-printing an object or array containing short strings, guaranteeing execution of the inlined put_indent function.",
+      "round": 1
+    },
+    {
+      "file": "gen_22.cpp",
+      "name": "gen_22",
+      "intent": "Exercise put_literal by serializing a structured JSON object with various types, causing literal components like null, true, false, or braces to be emitted via put_literal.",
+      "round": 1
+    },
+    {
+      "file": "gen_23.cpp",
+      "name": "gen_23",
+      "intent": "Exercise ascii_copyable lookup table and dump_escaped check explicitly by serializing a short printable ASCII string via stream operator with pretty formatting, ensuring ascii_copyable() and put_indent/put_literal are all invoked.",
+      "round": 1
+    },
+    {
+      "file": "gen_24.cpp",
+      "name": "gen_24",
+      "intent": "Exercise ascii_copyable with non-copyable bytes such as quotes or control characters inside short strings using pretty printing to hit the copyable table initialization and the pretty printing indentation loops.",
+      "round": 1
+    },
+    {
+      "file": "gen_25.cpp",
+      "name": "gen_25",
+      "intent": "Exercise ascii_copyable initialization and put_indent/put_literal paths with an array of short strings under pretty-printing indentation.",
+      "round": 1
+    },
+    {
+      "file": "gen_26.cpp",
+      "name": "serializer_direct_dump_escaped_fixed",
+      "intent": "Directly exercise serializer::dump_escaped through an output stream adapter.",
+      "round": 2,
+      "fixes": "gen_11.cpp",
+      "kind": "compile"
+    }
+  ],
+  "fix": {
+    "rounds_max": 2,
+    "model": "gemini-3.5-flash-lite"
+  }
+}

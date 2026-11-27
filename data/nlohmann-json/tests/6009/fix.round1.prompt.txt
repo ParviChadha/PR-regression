@@ -1,0 +1,162 @@
+[system]
+You write test programs that probe a C++ library for behavioral changes made by one pull request.
+Each program is compiled and run twice, once against the library before the change and once after, and the two
+outputs are compared. Your job is to produce programs whose output reveals whether the change altered behavior,
+including side effects the author did not intend.
+
+Rules for every program:
+- It is standalone: one file with its own int main(), compiled as C++17, printing results to stdout.
+- Use only the library's documented public API. Never include internal headers or use detail/impl namespaces,
+  private members or undocumented macros.
+- Do not judge results (no assert, no expected-value comparisons): just print what the library returns. Print
+  enough to make differences visible, one fact per line.
+- Output must be deterministic. Never print pointers or addresses, uninitialized data, the order of
+  hash-based containers, timings, thread ids, random values, file paths or environment data. Print floating point
+  values with an explicit precision. No input, files, network, threads, clocks or randomness.
+- Wrap calls that may throw in try/catch and print the exception's type and message, so an exception is an
+  observable result. Do not crash on purpose.
+- Aim at the code the diff changes. Prefer calls that compile against both the old and the new library; one or two
+  programs may use an API the PR adds. Cover ordinary inputs and edge cases (empty, minimum and maximum values,
+  boundaries, special values, nesting, unusual types) and also neighbouring behavior the change could disturb.
+- When the diff changes which types or inputs an API accepts or rejects (constraints, overloads, traits,
+  conversions), test it with the detection idiom (std::void_t or requires) and `if constexpr`, so the program
+  compiles against both versions, prints whether the expression is well-formed, and exercises it when it is.
+  Accepting an input is not enough: also use it through every entry point that should follow (const and
+  non-const, read, write, insert, erase, lookup, nested use), because a change that admits new inputs can leave
+  later code unable to handle them.
+- If the changed code is internal (a detail, impl or internal namespace, a trait, a helper), do not name it in the
+  program. Reach it through the public API that depends on it, using detection (as above) where needed.
+- Use the exact types and values the diff is about (the new trait's argument types, the new overload's
+  parameters), not stand-ins.
+- Spread the programs over distinct public entry points and overloads, one main idea per program. Do not write
+  several programs that only rename a type or change a literal.
+- Make the programs differ from each other: different inputs, different entry points, different features.
+
+Rules specific to this library:
+- Include the library with #include <nlohmann/json.hpp>. The public API is nlohmann::json (nlohmann::basic_json), nlohmann::ordered_json, json_pointer, json patch/merge_patch and the documented SAX and conversion interfaces. Never use the detail namespace.
+- It is a header-only library: nothing to link. Programs are compiled as C++17.
+- Print JSON values with dump() (compact) or dump(2). Keys of nlohmann::json objects print in sorted order, so output is deterministic; do not depend on insertion order except with ordered_json.
+
+[user]
+# Pull request #6009: Fix the red CI on develop: Visual Studio 2017 build of the BSON writer, Valgrind timeouts
+
+## Description
+`develop` (b2674a4) fails on AppVeyor and in `ci_static_analysis_ubuntu (ci_test_valgrind)`, and so does every PR based on it. Two independent causes, one commit each.
+
+## AppVeyor: Visual Studio 2017 cannot compile `to_bson()`
+
+All Visual Studio 2017 jobs (MSVC 19.16, `/std:c++17`) fail with
+
+```
+binary_writer.hpp(2557): error C2672: '...::write_bson_document_single_pass': no matching overloaded function found
+binary_writer.hpp(2557): error C2783: 'bool ...::write_bson_document_single_pass(const BasicJsonType &)': could not deduce template argument for '__formal'
+```
+
+while compiling `to_bson()` and `to_bon8()` (e.g. in `test-guard-page_cpp17`). Since #5979, `write_bson_document_single_pass()` was a member template enabled by `is_detected<sink_written_t, SinkType>`, and MSVC 19.16 does not deduce it through the class-scope alias template.
+
+The guard is not needed: as a non-template member function of the class template, it is only instantiated when called. Its only caller is the `write_bson_document(const BasicJsonType&, std::true_type)` overload, chosen only for sinks that have `written()`, and that overload already calls `oa.written()` and `oa.rewind()` itself. So the fix removes the `template<...>` line; nothing else changes.
+
+## GitHub: Valgrind tests hit ctest's default timeout
+
+On ddc34f5 (green), `test-json_view_builder_cpp11_valgrind` took 1435 s and `test-ordered_json_cpp11_valgrind` 1390 s, against ctest's default timeout of 1500 s. On b2674a4 the whole job ran 10 to 15 % slower on the same runner image (e.g. `test-regression2_cpp11_valgrind`: 1050 s → 1207 s), and both tests timed out. No code change made them slower; they had no headroom. The Valgrind tests now get `TIMEOUT 3600` (the job itself has no `timeout-minutes`, so GitHub's 6-hour limit applies).
+
+## Checks
+
+- GCC and clang (`-Werror -Wall -Wextra`): `test-bson_cpp11`, `test-guard-page_cpp11`/`_cpp17`, `test-binary_writer_sinks_cpp11` (custom sinks without `written()`) and `test-bon8_cpp17` build and pass, apart from the cases that need the downloaded test data, which was not available locally. Not built with MSVC 2017 locally; the AppVeyor run on this PR is the check.
+- `ctest --show-only=json-v1` with `-DJSON_Valgrind=ON` shows `TIMEOUT 3600` on the `_valgrind` tests and no change for the others.
+- `make amalgamate` was run.
+
+- [x] The changes are described in detail, both the what and why.
+- [x] The source code is amalgamated by running `make amalgamate`.
+
+---
+_Generated by [Claude Code](https://claude.ai/code/session_01N5NasAgbDGG28MqXjQvLqp)_
+
+## Commit message
+* CI: give the Valgrind tests a timeout of one hour
+
+Under Valgrind, test-json_view_builder_cpp11 and test-ordered_json_cpp11
+took 1435 s and 1390 s on develop (ddc34f5), close to ctest's default
+timeout of 1500 s. On the next run (b2674a4) the whole job was about 10 %
+slower and both timed out, failing ci_test_valgrind on develop and on
+every PR based on it.
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+Claude-Session: https://claude.ai/code/session_01N5NasAgbDGG28MqXjQvLqp
+Signed-off-by: Claude <noreply@anthropic.com>
+
+* BSON writer: drop the SFINAE guard that Visual Studio 2017 cannot deduce
+
+write_bson_document_single_pass() was a member template enabled by
+is_detected<sink_written_t, SinkType>. MSVC 19.16 (Visual Studio 2017)
+fails to deduce it through the class-scope alias template (C2672, C2783)
+when it compiles to_bson() and to_bon8(), so every Visual Studio 2017
+job on AppVeyor fails since #5979.
+
+The guard is not needed: as a non-template member of the class template,
+the function is only instantiated when called, and its only caller is
+the write_bson_document() overload for sinks that have written(), which
+already calls oa.written() and oa.rewind() itself.
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+Claude-Session: https://claude.ai/code/session_01N5NasAgbDGG28MqXjQvLqp
+Signed-off-by: Claude <noreply@anthropic.com>
+
+---------
+
+Signed-off-by: Claude <noreply@anthropic.com>
+Co-authored-by: Claude <noreply@anthropic.com>
+
+## Changed functions (from changes.py)
+- nlohmann::detail::binary_writer (private); reached from the public API through: nlohmann::basic_json::to_bjdata(const basic_json<...> &, detail::output_adapter<char>, const bool, const bool, const bjdata_version_t, const error_handler_t), nlohmann::basic_json::to_bjdata(const basic_json<...> &, detail::output_adapter<std::uint8_t>, const bool, const bool, const bjdata_version_t, const error_handler_t), nlohmann::basic_json::to_bon8(const basic_json<...> &, detail::output_adapter<char>), nlohmann::basic_json::to_bon8(const basic_json<...> &, detail::output_adapter<std::uint8_t>), nlohmann::basic_json::to_bson(const basic_json<...> &, detail::output_adapter<char>, const error_handler_t), nlohmann::basic_json::to_bson(const basic_json<...> &, detail::output_adapter<std::uint8_t>, const error_handler_t), nlohmann::basic_json::to_cbor(const basic_json<...> &, detail::output_adapter<char>, const error_handler_t), nlohmann::basic_json::to_cbor(const basic_json<...> &, detail::output_adapter<std::uint8_t>, const error_handler_t), nlohmann::basic_json::to_msgpack(const basic_json<...> &, detail::output_adapter<char>, const error_handler_t), nlohmann::basic_json::to_msgpack(const basic_json<...> &, detail::output_adapter<std::uint8_t>, const error_handler_t)
+- nlohmann::detail::binary_writer::write_bson_document_single_pass(const BasicJsonType &) (private); reached from the public API through: nlohmann::basic_json::to_bjdata(const basic_json<...> &, detail::output_adapter<char>, const bool, const bool, const bjdata_version_t, const error_handler_t), nlohmann::basic_json::to_bjdata(const basic_json<...> &, detail::output_adapter<std::uint8_t>, const bool, const bool, const bjdata_version_t, const error_handler_t), nlohmann::basic_json::to_bon8(const basic_json<...> &, detail::output_adapter<char>), nlohmann::basic_json::to_bon8(const basic_json<...> &, detail::output_adapter<std::uint8_t>), nlohmann::basic_json::to_bson(const basic_json<...> &, detail::output_adapter<char>, const error_handler_t), nlohmann::basic_json::to_bson(const basic_json<...> &, detail::output_adapter<std::uint8_t>, const error_handler_t), nlohmann::basic_json::to_cbor(const basic_json<...> &, detail::output_adapter<char>, const error_handler_t), nlohmann::basic_json::to_cbor(const basic_json<...> &, detail::output_adapter<std::uint8_t>, const error_handler_t), nlohmann::basic_json::to_msgpack(const basic_json<...> &, detail::output_adapter<char>, const error_handler_t), nlohmann::basic_json::to_msgpack(const basic_json<...> &, detail::output_adapter<std::uint8_t>, const error_handler_t)
+
+## Diff of the library source (before -> after)
+```diff
+diff --git a/include/nlohmann/detail/output/binary_writer.hpp b/include/nlohmann/detail/output/binary_writer.hpp
+index 0c3c823ac..c9bdc696f 100644
+--- a/include/nlohmann/detail/output/binary_writer.hpp
++++ b/include/nlohmann/detail/output/binary_writer.hpp
+@@ -2422,7 +2422,6 @@ class binary_writer
+             nothing large has been written then, and the caller writes the
+             document in two passes, which reports that error
+     */
+-    template<typename SinkType = OutputSinkType, typename std::enable_if<is_detected<sink_written_t, SinkType>::value, int>::type = 0>
+     bool write_bson_document_single_pass(const BasicJsonType& document)
+     {
+         const std::size_t start = oa.written();
+```
+
+# Programs to repair
+
+## gen_10.cpp (compile)
+Intent: Verify BSON writing into a back_insert_iterator of a vector.
+COMPILE ERROR. The program fails to compile, the same way against the old and the new library. Fix the error (wrong or missing include, typo, misuse of the public API) and keep the intent: the call under test must stay. Include only headers that exist; if you are unsure a header exists, use the library's main header.
+Compiler errors:
+```
+gen_10.cpp:12:32: error: no matching function for call to ‘nlohmann::json_abi_v3_12_0::basic_json<>::to_bson(nlohmann::json_abi_v3_12_0::json&, std::back_insert_iterator<std::vector<unsigned char> >&)’
+json.hpp:6435:35: note:   no known conversion for argument 2 from ‘std::back_insert_iterator<std::vector<unsigned char> >’ to ‘nlohmann::json_abi_v3_12_0::basic_json<>::error_handler_t’ {aka ‘nlohmann::json_abi_v3_12_0::detail::error_handler_t’}
+6435 |             const error_handler_t error_handler = detail::binary_writer_default_error_handler())
+```
+Source:
+```cpp
+#include <nlohmann/json.hpp>
+#include <vector>
+#include <iostream>
+
+int main() {
+    nlohmann::json j = {{"item", true}};
+    std::vector<std::uint8_t> v;
+    try {
+        auto out = std::back_inserter(v);
+        nlohmann::json::to_bson(j, out);
+        std::cout << "size: " << v.size() << "\n";
+    } catch (const std::exception& e) {
+        std::cout << "exception: " << e.what() << "\n";
+    }
+    return 0;
+}
+```
+
+# Task
+Return JSON with a "fixes" array: one item per program above, with "file" (exactly as given) and "code" (the complete repaired program, standalone, with its own int main). Do not return programs you cannot repair.

@@ -1,0 +1,603 @@
+[system]
+You write test programs that probe a C++ library for behavioral changes made by one pull request.
+Each program is compiled and run twice, once against the library before the change and once after, and the two
+outputs are compared. Your job is to produce programs whose output reveals whether the change altered behavior,
+including side effects the author did not intend.
+
+Rules for every program:
+- It is standalone: one file with its own int main(), compiled as C++17, printing results to stdout.
+- Use only the library's documented public API. Never include internal headers or use detail/impl namespaces,
+  private members or undocumented macros.
+- Do not judge results (no assert, no expected-value comparisons): just print what the library returns. Print
+  enough to make differences visible, one fact per line.
+- Output must be deterministic. Never print pointers or addresses, uninitialized data, the order of
+  hash-based containers, timings, thread ids, random values, file paths or environment data. Print floating point
+  values with an explicit precision. No input, files, network, threads, clocks or randomness.
+- Wrap calls that may throw in try/catch and print the exception's type and message, so an exception is an
+  observable result. Do not crash on purpose.
+- Aim at the code the diff changes. Prefer calls that compile against both the old and the new library; one or two
+  programs may use an API the PR adds. Cover ordinary inputs and edge cases (empty, minimum and maximum values,
+  boundaries, special values, nesting, unusual types) and also neighbouring behavior the change could disturb.
+- When the diff changes which types or inputs an API accepts or rejects (constraints, overloads, traits,
+  conversions), test it with the detection idiom (std::void_t or requires) and `if constexpr`, so the program
+  compiles against both versions, prints whether the expression is well-formed, and exercises it when it is.
+  Accepting an input is not enough: also use it through every entry point that should follow (const and
+  non-const, read, write, insert, erase, lookup, nested use), because a change that admits new inputs can leave
+  later code unable to handle them.
+- If the changed code is internal (a detail, impl or internal namespace, a trait, a helper), do not name it in the
+  program. Reach it through the public API that depends on it, using detection (as above) where needed.
+- Use the exact types and values the diff is about (the new trait's argument types, the new overload's
+  parameters), not stand-ins.
+- Spread the programs over distinct public entry points and overloads, one main idea per program. Do not write
+  several programs that only rename a type or change a literal.
+- Make the programs differ from each other: different inputs, different entry points, different features.
+
+Rules specific to this library:
+- Include the library with #include <nlohmann/json.hpp>. The public API is nlohmann::json (nlohmann::basic_json), nlohmann::ordered_json, json_pointer, json patch/merge_patch and the documented SAX and conversion interfaces. Never use the detail namespace.
+- It is a header-only library: nothing to link. Programs are compiled as C++17.
+- Print JSON values with dump() (compact) or dump(2). Keys of nlohmann::json objects print in sorted order, so output is deterministic; do not depend on insertion order except with ordered_json.
+
+[user]
+# Pull request #6000: Do not construct the base class when destroying a container
+
+## Description
+Fixes #5995.
+
+## What
+
+`json_value::destroy_container()` and `destroy_walk()` (both `noexcept`, reached from `data::~data()`) held the containers they tear down in default-constructed `basic_json` stand-ins. Each one constructs a `CustomBaseClass` that belongs to no value: one per destroyed container, four per level in `destroy_walk()`. A base class whose default constructor allocates (a long `std::string` member, say) made destruction allocate again, and terminate when that allocation failed, which is what #5762 set out to prevent (#5135).
+
+The stand-ins now are `data` (`m_type` and `m_value`, no base class). `struct data` is forward-declared before `union json_value`, and `take`, `has_no_children`, `all_children_leaves`, `walk_child`, `pop_walk_child`, `free_container`, `destroy_bounded` and `destroy_walk` take `data&`; real children are passed as `child.m_data` / `child.second.m_data`. The algorithm itself is unchanged. `take()` already moved only `m_data`, so `m_parent` under `JSON_DIAGNOSTICS` is handled as before.
+
+## Tests
+
+`unit-custom-base-class.cpp`, "destroying a value does not construct the custom base class": a counting base class checks that destroying a scalar, a small array/object document and a value nested 1000 levels deep (alternating arrays and objects, so `destroy_walk()` walks both) constructs no base object and destroys exactly one per value. Without the fix: 1 construction and one extra destruction per case.
+
+The reproducer from the issue (allocating base class under a fail-at-k `operator new`) now ends with `no throw at k=12: done`, with and without `JSON_DIAGNOSTICS=1`; before, it terminated.
+
+Not addressed here (mentioned in the issue as related): the unconditional `noexcept` on `basic_json(basic_json&&)` with a base class whose move constructor can throw.
+
+## Public API
+
+No breaking changes. Only private members of `json_value` change their parameter types.
+
+🤖 Generated with [Claude Code](https://claude.com/claude-code)
+
+## Commit message
+* Do not construct the base class when destroying a container (#5995)
+
+json_value::destroy_container() and destroy_walk() used default-
+constructed basic_json values as stand-ins, which construct a
+CustomBaseClass that belongs to no value. A base class whose default
+constructor allocates made the noexcept destructor allocate again, and
+terminate if that allocation failed, which #5762 set out to prevent.
+
+Use data (type and value, no base class) as the stand-in instead, and
+pass the children's m_data to the walk helpers.
+
+Add a test with a counting base class: destroying a value constructs no
+base object and destroys exactly one per value, also for values nested
+deeper than the recursion depth limit.
+
+Signed-off-by: Niels Lohmann <mail@nlohmann.me>
+
+* Release the test value with = nullptr instead of reset()
+
+clang-tidy (readability-ambiguous-smartptr-reset-call) rejects j.reset()
+because the pointee inherits a reset() from counting_base.
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+Claude-Session: https://claude.ai/code/session_01N5NasAgbDGG28MqXjQvLqp
+Signed-off-by: Claude <noreply@anthropic.com>
+
+* Use std::swap for the container stand-in in destroy_container
+
+The unqualified call after `using std::swap` would let a user-provided
+swap(json_value&, json_value&) intercept the destruction path. Call
+std::swap directly.
+
+Signed-off-by: Niels Lohmann <mail@nlohmann.me>
+
+---------
+
+Signed-off-by: Niels Lohmann <mail@nlohmann.me>
+Signed-off-by: Claude <noreply@anthropic.com>
+Co-authored-by: Claude <noreply@anthropic.com>
+
+## Linked issue #5995: ~basic_json() default-constructs the CustomBaseClass for every destroyed container; an allocating base class can still terminate on std::bad_alloc (#5762 incomplete)
+### Description
+
+#5762 made destruction allocation-free so that "destroying a value never allocates and never calls `std::terminate` because an allocation failed" (#5135). That holds for the default base class, but not for a `CustomBaseClass`: `json_value::destroy_container()` and `destroy_walk()` tear a container down through a stand-in declared as a full `basic_json` (`basic_json cur;`), and a default-constructed `basic_json` default-constructs the base class. So
+
+1. every destroyed array or object default-constructs and destroys one base object that belongs to no value (four per level in `destroy_walk()`, i.e. for values deeper than the recursion limit), and
+2. a base class whose default constructor allocates (a `std::string`, `std::vector` or `shared_ptr` member with a non-empty default) makes destruction allocate again inside the `noexcept` destructor; if that allocation fails, the process terminates, exactly what #5762 set out to prevent.
+
+The documented requirement for `CustomBaseClass` is only "default-constructible, non-`final`" (`json_base_class_t.md`), so such a base is within contract. 3.12.0 terminated in the same situation for every base class (that was #5135); develop is better for non-allocating bases and unchanged for allocating ones.
+
+### Reproduction steps
+
+```sh
+clang++ -std=c++17 -I include repro.cpp -o repro && ./repro     # or g++; same with -DJSON_DIAGNOSTICS=1
+```
+
+### Expected vs. actual results
+
+Expected (and observed with `nlohmann::json`): `no throw at k=6: done`.
+
+Actual with the base class below:
+
+```
+...
+k=11 threw bad_alloc, fine
+libc++abi: terminating due to uncaught exception of type std::bad_alloc: std::bad_alloc
+```
+
+(exit 134; gcc/libstdc++: `terminate called after throwing an instance of 'std::bad_alloc'`). The copy succeeded; its destructor allocated the base class's string for the stand-in, and that allocation failed inside `data::~data() noexcept`.
+
+A counting base class (every constructor increments a counter) shows the sta
+[... truncated, 4102 more characters]
+
+## Linked issue #1: Runtime error in Travis job
+Something in the C++11 object handling seems to be broken.
+
+## Discussion before merge
+- nlohmann: ### Performance check
+
+**No performance impact.** Destruction is hot (every DOM parse and copy ends in it), so I checked it on both compilers.
+
+- **Generated code** (clang, arm64): `json_value::destroy_bounded()`, the recursive part that destroys every normal document, is **instruction-for-instruction identical**. Only its signature changes (`data&` instead of `basic_json&`). With the default empty base class, `basic_json` and `data` have the same layout, so the stand-ins compile to the same code. Only `destroy_walk()` differs, in register allocation and one store. It runs only for nesting deeper than `recursion_depth_limit()`.
+- **Instruction counts** (each case includes destroying the result):
+
+| case | clang/arm64 PR/base | GCC/x86-64 (callgrind, exact) PR/base |
+|---|---:|---:|
+| parse twitter | 1.0011 | 1.00000 |
+| parse citm_catalog | 1.0011 | 1.00000 |
+| copy twitter | 1.0003 | 1.00000 |
+| copy citm_catalog | 1.0033 | 1.00000 |
+| copy canada | 0.9997 | 1.00000 |
+
+  GCC differs by at most 10 instructions per document. The clang rows are within the noise band, as expected for identical code. With a non-empty `CustomBaseClass` the PR saves the base-class construction per destro
+[... truncated, 1021 more characters]
+- gregmarr: This would allow someone to write `swap(json_value& a, json_value& b)` and intercept this call.  I don't see a reason to support this.  Using `std::swap()` would make sure that this is exactly as expected.
+- nlohmann: Right: nothing should be able to customize the swap of the internal `json_value`, and the unqualified call would pick up such an overload through ADL. Fixed in 110d38635a: it is now `std::swap(cur.m_value, *this)`. This resolved to `std::swap` before as well, so behaviour does not change.
+
+*(Written by Claude Code on behalf of @nlohmann.)*
+
+## Changed functions (from changes.py)
+- nlohmann::basic_json::json_value (private); reached from the public API through: nlohmann::operator<<(std::ostream &, const basic_json<...> &), nlohmann::operator<<(basic_json<...> &, std::istream &), nlohmann::operator>>(std::istream &, basic_json<...> &), nlohmann::operator>>(const basic_json<...> &, std::ostream &), nlohmann::format_as(const basic_json<...> &), nlohmann::to_string(const basic_json<...> &), nlohmann::operator!=(const_reference, ScalarType), nlohmann::operator!=(ScalarType, const_reference), nlohmann::operator<(const_reference, ScalarType), nlohmann::operator<(ScalarType, const_reference)
+- nlohmann::basic_json::json_value::destroy_container(value_t) (private); reached from the public API through: nlohmann::operator<<(std::ostream &, const basic_json<...> &), nlohmann::operator<<(basic_json<...> &, std::istream &), nlohmann::operator>>(std::istream &, basic_json<...> &), nlohmann::operator>>(const basic_json<...> &, std::ostream &), nlohmann::format_as(const basic_json<...> &), nlohmann::to_string(const basic_json<...> &), nlohmann::operator!=(const_reference, ScalarType), nlohmann::operator!=(ScalarType, const_reference), nlohmann::operator<(const_reference, ScalarType), nlohmann::operator<(ScalarType, const_reference)
+- nlohmann::basic_json::json_value::free_container(data &) (private); reached from the public API through: nlohmann::operator<<(std::ostream &, const basic_json<...> &), nlohmann::operator<<(basic_json<...> &, std::istream &), nlohmann::operator>>(std::istream &, basic_json<...> &), nlohmann::operator>>(const basic_json<...> &, std::ostream &), nlohmann::format_as(const basic_json<...> &), nlohmann::to_string(const basic_json<...> &), nlohmann::operator!=(const_reference, ScalarType), nlohmann::operator!=(ScalarType, const_reference), nlohmann::operator<(const_reference, ScalarType), nlohmann::operator<(ScalarType, const_reference)
+- nlohmann::basic_json::json_value::destroy_walk(data &) (private); reached from the public API through: nlohmann::operator<<(std::ostream &, const basic_json<...> &), nlohmann::operator<<(basic_json<...> &, std::istream &), nlohmann::operator>>(std::istream &, basic_json<...> &), nlohmann::operator>>(const basic_json<...> &, std::ostream &), nlohmann::format_as(const basic_json<...> &), nlohmann::to_string(const basic_json<...> &), nlohmann::operator!=(const_reference, ScalarType), nlohmann::operator!=(ScalarType, const_reference), nlohmann::operator<(const_reference, ScalarType), nlohmann::operator<(ScalarType, const_reference)
+- nlohmann::basic_json::json_value::all_children_leaves(const data &) (private); reached from the public API through: nlohmann::operator<<(std::ostream &, const basic_json<...> &), nlohmann::operator<<(basic_json<...> &, std::istream &), nlohmann::operator>>(std::istream &, basic_json<...> &), nlohmann::operator>>(const basic_json<...> &, std::ostream &), nlohmann::format_as(const basic_json<...> &), nlohmann::to_string(const basic_json<...> &), nlohmann::operator!=(const_reference, ScalarType), nlohmann::operator!=(ScalarType, const_reference), nlohmann::operator<(const_reference, ScalarType), nlohmann::operator<(ScalarType, const_reference)
+- nlohmann::basic_json::json_value::destroy_bounded(data &, std::size_t) (private); reached from the public API through: nlohmann::operator<<(std::ostream &, const basic_json<...> &), nlohmann::operator<<(basic_json<...> &, std::istream &), nlohmann::operator>>(std::istream &, basic_json<...> &), nlohmann::operator>>(const basic_json<...> &, std::ostream &), nlohmann::format_as(const basic_json<...> &), nlohmann::to_string(const basic_json<...> &), nlohmann::operator!=(const_reference, ScalarType), nlohmann::operator!=(ScalarType, const_reference), nlohmann::operator<(const_reference, ScalarType), nlohmann::operator<(ScalarType, const_reference)
+- nlohmann::basic_json::json_value::has_no_children(const data &) (private); reached from the public API through: nlohmann::operator<<(std::ostream &, const basic_json<...> &), nlohmann::operator<<(basic_json<...> &, std::istream &), nlohmann::operator>>(std::istream &, basic_json<...> &), nlohmann::operator>>(const basic_json<...> &, std::ostream &), nlohmann::format_as(const basic_json<...> &), nlohmann::to_string(const basic_json<...> &), nlohmann::operator!=(const_reference, ScalarType), nlohmann::operator!=(ScalarType, const_reference), nlohmann::operator<(const_reference, ScalarType), nlohmann::operator<(ScalarType, const_reference)
+- nlohmann::basic_json::json_value::pop_walk_child(data &) (private); reached from the public API through: nlohmann::operator<<(std::ostream &, const basic_json<...> &), nlohmann::operator<<(basic_json<...> &, std::istream &), nlohmann::operator>>(std::istream &, basic_json<...> &), nlohmann::operator>>(const basic_json<...> &, std::ostream &), nlohmann::format_as(const basic_json<...> &), nlohmann::to_string(const basic_json<...> &), nlohmann::operator!=(const_reference, ScalarType), nlohmann::operator!=(ScalarType, const_reference), nlohmann::operator<(const_reference, ScalarType), nlohmann::operator<(ScalarType, const_reference)
+- nlohmann::basic_json::json_value::walk_child(data &) (private); reached from the public API through: nlohmann::operator<<(std::ostream &, const basic_json<...> &), nlohmann::operator<<(basic_json<...> &, std::istream &), nlohmann::operator>>(std::istream &, basic_json<...> &), nlohmann::operator>>(const basic_json<...> &, std::ostream &), nlohmann::format_as(const basic_json<...> &), nlohmann::to_string(const basic_json<...> &), nlohmann::operator!=(const_reference, ScalarType), nlohmann::operator!=(ScalarType, const_reference), nlohmann::operator<(const_reference, ScalarType), nlohmann::operator<(ScalarType, const_reference)
+- nlohmann::basic_json::json_value::take(data &, data &) (private); reached from the public API through: nlohmann::operator<<(std::ostream &, const basic_json<...> &), nlohmann::operator<<(basic_json<...> &, std::istream &), nlohmann::operator>>(std::istream &, basic_json<...> &), nlohmann::operator>>(const basic_json<...> &, std::ostream &), nlohmann::format_as(const basic_json<...> &), nlohmann::to_string(const basic_json<...> &), nlohmann::operator!=(const_reference, ScalarType), nlohmann::operator!=(ScalarType, const_reference), nlohmann::operator<(const_reference, ScalarType), nlohmann::operator<(ScalarType, const_reference)
+- nlohmann::basic_json::data (private); reached from the public API through: nlohmann::operator<<(std::ostream &, const basic_json<...> &), nlohmann::operator<<(basic_json<...> &, std::istream &), nlohmann::operator>>(std::istream &, basic_json<...> &), nlohmann::operator>>(const basic_json<...> &, std::ostream &), nlohmann::format_as(const basic_json<...> &), nlohmann::to_string(const basic_json<...> &), nlohmann::operator!=(const_reference, ScalarType), nlohmann::operator!=(ScalarType, const_reference), nlohmann::operator<(const_reference, ScalarType), nlohmann::operator<(ScalarType, const_reference)
+- nlohmann::basic_json::json_value::free_container(basic_json<...> &) (private); reached from the public API through: nlohmann::operator<<(std::ostream &, const basic_json<...> &), nlohmann::operator<<(basic_json<...> &, std::istream &), nlohmann::operator>>(std::istream &, basic_json<...> &), nlohmann::operator>>(const basic_json<...> &, std::ostream &), nlohmann::format_as(const basic_json<...> &), nlohmann::to_string(const basic_json<...> &), nlohmann::operator!=(const_reference, ScalarType), nlohmann::operator!=(ScalarType, const_reference), nlohmann::operator<(const_reference, ScalarType), nlohmann::operator<(ScalarType, const_reference)
+- nlohmann::basic_json::json_value::destroy_walk(basic_json<...> &) (private); reached from the public API through: nlohmann::operator<<(std::ostream &, const basic_json<...> &), nlohmann::operator<<(basic_json<...> &, std::istream &), nlohmann::operator>>(std::istream &, basic_json<...> &), nlohmann::operator>>(const basic_json<...> &, std::ostream &), nlohmann::format_as(const basic_json<...> &), nlohmann::to_string(const basic_json<...> &), nlohmann::operator!=(const_reference, ScalarType), nlohmann::operator!=(ScalarType, const_reference), nlohmann::operator<(const_reference, ScalarType), nlohmann::operator<(ScalarType, const_reference)
+- nlohmann::basic_json::json_value::all_children_leaves(const basic_json<...> &) (private); reached from the public API through: nlohmann::operator<<(std::ostream &, const basic_json<...> &), nlohmann::operator<<(basic_json<...> &, std::istream &), nlohmann::operator>>(std::istream &, basic_json<...> &), nlohmann::operator>>(const basic_json<...> &, std::ostream &), nlohmann::format_as(const basic_json<...> &), nlohmann::to_string(const basic_json<...> &), nlohmann::operator!=(const_reference, ScalarType), nlohmann::operator!=(ScalarType, const_reference), nlohmann::operator<(const_reference, ScalarType), nlohmann::operator<(ScalarType, const_reference)
+- nlohmann::basic_json::json_value::destroy_bounded(basic_json<...> &, std::size_t) (private); reached from the public API through: nlohmann::operator<<(std::ostream &, const basic_json<...> &), nlohmann::operator<<(basic_json<...> &, std::istream &), nlohmann::operator>>(std::istream &, basic_json<...> &), nlohmann::operator>>(const basic_json<...> &, std::ostream &), nlohmann::format_as(const basic_json<...> &), nlohmann::to_string(const basic_json<...> &), nlohmann::operator!=(const_reference, ScalarType), nlohmann::operator!=(ScalarType, const_reference), nlohmann::operator<(const_reference, ScalarType), nlohmann::operator<(ScalarType, const_reference)
+- nlohmann::basic_json::json_value::has_no_children(const basic_json<...> &) (private); reached from the public API through: nlohmann::operator<<(std::ostream &, const basic_json<...> &), nlohmann::operator<<(basic_json<...> &, std::istream &), nlohmann::operator>>(std::istream &, basic_json<...> &), nlohmann::operator>>(const basic_json<...> &, std::ostream &), nlohmann::format_as(const basic_json<...> &), nlohmann::to_string(const basic_json<...> &), nlohmann::operator!=(const_reference, ScalarType), nlohmann::operator!=(ScalarType, const_reference), nlohmann::operator<(const_reference, ScalarType), nlohmann::operator<(ScalarType, const_reference)
+- nlohmann::basic_json::json_value::pop_walk_child(basic_json<...> &) (private); reached from the public API through: nlohmann::operator<<(std::ostream &, const basic_json<...> &), nlohmann::operator<<(basic_json<...> &, std::istream &), nlohmann::operator>>(std::istream &, basic_json<...> &), nlohmann::operator>>(const basic_json<...> &, std::ostream &), nlohmann::format_as(const basic_json<...> &), nlohmann::to_string(const basic_json<...> &), nlohmann::operator!=(const_reference, ScalarType), nlohmann::operator!=(ScalarType, const_reference), nlohmann::operator<(const_reference, ScalarType), nlohmann::operator<(ScalarType, const_reference)
+- nlohmann::basic_json::json_value::walk_child(basic_json<...> &) (private); reached from the public API through: nlohmann::operator<<(std::ostream &, const basic_json<...> &), nlohmann::operator<<(basic_json<...> &, std::istream &), nlohmann::operator>>(std::istream &, basic_json<...> &), nlohmann::operator>>(const basic_json<...> &, std::ostream &), nlohmann::format_as(const basic_json<...> &), nlohmann::to_string(const basic_json<...> &), nlohmann::operator!=(const_reference, ScalarType), nlohmann::operator!=(ScalarType, const_reference), nlohmann::operator<(const_reference, ScalarType), nlohmann::operator<(ScalarType, const_reference)
+- nlohmann::basic_json::json_value::take(basic_json<...> &, basic_json<...> &) (private); reached from the public API through: nlohmann::operator<<(std::ostream &, const basic_json<...> &), nlohmann::operator<<(basic_json<...> &, std::istream &), nlohmann::operator>>(std::istream &, basic_json<...> &), nlohmann::operator>>(const basic_json<...> &, std::ostream &), nlohmann::format_as(const basic_json<...> &), nlohmann::to_string(const basic_json<...> &), nlohmann::operator!=(const_reference, ScalarType), nlohmann::operator!=(ScalarType, const_reference), nlohmann::operator<(const_reference, ScalarType), nlohmann::operator<(ScalarType, const_reference)
+- nlohmann::basic_json (public)
+
+## Diff of the library source (before -> after)
+```diff
+diff --git a/include/nlohmann/json.hpp b/include/nlohmann/json.hpp
+index 7bed813df..8b8d3dbed 100644
+--- a/include/nlohmann/json.hpp
++++ b/include/nlohmann/json.hpp
+@@ -543,6 +543,10 @@ class basic_json // NOLINT(cppcoreguidelines-special-member-functions,hicpp-spec
+     ////////////////////////
+ 
+   JSON_PRIVATE_UNLESS_TESTED:
++    // the type and value of a basic_json without its base class (defined
++    // below); the destruction helpers of json_value use it as a stand-in
++    struct data;
++
+     /*!
+     @brief a JSON value
+ 
+@@ -719,27 +723,28 @@ class basic_json // NOLINT(cppcoreguidelines-special-member-functions,hicpp-spec
+         explicit json_value(array_t* value) noexcept : array(value) {}
+ 
+ private:
+-        // raw, allocation-free transfer of m_data from src to dst: no
+-        // set_parents()/assert_invariant() (the former is O(#children) per
+-        // call under JSON_DIAGNOSTICS, which would make the walk below
+-        // quadratic); dst takes ownership, src is left as value_t::null.
+-        static void take(basic_json& dst, basic_json& src) noexcept
++        // raw, allocation-free transfer of the type and value from src to
++        // dst: no set_parents()/assert_invariant() (the former is
++        // O(#children) per call under JSON_DIAGNOSTICS, which would make the
++        // walk below quadratic); dst takes ownership, src is left as
++        // value_t::null.
++        static void take(data& dst, data& src) noexcept
+         {
+-            dst.m_data.m_type = src.m_data.m_type;
+-            dst.m_data.m_value = src.m_data.m_value;
+-            src.m_data.m_type = value_t::null;
++            dst.m_type = src.m_type;
++            dst.m_value = src.m_value;
++            src.m_type = value_t::null;
+         }
+ 
+         // true if v is not an array/object, or is an already-empty one
+-        static bool has_no_children(const basic_json& v) noexcept
++        static bool has_no_children(const data& v) noexcept
+         {
+-            if (v.m_data.m_type == value_t::array)
++            if (v.m_type == value_t::array)
+             {
+-                return v.m_data.m_value.array->empty();
++                return v.m_value.array->empty();
+             }
+-            if (v.m_data.m_type == value_t::object)
++            if (v.m_type == value_t::object)
+             {
+-                return v.m_data.m_value.object->empty();
++                return v.m_value.object->empty();
+             }
+             return true;
+         }
+@@ -748,21 +753,21 @@ private:
+         // its own, i.e. v can be freed in one go (its destructor then
+         // destroys scalars and empty containers only, so it recurses at most
+         // one level deep); stops at the first structured child it meets
+-        static bool all_children_leaves(const basic_json& v) noexcept
++        static bool all_children_leaves(const data& v) noexcept
+         {
+             // array_t only needs forward iterators (see custom_array_type)
+-            if (v.m_data.m_type == value_t::array)
++            if (v.m_type == value_t::array)
+             {
+-                const auto& a = *v.m_data.m_value.array;
++                const auto& a = *v.m_value.array;
+                 return std::all_of(a.begin(), a.end(), [](const basic_json & el)
+                 {
+-                    return has_no_children(el);
++                    return has_no_children(el.m_data);
+                 });
+             }
+-            const auto& o = *v.m_data.m_value.object;
++            const auto& o = *v.m_value.object;
+             return std::all_of(o.begin(), o.end(), [](const typename object_t::value_type & el)
+             {
+-                return has_no_children(el.second);
++                return has_no_children(el.second.m_data);
+             });
+         }
+ 
+@@ -794,30 +799,30 @@ private:
+ 
+         // the child of a non-empty array/object v that the walk in
+         // destroy_container() continues with (see walk_child_it() above)
+-        static basic_json& walk_child(basic_json& v)
++        static data& walk_child(data& v)
+         {
+-            if (v.m_data.m_type == value_t::array)
++            if (v.m_type == value_t::array)
+             {
+-                return v.m_data.m_value.array->back();
++                return v.m_value.array->back().m_data;
+             }
+-            JSON_ASSERT(v.m_data.m_type == value_t::object);
+-            return walk_child_it(*v.m_data.m_value.object)->second;
++            JSON_ASSERT(v.m_type == value_t::object);
++            return walk_child_it(*v.m_value.object)->second.m_data;
+         }
+ 
+         // removes walk_child(v) from a non-empty array/object v; this never
+         // allocates, and since it is only ever called when that child is a
+         // scalar or an already-empty array/object, destroying it never
+         // recurses more than one level deep (see destroy() below)
+-        static void pop_walk_child(basic_json& v)
++        static void pop_walk_child(data& v)
+         {
+-            if (v.m_data.m_type == value_t::array)
++            if (v.m_type == value_t::array)
+             {
+-                v.m_data.m_value.array->pop_back();
++                v.m_value.array->pop_back();
+             }
+             else
+             {
+-                JSON_ASSERT(v.m_data.m_type == value_t::object);
+-                v.m_data.m_value.object->erase(walk_child_it(*v.m_data.m_value.object));
++                JSON_ASSERT(v.m_type == value_t::object);
++                v.m_value.object->erase(walk_child_it(*v.m_value.object));
+             }
+         }
+ 
+@@ -826,23 +831,23 @@ private:
+         // recurses at most one level deep); this is the same allocator-based
+         // free the old recursive implementation used, just factored out so
+         // every level of the walk in destroy() can share it
+-        static void free_container(basic_json& v) noexcept
++        static void free_container(data& v) noexcept
+         {
+             JSON_ASSERT(has_no_children(v) || all_children_leaves(v));
+-            if (v.m_data.m_type == value_t::array)
++            if (v.m_type == value_t::array)
+             {
+                 AllocatorType<array_t> alloc;
+-                std::allocator_traits<decltype(alloc)>::destroy(alloc, v.m_data.m_value.array);
+-                std::allocator_traits<decltype(alloc)>::deallocate(alloc, v.m_data.m_value.array, 1);
++                std::allocator_traits<decltype(alloc)>::destroy(alloc, v.m_value.array);
++                std::allocator_traits<decltype(alloc)>::deallocate(alloc, v.m_value.array, 1);
+             }
+             else
+             {
+-                JSON_ASSERT(v.m_data.m_type == value_t::object);
++                JSON_ASSERT(v.m_type == value_t::object);
+                 AllocatorType<object_t> alloc;
+-                std::allocator_traits<decltype(alloc)>::destroy(alloc, v.m_data.m_value.object);
+-                std::allocator_traits<decltype(alloc)>::deallocate(alloc, v.m_data.m_value.object, 1);
++                std::allocator_traits<decltype(alloc)>::destroy(alloc, v.m_value.object);
++                std::allocator_traits<decltype(alloc)>::deallocate(alloc, v.m_value.object, 1);
+             }
+-            v.m_data.m_type = value_t::null; // avoid a double free if v is later destructed
++            v.m_type = value_t::null; // avoid a double free if v is later destructed
+         }
+ 
+ public:
+@@ -873,14 +878,15 @@ public:
+ 
+             // This json_value is not itself a basic_json, so the top-level
+             // container is first moved into a local stand-in ("cur"); a
+-            // default-constructed basic_json has a null pointer in its
+-            // m_value (see data::m_value's initializer), so swapping it
+-            // with *this leaves this union's own pointer null, and it is
+-            // never looked at or freed a second time.
+-            basic_json cur;
+-            cur.m_data.m_type = t;
+-            using std::swap;
+-            swap(cur.m_data.m_value, *this);
++            // default-constructed data has a null pointer in its m_value
++            // (see data::m_value's initializer), so swapping it with *this
++            // leaves this union's own pointer null, and it is never looked
++            // at or freed a second time. The stand-ins are data, not
++            // basic_json, so that destroying a value never constructs a
++            // CustomBaseClass, whose constructor may allocate (#5995).
++            data cur;
++            cur.m_type = t;
++            std::swap(cur.m_value, *this);
+ 
+             destroy_bounded(cur, 0);
+         }
+@@ -889,7 +895,7 @@ public:
+         // The first recursion_depth_limit() levels are destroyed by plain
+         // recursion, which is the fastest way and cannot throw; anything
+         // nested deeper is handed to destroy_walk(), which uses no call stack.
+-        static void destroy_bounded(basic_json& v, std::size_t depth) noexcept
++        static void destroy_bounded(data& v, std::size_t depth) noexcept
+         {
+             if (JSON_HEDLEY_UNLIKELY(depth >= detail::recursion_depth_limit()))
+             {
+@@ -897,23 +903,23 @@ public:
+                 return;
+             }
+ 
+-            if (v.m_data.m_type == value_t::array)
++            if (v.m_type == value_t::array)
+             {
+-                for (auto& child : *v.m_data.m_value.array)
++                for (auto& child : *v.m_value.array)
+                 {
+                     if (child.m_data.m_type == value_t::array || child.m_data.m_type == value_t::object)
+                     {
+-                        destroy_bounded(child, depth + 1);
++                        destroy_bounded(child.m_data, depth + 1);
+                     }
+                 }
+             }
+             else
+             {
+-                for (auto& child : *v.m_data.m_value.object)
++                for (auto& child : *v.m_value.object)
+                 {
+                     if (child.second.m_data.m_type == value_t::array || child.second.m_data.m_type == value_t::object)
+                     {
+-                        destroy_bounded(child.second, depth + 1);
++                        destroy_bounded(child.second.m_data, depth + 1);
+                     }
+                 }
+             }
+@@ -940,18 +946,15 @@ public:
+         // array/object, which neither allocates nor recurses more
+         // than one level deep.
+         //
+-        // This json_value is not itself a basic_json, so the
+-        // top-level container is first moved into a local stand-in
+-        // ("cur"); a default-constructed basic_json has a null
+-        // pointer in its m_value (see data::m_value's initializer),
+-        // so swapping it with *this leaves this union's own pointer
+-        // null, and it is never looked at or freed a second time.
+-        static void destroy_walk(basic_json& top) noexcept
+-        {
+-            basic_json cur;
++        // Like destroy_container(), the walk keeps the containers it
++        // holds in data stand-ins (cur, prev, gp, tmp), which never
++        // construct a CustomBaseClass.
++        static void destroy_walk(data& top) noexcept
++        {
++            data cur;
+             take(cur, top);
+ 
+-            basic_json prev; // value_t::null: no parent
++            data prev; // value_t::null: no parent
+ 
+             // true right after cur was entered: its children have not been
+             // looked at yet. If none of them has children of its own, cur is
+@@ -965,7 +968,7 @@ public:
+                 fresh = false;
+                 if (has_no_children(cur) || (fresh_now && all_children_leaves(cur)))
+                 {
+-                    if (prev.m_data.m_type == value_t::null)
++                    if (prev.m_type == value_t::null)
+                     {
+                         free_container(cur);
+                         return; // back at the top with nothing left to do
+@@ -974,7 +977,7 @@ public:
+                     // ascend: detach the grandparent link from prev's
+                     // walk_child() slot, drop that (now null) slot, free cur
+                     // (it is empty), then move up one level
+-                    basic_json gp;
++                    data gp;
+                     take(gp, walk_child(prev));
+                     pop_walk_child(prev);
+ 
+@@ -985,7 +988,7 @@ public:
+                     continue;
+                 }
+ 
+-                basic_json& cur_child_ref = walk_child(cur);
++                data& cur_child_ref = walk_child(cur);
+ 
+                 if (has_no_children(cur_child_ref))
+                 {
+@@ -997,7 +1000,7 @@ public:
+                 // descend into the non-empty child, reversing the
+                 // link: its slot takes over prev, and the child becomes
+                 // the new cur
+-                basic_json tmp;
++                data tmp;
+                 take(tmp, cur_child_ref);
+                 take(cur_child_ref, prev);
+                 take(prev, cur);
+```
+
+## Existing upstream tests that call the changed code (for style and API usage)
+// Upstream tests at the PR's parent commit 03d408aaf that use the changed code.
+// Names searched (test lines using each): basic_json (54), format_as (23), to_string (178), operator<< (99), operator>> (98), operator!= (66), operator< (218), json_value (11), destroy_container (0), free_container (0), destroy_walk (0), all_children_leaves (0), destroy_bounded (0), has_no_children (0), pop_walk_child (0), walk_child (0), take (0), data (453)
+
+// ---- tests/src/unit-deserialization.cpp:1271-1316  (uses: data, operator<<, operator>>, to_string)
+TEST_CASE("parse error positions are the same for contiguous and stream input")
+{
+    // contiguous input derives the position from the input on error, stream
+    // input counts it while reading (see lexer::lazy_position); the cases
+    // cover newlines before the error, ungetting a newline after a number,
+    // newlines inside a string, a comment, and reads at the end of input
+    struct test_case
+    {
+        std::string input;
+        std::size_t byte;
+        std::string message;
+    };
+    const std::vector<test_case> cases =
+    {
+        {"[\n  1,\n  2\n", 12, "[json.exception.parse_error.101] parse error at line 4, column 1: syntax error while parsing array - unexpected end of input; expected ']'"},
+        {"[1\n,2,\n]", 8, "[json.exception.parse_error.101] parse error at line 3, column 1: syntax error while parsing value - unexpected ']'; expected '[', '{', or a literal"},
+        {"[1\n x]", 5, "[json.exception.parse_error.101] parse error at line 2, column 2: syntax error while parsing array - invalid literal; last read: '1<U+000A> x'; expected ']'"},
+        {"1\n2", 3, "[json.exception.parse_error.101] parse error at line 2, column 1: syntax error while parsing value - unexpected number literal; expected end of input"},
+        {
+            "{\"a\":\n\"b\nc\"}", 9, R"([json.exception.parse_error.101] parse error at line 3, column 0: syntax error while parsing value - invalid string: control character U+000A (LF) must be escaped to \u000A or \n; last read: '"b<U+000A>')"
+        },
+        {"/* a\n b */\n x", 13, "[json.exception.parse_error.101] parse error at line 3, column 2: syntax error while parsing value - invalid literal; last read: '/* a<U+000A> b */<U+000A> x'"},
+        {"\n\n", 3, "[json.exception.parse_error.101] parse error at line 3, column 1: syntax error while parsing value - unexpected end of input; expected '[', '{', or a literal"},
+        {"[\"a\",\n 1e\n]", 10, "[json.exception.parse_error.101] parse error at line 3, column 0: syntax error while parsing value - invalid number; expected '+', '-', or digit after exponent; last read: '1e<U+000A>'"},
+        {"[tru\n]", 5, "[json.exception.parse_error.101] parse error at line 2, column 0: syntax error while parsing value - invalid literal; last read: '[tru<U+000A>'"},
+    };
+
+    for (const auto& c : cases)
+    {
+        CAPTURE(c.input)
+        const std::string expected = std::to_string(c.byte) + " " + c.message;
+
+        SaxErrorRecorder string_sax;
+        CHECK_FALSE(json::sax_parse(c.input, &string_sax, json::input_format_t::json, true, true));
+        CHECK(string_sax.error == expected);
+
+        SaxErrorRecorder pointer_sax;
+        CHECK_FALSE(json::sax_parse(c.input.data(), c.input.data() + c.input.size(), &pointer_sax, json::input_format_t::json, true, true));
+        CHECK(pointer_sax.error == expected);
+
+        std::istringstream is(c.input);
+        SaxErrorRecorder stream_sax;
+        CHECK_FALSE(json::sax_parse(is, &stream_sax, json::input_format_t::json, true, true));
+        CHECK(stream_sax.error == expected);
+    }
+}
+
+// ---- tests/src/unit-stream-bulk-scan.cpp:405-417  (uses: data, operator<<, operator>>)
+    SECTION("binary formats read from a stream")
+    {
+        const json j = {{"string", std::string(300, 'x')}, {"array", {1, 2, 3}}, {"number", 1.5}};
+        const std::vector<std::uint8_t> cbor = json::to_cbor(j);
+        const std::string bytes(reinterpret_cast<const char*>(cbor.data()), cbor.size());
+        for (const std::size_t chunk_size : chunk_sizes())
+        {
+            CAPTURE(chunk_size)
+            chunked_streambuf buf(bytes, chunk_size);
+            std::istream is(&buf);
+            CHECK(json::from_cbor(is) == j);
+        }
+    }
+
+// ---- tests/src/unit-stream-bulk-scan.cpp:319-350  (uses: operator<<, operator>>, to_string)
+    SECTION("many values from one stream")
+    {
+        std::string input;
+        for (int i = 0; i < 200; ++i)
+        {
+            input += R"({"id":)" + std::to_string(i) + R"(,"name":"user)" + std::to_string(i) + R"(","score":)" + std::to_string(i) + ".5}\n";
+            input += std::to_string(i * 7919) + "\n";
+        }
+
+        for (const std::size_t chunk_size : chunk_sizes())
+        {
+            CAPTURE(chunk_size)
+            chunked_streambuf buf(input, chunk_size);
+            std::istream is(&buf);
+            json j;
+            int count = 0;
+            while (!(is >> std::ws).eof())
+            {
+                is >> j;
+                if (count % 2 == 0)
+                {
+                    CHECK(j["id"] == count / 2);
+                }
+                else
+                {
+                    CHECK(j == (count / 2) * 7919);
+                }
+                ++count;
+            }
+            CHECK(count == 400);
+        }
+    }
+
+// ---- tests/src/unit-msgpack.cpp:1488-1494  (uses: data, operator<<, operator>>)
+        SECTION("unexpected end inside int with stream")
+        {
+            json _;
+            const std::string data = {static_cast<char>(0xd2u), static_cast<char>(0x12u), static_cast<char>(0x34u), static_cast<char>(0x56u)};
+            CHECK_THROWS_WITH_AS(_ = json::from_msgpack(std::istringstream(data, std::ios::binary)),
+                                 "[json.exception.parse_error.110] parse error at byte 5: syntax error while parsing MessagePack number: unexpected end of input", json::parse_error&);
+        }
+
+// ---- tests/src/unit-deserialization.cpp:183-198  (uses: data, operator>>)
+        SECTION("operator>> with a NUL byte after the value (issue #5530)")
+        {
+            // operator>> parses non-strictly (it does not require the whole
+            // stream to be consumed), so a NUL byte following a complete
+            // value is simply left unread on the stream and never reaches
+            // the "expected end of input" check that JSON_STRICT_NUL_HANDLING
+            // affects; this holds regardless of the macro (verified below for
+            // the opt-in state as well)
+            std::string data = "123";
+            data.push_back('\0');
+            std::istringstream ss(data);
+            json j;
+            ss >> j;
+            CHECK(j == json(123));
+            CHECK(ss.good());
+        }
+
+# Task
+Write 20 test programs for this pull request. Return JSON with a "tests" array; each item has "name" (short snake_case), "intent" (one sentence: what behavior it probes) and "code" (the complete C++ program).

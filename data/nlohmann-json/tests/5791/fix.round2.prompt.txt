@@ -1,0 +1,475 @@
+[system]
+You write test programs that probe a C++ library for behavioral changes made by one pull request.
+Each program is compiled and run twice, once against the library before the change and once after, and the two
+outputs are compared. Your job is to produce programs whose output reveals whether the change altered behavior,
+including side effects the author did not intend.
+
+Rules for every program:
+- It is standalone: one file with its own int main(), compiled as C++17, printing results to stdout.
+- Use only the library's documented public API. Never include internal headers or use detail/impl namespaces,
+  private members or undocumented macros.
+- Do not judge results (no assert, no expected-value comparisons): just print what the library returns. Print
+  enough to make differences visible, one fact per line.
+- Output must be deterministic. Never print pointers or addresses, uninitialized data, the order of
+  hash-based containers, timings, thread ids, random values, file paths or environment data. Print floating point
+  values with an explicit precision. No input, files, network, threads, clocks or randomness.
+- Wrap calls that may throw in try/catch and print the exception's type and message, so an exception is an
+  observable result. Do not crash on purpose.
+- Aim at the code the diff changes. Prefer calls that compile against both the old and the new library; one or two
+  programs may use an API the PR adds. Cover ordinary inputs and edge cases (empty, minimum and maximum values,
+  boundaries, special values, nesting, unusual types) and also neighbouring behavior the change could disturb.
+- When the diff changes which types or inputs an API accepts or rejects (constraints, overloads, traits,
+  conversions), test it with the detection idiom (std::void_t or requires) and `if constexpr`, so the program
+  compiles against both versions, prints whether the expression is well-formed, and exercises it when it is.
+  Accepting an input is not enough: also use it through every entry point that should follow (const and
+  non-const, read, write, insert, erase, lookup, nested use), because a change that admits new inputs can leave
+  later code unable to handle them.
+- If the changed code is internal (a detail, impl or internal namespace, a trait, a helper), do not name it in the
+  program. Reach it through the public API that depends on it, using detection (as above) where needed.
+- Use the exact types and values the diff is about (the new trait's argument types, the new overload's
+  parameters), not stand-ins.
+- Spread the programs over distinct public entry points and overloads, one main idea per program. Do not write
+  several programs that only rename a type or change a literal.
+- Make the programs differ from each other: different inputs, different entry points, different features.
+
+Rules specific to this library:
+- Include the library with #include <nlohmann/json.hpp>. The public API is nlohmann::json (nlohmann::basic_json), nlohmann::ordered_json, json_pointer, json patch/merge_patch and the documented SAX and conversion interfaces. Never use the detail namespace.
+- It is a header-only library: nothing to link. Programs are compiled as C++17.
+- Print JSON values with dump() (compact) or dump(2). Keys of nlohmann::json objects print in sorted order, so output is deterministic; do not depend on insertion order except with ordered_json.
+
+[user]
+# Pull request #5791: Keep converted object keys alive while writing UBJSON and BJData
+
+## Description
+## What
+
+Since #5746, `write_ubjson` (recursive) and `write_ubjson_iterative` (used past `detail::recursion_depth_limit()`, #5781) write each object key with
+
+```cpp
+string_t storage;
+const string_t& key = sanitize_utf8_for_write(el.first, j, storage);
+```
+
+When `object_t::key_type` is not `string_t` but converts to it implicitly, `el.first` becomes a temporary `string_t` that is destroyed at the end of this statement. `sanitize_utf8_for_write` returns a reference to its argument in every case except a sanitized `replace`/`ignore` copy, so `key` then refers to a dead object. AddressSanitizer reports `stack-use-after-scope` in `write_ubjson` for `to_ubjson` and `to_bjdata` with such a key type.
+
+- Only custom `ObjectType`s whose `key_type` differs from `string_t` are affected. Default `json` and `ordered_json` bind the key directly and never see a temporary.
+- No release is affected: v3.12.0 wrote keys via `el.first.size()` / `el.first.c_str()`. It was found while reviewing #5328.
+
+## Fix
+
+- New private alias `binary_writer::object_key_string_t`: `const string_t&` when `key_type` is `string_t`, `string_t` otherwise. Both UBJSON sites bind the key to it before sanitizing, so the default types get no extra copy.
+- A deleted template overload `sanitize_utf8_for_write(const T&, ...)` for any `T` other than `string_t` makes passing a converting key a compile error instead of a dangling reference. The doc comment explains this.
+
+## Tests
+
+New test case in `tests/src/unit-binary_utf8_error_handler.cpp` using a local key type that converts to `std::string`. Keys are longer than the small-string buffer.
+- Well-formed keys under every `error_handler`, for UBJSON and BJData draft2/draft3, with all `use_count`/`use_type` combinations.
+- Ill-formed keys: `strict` throws, `replace`/`ignore` match `dump()`+`parse()`, `keep` passes the bytes through.
+- 200 nested objects, so the iterative writer is covered as well.
+
+Verified locally with `-fsanitize=address,undefined`:
+- **develop headers:** the new test crashes with `stack-use-after-scope` in `write_ubjson`.
+- **Iterative site alone:** with only the iterative site left unfixed, the nesting section crashes in `write_ubjson_iterative`.
+- **With the fix:** all 490 assertions pass in C++11 (`include/`) and C++17 with `JSON_DIAGNOSTICS=1` (`single_include/`).
+- **Guard:** reverting one site to `sanitize_utf8_for_write(el.first, ...)` fails to compile for the custom key type with "call to deleted member function", while `json`/`ordered_json` still compile.
+
+## Public API
+
+No breaking changes. The alias and the deleted overload are private members of `detail::binary_writer`. All public entry points compile for exactly the same `basic_json` specializations as before; the only behavior change is that the affected custom key types no longer read freed memory.
+
+🤖 Generated with [Claude Code](https://claude.com/claude-code)
+
+## Commit message
+* Keep converted object keys alive while writing UBJSON and BJData
+
+Since #5746, write_ubjson and write_ubjson_iterative pass each object key
+to sanitize_utf8_for_write and keep the returned reference. When
+object_t::key_type is not string_t but converts to it, the argument is a
+temporary that is destroyed at the end of the statement, and the
+function returns a reference to it in every case but a sanitized copy,
+so the key bytes are read from a dead object (AddressSanitizer:
+stack-use-after-scope). Default json and ordered_json are unaffected.
+
+Bind the key to a named object_key_string_t first: a reference when
+key_type is string_t, so no copy is added there, and a converted copy
+otherwise. A deleted overload of sanitize_utf8_for_write for anything
+other than string_t turns a recurrence into a compile error.
+
+Signed-off-by: Niels Lohmann <mail@nlohmann.me>
+
+* Suppress -Wunused-member-function for the converting_key test type
+
+converting_key::data() is only called when JSON_DIAGNOSTICS is enabled.
+
+Signed-off-by: Niels Lohmann <mail@nlohmann.me>
+
+* Fix clang-tidy findings in the UBJSON/BJData converted-key fix
+
+Suppress hicpp/modernize-use-equals-delete on the deleted
+sanitize_utf8_for_write overload: it guards a private helper and must stay
+private. Replace the C-style array in the new test with std::array.
+
+Signed-off-by: Niels Lohmann <mail@nlohmann.me>
+
+---------
+
+Signed-off-by: Niels Lohmann <mail@nlohmann.me>
+
+## Changed functions (from changes.py)
+- nlohmann::detail::binary_writer (private); reached from the public API through: nlohmann::basic_json::to_bjdata(const basic_json<...> &, detail::output_adapter<char>, const bool, const bool, const bjdata_version_t, const error_handler_t), nlohmann::basic_json::to_bjdata(const basic_json<...> &, detail::output_adapter<std::uint8_t>, const bool, const bool, const bjdata_version_t, const error_handler_t), nlohmann::basic_json::to_bon8(const basic_json<...> &, detail::output_adapter<char>), nlohmann::basic_json::to_bon8(const basic_json<...> &, detail::output_adapter<std::uint8_t>), nlohmann::basic_json::to_bson(const basic_json<...> &, detail::output_adapter<char>, const error_handler_t), nlohmann::basic_json::to_bson(const basic_json<...> &, detail::output_adapter<std::uint8_t>, const error_handler_t), nlohmann::basic_json::to_cbor(const basic_json<...> &, detail::output_adapter<char>, const error_handler_t), nlohmann::basic_json::to_cbor(const basic_json<...> &, detail::output_adapter<std::uint8_t>, const error_handler_t), nlohmann::basic_json::to_msgpack(const basic_json<...> &, detail::output_adapter<char>, const error_handler_t), nlohmann::basic_json::to_msgpack(const basic_json<...> &, detail::output_adapter<std::uint8_t>, const error_handler_t)
+- nlohmann::detail::binary_writer::write_ubjson(const BasicJsonType &, const bool, const bool, const bool, const bool, const bjdata_version_t, const std::size_t) (private); reached from the public API through: nlohmann::basic_json::to_bjdata(const basic_json<...> &, detail::output_adapter<char>, const bool, const bool, const bjdata_version_t, const error_handler_t), nlohmann::basic_json::to_bjdata(const basic_json<...> &, detail::output_adapter<std::uint8_t>, const bool, const bool, const bjdata_version_t, const error_handler_t), nlohmann::basic_json::to_bon8(const basic_json<...> &, detail::output_adapter<char>), nlohmann::basic_json::to_bon8(const basic_json<...> &, detail::output_adapter<std::uint8_t>), nlohmann::basic_json::to_bson(const basic_json<...> &, detail::output_adapter<char>, const error_handler_t), nlohmann::basic_json::to_bson(const basic_json<...> &, detail::output_adapter<std::uint8_t>, const error_handler_t), nlohmann::basic_json::to_cbor(const basic_json<...> &, detail::output_adapter<char>, const error_handler_t), nlohmann::basic_json::to_cbor(const basic_json<...> &, detail::output_adapter<std::uint8_t>, const error_handler_t), nlohmann::basic_json::to_msgpack(const basic_json<...> &, detail::output_adapter<char>, const error_handler_t), nlohmann::basic_json::to_msgpack(const basic_json<...> &, detail::output_adapter<std::uint8_t>, const error_handler_t)
+- nlohmann::detail::binary_writer::write_ubjson_iterative(const BasicJsonType &, const bool, const bool, const bool, const bool, const bjdata_version_t) (private); reached from the public API through: nlohmann::basic_json::to_bjdata(const basic_json<...> &, detail::output_adapter<char>, const bool, const bool, const bjdata_version_t, const error_handler_t), nlohmann::basic_json::to_bjdata(const basic_json<...> &, detail::output_adapter<std::uint8_t>, const bool, const bool, const bjdata_version_t, const error_handler_t), nlohmann::basic_json::to_bon8(const basic_json<...> &, detail::output_adapter<char>), nlohmann::basic_json::to_bon8(const basic_json<...> &, detail::output_adapter<std::uint8_t>), nlohmann::basic_json::to_bson(const basic_json<...> &, detail::output_adapter<char>, const error_handler_t), nlohmann::basic_json::to_bson(const basic_json<...> &, detail::output_adapter<std::uint8_t>, const error_handler_t), nlohmann::basic_json::to_cbor(const basic_json<...> &, detail::output_adapter<char>, const error_handler_t), nlohmann::basic_json::to_cbor(const basic_json<...> &, detail::output_adapter<std::uint8_t>, const error_handler_t), nlohmann::basic_json::to_msgpack(const basic_json<...> &, detail::output_adapter<char>, const error_handler_t), nlohmann::basic_json::to_msgpack(const basic_json<...> &, detail::output_adapter<std::uint8_t>, const error_handler_t)
+- nlohmann::detail::binary_writer::object_key_string_t (private); reached from the public API through: nlohmann::basic_json::to_bjdata(const basic_json<...> &, detail::output_adapter<char>, const bool, const bool, const bjdata_version_t, const error_handler_t), nlohmann::basic_json::to_bjdata(const basic_json<...> &, detail::output_adapter<std::uint8_t>, const bool, const bool, const bjdata_version_t, const error_handler_t), nlohmann::basic_json::to_bon8(const basic_json<...> &, detail::output_adapter<char>), nlohmann::basic_json::to_bon8(const basic_json<...> &, detail::output_adapter<std::uint8_t>), nlohmann::basic_json::to_bson(const basic_json<...> &, detail::output_adapter<char>, const error_handler_t), nlohmann::basic_json::to_bson(const basic_json<...> &, detail::output_adapter<std::uint8_t>, const error_handler_t), nlohmann::basic_json::to_cbor(const basic_json<...> &, detail::output_adapter<char>, const error_handler_t), nlohmann::basic_json::to_cbor(const basic_json<...> &, detail::output_adapter<std::uint8_t>, const error_handler_t), nlohmann::basic_json::to_msgpack(const basic_json<...> &, detail::output_adapter<char>, const error_handler_t), nlohmann::basic_json::to_msgpack(const basic_json<...> &, detail::output_adapter<std::uint8_t>, const error_handler_t)
+- nlohmann::detail::binary_writer::sanitize_utf8_for_write(const T &, const BasicJsonType &, string_t &) (private); reached from the public API through: nlohmann::basic_json::to_bjdata(const basic_json<...> &, detail::output_adapter<char>, const bool, const bool, const bjdata_version_t, const error_handler_t), nlohmann::basic_json::to_bjdata(const basic_json<...> &, detail::output_adapter<std::uint8_t>, const bool, const bool, const bjdata_version_t, const error_handler_t), nlohmann::basic_json::to_bon8(const basic_json<...> &, detail::output_adapter<char>), nlohmann::basic_json::to_bon8(const basic_json<...> &, detail::output_adapter<std::uint8_t>), nlohmann::basic_json::to_bson(const basic_json<...> &, detail::output_adapter<char>, const error_handler_t), nlohmann::basic_json::to_bson(const basic_json<...> &, detail::output_adapter<std::uint8_t>, const error_handler_t), nlohmann::basic_json::to_cbor(const basic_json<...> &, detail::output_adapter<char>, const error_handler_t), nlohmann::basic_json::to_cbor(const basic_json<...> &, detail::output_adapter<std::uint8_t>, const error_handler_t), nlohmann::basic_json::to_msgpack(const basic_json<...> &, detail::output_adapter<char>, const error_handler_t), nlohmann::basic_json::to_msgpack(const basic_json<...> &, detail::output_adapter<std::uint8_t>, const error_handler_t)
+- nlohmann::detail::binary_writer::string_t (private); reached from the public API through: nlohmann::basic_json::to_bjdata(const basic_json<...> &, detail::output_adapter<char>, const bool, const bool, const bjdata_version_t, const error_handler_t), nlohmann::basic_json::to_bjdata(const basic_json<...> &, detail::output_adapter<std::uint8_t>, const bool, const bool, const bjdata_version_t, const error_handler_t), nlohmann::basic_json::to_bon8(const basic_json<...> &, detail::output_adapter<char>), nlohmann::basic_json::to_bon8(const basic_json<...> &, detail::output_adapter<std::uint8_t>), nlohmann::basic_json::to_bson(const basic_json<...> &, detail::output_adapter<char>, const error_handler_t), nlohmann::basic_json::to_bson(const basic_json<...> &, detail::output_adapter<std::uint8_t>, const error_handler_t), nlohmann::basic_json::to_cbor(const basic_json<...> &, detail::output_adapter<char>, const error_handler_t), nlohmann::basic_json::to_cbor(const basic_json<...> &, detail::output_adapter<std::uint8_t>, const error_handler_t), nlohmann::basic_json::to_msgpack(const basic_json<...> &, detail::output_adapter<char>, const error_handler_t), nlohmann::basic_json::to_msgpack(const basic_json<...> &, detail::output_adapter<std::uint8_t>, const error_handler_t)
+
+## Diff of the library source (before -> after)
+```diff
+diff --git a/include/nlohmann/detail/output/binary_writer.hpp b/include/nlohmann/detail/output/binary_writer.hpp
+index 4af3ff9fb..212d2658f 100644
+--- a/include/nlohmann/detail/output/binary_writer.hpp
++++ b/include/nlohmann/detail/output/binary_writer.hpp
+@@ -85,6 +85,12 @@ template<typename BasicJsonType, typename CharType, typename OutputSinkType = ou
+ class binary_writer
+ {
+     using string_t = typename BasicJsonType::string_t;
++
++    /// an object key as string_t: a reference when object_t::key_type already is
++    /// string_t, otherwise a converted copy that outlives sanitize_utf8_for_write's result
++    using object_key_string_t = typename std::conditional <
++                                std::is_same<typename BasicJsonType::object_t::key_type, string_t>::value,
++                                const string_t&, string_t >::type;
+     using binary_t = typename BasicJsonType::binary_t;
+     using number_float_t = typename BasicJsonType::number_float_t;
+ 
+@@ -776,8 +782,10 @@ class binary_writer
+ 
+                 for (const auto& el : *j.m_data.m_value.object)
+                 {
++                    // a converted key must outlive the reference returned by sanitize_utf8_for_write
++                    const object_key_string_t key_string = el.first;
+                     string_t storage;
+-                    const string_t& key = sanitize_utf8_for_write(el.first, j, storage);
++                    const string_t& key = sanitize_utf8_for_write(key_string, j, storage);
+                     write_number_with_ubjson_prefix(key.size(), true, use_bjdata);
+                     oa.write_characters(
+                           reinterpret_cast<const CharType*>(key.data()),
+@@ -1317,8 +1325,10 @@ class binary_writer
+                     continue;
+                 }
+ 
++                // a converted key must outlive the reference returned by sanitize_utf8_for_write
++                const object_key_string_t key_string = current.object_it->first;
+                 string_t storage;
+-                const string_t& key = sanitize_utf8_for_write(current.object_it->first, j, storage);
++                const string_t& key = sanitize_utf8_for_write(key_string, j, storage);
+                 write_number_with_ubjson_prefix(key.size(), true, use_bjdata);
+                 oa.write_characters(
+                       reinterpret_cast<const CharType*>(key.data()),
+@@ -2760,6 +2770,11 @@ class binary_writer
+     itself in every case but a sanitized `replace`/`ignore` one, so @a
+     storage must outlive the returned reference only then.
+ 
++    @a s must be an lvalue that outlives the returned reference. An object key
++    whose `key_type` is not @ref string_t must therefore first be converted
++    into a named string_t (see @ref object_key_string_t); the deleted overload
++    below enforces this at compile time.
++
+     @param[in] s        the string (value or object key) to write
+     @param[in] context  the value @a s belongs to (for diagnostics)
+     @param[out] storage  backing storage for a sanitized copy
+@@ -2789,6 +2804,10 @@ class binary_writer
+         }
+     }
+ 
++    /// deleted: anything but a string_t would bind a temporary that dies before the returned reference is used
++    template < typename T, enable_if_t < !std::is_same<T, string_t>::value, int > = 0 >
++    const string_t& sanitize_utf8_for_write(const T& /*s*/, const BasicJsonType& /*context*/, string_t& /*storage*/) const = delete; // NOLINT(hicpp-use-equals-delete,modernize-use-equals-delete): a private helper's guard, not part of the interface
++
+     /*!
+     @brief write an integer in the shortest encoding
+```
+
+## Existing upstream tests that call the changed code (for style and API usage)
+// Upstream tests at the PR's parent commit d540750f2 that use the changed code.
+// Names searched (test lines using each): to_bjdata (0), to_bon8 (0), to_bson (0), to_cbor (0), to_msgpack (0), binary_writer (0), write_ubjson (0), write_ubjson_iterative (0), object_key_string_t (0), sanitize_utf8_for_write (0), string_t (182)
+
+// ---- tests/src/unit-allocator.cpp:165-173  (uses: string_t)
+        SECTION("json_value(const string_t&)")
+        {
+            next_construct_fails = false;
+            const my_json::string_t v("foo");
+            CHECK_NOTHROW(my_allocator_clean_up(my_json::json_value(v).string));
+            next_construct_fails = true;
+            CHECK_THROWS_AS(my_json::json_value(v), std::bad_alloc&);
+            next_construct_fails = false;
+        }
+
+// ---- tests/src/unit-allocator.cpp:198-205  (uses: string_t)
+        SECTION("basic_json(const typename string_t::value_type*)")
+        {
+            next_construct_fails = false;
+            CHECK_NOTHROW(my_json("foo"));
+            next_construct_fails = true;
+            CHECK_THROWS_AS(my_json("foo"), std::bad_alloc&);
+            next_construct_fails = false;
+        }
+
+// ---- tests/src/unit-bjdata.cpp:4031-4066  (uses: string_t)
+        SECTION("ill-formed UTF-8 (see #5529, #5651)")
+        {
+            // none of the binary format specs requires a decoder to reject
+            // ill-formed UTF-8 in a text string, so a value whose bytes are
+            // not valid UTF-8 (0xC0 0xAE is an overlong encoding of '.')
+            // round-trips byte for byte as a string value; to_bjdata() writes
+            // the bytes unchanged, as before 3.13.0, unless
+            // JSON_STRICT_BINARY_UTF8 is enabled (see
+            // unit-binary_utf8_strict.cpp)
+            const std::vector<uint8_t> v = {'S', 'i', 2, 0xc0, 0xae};
+            json j;
+            CHECK_NOTHROW(j = json::from_bjdata(v));
+            REQUIRE(j.is_string());
+            CHECK(j.get_ref<const json::string_t&>() == std::string("\xc0\xae"));
+            CHECK_THROWS_AS(utils::ignore_return_value(j.dump()), json::type_error&);
+            CHECK(json::from_bjdata(json::to_bjdata(j)) == j);
+
+            // the same bytes as an object key round-trip as well
+            const std::vector<uint8_t> v_key = {'{', 'i', 2, 0xc0, 0xae, 'i', 1, '}'};
+            json j_key;
+            CHECK_NOTHROW(j_key = json::from_bjdata(v_key));
+            REQUIRE(j_key.is_object());
+            CHECK(j_key.contains(std::string("\xc0\xae")));
+            CHECK(json::from_bjdata(json::to_bjdata(j_key)) == j_key);
+
+            CHECK(json::from_bjdata(json::to_bjdata(json("\xFF"))) == json("\xFF"));
+            // a truncated multi-byte sequence
+            CHECK(json::from_bjdata(json::to_bjdata(json("\xC3"))) == json("\xC3"));
+            // an encoded surrogate half (U+D800)
+            CHECK(json::from_bjdata(json::to_bjdata(json("\xED\xA0\x80"))) == json("\xED\xA0\x80"));
+            // an overlong encoding of '.'
+            CHECK(json::from_bjdata(json::to_bjdata(json("\xC0\xAF"))) == json("\xC0\xAF"));
+
+            // an object key with ill-formed UTF-8 is kept the same way
+            CHECK(json::from_bjdata(json::to_bjdata(json{{"\xFF", 1}})) == json{{"\xFF", 1}});
+        }
+
+// ---- tests/src/unit-bson.cpp:211-246  (uses: string_t)
+    SECTION("ill-formed UTF-8 (see #5529, #5651)")
+    {
+        // a BSON document {"s": "\xC0\xAE"} (0xC0 0xAE is an overlong
+        // encoding of '.'); the BSON spec does not require a decoder to
+        // reject ill-formed UTF-8 in a string value, so the reader hands the
+        // bytes back unchanged
+        const std::vector<uint8_t> v =
+        {
+            0x0F, 0x00, 0x00, 0x00, // document length
+            0x02, 's', 0x00,        // type 0x02 (string), key "s"
+            0x03, 0x00, 0x00, 0x00, // string length (including null)
+            0xc0, 0xae, 0x00,       // string content and its null terminator
+            0x00                    // document terminator
+        };
+        json j;
+        CHECK_NOTHROW(j = json::from_bson(v));
+        REQUIRE(j.is_object());
+        REQUIRE(j.contains("s"));
+        CHECK(j["s"].get_ref<const json::string_t&>() == std::string("\xc0\xae"));
+        // dump() still requires valid UTF-8 and throws for such a value
+        CHECK_THROWS_AS(utils::ignore_return_value(j.dump()), json::type_error&);
+        // to_bson() writes the bytes back unchanged, as before 3.13.0,
+        // unless JSON_STRICT_BINARY_UTF8 is enabled (see unit-binary_utf8_strict.cpp)
+        CHECK(json::from_bson(json::to_bson(j)) == j);
+
+        CHECK(json::from_bson(json::to_bson(json{{"s", "\xFF"}})) == json{{"s", "\xFF"}});
+        // a truncated multi-byte sequence
+        CHECK(json::from_bson(json::to_bson(json{{"s", "\xC3"}})) == json{{"s", "\xC3"}});
+        // an encoded surrogate half (U+D800)
+        CHECK(json::from_bson(json::to_bson(json{{"s", "\xED\xA0\x80"}})) == json{{"s", "\xED\xA0\x80"}});
+        // an overlong encoding of '.'
+        CHECK(json::from_bson(json::to_bson(json{{"s", "\xC0\xAF"}})) == json{{"s", "\xC0\xAF"}});
+
+        // an object key with ill-formed UTF-8 is kept as well
+        CHECK(json::from_bson(json::to_bson(json{{"\xFF", 1}})) == json{{"\xFF", 1}});
+    }
+
+// ---- tests/src/unit-constructor1.cpp:146-152  (uses: string_t)
+        SECTION("std::map<json::string_t, json>")
+        {
+            std::map<json::string_t, json> const o {{"a", json(1)}, {"b", json(1u)}, {"c", json(2.2)}, {"d", json(false)}, {"e", json("string")}, {"f", json()}};
+            json const j(o);
+            CHECK(j.type() == json::value_t::object);
+            CHECK(j == j_reference);
+        }
+
+// ---- tests/src/unit-constructor1.cpp:175-181  (uses: string_t)
+        SECTION("std::multimap<json::string_t, json>")
+        {
+            std::multimap<json::string_t, json> const o {{"a", json(1)}, {"b", json(1u)}, {"c", json(2.2)}, {"d", json(false)}, {"e", json("string")}, {"f", json()}};
+            json const j(o);
+            CHECK(j.type() == json::value_t::object);
+            CHECK(j == j_reference);
+        }
+
+// ---- tests/src/unit-conversions1.cpp:72-77  (uses: string_t)
+        SECTION("std::map<json::string_t, json>")
+        {
+            const std::map<json::string_t, json> o =
+                j.get<std::map<json::string_t, json>>();
+            CHECK(json(o) == j);
+        }
+
+// ---- tests/src/unit-conversions1.cpp:79-84  (uses: string_t)
+        SECTION("std::multimap<json::string_t, json>")
+        {
+            const std::multimap<json::string_t, json> o =
+                j.get<std::multimap<json::string_t, json>>();
+            CHECK(json(o) == j);
+        }
+
+# Programs to repair
+
+## gen_05.cpp (compile)
+Intent: Verify that UBJSON binary output with strict error handling throws when encountering invalid UTF-8 in keys.
+COMPILE ERROR. The program fails to compile, the same way against the old and the new library. Fix the error (wrong or missing include, typo, misuse of the public API) and keep the intent: the call under test must stay. Include only headers that exist; if you are unsure a header exists, use the library's main header.
+Compiler errors:
+```
+gen_05.cpp:14:22: error: missing terminating " character
+gen_05.cpp:14:21: error: expected primary-expression at end of input
+gen_05.cpp:14:21: error: expected ‘}’ at end of input
+gen_05.cpp:14:21: error: expected ‘}’ at end of input
+```
+Source:
+```cpp
+#include <nlohmann/json.hpp>
+#include <string>
+#include <iostream>
+
+int main() {
+    try {
+        nlohmann::json j;
+        j["\xFF"] = 1;
+        auto v = nlohmann::json::to_ubjson(j, true, false, nlohmann::json::error_handler_t::strict);
+        std::cout << "Produced size: " << v.size() << std::endl;
+    } catch (const std::exception& e) {
+        std::cout << "Caught exception type:
+```
+
+## gen_07.cpp (compile)
+Intent: Instantiate object_key_string_t with a custom key type that is not string_t, triggering the non-string_t branch of object_key_string_t conditional type definition.
+COMPILE ERROR. The program fails to compile, the same way against the old and the new library. Fix the error (wrong or missing include, typo, misuse of the public API) and keep the intent: the call under test must stay. Include only headers that exist; if you are unsure a header exists, use the library's main header.
+Compiler errors:
+```
+gen_07.cpp:21:185: error: value mismatch at argument 1 in template parameter list for ‘template<template<class U, class V, class ... Args> class ObjectType, template<class U, class ... Args> class ArrayType, class StringType, class BooleanType, class NumberIntegerType, class NumberUnsignedType, clas
+gen_07.cpp:21:185: error: template argument 9 is invalid
+gen_07.cpp:25:9: error: ‘my_json’ was not declared in this scope
+gen_07.cpp:27:9: error: ‘j’ was not declared in this scope
+gen_07.cpp:28:20: error: ‘my_json’ is not a class, namespace, or enumeration
+```
+Source:
+```cpp
+#include <nlohmann/json.hpp>
+#include <string>
+#include <iostream>
+
+struct custom_key {
+    std::string s;
+    operator std::string() const { return s; }
+};
+
+// We need to provide a custom basic_json specialization with a different key_type to trigger the alias.
+// Since custom key_type requires a custom object_t container, let's use a map with custom_key.
+namespace nlohmann {
+    template <typename T>
+    struct adl_serializer;
+}
+
+// Actually, nlohmann::basic_json allows specifying ObjectType. Let's define a custom json type.
+using custom_object_t = std::map<custom_key, nlohmann::json, std::less<custom_key>>;
+using my_json = nlohmann::basic_json<custom_object_t, std::vector, std::string, bool, std::int64_t, std::uint64_t, double, std::allocator, nlohmann::adl_serializer, std::vector<uint8_t>>;
+
+int main() {
+    try {
+        my_json j;
+        custom_key k{"my_custom_key"};
+        j[k] = 100;
+        auto bin = my_json::to_ubjson(j);
+        std::cout << "Custom key UBJSON size: " << bin.size() << std::endl;
+    } catch (const std::exception& e) {
+        std::cout << "Exception: " << e.what() << std::endl;
+    }
+    return 0;
+}
+```
+
+## gen_08.cpp (compile)
+Intent: Test sanitize_utf8_for_write directly via public binary serialization using standard string_t, reaching the valid template overload.
+COMPILE ERROR. The program fails to compile, the same way against the old and the new library. Fix the error (wrong or missing include, typo, misuse of the public API) and keep the intent: the call under test must stay. Include only headers that exist; if you are unsure a header exists, use the library's main header.
+Compiler errors:
+```
+gen_08.cpp:11:34: error: no matching function for call to ‘nlohmann::json_abi_v3_12_0::basic_json<>::to_bjdata(nlohmann::json_abi_v3_12_0::json&, std::back_insert_iterator<std::vector<unsigned char> >, bool, bool)’
+```
+Source:
+```cpp
+#include <nlohmann/json.hpp>
+#include <iostream>
+
+int main() {
+    try {
+        nlohmann::json j;
+        j["test_key"] = "value";
+        std::vector<uint8_t> out;
+        nlohmann::json::to_bjdata(j, std::back_inserter(out), true, true);
+        std::cout << "BJData bytes: " << out.size() << std::endl;
+    } catch (const std::exception& e) {
+        std::cout << "Exception: " << e.what() << std::endl;
+    }
+    return 0;
+}
+```
+
+## gen_09.cpp (compile)
+Intent: Use detection idiom via SFINAE to inspect whether sanitize_utf8_for_write can be invoked with a non-string_t type, exercising the deleted template overload compile-time constraint guard context.
+COMPILE ERROR. The program fails to compile, the same way against the old and the new library. Fix the error (wrong or missing include, typo, misuse of the public API) and keep the intent: the call under test must stay. Include only headers that exist; if you are unsure a header exists, use the library's main header.
+Compiler errors:
+```
+gen_09.cpp:21:189: error: value mismatch at argument 1 in template parameter list for ‘template<template<class U, class V, class ... Args> class ObjectType, template<class U, class ... Args> class ArrayType, class StringType, class BooleanType, class NumberIntegerType, class NumberUnsignedType, clas
+gen_09.cpp:24:9: error: ‘my_json’ was not declared in this scope
+gen_09.cpp:26:9: error: ‘j’ was not declared in this scope
+gen_09.cpp:27:20: error: ‘my_json’ is not a class, namespace, or enumeration
+```
+Source:
+```cpp
+#include <nlohmann/json.hpp>
+#include <type_traits>
+#include <string>
+#include <iostream>
+
+struct another_key {
+    std::string val;
+    operator std::string() const { return val; }
+};
+
+template <typename T, typename = void>
+struct can_sanitize : std::false_type {};
+
+// We try to detect if we can call sanitize_utf8_for_write through a helper or check trait.
+// Since binary_writer is internal, we can verify that basic_json with a non-string_t key compiles its serialization methods correctly.
+int main() {
+    // Check if basic_json with custom key compiles and serializes to bjdata.
+    using custom_object_t = std::map<another_key, nlohmann::json, std::less<another_key>>;
+    using my_json = nlohmann::basic_json<custom_object_t, std::vector, std::string, bool, std::int64_t, std::uint64_t, double, std::allocator, nlohmann::adl_serializer, std::vector<uint8_t>>;
+
+    try {
+        my_json j;
+        another_key k{"hello"};
+        j[k] = 123;
+        auto res = my_json::to_bjdata(j);
+        std::cout << "Serialized custom key with BJData successfully, size: " << res.size() << std::endl;
+    } catch (const std::exception& e) {
+        std::cout << "Exception: " << e.what() << std::endl;
+    }
+    return 0;
+}
+```
+
+# Task
+Return JSON with a "fixes" array: one item per program above, with "file" (exactly as given) and "code" (the complete repaired program, standalone, with its own int main). Do not return programs you cannot repair.

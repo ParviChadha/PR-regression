@@ -1,0 +1,246 @@
+[system]
+You write test programs that probe a C++ library for behavioral changes made by one pull request.
+Each program is compiled and run twice, once against the library before the change and once after, and the two
+outputs are compared. Your job is to produce programs whose output reveals whether the change altered behavior,
+including side effects the author did not intend.
+
+Rules for every program:
+- It is standalone: one file with its own int main(), compiled as C++17, printing results to stdout.
+- Use only the library's documented public API. Never include internal headers or use detail/impl namespaces,
+  private members or undocumented macros.
+- Do not judge results (no assert, no expected-value comparisons): just print what the library returns. Print
+  enough to make differences visible, one fact per line.
+- Output must be deterministic. Never print pointers or addresses, uninitialized data, the order of
+  hash-based containers, timings, thread ids, random values, file paths or environment data. Print floating point
+  values with an explicit precision. No input, files, network, threads, clocks or randomness.
+- Wrap calls that may throw in try/catch and print the exception's type and message, so an exception is an
+  observable result. Do not crash on purpose.
+- Aim at the code the diff changes. Prefer calls that compile against both the old and the new library; one or two
+  programs may use an API the PR adds. Cover ordinary inputs and edge cases (empty, minimum and maximum values,
+  boundaries, special values, nesting, unusual types) and also neighbouring behavior the change could disturb.
+- When the diff changes which types or inputs an API accepts or rejects (constraints, overloads, traits,
+  conversions), test it with the detection idiom (std::void_t or requires) and `if constexpr`, so the program
+  compiles against both versions, prints whether the expression is well-formed, and exercises it when it is.
+  Accepting an input is not enough: also use it through every entry point that should follow (const and
+  non-const, read, write, insert, erase, lookup, nested use), because a change that admits new inputs can leave
+  later code unable to handle them.
+- If the changed code is internal (a detail, impl or internal namespace, a trait, a helper), do not name it in the
+  program. Reach it through the public API that depends on it, using detection (as above) where needed.
+- Use the exact types and values the diff is about (the new trait's argument types, the new overload's
+  parameters), not stand-ins.
+- Spread the programs over distinct public entry points and overloads, one main idea per program. Do not write
+  several programs that only rename a type or change a literal.
+- Make the programs differ from each other: different inputs, different entry points, different features.
+
+Rules specific to this library:
+- Include the library with #include <nlohmann/json.hpp>. The public API is nlohmann::json (nlohmann::basic_json), nlohmann::ordered_json, json_pointer, json patch/merge_patch and the documented SAX and conversion interfaces. Never use the detail namespace.
+- It is a header-only library: nothing to link. Programs are compiled as C++17.
+- Print JSON values with dump() (compact) or dump(2). Keys of nlohmann::json objects print in sorted order, so output is deterministic; do not depend on insertion order except with ordered_json.
+
+[user]
+# Pull request #5929: Validate the UBJSON/BJData container type marker for count 0; fix UBJSON docs
+
+## Description
+## Summary
+- The `$` type marker of an optimized container was only checked when an element was read, so `[$x#i0`, `{$x#i0` and `[$E#i0` parsed as empty containers although `[$x#i1 …` is rejected and the specification requires a legal marker after `$` (py-ubjson rejects it too). `get_ubjson_size_type` now validates the marker right after `$`: UBJSON allows `Z N T F i U I l L d D H C S [ {`; BJData `B U i u I m l M L h d D C` (existing exclusions unchanged). The function is shared, so BJData is fixed too.
+- UBJSON docs corrected and completed: `N` vs `Z`, `$` requires `#`, NaN/Infinity, the `H` row, `use_type` semantics, long `Z/T/F` arrays, exception lists, duplicate keys.
+
+## Breaking changes
+No API or ABI change. Input that was accepted is now rejected with `parse_error.112`: an optimized `[` or `{` container with a `$` marker that is not legal for the format and count 0 (`5B 24 78 23 69 00`, `7B 24 78 23 69 00`, `[$E#i0`; in UBJSON also the BJData-only markers `B u m M h`). They used to return `[]`/`{}`. Valid input is unaffected (differential fuzz of ~2M inputs against the previous code: no valid input changed). `[$#` now reports 112 instead of 110.
+
+## Stack
+This PR is part of a stack of six PRs from a review of the binary formats against their specifications and other implementations (CBOR → MessagePack → UBJSON → BSON → BJData → BON8). Please merge in that order.
+
+🤖 Generated with [Claude Code](https://claude.com/claude-code)
+
+## Commit message
+* Validate the optimized-container type marker for count 0 in UBJSON and BJData
+
+The '$' type marker of an optimized container was only checked when an
+element was read, so containers with count 0 accepted any marker:
+`[$x#i0`, `{$x#i0` and `[$E#i0` parsed as empty containers although a
+non-empty container with the same marker is rejected and the UBJSON
+specification requires a legal marker after '$'.
+
+get_ubjson_size_type() now checks the marker right after '$' against the
+allowed set (UBJSON: Z N T F i U I l L d D H C S [ {; BJData: B U i u I m
+l M L h d D C, with the existing exclusion of T F Z N S H [ {) and reports
+parse_error.112 "marker ... is not a permitted optimized array type".
+
+Input that was accepted and is now rejected: an optimized container with
+count 0 and an invalid '$' type marker. Valid input is unaffected. Two
+existing tests that used an invalid marker incidentally ("[$#" and a
+negative-count case) were adapted.
+
+Signed-off-by: Niels Lohmann <mail@nlohmann.me>
+
+* Correct and complete the UBJSON documentation
+
+Fix statements that disagree with the behavior (checked with probes):
+- `Z` is null; the unused marker is `N`.
+- `$` requires `#`; use_type with use_size=false throws other_error.502 only
+  for non-empty arrays, objects and binary values.
+- NaN and infinity are written as IEEE 754 float64 and read back unchanged;
+  the UBJSON specification encodes infinity as null.
+- `H` is documented (semantics, parse_error.115, out_of_range.406); the
+  "complete mapping" claim is qualified.
+- use_type "same type" means same marker.
+- Long Z/T/F arrays lose only the `$` annotation; the `#` count and the
+  element markers are kept.
+- from_ubjson lists the 112, 113, 115, 406 and 408 causes that occur for
+  UBJSON, without the BJData-only ND-array wording.
+- Duplicate object keys keep the last value; the `$` type marker is
+  validated even for count 0.
+- Smaller fixes: float32 row, "map" -> "object", https link, exception 110
+  strict case, to_ubjson history 
+[... truncated, 994 more characters]
+
+## Discussion before merge
+- github-advanced-security[bot]: ## Flawfinder / Check when opening files - can an attacker redirect it (via symlinks), force the opening of special file type (e.g., device files), move things around to create a race condition, control its ancestors, or change its contents? (CWE-362).
+
+misc/open:Check when opening files - can an attacker redirect it (via symlinks), force the opening of special file type (e.g., device files), move things around to create a race condition, control its ancestors, or change its contents? (CWE-362).
+
+[Show more details](https://github.com/nlohmann/json/security/code-scanning/1068)
+- github-advanced-security[bot]: ## Flawfinder / Check when opening files - can an attacker redirect it (via symlinks), force the opening of special file type (e.g., device files), move things around to create a race condition, control its ancestors, or change its contents? (CWE-362).
+
+misc/open:Check when opening files - can an attacker redirect it (via symlinks), force the opening of special file type (e.g., device files), move things around to create a race condition, control its ancestors, or change its contents? (CWE-362).
+
+[Show more details](https://github.com/nlohmann/json/security/code-scanning/1069)
+- github-advanced-security[bot]: ## Flawfinder / Check when opening files - can an attacker redirect it (via symlinks), force the opening of special file type (e.g., device files), move things around to create a race condition, control its ancestors, or change its contents? (CWE-362).
+
+misc/open:Check when opening files - can an attacker redirect it (via symlinks), force the opening of special file type (e.g., device files), move things around to create a race condition, control its ancestors, or change its contents? (CWE-362).
+
+[Show more details](https://github.com/nlohmann/json/security/code-scanning/1070)
+- github-advanced-security[bot]: ## Flawfinder / Check when opening files - can an attacker redirect it (via symlinks), force the opening of special file type (e.g., device files), move things around to create a race condition, control its ancestors, or change its contents? (CWE-362).
+
+misc/open:Check when opening files - can an attacker redirect it (via symlinks), force the opening of special file type (e.g., device files), move things around to create a race condition, control its ancestors, or change its contents? (CWE-362).
+
+[Show more details](https://github.com/nlohmann/json/security/code-scanning/1065)
+- github-advanced-security[bot]: ## Flawfinder / Check when opening files - can an attacker redirect it (via symlinks), force the opening of special file type (e.g., device files), move things around to create a race condition, control its ancestors, or change its contents? (CWE-362).
+
+misc/open:Check when opening files - can an attacker redirect it (via symlinks), force the opening of special file type (e.g., device files), move things around to create a race condition, control its ancestors, or change its contents? (CWE-362).
+
+[Show more details](https://github.com/nlohmann/json/security/code-scanning/1066)
+- github-advanced-security[bot]: ## Flawfinder / Check when opening files - can an attacker redirect it (via symlinks), force the opening of special file type (e.g., device files), move things around to create a race condition, control its ancestors, or change its contents? (CWE-362).
+
+misc/open:Check when opening files - can an attacker redirect it (via symlinks), force the opening of special file type (e.g., device files), move things around to create a race condition, control its ancestors, or change its contents? (CWE-362).
+
+[Show more details](https://github.com/nlohmann/json/security/code-scanning/1067)
+
+## Changed functions (from changes.py)
+- nlohmann::detail::binary_reader::get_ubjson_size_type(std::pair<std::size_t, char_int_type> &, bool) (private); reached from the public API through: nlohmann::basic_json::sax_parse(detail::span_input_adapter &&, SAX *, input_format_t, const bool, const bool, const bool, const cbor_tag_handler_t), nlohmann::basic_json::sax_parse(InputType &&, SAX *, input_format_t, const bool, const bool, const bool, const cbor_tag_handler_t), nlohmann::basic_json::sax_parse(IteratorType, SentinelType, SAX *, input_format_t, const bool, const bool, const bool, const cbor_tag_handler_t), nlohmann::basic_json::from_bson(detail::span_input_adapter &&, const bool, const bool), nlohmann::basic_json::from_cbor(detail::span_input_adapter &&, const bool, const bool, const cbor_tag_handler_t), nlohmann::basic_json::from_msgpack(detail::span_input_adapter &&, const bool, const bool), nlohmann::basic_json::from_ubjson(detail::span_input_adapter &&, const bool, const bool), nlohmann::basic_json::from_bjdata(InputType &&, const bool, const bool, const error_handler_t), nlohmann::basic_json::from_bon8(InputType &&, const bool, const bool), nlohmann::basic_json::from_bson(InputType &&, const bool, const bool, const error_handler_t)
+- nlohmann::detail::binary_reader (private); reached from the public API through: nlohmann::basic_json::sax_parse(detail::span_input_adapter &&, SAX *, input_format_t, const bool, const bool, const bool, const cbor_tag_handler_t), nlohmann::basic_json::sax_parse(InputType &&, SAX *, input_format_t, const bool, const bool, const bool, const cbor_tag_handler_t), nlohmann::basic_json::sax_parse(IteratorType, SentinelType, SAX *, input_format_t, const bool, const bool, const bool, const cbor_tag_handler_t), nlohmann::basic_json::from_bson(detail::span_input_adapter &&, const bool, const bool), nlohmann::basic_json::from_cbor(detail::span_input_adapter &&, const bool, const bool, const cbor_tag_handler_t), nlohmann::basic_json::from_msgpack(detail::span_input_adapter &&, const bool, const bool), nlohmann::basic_json::from_ubjson(detail::span_input_adapter &&, const bool, const bool), nlohmann::basic_json::from_bjdata(InputType &&, const bool, const bool, const error_handler_t), nlohmann::basic_json::from_bon8(InputType &&, const bool, const bool), nlohmann::basic_json::from_bson(InputType &&, const bool, const bool, const error_handler_t)
+- nlohmann::detail::binary_reader::is_valid_optimized_type(const char_int_type) (private); reached from the public API through: nlohmann::basic_json::sax_parse(detail::span_input_adapter &&, SAX *, input_format_t, const bool, const bool, const bool, const cbor_tag_handler_t), nlohmann::basic_json::sax_parse(InputType &&, SAX *, input_format_t, const bool, const bool, const bool, const cbor_tag_handler_t), nlohmann::basic_json::sax_parse(IteratorType, SentinelType, SAX *, input_format_t, const bool, const bool, const bool, const cbor_tag_handler_t), nlohmann::basic_json::from_bson(detail::span_input_adapter &&, const bool, const bool), nlohmann::basic_json::from_cbor(detail::span_input_adapter &&, const bool, const bool, const cbor_tag_handler_t), nlohmann::basic_json::from_msgpack(detail::span_input_adapter &&, const bool, const bool), nlohmann::basic_json::from_ubjson(detail::span_input_adapter &&, const bool, const bool), nlohmann::basic_json::from_bjdata(InputType &&, const bool, const bool, const error_handler_t), nlohmann::basic_json::from_bon8(InputType &&, const bool, const bool), nlohmann::basic_json::from_bson(InputType &&, const bool, const bool, const error_handler_t)
+
+## Diff of the library source (before -> after)
+```diff
+diff --git a/include/nlohmann/detail/input/binary_reader.hpp b/include/nlohmann/detail/input/binary_reader.hpp
+index 929ac7573..4c8d6ed0f 100644
+--- a/include/nlohmann/detail/input/binary_reader.hpp
++++ b/include/nlohmann/detail/input/binary_reader.hpp
+@@ -3000,6 +3000,14 @@ class binary_reader
+                 return false;
+             }
+ 
++            // validate the type marker up front: otherwise it would only be
++            // checked when an element is read, and a container with count 0
++            // would accept any marker
++            if (JSON_HEDLEY_UNLIKELY(!is_valid_optimized_type(result.second)))
++            {
++                return optimized_type_error();
++            }
++
+             get_ignore_noop();
+             if (JSON_HEDLEY_UNLIKELY(current != '#'))
+             {
+@@ -4496,6 +4504,44 @@ class binary_reader
+     std::size_t bon8_pushback_size = 0;
+ 
+   JSON_PRIVATE_UNLESS_TESTED:
++    /*!
++    @brief check whether @a marker is a type marker that may follow '$'
++    UBJSON: Z N T F i U I l L d D H C S [ {; BJData: the numeric markers and C
++    (BJData's excluded markers are rejected separately).
++    */
++    bool is_valid_optimized_type(const char_int_type marker) const noexcept
++    {
++        switch (marker)
++        {
++            case 'i':
++            case 'U':
++            case 'I':
++            case 'l':
++            case 'L':
++            case 'd':
++            case 'D':
++            case 'C':
++                return true;
++            case 'Z':
++            case 'N':
++            case 'T':
++            case 'F':
++            case 'H':
++            case 'S':
++            case '[':
++            case '{':
++                return input_format != input_format_t::bjdata;
++            case 'B':
++            case 'u':
++            case 'm':
++            case 'M':
++            case 'h':
++                return input_format == input_format_t::bjdata;
++            default:
++                return false;
++        }
++    }
++
+     /*!
+     @brief whether @a marker is excluded from BJData's optimized ND-array types
+     @return whether @a marker is one of 'F', 'H', 'N', 'S', 'T', 'Z', '[', '{'
+```
+
+## Existing upstream tests that call the changed code (for style and API usage)
+// Upstream tests at the PR's parent commit 2bbe80c04 that use the changed code.
+// Names searched (test lines using each): sax_parse (0), from_bson (0), from_cbor (0), from_msgpack (0), from_ubjson (0), from_bjdata (0), from_bon8 (0), get_ubjson_size_type (0), binary_reader (2), is_valid_optimized_type (0)
+
+// ---- tests/src/unit-bjdata.cpp:76-111  (uses: binary_reader)
+    SECTION("binary_reader BJData lookup tables")
+    {
+        // both lookups are static member functions
+        std::vector<std::uint8_t> const data;
+        using reader_t = nlohmann::detail::binary_reader<json, decltype(nlohmann::detail::input_adapter(data))>;
+
+        // the excluded optimized-type markers must match binary_writer's
+        // is_bjdata_excluded_type_marker(), which encodes the same 8 markers
+        for (const char marker :
+                {'[', '{', 'S', 'H', 'T', 'F', 'N', 'Z'
+                })
+        {
+            CHECK(reader_t::is_bjd_excluded_optimized_type(static_cast<unsigned char>(marker)));
+        }
+        for (const char marker :
+                {'U', 'i', 'u', 'I', 'm', 'l', 'M', 'L', 'd', 'D', 'C', 'B', 'x'
+                })
+        {
+            CHECK(!reader_t::is_bjd_excluded_optimized_type(static_cast<unsigned char>(marker)));
+        }
+
+        // every dtype marker must round-trip to its ND-array type name
+        const std::vector<std::pair<char, std::string>> types
+        {
+            {'B', "byte"}, {'C', "char"}, {'D', "double"}, {'I', "int16"},
+            {'L', "int64"}, {'M', "uint64"}, {'U', "uint8"}, {'d', "single"},
+            {'i', "int8"}, {'l', "int32"}, {'m', "uint32"}, {'u', "uint16"}
+        };
+        for (const auto& type : types)
+        {
+            const char* name = reader_t::bjd_type_name(static_cast<unsigned char>(type.first));
+            REQUIRE(name != nullptr);
+            CHECK(std::string(name) == type.second);
+        }
+        CHECK(reader_t::bjd_type_name(static_cast<unsigned char>('x')) == nullptr);
+    }
+
+# Task
+Write 20 test programs for this pull request. Return JSON with a "tests" array; each item has "name" (short snake_case), "intent" (one sentence: what behavior it probes) and "code" (the complete C++ program).

@@ -1,0 +1,173 @@
+{
+  "target": "nlohmann-json",
+  "pr": 5886,
+  "model": "gemini-3.5-flash-lite",
+  "prompt_sha256": "e72ee994719d24d6833626a973e293fe396e593ad807581c5b918c9a6565f468",
+  "n_requested": 20,
+  "dropped": 0,
+  "usage": {
+    "promptTokenCount": 18728,
+    "candidatesTokenCount": 3952,
+    "totalTokenCount": 22680,
+    "promptTokensDetails": [
+      {
+        "modality": "TEXT",
+        "tokenCount": 18728
+      }
+    ],
+    "serviceTier": "standard"
+  },
+  "tests": [
+    {
+      "file": "gen_01.cpp",
+      "name": "patch_members_one_pass",
+      "intent": "Probes fast one-pass patch member extraction and sequential patch application.",
+      "round": 0
+    },
+    {
+      "file": "gen_02.cpp",
+      "name": "plain_steps_caching_patch",
+      "intent": "Probes resolving consecutive plain pointers with cached plain_steps during patching.",
+      "round": 0
+    },
+    {
+      "file": "gen_03.cpp",
+      "name": "is_dash_pointer_behavior",
+      "intent": "Probes the optimized is_dash helper method used by JSON pointers for the '-' token.",
+      "round": 0
+    },
+    {
+      "file": "gen_04.cpp",
+      "name": "resolve_plain_array_indices",
+      "intent": "Probes fast in-place scanning of array indices inside resolve_plain.",
+      "round": 0
+    },
+    {
+      "file": "gen_05.cpp",
+      "name": "ordered_json_flatten_reserve",
+      "intent": "Probes flattening ordered_json with pre-reserved storage capacity.",
+      "round": 0
+    },
+    {
+      "file": "gen_06.cpp",
+      "name": "unflatten_skip_token_copy",
+      "intent": "Probes optimized unflattening that skips token copies for array indices.",
+      "round": 0
+    },
+    {
+      "file": "gen_07.cpp",
+      "name": "diff_target_values_stack",
+      "intent": "Probes keeping diff target values on the stack for objects with small member counts.",
+      "round": 0
+    },
+    {
+      "file": "gen_08.cpp",
+      "name": "diff_operation_direct_add",
+      "intent": "Probes adding members of a diff operation directly without map lookup.",
+      "round": 0
+    },
+    {
+      "file": "gen_09.cpp",
+      "name": "flatten_array_path_resize",
+      "intent": "Probes writing array element paths in flatten() with a single resize operation.",
+      "round": 0
+    },
+    {
+      "file": "gen_10.cpp",
+      "name": "object_member_single_search",
+      "intent": "Probes searching once for a new object member in unflatten and pointer lookups.",
+      "round": 0
+    },
+    {
+      "file": "gen_11.cpp",
+      "name": "unflatten_reserve_array_elements",
+      "intent": "Probes reserving room for elements when unflattening arrays.",
+      "round": 0
+    },
+    {
+      "file": "gen_12.cpp",
+      "name": "patch_inplace_optimization",
+      "intent": "Probes apply patch_inplace with the optimized find_patch_members and plain resolution.",
+      "round": 0
+    },
+    {
+      "file": "gen_13.cpp",
+      "name": "json_pointer_escaped_tokens_plain",
+      "intent": "Probes pointer resolution falling back correctly when escape characters like ~ occur.",
+      "round": 0
+    },
+    {
+      "file": "gen_14.cpp",
+      "name": "diff_large_object_fallback",
+      "intent": "Probes diff function with objects exceeding the small stack-allocation member threshold.",
+      "round": 0
+    },
+    {
+      "file": "gen_15.cpp",
+      "name": "unflatten_nested_objects_arrays",
+      "intent": "Probes complex unflattening combining deeply nested objects and arrays.",
+      "round": 0
+    },
+    {
+      "file": "gen_16.cpp",
+      "name": "patch_missing_value_handled",
+      "intent": "Probes patch error path when mandatory value member is missing using optimized patch members.",
+      "round": 0
+    },
+    {
+      "file": "gen_17.cpp",
+      "name": "json_pointer_array_index_overflow",
+      "intent": "Probes array index parsing and bounds checks inside optimized resolve_plain.",
+      "round": 0
+    },
+    {
+      "file": "gen_18.cpp",
+      "name": "patch_move_proper_prefix_check",
+      "intent": "Probes patch move operation with proper prefix constraints and exception handling.",
+      "round": 0
+    },
+    {
+      "file": "gen_19.cpp",
+      "name": "flatten_empty_container",
+      "intent": "Probes flatten on empty containers with pre-reserved capacities.",
+      "round": 0
+    },
+    {
+      "file": "gen_20.cpp",
+      "name": "patch_test_operation_success",
+      "intent": "Probes patch test operation using fast plain resolution paths.",
+      "round": 0
+    },
+    {
+      "file": "gen_21.cpp",
+      "name": "gen_21",
+      "intent": "Exercises object_member_impl with priority_tag<1> and lower_bound emplace_hint on a std::map backed basic_json object, and reserve_elements with priority_tag<1> on std::vector.",
+      "round": 1
+    },
+    {
+      "file": "gen_22.cpp",
+      "name": "gen_22",
+      "intent": "Exercises plain_steps caching and reuse during consecutive JSON patch applications referencing the same prefix structures.",
+      "round": 1
+    },
+    {
+      "file": "gen_23.cpp",
+      "name": "gen_23",
+      "intent": "Exercises resolve_plain array index parsing edge cases including 18-digit limits, leading zeros checks, and '-' token processing inside array pointer contexts.",
+      "round": 1,
+      "superseded_by": "gen_24.cpp"
+    },
+    {
+      "file": "gen_24.cpp",
+      "name": "gen_23_fixed",
+      "intent": "Exercises resolve_plain array index parsing edge cases including 18-digit limits, leading zeros checks, and '-' token processing inside array pointer contexts.",
+      "round": 2,
+      "fixes": "gen_23.cpp",
+      "kind": "compile"
+    }
+  ],
+  "fix": {
+    "rounds_max": 2,
+    "model": "gemini-3.5-flash-lite"
+  }
+}

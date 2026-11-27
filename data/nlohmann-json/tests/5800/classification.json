@@ -1,0 +1,81 @@
+{
+  "target": "nlohmann-json",
+  "pr": 5800,
+  "model": "gemini-3.5-flash-lite",
+  "prompt_sha256": "267d5f9bfba4c312a3145f9a4b34ef6a0bc4c411475af9a0d4a92594c848dd38",
+  "results_sha256": "8d6601c05336744fee2203c8f875f8df4b42490c67852bc27f869238c8e8b161",
+  "clusters": [
+    {
+      "id": "C1",
+      "status": "output_diff",
+      "failed_on": null,
+      "programs": [
+        "gen_01.cpp",
+        "gen_02.cpp",
+        "gen_17.cpp"
+      ],
+      "verdict": "intended",
+      "confidence": "high",
+      "reason": "The PR specifically changes one-character non-numeric array indices like '/x' to throw parse_error.109 instead of out_of_range.404."
+    },
+    {
+      "id": "C2",
+      "status": "output_diff",
+      "failed_on": null,
+      "programs": [
+        "gen_09.cpp",
+        "gen_10.cpp",
+        "gen_18.cpp"
+      ],
+      "verdict": "intended",
+      "confidence": "high",
+      "reason": "The PR changes one-character non-numeric tokens such as '/x' accessed via json_pointer to report parse_error.109 instead of out_of_range.404."
+    },
+    {
+      "id": "C3",
+      "status": "output_diff",
+      "failed_on": null,
+      "programs": [
+        "gen_03.cpp"
+      ],
+      "verdict": "intended",
+      "confidence": "high",
+      "reason": "The PR states that value(json_pointer, default) on an array with a one-character non-numeric token now throws parse_error.109 instead of returning the default value."
+    },
+    {
+      "id": "C4",
+      "status": "output_diff",
+      "failed_on": null,
+      "programs": [
+        "gen_13.cpp"
+      ],
+      "verdict": "intended",
+      "confidence": "high",
+      "reason": "The PR changes the behavior for one-character non-numeric tokens like '/y' in array indexing via value(), causing it to throw parse_error.109 instead of returning the fallback value."
+    }
+  ],
+  "clusters_not_shown": 0,
+  "counts": {
+    "same": 5,
+    "invalid": 0,
+    "flaky": 0,
+    "superseded": 6,
+    "missing": 0
+  },
+  "pr_verdict": {
+    "regression_candidate": false,
+    "unintended_clusters": []
+  },
+  "usage": {
+    "promptTokenCount": 7077,
+    "candidatesTokenCount": 323,
+    "totalTokenCount": 7400,
+    "promptTokensDetails": [
+      {
+        "modality": "TEXT",
+        "tokenCount": 7077
+      }
+    ],
+    "serviceTier": "standard"
+  }
+}

@@ -1,0 +1,146 @@
+{
+  "target": "nlohmann-json",
+  "pr": 4965,
+  "model": "gemini-3.5-flash-lite",
+  "prompt_sha256": "d3592db6efa93197c7f8361cdbf65d377e7c57e07f9ecc6bd9235c950ac2f5c0",
+  "n_requested": 20,
+  "dropped": 0,
+  "usage": {
+    "promptTokenCount": 7263,
+    "candidatesTokenCount": 394,
+    "totalTokenCount": 7657,
+    "promptTokensDetails": [
+      {
+        "modality": "TEXT",
+        "tokenCount": 7263
+      }
+    ],
+    "serviceTier": "standard"
+  },
+  "tests": [
+    {
+      "file": "gen_01.cpp",
+      "name": "merge_diff_basic_primitives",
+      "intent": "Probes merge_diff when source and target are non-object primitives, expecting target to be returned.",
+      "round": 0,
+      "superseded_by": "gen_09.cpp"
+    },
+    {
+      "file": "gen_02.cpp",
+      "name": "merge_diff_empty_objects",
+      "intent": "Probes merge_diff between two empty objects, expecting an empty object diff.",
+      "round": 0,
+      "superseded_by": "gen_10.cpp"
+    },
+    {
+      "file": "gen_03.cpp",
+      "name": "merge_diff_added_key",
+      "intent": "Probes merge_diff when a key is added in the target object.",
+      "round": 0,
+      "superseded_by": "gen_11.cpp"
+    },
+    {
+      "file": "gen_04.cpp",
+      "name": "gen_04",
+      "intent": "Probes merge_diff with objects where a key from source is missing in target, producing a null value in the patch.",
+      "round": 1,
+      "superseded_by": "gen_12.cpp"
+    },
+    {
+      "file": "gen_05.cpp",
+      "name": "gen_05",
+      "intent": "Probes merge_diff with objects where a value is changed and an added member exists in target.",
+      "round": 1,
+      "superseded_by": "gen_13.cpp"
+    },
+    {
+      "file": "gen_06.cpp",
+      "name": "gen_06",
+      "intent": "Probes merge_diff with nested objects requiring recursive diffing and checking non-empty nested diffs.",
+      "round": 1,
+      "superseded_by": "gen_14.cpp"
+    },
+    {
+      "file": "gen_07.cpp",
+      "name": "gen_07",
+      "intent": "Probes merge_diff with deeply nested objects exceeding recursion depth to trigger merge_diff_iteratively.",
+      "round": 1,
+      "superseded_by": "gen_15.cpp"
+    },
+    {
+      "file": "gen_08.cpp",
+      "name": "gen_08",
+      "intent": "Probes merge_diff where nested objects have added members within the iterative fallback path.",
+      "round": 1,
+      "superseded_by": "gen_16.cpp"
+    },
+    {
+      "file": "gen_09.cpp",
+      "name": "merge_diff_basic_primitives_fixed",
+      "intent": "Probes merge_diff when source and target are non-object primitives, expecting target to be returned.",
+      "round": 2,
+      "fixes": "gen_01.cpp",
+      "kind": "detect"
+    },
+    {
+      "file": "gen_10.cpp",
+      "name": "merge_diff_empty_objects_fixed",
+      "intent": "Probes merge_diff between two empty objects, expecting an empty object diff.",
+      "round": 2,
+      "fixes": "gen_02.cpp",
+      "kind": "detect"
+    },
+    {
+      "file": "gen_11.cpp",
+      "name": "merge_diff_added_key_fixed",
+      "intent": "Probes merge_diff when a key is added in the target object.",
+      "round": 2,
+      "fixes": "gen_03.cpp",
+      "kind": "compile"
+    },
+    {
+      "file": "gen_12.cpp",
+      "name": "gen_04_fixed",
+      "intent": "Probes merge_diff with objects where a key from source is missing in target, producing a null value in the patch.",
+      "round": 2,
+      "fixes": "gen_04.cpp",
+      "kind": "detect"
+    },
+    {
+      "file": "gen_13.cpp",
+      "name": "gen_05_fixed",
+      "intent": "Probes merge_diff with objects where a value is changed and an added member exists in target.",
+      "round": 2,
+      "fixes": "gen_05.cpp",
+      "kind": "detect"
+    },
+    {
+      "file": "gen_14.cpp",
+      "name": "gen_06_fixed",
+      "intent": "Probes merge_diff with nested objects requiring recursive diffing and checking non-empty nested diffs.",
+      "round": 3,
+      "fixes": "gen_06.cpp",
+      "kind": "detect"
+    },
+    {
+      "file": "gen_15.cpp",
+      "name": "gen_07_fixed",
+      "intent": "Probes merge_diff with deeply nested objects exceeding recursion depth to trigger merge_diff_iteratively.",
+      "round": 3,
+      "fixes": "gen_07.cpp",
+      "kind": "detect"
+    },
+    {
+      "file": "gen_16.cpp",
+      "name": "gen_08_fixed",
+      "intent": "Probes merge_diff where nested objects have added members within the iterative fallback path.",
+      "round": 3,
+      "fixes": "gen_08.cpp",
+      "kind": "detect"
+    }
+  ],
+  "fix": {
+    "rounds_max": 2,
+    "model": "gemini-3.5-flash-lite"
+  }
+}

@@ -1,0 +1,185 @@
+{
+  "target": "nlohmann-json",
+  "pr": 5969,
+  "model": "gemini-3.5-flash-lite",
+  "prompt_sha256": "4fd4692eb5737bf4fdf0849eb16810723a3d07bc1f850f95592d64c18cf65f1b",
+  "n_requested": 20,
+  "dropped": 0,
+  "usage": {
+    "promptTokenCount": 5291,
+    "candidatesTokenCount": 4071,
+    "totalTokenCount": 9362,
+    "promptTokensDetails": [
+      {
+        "modality": "TEXT",
+        "tokenCount": 5291
+      }
+    ],
+    "serviceTier": "standard"
+  },
+  "tests": [
+    {
+      "file": "gen_01.cpp",
+      "name": "json_view_chain_single_escape",
+      "intent": "Verify parsing of a string with a single unicode escape sequence via json_view.",
+      "round": 0
+    },
+    {
+      "file": "gen_02.cpp",
+      "name": "json_view_chain_multiple_escapes",
+      "intent": "Verify parsing of a chain of unicode escapes generating multi-byte UTF-8 sequences.",
+      "round": 0
+    },
+    {
+      "file": "gen_03.cpp",
+      "name": "json_view_chain_mixed_case_hex",
+      "intent": "Verify parsing of unicode escape chains using mixed-case hexadecimal digits.",
+      "round": 0
+    },
+    {
+      "file": "gen_04.cpp",
+      "name": "json_view_chain_long_sequence",
+      "intent": "Verify parsing of a long chain of unicode escapes to trigger the loop optimization.",
+      "round": 0
+    },
+    {
+      "file": "gen_05.cpp",
+      "name": "json_view_chain_followed_by_text",
+      "intent": "Verify parsing of a unicode escape chain directly followed by regular text characters.",
+      "round": 0
+    },
+    {
+      "file": "gen_06.cpp",
+      "name": "json_view_chain_interrupted_by_surrogate",
+      "intent": "Verify that a surrogate pair in an escape chain safely breaks out of the optimized loop.",
+      "round": 0
+    },
+    {
+      "file": "gen_07.cpp",
+      "name": "json_view_chain_interrupted_by_bad_digit",
+      "intent": "Verify that a malformed hex digit in an escape chain falls back and correctly triggers a parse error.",
+      "round": 0
+    },
+    {
+      "file": "gen_08.cpp",
+      "name": "json_view_chain_interrupted_by_cut",
+      "intent": "Verify that an abruptly truncated input inside an escape chain triggers a parse error.",
+      "round": 0
+    },
+    {
+      "file": "gen_09.cpp",
+      "name": "json_view_chain_in_object_key",
+      "intent": "Verify parsing of unicode escape chains located within object property keys.",
+      "round": 0
+    },
+    {
+      "file": "gen_10.cpp",
+      "name": "json_view_chain_ascii_escapes",
+      "intent": "Verify parsing of a chain of ASCII-range unicode escapes.",
+      "round": 0
+    },
+    {
+      "file": "gen_11.cpp",
+      "name": "json_view_chain_zero_codepoint",
+      "intent": "Verify parsing of unicode escapes generating null characters in a chain.",
+      "round": 0
+    },
+    {
+      "file": "gen_12.cpp",
+      "name": "json_view_chain_boundary_six_bytes",
+      "intent": "Verify parsing behavior when exactly six bytes remain after a unicode escape.",
+      "round": 0
+    },
+    {
+      "file": "gen_13.cpp",
+      "name": "json_view_chain_boundary_five_bytes",
+      "intent": "Verify parsing behavior when fewer than six bytes remain for the subsequent escape.",
+      "round": 0
+    },
+    {
+      "file": "gen_14.cpp",
+      "name": "json_view_chain_lone_surrogate_error",
+      "intent": "Verify that a lone high surrogate inside a chain halts the optimization and raises a correct error.",
+      "round": 0
+    },
+    {
+      "file": "gen_15.cpp",
+      "name": "json_view_chain_accept_method",
+      "intent": "Verify the accept method correctly validates strings containing unicode escape chains.",
+      "round": 0
+    },
+    {
+      "file": "gen_16.cpp",
+      "name": "json_view_chain_read_method",
+      "intent": "Verify the read method on an existing json_document instance correctly handles escape chains.",
+      "round": 0
+    },
+    {
+      "file": "gen_17.cpp",
+      "name": "json_view_chain_three_byte_utf8",
+      "intent": "Verify proper generation of 3-byte UTF-8 characters via unicode escape sequences.",
+      "round": 0
+    },
+    {
+      "file": "gen_18.cpp",
+      "name": "json_view_chain_two_byte_utf8",
+      "intent": "Verify proper generation of 2-byte UTF-8 characters via unicode escape sequences.",
+      "round": 0
+    },
+    {
+      "file": "gen_19.cpp",
+      "name": "json_view_chain_multiple_chains_in_array",
+      "intent": "Verify parsing of an array containing multiple distinct unicode escape chains.",
+      "round": 0
+    },
+    {
+      "file": "gen_20.cpp",
+      "name": "json_view_chain_huge_stress",
+      "intent": "Verify memory handling and parsing correctness for an extremely large escape chain of 3000 items.",
+      "round": 0,
+      "superseded_by": "gen_26.cpp"
+    },
+    {
+      "file": "gen_21.cpp",
+      "name": "gen_21",
+      "intent": "Exercise line 355: a surrogate pair inside a chain of unicode escapes, ensuring the loop correctly breaks out via surrogate detection.",
+      "round": 1
+    },
+    {
+      "file": "gen_22.cpp",
+      "name": "gen_22",
+      "intent": "Exercise line 355: a negative hex_codepoint return value (bad hex digit) inside the loop, forcing a break.",
+      "round": 1
+    },
+    {
+      "file": "gen_23.cpp",
+      "name": "gen_28",
+      "intent": "Exercise line 358: ensure arena capacity expansion (arena_ensure) is successfully invoked when multiple sequential valid unicode escapes are decoded in the loop.",
+      "round": 1
+    },
+    {
+      "file": "gen_24.cpp",
+      "name": "gen_29",
+      "intent": "Exercise lines 355 and 358 together: a valid chain expanding memory via arena_ensure followed by a surrogate break condition.",
+      "round": 1
+    },
+    {
+      "file": "gen_25.cpp",
+      "name": "gen_30",
+      "intent": "Exercise line 358 and 359: a chain of unicode escapes with various valid character code points ensuring put_utf8 and arena_ensure operate correctly across multiple iterations.",
+      "round": 1
+    },
+    {
+      "file": "gen_26.cpp",
+      "name": "json_view_chain_huge_stress_fixed",
+      "intent": "Verify memory handling and parsing correctness for an extremely large escape chain of 3000 items.",
+      "round": 2,
+      "fixes": "gen_20.cpp",
+      "kind": "compile"
+    }
+  ],
+  "fix": {
+    "rounds_max": 2,
+    "model": "gemini-3.5-flash-lite"
+  }
+}

@@ -1,0 +1,135 @@
+[system]
+You write test programs that probe a C++ library for behavioral changes made by one pull request.
+Each program is compiled and run twice, once against the library before the change and once after, and the two
+outputs are compared. Your job is to produce programs whose output reveals whether the change altered behavior,
+including side effects the author did not intend.
+
+Rules for every program:
+- It is standalone: one file with its own int main(), compiled as C++17, printing results to stdout.
+- Use only the library's documented public API. Never include internal headers or use detail/impl namespaces,
+  private members or undocumented macros.
+- Do not judge results (no assert, no expected-value comparisons): just print what the library returns. Print
+  enough to make differences visible, one fact per line.
+- Output must be deterministic. Never print pointers or addresses, uninitialized data, the order of
+  hash-based containers, timings, thread ids, random values, file paths or environment data. Print floating point
+  values with an explicit precision. No input, files, network, threads, clocks or randomness.
+- Wrap calls that may throw in try/catch and print the exception's type and message, so an exception is an
+  observable result. Do not crash on purpose.
+- Aim at the code the diff changes. Prefer calls that compile against both the old and the new library; one or two
+  programs may use an API the PR adds. Cover ordinary inputs and edge cases (empty, minimum and maximum values,
+  boundaries, special values, nesting, unusual types) and also neighbouring behavior the change could disturb.
+- When the diff changes which types or inputs an API accepts or rejects (constraints, overloads, traits,
+  conversions), test it with the detection idiom (std::void_t or requires) and `if constexpr`, so the program
+  compiles against both versions, prints whether the expression is well-formed, and exercises it when it is.
+  Accepting an input is not enough: also use it through every entry point that should follow (const and
+  non-const, read, write, insert, erase, lookup, nested use), because a change that admits new inputs can leave
+  later code unable to handle them.
+- If the changed code is internal (a detail, impl or internal namespace, a trait, a helper), do not name it in the
+  program. Reach it through the public API that depends on it, using detection (as above) where needed.
+- Use the exact types and values the diff is about (the new trait's argument types, the new overload's
+  parameters), not stand-ins.
+- Spread the programs over distinct public entry points and overloads, one main idea per program. Do not write
+  several programs that only rename a type or change a literal.
+- Make the programs differ from each other: different inputs, different entry points, different features.
+
+Rules specific to this library:
+- Include the library with #include <nlohmann/json.hpp>. The public API is nlohmann::json (nlohmann::basic_json), nlohmann::ordered_json, json_pointer, json patch/merge_patch and the documented SAX and conversion interfaces. Never use the detail namespace.
+- It is a header-only library: nothing to link. Programs are compiled as C++17.
+- Print JSON values with dump() (compact) or dump(2). Keys of nlohmann::json objects print in sorted order, so output is deterministic; do not depend on insertion order except with ordered_json.
+
+[user]
+# Pull request #5829: Update cppcheck to 1.5.2 (Cppcheck 2.20) and fix its new findings
+
+## Description
+Supersedes the Dependabot bump of `cppcheck` from 1.5.1 to 1.5.2, whose [`ci_cppcheck` job failed](https://github.com/nlohmann/json/actions/runs/38466451463/job/115534385840). Wheel 1.5.2 ships Cppcheck 2.20.0, up from 2.17.1.
+
+## Changes
+
+- **Preprocessor errors** (`macro_scope.hpp:61`, `:196`: `failed to evaluate #if condition, undefined function-like macro invocation: __has_include( ... )` / `__has_attribute( ... )`): `default_defines.hpp` is a `clang -dM` dump of Hedley. It defines `JSON_HEDLEY_VERSION`, so Hedley's own fallbacks are skipped and macros like `JSON_HEDLEY_HAS_ATTRIBUTE(x)` expand to the compiler's `__has_attribute(x)`. Cppcheck 2.17 quietly evaluated such unknown invocations as 0. Cppcheck 2.20 reports a `syntaxError` instead. `cmake/ci.cmake` now generates `cppcheck_feature_tests.hpp` at configure time, which defines the eight `__has_*` operators the headers use as `0`, and passes it as a second `--include`. The file is written with CMake's `file()` because the custom target is not `VERBATIM`, and parentheses in `-D` arguments would reach `/bin/sh` unquoted.
+- **`bufferAccessOutOfBounds` false positive** (`number_parse.hpp:707`): in the `float` overload of `float_from_bits`, Cppcheck sizes `value` as the `double` overload's 8 bytes. A minimal repro confirms this. `sizeof(bits32)` avoids it without a suppression. Both sides are 4 bytes, which the `static_assert` guarantees.
+- Bumps `cmake/requirements/requirements-cppcheck.txt` to `cppcheck==1.5.2`.
+
+`make ci_cppcheck` passes locally with Cppcheck 2.20.0.
+
+## Public API
+
+No breaking changes. The library change only swaps one `sizeof` operand for an equal one inside a `detail` function.
+
+---
+Written by Claude Code.
+
+🤖 Generated with [Claude Code](https://claude.com/claude-code)
+
+## Commit message
+Cppcheck 2.20 rejects invocations of unknown function-like macros in #if
+conditions instead of evaluating them as 0. default_defines.hpp expands
+the Hedley macros to the compiler's feature-test operators (__has_attribute
+etc.), so define them as 0 in a generated include file.
+
+It also reports a false bufferAccessOutOfBounds in the float overload of
+float_from_bits, sizing the parameter as the double overload's; use the
+size of the source instead (equal by the static_assert).
+
+Signed-off-by: Niels Lohmann <mail@nlohmann.me>
+
+## Discussion before merge
+- github-advanced-security[bot]: ## Flawfinder / Does not check for buffer overflows when copying to destination (CWE-120).
+
+buffer/memcpy:Does not check for buffer overflows when copying to destination (CWE-120).
+
+[Show more details](https://github.com/nlohmann/json/security/code-scanning/793)
+- github-advanced-security[bot]: ## Flawfinder / Does not check for buffer overflows when copying to destination (CWE-120).
+
+buffer/memcpy:Does not check for buffer overflows when copying to destination (CWE-120).
+
+[Show more details](https://github.com/nlohmann/json/security/code-scanning/794)
+
+## Changed functions (from changes.py)
+- nlohmann::detail::float_from_bits(std::uint64_t, float &) (private); reached from the public API through: nlohmann::basic_json::sax_parse(detail::span_input_adapter &&, SAX *, input_format_t, const bool, const bool, const bool, const cbor_tag_handler_t), nlohmann::basic_json::sax_parse(InputType &&, SAX *, input_format_t, const bool, const bool, const bool, const cbor_tag_handler_t), nlohmann::basic_json::sax_parse(IteratorType, SentinelType, SAX *, input_format_t, const bool, const bool, const bool, const cbor_tag_handler_t), nlohmann::basic_json::from_bson(detail::span_input_adapter &&, const bool, const bool), nlohmann::basic_json::from_cbor(detail::span_input_adapter &&, const bool, const bool, const cbor_tag_handler_t), nlohmann::basic_json::from_msgpack(detail::span_input_adapter &&, const bool, const bool), nlohmann::basic_json::from_ubjson(detail::span_input_adapter &&, const bool, const bool), nlohmann::basic_json::from_bjdata(InputType &&, const bool, const bool, const error_handler_t), nlohmann::basic_json::from_bon8(InputType &&, const bool, const bool), nlohmann::basic_json::from_bson(InputType &&, const bool, const bool, const error_handler_t)
+
+## Diff of the library source (before -> after)
+```diff
+diff --git a/include/nlohmann/detail/input/number_parse.hpp b/include/nlohmann/detail/input/number_parse.hpp
+index db5eba04e..3baeb60b0 100644
+--- a/include/nlohmann/detail/input/number_parse.hpp
++++ b/include/nlohmann/detail/input/number_parse.hpp
+@@ -720,7 +720,7 @@ inline void float_from_bits(std::uint64_t bits, float& value) noexcept
+ {
+     static_assert(sizeof(float) == sizeof(std::uint32_t), "float must have 32 bits");
+     const auto bits32 = static_cast<std::uint32_t>(bits);
+-    std::memcpy(&value, &bits32, sizeof(value));
++    std::memcpy(&value, &bits32, sizeof(bits32));
+ }
+ 
+ /// the powers of ten that are exact in binary64 (up to 10^22)
+```
+
+# Programs to repair
+
+## gen_27.cpp (compile)
+Intent: Probes CBOR parsing with custom tag handler options alongside float conversions.
+COMPILE ERROR. The program fails to compile, the same way against the old and the new library. Fix the error (wrong or missing include, typo, misuse of the public API) and keep the intent: the call under test must stay. Include only headers that exist; if you are unsure a header exists, use the library's main header.
+Compiler errors:
+```
+gen_27.cpp:9:69: error: ‘nlohmann::cbor_tag_handler_t’ has not been declared
+9 |         auto j = nlohmann::json::from_cbor(v, true, true, nlohmann::cbor_tag_handler_t::error);
+```
+Source:
+```cpp
+#include <nlohmann/json.hpp>
+#include <iostream>
+#include <vector>
+int main() {
+    try {
+        std::vector<uint8_t> v = {0xFA, 0x3F, 0x80, 0x00, 0x00};
+        auto j = nlohmann::json::from_cbor(v, true, true, nlohmann::cbor_tag_handler_t::error);
+        std::cout << "RESULT: " << j.dump(2) << std::endl;
+    } catch (const std::exception& e) {
+        std::cout << "EXCEPTION: " << e.what() << std::endl;
+    }
+    return 0;
+}
+```
+
+# Task
+Return JSON with a "fixes" array: one item per program above, with "file" (exactly as given) and "code" (the complete repaired program, standalone, with its own int main). Do not return programs you cannot repair.

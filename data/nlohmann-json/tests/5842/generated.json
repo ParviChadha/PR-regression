@@ -1,0 +1,71 @@
+{
+  "target": "nlohmann-json",
+  "pr": 5842,
+  "model": "gemini-3.5-flash-lite",
+  "prompt_sha256": "a8af81de1296c9187ae28e7633ab3447b0536ab7758d6b81436751f798527e24",
+  "n_requested": 20,
+  "dropped": 0,
+  "usage": {
+    "promptTokenCount": 7374,
+    "candidatesTokenCount": 108,
+    "totalTokenCount": 7482,
+    "promptTokensDetails": [
+      {
+        "modality": "TEXT",
+        "tokenCount": 7374
+      }
+    ],
+    "serviceTier": "standard"
+  },
+  "tests": [
+    {
+      "file": "gen_01.cpp",
+      "name": "patch_inplace_missing_member_op",
+      "intent": "Probes patch_inplace throwing missing member error when operation 'op' field is missing.",
+      "round": 0,
+      "superseded_by": "gen_07.cpp"
+    },
+    {
+      "file": "gen_02.cpp",
+      "name": "gen_02",
+      "intent": "Trigger patch_inplace add parent not a container error by adding to a primitive target parent.",
+      "round": 1
+    },
+    {
+      "file": "gen_03.cpp",
+      "name": "gen_03",
+      "intent": "Trigger patch_inplace not an array error by providing a non-array JSON patch document.",
+      "round": 1
+    },
+    {
+      "file": "gen_04.cpp",
+      "name": "gen_04",
+      "intent": "Trigger patch_inplace move into child error where from path is a proper prefix of path.",
+      "round": 1
+    },
+    {
+      "file": "gen_05.cpp",
+      "name": "gen_05",
+      "intent": "Trigger patch_inplace test failed exception using a failing test operation.",
+      "round": 1
+    },
+    {
+      "file": "gen_06.cpp",
+      "name": "gen_06",
+      "intent": "Trigger patch_inplace invalid operation name exception.",
+      "round": 1
+    },
+    {
+      "file": "gen_07.cpp",
+      "name": "patch_inplace_missing_member_op_fixed",
+      "intent": "Probes patch_inplace throwing missing member error when operation 'op' field is missing.",
+      "round": 2,
+      "fixes": "gen_01.cpp",
+      "kind": "compile"
+    }
+  ],
+  "fix": {
+    "rounds_max": 2,
+    "model": "gemini-3.5-flash-lite"
+  }
+}

@@ -1,0 +1,185 @@
+{
+  "target": "nlohmann-json",
+  "pr": 5766,
+  "model": "gemini-3.5-flash-lite",
+  "prompt_sha256": "117d00ee0dc0dfd329b0830cfd65d8cd0f51a7105eff61015527f0def1034530",
+  "n_requested": 20,
+  "dropped": 0,
+  "usage": {
+    "promptTokenCount": 8511,
+    "candidatesTokenCount": 5812,
+    "totalTokenCount": 14323,
+    "promptTokensDetails": [
+      {
+        "modality": "TEXT",
+        "tokenCount": 8511
+      }
+    ],
+    "serviceTier": "standard"
+  },
+  "tests": [
+    {
+      "file": "gen_01.cpp",
+      "name": "test_nested_indefinite_text_string_cbor",
+      "intent": "Probes parsing of a nested indefinite-length text string in CBOR, ensuring it throws parse_error.113 instead of accepting it.",
+      "round": 0
+    },
+    {
+      "file": "gen_02.cpp",
+      "name": "test_nested_indefinite_binary_array_cbor",
+      "intent": "Probes parsing of a nested indefinite-length byte string in CBOR, ensuring it throws parse_error.113.",
+      "round": 0
+    },
+    {
+      "file": "gen_03.cpp",
+      "name": "test_valid_single_indefinite_text_string",
+      "intent": "Probes parsing of a valid single-level indefinite-length text string in CBOR to ensure it still parses correctly.",
+      "round": 0
+    },
+    {
+      "file": "gen_04.cpp",
+      "name": "test_valid_single_indefinite_binary_array",
+      "intent": "Probes parsing of a valid single-level indefinite-length byte string in CBOR to ensure it still parses correctly.",
+      "round": 0
+    },
+    {
+      "file": "gen_05.cpp",
+      "name": "test_deeply_nested_indefinite_text_strings",
+      "intent": "Probes parsing of a deeply nested indefinite-length text string sequence to ensure stack safety and immediate rejection.",
+      "round": 0
+    },
+    {
+      "file": "gen_06.cpp",
+      "name": "test_indefinite_text_string_with_multiple_definite_chunks",
+      "intent": "Probes an indefinite text string with multiple valid chunks to confirm standard multi-chunk parsing behavior.",
+      "round": 0
+    },
+    {
+      "file": "gen_07.cpp",
+      "name": "test_indefinite_binary_with_multiple_definite_chunks",
+      "intent": "Probes an indefinite byte string with multiple valid chunks to confirm standard multi-chunk binary parsing behavior.",
+      "round": 0
+    },
+    {
+      "file": "gen_08.cpp",
+      "name": "test_mixed_type_indefinite_chunks",
+      "intent": "Probes an indefinite text string containing a binary chunk, checking error emission.",
+      "round": 0
+    },
+    {
+      "file": "gen_09.cpp",
+      "name": "test_cbor_sax_parse_nested_indefinite_string",
+      "intent": "Probes SAX parsing interface with nested indefinite-length string CBOR input.",
+      "round": 0
+    },
+    {
+      "file": "gen_10.cpp",
+      "name": "test_cbor_allow_exceptions_false",
+      "intent": "Probes CBOR parsing with allow_exceptions set to false for nested indefinite-length string input, yielding a discarded value.",
+      "round": 0
+    },
+    {
+      "file": "gen_11.cpp",
+      "name": "test_empty_indefinite_text_string",
+      "intent": "Probes an empty indefinite-length text string (just open and close markers).",
+      "round": 0
+    },
+    {
+      "file": "gen_12.cpp",
+      "name": "test_empty_indefinite_binary_array",
+      "intent": "Probes an empty indefinite-length binary array (just open and close markers).",
+      "round": 0
+    },
+    {
+      "file": "gen_13.cpp",
+      "name": "test_indefinite_string_utf8_check_after_break",
+      "intent": "Probes invalid UTF-8 validation in indefinite-length text strings after a break marker.",
+      "round": 0
+    },
+    {
+      "file": "gen_14.cpp",
+      "name": "test_indefinite_string_inside_array",
+      "intent": "Probes an indefinite-length text string containing a nested indefinite string placed inside a normal CBOR array.",
+      "round": 0
+    },
+    {
+      "file": "gen_15.cpp",
+      "name": "test_indefinite_string_inside_object_key",
+      "intent": "Probes a nested indefinite string used as an object key in CBOR.",
+      "round": 0
+    },
+    {
+      "file": "gen_16.cpp",
+      "name": "test_multiple_nested_indefinite_binary_chunks",
+      "intent": "Probes multiple levels of nested indefinite-length binary arrays.",
+      "round": 0
+    },
+    {
+      "file": "gen_17.cpp",
+      "name": "test_indefinite_string_chunk_error_message_content",
+      "intent": "Probes the exact error message thrown by cbor_indefinite_string_error for string type.",
+      "round": 0
+    },
+    {
+      "file": "gen_18.cpp",
+      "name": "test_indefinite_binary_chunk_error_message_content",
+      "intent": "Probes the exact error message thrown by cbor_indefinite_string_error for binary array type.",
+      "round": 0
+    },
+    {
+      "file": "gen_19.cpp",
+      "name": "test_span_input_adapter_nested_indefinite",
+      "intent": "Probes parsing via span_input_adapter directly with nested indefinite-length CBOR strings.",
+      "round": 0,
+      "superseded_by": "gen_26.cpp"
+    },
+    {
+      "file": "gen_20.cpp",
+      "name": "test_ordered_json_nested_indefinite_cbor",
+      "intent": "Probes nlohmann::ordered_json parsing of nested indefinite-length text strings in CBOR.",
+      "round": 0
+    },
+    {
+      "file": "gen_21.cpp",
+      "name": "gen_21",
+      "intent": "Exercise line 1380 where an unexpected token occurs inside an indefinite-length binary chunk reader when inside_indefinite is true, omitting 'or indefinite binary array type (0x5F)' from the error message.",
+      "round": 1
+    },
+    {
+      "file": "gen_22.cpp",
+      "name": "gen_22",
+      "intent": "Exercise line 1380 with an invalid chunk token inside a nested binary stream where inside_indefinite is true, verifying the exact error message content.",
+      "round": 1
+    },
+    {
+      "file": "gen_23.cpp",
+      "name": "gen_23",
+      "intent": "Exercise line 1380 with integer token 0x01 inside an indefinite binary array chunk context.",
+      "round": 1
+    },
+    {
+      "file": "gen_24.cpp",
+      "name": "gen_24",
+      "intent": "Exercise line 1380 with an invalid type byte (0xFF used prematurely as chunk length) inside an indefinite-length binary chunk.",
+      "round": 1
+    },
+    {
+      "file": "gen_25.cpp",
+      "name": "gen_25",
+      "intent": "Exercise line 1380 by supplying a text string major type chunk inside an indefinite-length binary array chunk.",
+      "round": 1
+    },
+    {
+      "file": "gen_26.cpp",
+      "name": "test_span_input_adapter_nested_indefinite_fixed",
+      "intent": "Probes parsing via span_input_adapter directly with nested indefinite-length CBOR strings.",
+      "round": 2,
+      "fixes": "gen_19.cpp",
+      "kind": "compile"
+    }
+  ],
+  "fix": {
+    "rounds_max": 2,
+    "model": "gemini-3.5-flash-lite"
+  }
+}

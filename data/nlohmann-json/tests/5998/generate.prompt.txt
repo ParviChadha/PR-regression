@@ -1,0 +1,363 @@
+[system]
+You write test programs that probe a C++ library for behavioral changes made by one pull request.
+Each program is compiled and run twice, once against the library before the change and once after, and the two
+outputs are compared. Your job is to produce programs whose output reveals whether the change altered behavior,
+including side effects the author did not intend.
+
+Rules for every program:
+- It is standalone: one file with its own int main(), compiled as C++17, printing results to stdout.
+- Use only the library's documented public API. Never include internal headers or use detail/impl namespaces,
+  private members or undocumented macros.
+- Do not judge results (no assert, no expected-value comparisons): just print what the library returns. Print
+  enough to make differences visible, one fact per line.
+- Output must be deterministic. Never print pointers or addresses, uninitialized data, the order of
+  hash-based containers, timings, thread ids, random values, file paths or environment data. Print floating point
+  values with an explicit precision. No input, files, network, threads, clocks or randomness.
+- Wrap calls that may throw in try/catch and print the exception's type and message, so an exception is an
+  observable result. Do not crash on purpose.
+- Aim at the code the diff changes. Prefer calls that compile against both the old and the new library; one or two
+  programs may use an API the PR adds. Cover ordinary inputs and edge cases (empty, minimum and maximum values,
+  boundaries, special values, nesting, unusual types) and also neighbouring behavior the change could disturb.
+- When the diff changes which types or inputs an API accepts or rejects (constraints, overloads, traits,
+  conversions), test it with the detection idiom (std::void_t or requires) and `if constexpr`, so the program
+  compiles against both versions, prints whether the expression is well-formed, and exercises it when it is.
+  Accepting an input is not enough: also use it through every entry point that should follow (const and
+  non-const, read, write, insert, erase, lookup, nested use), because a change that admits new inputs can leave
+  later code unable to handle them.
+- If the changed code is internal (a detail, impl or internal namespace, a trait, a helper), do not name it in the
+  program. Reach it through the public API that depends on it, using detection (as above) where needed.
+- Use the exact types and values the diff is about (the new trait's argument types, the new overload's
+  parameters), not stand-ins.
+- Spread the programs over distinct public entry points and overloads, one main idea per program. Do not write
+  several programs that only rename a type or change a literal.
+- Make the programs differ from each other: different inputs, different entry points, different features.
+
+Rules specific to this library:
+- Include the library with #include <nlohmann/json.hpp>. The public API is nlohmann::json (nlohmann::basic_json), nlohmann::ordered_json, json_pointer, json patch/merge_patch and the documented SAX and conversion interfaces. Never use the detail namespace.
+- It is a header-only library: nothing to link. Programs are compiled as C++17.
+- Print JSON values with dump() (compact) or dump(2). Keys of nlohmann::json objects print in sorted order, so output is deterministic; do not depend on insertion order except with ordered_json.
+
+[user]
+# Pull request #5998: Replace a multibyte decimal point in dump() of a long double
+
+## Description
+Fixes #5993.
+
+## What
+
+`dump_float(number_float_t, std::false_type)`, the `snprintf` path for a `number_float_t` that is neither IEEE single nor double (a `long double` on x86-64 and aarch64 Linux), read `localeconv()->decimal_point` and `->thousands_sep` as single `char`s. Under a locale whose decimal point is a multibyte sequence (glibc's `ps_AF`: U+066B, bytes `D9 AB`; thousands separator U+066C, `D9 AC`), it removed the shared first byte `D9` as a "thousands separator" and left `AB` in the output: `1.5L` dumped as `1\xab5.0`, which does not parse back.
+
+Now the decimal point is treated as a byte string, as `convert_float_locale_aware()` already does on the parse side (#5660): `std::search` finds the whole sequence, which is replaced by `.`, and the rest of the buffer moves left. The thousands-separator removal is gone: `%g` never groups digits (that needs the POSIX `'` flag), so it had nothing legitimate to remove.
+
+Default `json` (double) and `float` are not affected; they use `to_chars`.
+
+## Tests
+
+`unit-locale-cpp.cpp`, "locale with a multi-byte decimal point": under each available multibyte locale, `dump()` of `1.5L`, `2.0L`, `-0.25L` gives the C-locale text, and `1.5e-7L` and the parsed long double array round-trip through `dump()`/`parse()`.
+
+Run in `gcc:16` (glibc 2.41) with generated `ps_AF.UTF-8`, `fa_IR.UTF-8`, `de_DE.UTF-8`: the new checks fail without the fix (`1\xab5.0`, parse_error.101) and pass with it; `unit-locale-cpp` and `unit-serialization` pass in full. (CI runners may not have `ps_AF`; the test then skips with a message, as before.)
+
+## Public API
+
+No breaking changes. `dump()` output changes only where it was corrupt (a non-binary64 `long double` under a locale with a multibyte decimal point).
+
+🤖 Generated with [Claude Code](https://claude.com/claude-code)
+
+## Commit message
+
+
+## Linked issue #5993: dump() of a long double value is corrupt under a locale with a multibyte decimal point (glibc ps_AF)
+### Description
+
+With a `basic_json` whose `number_float_t` is `long double` (where `long double` is not binary64, i.e. x86-64 and aarch64 Linux), `dump()` writes corrupt output under a locale whose decimal point is a multibyte sequence. glibc's `ps_AF` locale has decimal_point U+066B (bytes `D9 AB`) and thousands_sep U+066C (bytes `D9 AC`). `dump()` of `1.5L` returns the bytes `1 \xab 5 . 0`, which is not JSON and does not parse back.
+
+The default `json` (double) and `float` configurations are not affected: they take the `to_chars` path. The lexer handles the same locale correctly since #5660 (`detail::convert_float_locale_aware()` treats the decimal point as a string), so values parse but do not dump.
+
+### Reproduction steps
+
+Linux with glibc (gcc:16 Docker image, glibc 2.41):
+
+```sh
+apt-get install -y locales && localedef -i ps_AF -f UTF-8 ps_AF.UTF-8
+g++ -std=c++17 -I include repro.cpp -o repro && ./repro
+```
+
+### Expected vs. actual results
+
+Expected: `1.5` (dump is documented as locale-independent, `docs/mkdocs/docs/features/types/number_handling.md`).
+
+Actual:
+
+```
+dump: 1\xab5.0   (expected 1.5)
+does not parse back: [json.exception.parse_error.101] parse error at line 1, column 2: syntax error while parsing value - invalid literal; last read: '1\xd9'; expected end of input
+```
+
+More values under `ps_AF.UTF-8`: `123456.789L` → `123456\xab788999999999999999999999999999.0`, `1e100L` → `9\xab99999999999999999999999999999999963e+99`, `1.5e-7L` → `1\xab50000000000000000000000000000000008e-07`; `2.0L` → `2.0` (no fraction, correct). Under `C`, `de_DE.UTF-8` and `fa_IR.UTF-8` (decimal point `.` in glibc) everything is correct.
+
+### Minimal code example
+
+```cpp
+#include <clocale>
+#include <cstdint>
+#include <cstdio>
+#include <map>
+#include <vector>
+#include <nlohmann/json.hpp>
+using ldjson = nlohmann::basic_json<std::map, std::vector, std::string, bool, std::int64_t, std::uint64_t, long double>;
+int main()
+{
+    if (std::setlocale(LC_ALL, "ps_AF.UTF-8") == nullptr) {
+[... truncated, 3021 more characters]
+
+## Discussion before merge
+- nlohmann: **`ci_static_analysis_ubuntu (ci_test_valgrind)`** fails on e96469f. This is not caused by this PR: the same two tests hit ctest's default 1500 s timeout on `develop` too (Ubuntu run on b2674a4, job 124962450469):
+
+- `test-json_view_builder_cpp11_valgrind` (Timeout)
+- `test-ordered_json_cpp11_valgrind` (Timeout)
+
+This PR only changes `dump_float()` for non-binary64 `long double` and `unit-locale-cpp.cpp`, which neither test exercises. No fix exists on `develop` yet (it needs either a longer timeout for the valgrind label or smaller test cases there), and I can't re-run the job from here.
+
+---
+_Generated by [Claude Code](https://claude.ai/code)_
+- github-advanced-security[bot]: ## Flawfinder / Does not handle strings that are not \0-terminated; if given one it may perform an over-read (it could cause a crash if unprotected) (CWE-126).
+
+buffer/strlen:Does not handle strings that are not \0-terminated; if given one it may perform an over-read (it could cause a crash if unprotected) (CWE-126).
+
+[Show more details](https://github.com/nlohmann/json/security/code-scanning/1125)
+- gregmarr: ```suggestion
+        if ((decimal_point_len > 1) || (decimal_point_len == 1 && decimal_point[0] != '.'))
+```
+- nlohmann: Right, that is the same condition without the negation, and it says more directly that a multibyte decimal point always needs replacing. Applied in 6aa10fd343.
+
+*(Written by Claude Code on behalf of @nlohmann.)*
+
+## Changed functions (from changes.py)
+- nlohmann::detail::serializer::dump_float(number_float_t, std::false_type) (private); reached from the public API through: nlohmann::operator<<(std::ostream &, const basic_json<...> &), nlohmann::operator<<(basic_json<...> &, std::istream &), nlohmann::operator>>(std::istream &, basic_json<...> &), nlohmann::operator>>(const basic_json<...> &, std::ostream &), nlohmann::format_as(const basic_json<...> &), nlohmann::to_string(const basic_json<...> &), nlohmann::operator!=(const_reference, ScalarType), nlohmann::operator!=(ScalarType, const_reference), nlohmann::operator<(const_reference, ScalarType), nlohmann::operator<(ScalarType, const_reference)
+
+## Diff of the library source (before -> after)
+```diff
+diff --git a/include/nlohmann/detail/output/serializer.hpp b/include/nlohmann/detail/output/serializer.hpp
+index 0c004c491..235e7bafd 100644
+--- a/include/nlohmann/detail/output/serializer.hpp
++++ b/include/nlohmann/detail/output/serializer.hpp
+@@ -8,7 +8,7 @@
+ 
+ #pragma once
+ 
+-#include <algorithm> // remove, fill, find, none_of, min
++#include <algorithm> // copy, none_of, min, search
+ #include <array> // array
+ #include <clocale> // localeconv, lconv
+ #include <cmath> // isfinite
+@@ -2080,31 +2080,35 @@ class serializer
+         // check if the buffer was large enough
+         JSON_ASSERT(static_cast<std::size_t>(len) < number_buffer.size());
+ 
+-        // look up the locale's thousands separator and decimal point now,
+-        // matching what snprintf_float() just used (see lexer::get_decimal_point())
++        // look up the locale's decimal point now, matching what
++        // snprintf_float() just used (see get_decimal_point() in
++        // number_parse.hpp); it is a string, which can be longer than one
++        // byte (U+066B in ps_AF, #5993).
++        // A thousands separator needs no handling: %g never groups digits.
+         const auto* loc = std::localeconv();
+         JSON_ASSERT(loc != nullptr);
+-        const char thousands_sep = (loc->thousands_sep == nullptr) ? '\0' : *loc->thousands_sep;
+-        const char decimal_point = (loc->decimal_point == nullptr) ? '\0' : *loc->decimal_point;
+-
+-        // erase thousands separators
+-        if (thousands_sep != '\0')
+-        {
+-            // NOLINTNEXTLINE(readability-qualified-auto,llvm-qualified-auto): std::remove returns an iterator, see https://github.com/nlohmann/json/issues/3081
+-            const auto end = std::remove(number_buffer.begin(), number_buffer.begin() + len, thousands_sep);
+-            std::fill(end, number_buffer.end(), '\0');
+-            JSON_ASSERT((end - number_buffer.begin()) <= len);
+-            len = (end - number_buffer.begin());
+-        }
++        const char* const decimal_point = (loc->decimal_point == nullptr) ? "" : loc->decimal_point;
++        const std::size_t decimal_point_len = std::char_traits<char>::length(decimal_point);
+ 
+         // convert decimal point to '.'
+-        if (decimal_point != '\0' && decimal_point != '.')
++        if ((decimal_point_len > 1) || (decimal_point_len == 1 && decimal_point[0] != '.'))
+         {
+-            // NOLINTNEXTLINE(readability-qualified-auto,llvm-qualified-auto): std::find returns an iterator, see https://github.com/nlohmann/json/issues/3081
+-            const auto dec_pos = std::find(number_buffer.begin(), number_buffer.end(), decimal_point);
+-            if (dec_pos != number_buffer.end())
++            const auto first = number_buffer.begin();
++            const auto last = first + len;
++            // NOLINTNEXTLINE(readability-qualified-auto,llvm-qualified-auto): std::search returns an iterator, see https://github.com/nlohmann/json/issues/3081
++            const auto dec_pos = std::search(first, last, decimal_point, decimal_point + decimal_point_len);
++            if (dec_pos != last)
+             {
+                 *dec_pos = '.';
++                if (decimal_point_len > 1)
++                {
++                    // move the fraction and exponent behind the '.' (std::copy
++                    // allows the overlap, as the destination is before the source)
++                    // NOLINTNEXTLINE(readability-qualified-auto,llvm-qualified-auto): std::copy returns an iterator, see https://github.com/nlohmann/json/issues/3081
++                    const auto end = std::copy(dec_pos + static_cast<std::ptrdiff_t>(decimal_point_len), last, dec_pos + 1);
++                    *end = '\0';
++                    len = end - first;
++                }
+             }
+         }
+```
+
+## Existing upstream tests that call the changed code (for style and API usage)
+// Upstream tests at the PR's parent commit 92707f43f that use the changed code.
+// Names searched (test lines using each): format_as (23), to_string (182), operator<< (103), operator>> (105), operator!= (69), operator< (229), dump_float (0)
+
+// ---- tests/src/unit-deserialization.cpp:1293-1338  (uses: operator<<, operator>>, to_string)
+TEST_CASE("parse error positions are the same for contiguous and stream input")
+{
+    // contiguous input derives the position from the input on error, stream
+    // input counts it while reading (see lexer::lazy_position); the cases
+    // cover newlines before the error, ungetting a newline after a number,
+    // newlines inside a string, a comment, and reads at the end of input
+    struct test_case
+    {
+        std::string input;
+        std::size_t byte;
+        std::string message;
+    };
+    const std::vector<test_case> cases =
+    {
+        {"[\n  1,\n  2\n", 12, "[json.exception.parse_error.101] parse error at line 4, column 1: syntax error while parsing array - unexpected end of input; expected ']'"},
+        {"[1\n,2,\n]", 8, "[json.exception.parse_error.101] parse error at line 3, column 1: syntax error while parsing value - unexpected ']'; expected '[', '{', or a literal"},
+        {"[1\n x]", 5, "[json.exception.parse_error.101] parse error at line 2, column 2: syntax error while parsing array - invalid literal; last read: '1<U+000A> x'; expected ']'"},
+        {"1\n2", 3, "[json.exception.parse_error.101] parse error at line 2, column 1: syntax error while parsing value - unexpected number literal; expected end of input"},
+        {
+            "{\"a\":\n\"b\nc\"}", 9, R"([json.exception.parse_error.101] parse error at line 3, column 0: syntax error while parsing value - invalid string: control character U+000A (LF) must be escaped to \u000A or \n; last read: '"b<U+000A>')"
+        },
+        {"/* a\n b */\n x", 13, "[json.exception.parse_error.101] parse error at line 3, column 2: syntax error while parsing value - invalid literal; last read: '/* a<U+000A> b */<U+000A> x'"},
+        {"\n\n", 3, "[json.exception.parse_error.101] parse error at line 3, column 1: syntax error while parsing value - unexpected end of input; expected '[', '{', or a literal"},
+        {"[\"a\",\n 1e\n]", 10, "[json.exception.parse_error.101] parse error at line 3, column 0: syntax error while parsing value - invalid number; expected '+', '-', or digit after exponent; last read: '1e<U+000A>'"},
+        {"[tru\n]", 5, "[json.exception.parse_error.101] parse error at line 2, column 0: syntax error while parsing value - invalid literal; last read: '[tru<U+000A>'"},
+    };
+
+    for (const auto& c : cases)
+    {
+        CAPTURE(c.input)
+        const std::string expected = std::to_string(c.byte) + " " + c.message;
+
+        SaxErrorRecorder string_sax;
+        CHECK_FALSE(json::sax_parse(c.input, &string_sax, json::input_format_t::json, true, true));
+        CHECK(string_sax.error == expected);
+
+        SaxErrorRecorder pointer_sax;
+        CHECK_FALSE(json::sax_parse(c.input.data(), c.input.data() + c.input.size(), &pointer_sax, json::input_format_t::json, true, true));
+        CHECK(pointer_sax.error == expected);
+
+        std::istringstream is(c.input);
+        SaxErrorRecorder stream_sax;
+        CHECK_FALSE(json::sax_parse(is, &stream_sax, json::input_format_t::json, true, true));
+        CHECK(stream_sax.error == expected);
+    }
+}
+
+// ---- tests/src/unit-stream-bulk-scan.cpp:349-380  (uses: operator<<, operator>>, to_string)
+    SECTION("many values from one stream")
+    {
+        std::string input;
+        for (int i = 0; i < 200; ++i)
+        {
+            input += R"({"id":)" + std::to_string(i) + R"(,"name":"user)" + std::to_string(i) + R"(","score":)" + std::to_string(i) + ".5}\n";
+            input += std::to_string(i * 7919) + "\n";
+        }
+
+        for (const std::size_t chunk_size : chunk_sizes())
+        {
+            CAPTURE(chunk_size)
+            chunked_streambuf buf(input, chunk_size);
+            std::istream is(&buf);
+            json j;
+            int count = 0;
+            while (!(is >> std::ws).eof())
+            {
+                is >> j;
+                if (count % 2 == 0)
+                {
+                    CHECK(j["id"] == count / 2);
+                }
+                else
+                {
+                    CHECK(j == (count / 2) * 7919);
+                }
+                ++count;
+            }
+            CHECK(count == 400);
+        }
+    }
+
+// ---- tests/src/unit-stream-bulk-scan.cpp:403-433  (uses: operator<<, operator>>, to_string)
+    SECTION("std::stringstream and std::ifstream")
+    {
+        const std::string input = R"([1, 2.5, "three", {"four": [true, null]}] 5)";
+
+        std::stringstream ss(input);
+        json j1;
+        json j2;
+        ss >> j1 >> j2;
+        CHECK(j1 == json::parse(R"([1, 2.5, "three", {"four": [true, null]}])"));
+        CHECK(j2 == 5);
+        CHECK(ss.eof());
+
+        // a file name of its own for every run: the test runs for several C++
+        // standards and configurations at the same time, in the same directory
+        std::random_device rd;
+        const std::string temp_name = "unit-stream-bulk-scan-" + std::to_string(rd()) + ".tmp";
+        const char* const filename = temp_name.c_str();
+        {
+            std::ofstream file(filename);
+            file << input;
+        }
+        {
+            std::ifstream file(filename);
+            json k1;
+            json k2;
+            file >> k1 >> k2;
+            CHECK(k1 == j1);
+            CHECK(k2 == j2);
+        }
+        static_cast<void>(std::remove(filename));
+    }
+
+// ---- tests/src/unit-deserialization.cpp:97-109  (uses: operator<<, operator>>)
+TEST_CASE("deserialization")
+{
+    SECTION("successful deserialization")
+    {
+        SECTION("stream")
+        {
+            std::stringstream ss1;
+            std::stringstream ss2;
+            std::stringstream ss3;
+            ss1 << R"(["foo",1,2,3,false,{"one":1}])";
+            ss2 << R"(["foo",1,2,3,false,{"one":1}])";
+            ss3 << R"(["foo",1,2,3,false,{"one":1}])";
+            const json j = json::parse(ss1);
+
+// ---- tests/src/unit-precise-stream-position.cpp:123-135  (uses: operator<<, operator>>)
+TEST_CASE("JSON_PRECISE_STREAM_POSITION")
+{
+    SECTION("the macro is part of the ABI tag")
+    {
+        const std::string ns = STRINGIZE(NLOHMANN_JSON_NAMESPACE);
+        // other tags may come before it, e.g. json_abi_diag_psp
+        CHECK(ns.find("_psp") != std::string::npos);
+    }
+
+    SECTION("a number does not consume the character that terminates it")
+    {
+        // a number is only terminated by the character following it; that
+        // character must be given back so the stream is positioned right
+
+// ---- tests/src/unit-regression1.cpp:1036-1038  (uses: operator!=, operator<)
+    SECTION("issue #414 - compare with literal 0)")
+    {
+#define CHECK_TYPE(v) \
+
+# Task
+Write 20 test programs for this pull request. Return JSON with a "tests" array; each item has "name" (short snake_case), "intent" (one sentence: what behavior it probes) and "code" (the complete C++ program).

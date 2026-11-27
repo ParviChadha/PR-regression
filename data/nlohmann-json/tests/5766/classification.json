@@ -1,0 +1,169 @@
+{
+  "target": "nlohmann-json",
+  "pr": 5766,
+  "model": "gemini-3.5-flash-lite",
+  "prompt_sha256": "3d9acecb0cd11ff75c88896df00373edbe9fe4e54e3959d98385d0d63643284d",
+  "results_sha256": "7c6abaef346ba42dc2cd7b408b4b18b854c8bc71ea2de156cbe8f2041a15fb98",
+  "clusters": [
+    {
+      "id": "C1",
+      "status": "output_diff",
+      "failed_on": null,
+      "programs": [
+        "gen_21.cpp",
+        "gen_23.cpp",
+        "gen_25.cpp"
+      ],
+      "verdict": "intended",
+      "confidence": "high",
+      "reason": "The PR modified chunk error messages to omit 'or indefinite string type (0x7F)' when inside an indefinite-length string, which changes the exception message for invalid chunks as intended."
+    },
+    {
+      "id": "C2",
+      "status": "output_diff",
+      "failed_on": null,
+      "programs": [
+        "gen_17.cpp",
+        "gen_18.cpp"
+      ],
+      "verdict": "intended",
+      "confidence": "high",
+      "reason": "The PR introduces specific error messages for nested indefinite-length strings and binary arrays, matching the substring checks in these regression tests."
+    },
+    {
+      "id": "C3",
+      "status": "output_diff",
+      "failed_on": null,
+      "programs": [
+        "gen_20.cpp",
+        "gen_26.cpp"
+      ],
+      "verdict": "intended",
+      "confidence": "high",
+      "reason": "Nested indefinite-length strings are now correctly rejected per RFC 8949 \u00a73.2.3, causing ordered_json parsing to throw a parse error."
+    },
+    {
+      "id": "C4",
+      "status": "output_diff",
+      "failed_on": null,
+      "programs": [
+        "gen_01.cpp"
+      ],
+      "verdict": "intended",
+      "confidence": "high",
+      "reason": "The PR explicitly changes behavior to reject nested indefinite-length CBOR strings with parse_error.113."
+    },
+    {
+      "id": "C5",
+      "status": "output_diff",
+      "failed_on": null,
+      "programs": [
+        "gen_02.cpp"
+      ],
+      "verdict": "intended",
+      "confidence": "high",
+      "reason": "The PR explicitly changes behavior to reject nested indefinite-length CBOR binary arrays with parse_error.113."
+    },
+    {
+      "id": "C6",
+      "status": "output_diff",
+      "failed_on": null,
+      "programs": [
+        "gen_05.cpp"
+      ],
+      "verdict": "intended",
+      "confidence": "high",
+      "reason": "The PR rejects any second indefinite-length marker inside an indefinite-length string, preventing deeply nested or recursive chunks."
+    },
+    {
+      "id": "C7",
+      "status": "output_diff",
+      "failed_on": null,
+      "programs": [
+        "gen_08.cpp"
+      ],
+      "verdict": "intended",
+      "confidence": "high",
+      "reason": "The chunk error message update correctly drops the mention of indefinite types when inside an indefinite-length context."
+    },
+    {
+      "id": "C8",
+      "status": "output_diff",
+      "failed_on": null,
+      "programs": [
+        "gen_09.cpp"
+      ],
+      "verdict": "intended",
+      "confidence": "high",
+      "reason": "SAX parsing now correctly reports a parse error when encountering invalid nested indefinite-length strings."
+    },
+    {
+      "id": "C9",
+      "status": "output_diff",
+      "failed_on": null,
+      "programs": [
+        "gen_10.cpp"
+      ],
+      "verdict": "intended",
+      "confidence": "high",
+      "reason": "When exceptions are disabled, parsing invalid nested indefinite-length strings correctly returns a discarded json value."
+    },
+    {
+      "id": "C10",
+      "status": "output_diff",
+      "failed_on": null,
+      "programs": [
+        "gen_14.cpp"
+      ],
+      "verdict": "intended",
+      "confidence": "high",
+      "reason": "Nested indefinite-length strings inside arrays are correctly rejected with parse_error.113."
+    },
+    {
+      "id": "C11",
+      "status": "output_diff",
+      "failed_on": null,
+      "programs": [
+        "gen_15.cpp"
+      ],
+      "verdict": "intended",
+      "confidence": "high",
+      "reason": "Nested indefinite-length strings used as object keys are correctly rejected with parse_error.113."
+    },
+    {
+      "id": "C12",
+      "status": "output_diff",
+      "failed_on": null,
+      "programs": [
+        "gen_16.cpp"
+      ],
+      "verdict": "intended",
+      "confidence": "high",
+      "reason": "Deeply nested indefinite-length binary arrays are caught early at the second indefinite marker with parse_error.113 instead of failing later on EOF."
+    }
+  ],
+  "clusters_not_shown": 1,
+  "counts": {
+    "same": 8,
+    "invalid": 0,
+    "flaky": 0,
+    "superseded": 1,
+    "missing": 0
+  },
+  "pr_verdict": {
+    "regression_candidate": false,
+    "unintended_clusters": []
+  },
+  "usage": {
+    "promptTokenCount": 14152,
+    "candidatesTokenCount": 766,
+    "totalTokenCount": 14918,
+    "promptTokensDetails": [
+      {
+        "modality": "TEXT",
+        "tokenCount": 14152
+      }
+    ],
+    "serviceTier": "standard"
+  }
+}

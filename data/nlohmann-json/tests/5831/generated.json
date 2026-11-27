@@ -1,0 +1,173 @@
+{
+  "target": "nlohmann-json",
+  "pr": 5831,
+  "model": "gemini-3.5-flash-lite",
+  "prompt_sha256": "ebf729753d1c3564e0a93433b813560dd20b2d6f2779bcd033f6acd265090b80",
+  "n_requested": 20,
+  "dropped": 0,
+  "usage": {
+    "promptTokenCount": 4181,
+    "candidatesTokenCount": 4346,
+    "totalTokenCount": 8527,
+    "promptTokensDetails": [
+      {
+        "modality": "TEXT",
+        "tokenCount": 4181
+      }
+    ],
+    "serviceTier": "standard"
+  },
+  "tests": [
+    {
+      "file": "gen_01.cpp",
+      "name": "callback_parser_duplicate_keys",
+      "intent": "Probes json::parse with a callback function on an object containing duplicate keys to exercise the nlohmann::detail::json_sax_dom_callback_parser::key lookup, emplace, and stash-restore mechanism.",
+      "round": 0
+    },
+    {
+      "file": "gen_02.cpp",
+      "name": "callback_parser_reject_duplicate_key_value",
+      "intent": "Exercises the callback rejecting the value of a duplicate key during parsing to trigger the duplicate_key_stash restoration code path.",
+      "round": 0
+    },
+    {
+      "file": "gen_03.cpp",
+      "name": "callback_parser_key_filtering",
+      "intent": "Exercises key filtering via callback returning false on specific keys during callback parsing.",
+      "round": 0
+    },
+    {
+      "file": "gen_04.cpp",
+      "name": "callback_parser_wide_object",
+      "intent": "Exercises parse with callback on a wide object with numerous keys to test efficiency and stability of emplace lookups.",
+      "round": 0
+    },
+    {
+      "file": "gen_05.cpp",
+      "name": "callback_parser_nested_duplicates",
+      "intent": "Exercises callback parsing on nested objects containing duplicate keys at different nesting levels.",
+      "round": 0
+    },
+    {
+      "file": "gen_06.cpp",
+      "name": "callback_parser_discarded_placeholder",
+      "intent": "Exercises callback parsing where keys are processed while values get discarded via callback return values.",
+      "round": 0
+    },
+    {
+      "file": "gen_07.cpp",
+      "name": "stream_extraction_basic",
+      "intent": "Tests basic stream extraction operator>> using standard input streams.",
+      "round": 0
+    },
+    {
+      "file": "gen_08.cpp",
+      "name": "basic_json_accept_with_callback",
+      "intent": "Tests the accept method overload that takes input and verifies parsing validity with callbacks.",
+      "round": 0
+    },
+    {
+      "file": "gen_09.cpp",
+      "name": "sax_parse_dom_callback_parser",
+      "intent": "Directly exercises the sax_parse interface with span input adapter.",
+      "round": 0,
+      "superseded_by": "gen_21.cpp"
+    },
+    {
+      "file": "gen_10.cpp",
+      "name": "callback_parser_empty_object",
+      "intent": "Exercises callback parsing on an empty JSON object to test boundary conditions.",
+      "round": 0
+    },
+    {
+      "file": "gen_11.cpp",
+      "name": "callback_parser_multiple_duplicate_runs",
+      "intent": "Exercises multiple consecutive duplicate keys within the same object under callback parsing.",
+      "round": 0
+    },
+    {
+      "file": "gen_12.cpp",
+      "name": "callback_parser_mixed_types_duplicates",
+      "intent": "Exercises object parsing with duplicate keys containing different JSON value types.",
+      "round": 0
+    },
+    {
+      "file": "gen_13.cpp",
+      "name": "parser_iterator_range",
+      "intent": "Exercises parsing using iterator range over a string with callback parser enabled.",
+      "round": 0
+    },
+    {
+      "file": "gen_14.cpp",
+      "name": "parser_strict_mode",
+      "intent": "Exercises parser with strict mode settings and callback functions.",
+      "round": 0
+    },
+    {
+      "file": "gen_15.cpp",
+      "name": "callback_parser_exception_safety",
+      "intent": "Exercises exception behavior when callback throws an exception during key processing.",
+      "round": 0
+    },
+    {
+      "file": "gen_16.cpp",
+      "name": "callback_parser_null_values",
+      "intent": "Exercises callback parsing with null values and duplicate keys.",
+      "round": 0
+    },
+    {
+      "file": "gen_17.cpp",
+      "name": "callback_parser_booleans",
+      "intent": "Exercises callback parsing with boolean values under duplicate keys.",
+      "round": 0
+    },
+    {
+      "file": "gen_18.cpp",
+      "name": "callback_parser_array_elements",
+      "intent": "Exercises callback parser when duplicate keys reside inside arrays of objects.",
+      "round": 0
+    },
+    {
+      "file": "gen_19.cpp",
+      "name": "callback_parser_numeric_keys",
+      "intent": "Exercises callback parser with string keys that look like numbers and have duplicates.",
+      "round": 0
+    },
+    {
+      "file": "gen_20.cpp",
+      "name": "callback_parser_unicode_keys",
+      "intent": "Exercises callback parser with unicode characters in duplicate keys.",
+      "round": 0,
+      "superseded_by": "gen_22.cpp"
+    },
+    {
+      "file": "gen_21.cpp",
+      "name": "sax_parse_dom_callback_parser_fixed",
+      "intent": "Directly exercises the sax_parse interface with span input adapter.",
+      "round": 1,
+      "fixes": "gen_09.cpp",
+      "kind": "compile",
+      "superseded_by": "gen_23.cpp"
+    },
+    {
+      "file": "gen_22.cpp",
+      "name": "callback_parser_unicode_keys_fixed",
+      "intent": "Exercises callback parser with unicode characters in duplicate keys.",
+      "round": 1,
+      "fixes": "gen_20.cpp",
+      "kind": "compile"
+    },
+    {
+      "file": "gen_23.cpp",
+      "name": "sax_parse_dom_callback_parser_fixed_fixed",
+      "intent": "Directly exercises the sax_parse interface with span input adapter.",
+      "round": 2,
+      "fixes": "gen_21.cpp",
+      "kind": "compile"
+    }
+  ],
+  "fix": {
+    "rounds_max": 2,
+    "model": "gemini-3.5-flash-lite"
+  }
+}

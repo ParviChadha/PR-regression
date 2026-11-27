@@ -1,0 +1,183 @@
+[system]
+You write test programs that probe a C++ library for behavioral changes made by one pull request.
+Each program is compiled and run twice, once against the library before the change and once after, and the two
+outputs are compared. Your job is to produce programs whose output reveals whether the change altered behavior,
+including side effects the author did not intend.
+
+Rules for every program:
+- It is standalone: one file with its own int main(), compiled as C++17, printing results to stdout.
+- Use only the library's documented public API. Never include internal headers or use detail/impl namespaces,
+  private members or undocumented macros.
+- Do not judge results (no assert, no expected-value comparisons): just print what the library returns. Print
+  enough to make differences visible, one fact per line.
+- Output must be deterministic. Never print pointers or addresses, uninitialized data, the order of
+  hash-based containers, timings, thread ids, random values, file paths or environment data. Print floating point
+  values with an explicit precision. No input, files, network, threads, clocks or randomness.
+- Wrap calls that may throw in try/catch and print the exception's type and message, so an exception is an
+  observable result. Do not crash on purpose.
+- Aim at the code the diff changes. Prefer calls that compile against both the old and the new library; one or two
+  programs may use an API the PR adds. Cover ordinary inputs and edge cases (empty, minimum and maximum values,
+  boundaries, special values, nesting, unusual types) and also neighbouring behavior the change could disturb.
+- When the diff changes which types or inputs an API accepts or rejects (constraints, overloads, traits,
+  conversions), test it with the detection idiom (std::void_t or requires) and `if constexpr`, so the program
+  compiles against both versions, prints whether the expression is well-formed, and exercises it when it is.
+  Accepting an input is not enough: also use it through every entry point that should follow (const and
+  non-const, read, write, insert, erase, lookup, nested use), because a change that admits new inputs can leave
+  later code unable to handle them.
+- If the changed code is internal (a detail, impl or internal namespace, a trait, a helper), do not name it in the
+  program. Reach it through the public API that depends on it, using detection (as above) where needed.
+- Use the exact types and values the diff is about (the new trait's argument types, the new overload's
+  parameters), not stand-ins.
+- Spread the programs over distinct public entry points and overloads, one main idea per program. Do not write
+  several programs that only rename a type or change a literal.
+- Make the programs differ from each other: different inputs, different entry points, different features.
+
+Rules specific to this library:
+- Include the library with #include <nlohmann/json.hpp>. The public API is nlohmann::json (nlohmann::basic_json), nlohmann::ordered_json, json_pointer, json patch/merge_patch and the documented SAX and conversion interfaces. Never use the detail namespace.
+- It is a header-only library: nothing to link. Programs are compiled as C++17.
+- Print JSON values with dump() (compact) or dump(2). Keys of nlohmann::json objects print in sorted order, so output is deterministic; do not depend on insertion order except with ordered_json.
+
+[user]
+# Pull request #5740: Allow SAX parsing of tagged CBOR
+
+## Description
+Fixes #5676.
+
+`sax_parse` rejects CBOR tags because its public signatures did not pass a tag handler to the binary reader. This also rejects binary values with a subtype written by `to_cbor`.
+
+Consolidate `sax_parse` by adding a defaulted `const cbor_tag_handler_t tag_handler = cbor_tag_handler_t::error` parameter directly to the existing `sax_parse` signatures (compatible inputs, iterator pairs, and the deprecated span adapter). The parameter passes the handler to the binary reader, allowing callers to choose `ignore` or `store`. Regression tests cover all three input forms, each handler mode, and the JSON path.
+
+Validation (Docker, GCC 12, C++11):
+
+- `unit-regression3` with multiple headers: 12 cases, 107 assertions passed.
+- `unit-regression3` with the single header: 12 cases, 107 assertions passed.
+- `unit-cbor --test-case="Tagged values"`: 1 case, 209 assertions passed.
+- Regenerated the single header with the repository amalgamation script and formatted with AStyle 3.4.13.
+
+- [x] Changes are described with the cause and fix.
+- [x] The existing issue is referenced.
+- [ ] OSS-Fuzz issue: not applicable.
+- [ ] Code coverage remains at 100%: not measured locally; the new branches have regression coverage.
+- [x] Documentation is updated.
+- [x] Ran `make amalgamate`: ran its amalgamation script and pinned formatter directly.
+
+## Commit message
+* Allow SAX parsing of tagged CBOR
+
+Signed-off-by: Tyagiquamar <mohdquamartyagi@gmail.com>
+
+* Consolidate sax_parse overloads with default tag_handler parameter
+
+Signed-off-by: Tyagiquamar <mohdquamartyagi@gmail.com>
+
+* Add version history entry for tag_handler in sax_parse documentation
+
+---------
+
+Signed-off-by: Tyagiquamar <mohdquamartyagi@gmail.com>
+Signed-off-by: Niels Lohmann <mail@nlohmann.me>
+Co-authored-by: Niels Lohmann <mail@nlohmann.me>
+
+## Linked issue #5676: sax_parse cannot read CBOR that contains tags, including binary values with a subtype written by to_cbor
+### Description
+
+[`sax_parse`](https://json.nlohmann.me/api/basic_json/sax_parse/) supports CBOR input, but it has no parameter for a [`cbor_tag_handler_t`](https://json.nlohmann.me/api/basic_json/cbor_tag_handler_t/). The CBOR reader therefore always runs with the default `cbor_tag_handler_t::error`, so any CBOR document that contains a tag fails with parse_error.112. That includes the output of `to_cbor` for every binary value with a subtype, because the writer stores subtypes as tags 0xD8..0xDB ([cbor.md](https://github.com/nlohmann/json/blob/633de8e44bbbc29383d72f8c920343ea5d1eaa21/docs/mkdocs/docs/features/binary_formats/cbor.md?plain=1#L60)).
+
+`from_cbor` has the same default, but it takes a `tag_handler` argument, and the documentation tells users to pass `ignore` or `store` ([cbor.md](https://github.com/nlohmann/json/blob/633de8e44bbbc29383d72f8c920343ea5d1eaa21/docs/mkdocs/docs/features/binary_formats/cbor.md?plain=1#L204)). With `sax_parse` there is no such way, so tagged CBOR cannot be processed with the SAX interface at all. Tags are common in real-world CBOR, for example for date/time, bignums and URIs.
+
+The underlying `detail::binary_reader::sax_parse` already takes the handler ([binary_reader.hpp](https://github.com/nlohmann/json/blob/633de8e44bbbc29383d72f8c920343ea5d1eaa21/include/nlohmann/detail/input/binary_reader.hpp#L134-L137)). The three public `basic_json::sax_parse` overloads just don't forward one ([json.hpp](https://github.com/nlohmann/json/blob/633de8e44bbbc29383d72f8c920343ea5d1eaa21/include/nlohmann/json.hpp#L4984-L5036)).
+
+**Possible fix (untested):**
+
+- Add a trailing `const cbor_tag_handler_t tag_handler = cbor_tag_handler_t::error` parameter to the three `sax_parse` overloads and pass it to `binary_reader::sax_parse`.
+- Alternatively, add CBOR-specific overloads, since the parameter only matters for CBOR, much like `ignore_comments` and `ignore_trailing_commas` only matter for JSON.
+
+Neither changes behavior for existing callers.
+
+Re
+[... truncated, 3345 more characters]
+
+## Discussion before merge
+- nlohmann: Thanks for the PR! I merged `develop` into your branch (857d3baaa) to resolve conflicts with #5737 and #5745. Two things changed besides the conflict markers, so please pull before pushing again:
+
+- On develop, `binary_reader` now gets the input format when it is constructed, so `binary_reader::sax_parse` no longer takes a `format` argument. I updated your three new call sites in `include/nlohmann/json.hpp` to `.sax_parse(sax, strict, tag_handler)`.
+- #5737 wrapped the deprecated span-adapter `sax_parse` overload in `#pragma clang diagnostic ignored "-Wdocumentation-deprecated-sync"`. Your two new deprecated overloads are now inside that block as well.
+
+`single_include` is regenerated. The CBOR "Tagged values" tests (209 assertions), unit-regression3 and unit-class_parser pass locally.
+
+(This comment was written by Claude Code.)
+- Tyagiquamar: Updated to consolidate the \sax_parse\ functions by adding the default \	ag_handler = cbor_tag_handler_t::error\ parameter directly to the existing signatures instead of having separate overloads. Documentation and \single_include\ have been regenerated, and all test suites pass locally in Docker.
+- Tyagiquamar: Merged \develop\ into the branch, added the version history entry for \	ag_handler\ in \docs/mkdocs/docs/api/basic_json/sax_parse.md\, verified amalgamation and formatting, and updated the PR description.
+- gregmarr: Can the handling just be added as new parameters to the existing functions?  Since this is a header-only library, we only need to preserve source compatibility, not binary.
+- nlohmann: I agree - this would also halve the code in this PR.
+- Tyagiquamar: Addressed in 5a3606080: tag_handler is now a defaulted final parameter on the three existing sax_parse overloads. The extra overloads were removed, and single_include and the API docs match.
+
+## Changed functions (from changes.py)
+- nlohmann::basic_json::sax_parse(InputType &&, SAX *, input_format_t, const bool, const bool, const bool, const cbor_tag_handler_t) (public)
+- nlohmann::basic_json::sax_parse(IteratorType, SentinelType, SAX *, input_format_t, const bool, const bool, const bool, const cbor_tag_handler_t) (public)
+- nlohmann::basic_json::sax_parse(detail::span_input_adapter &&, SAX *, input_format_t, const bool, const bool, const bool, const cbor_tag_handler_t) (public)
+- nlohmann::basic_json::sax_parse(InputType &&, SAX *, input_format_t, const bool, const bool, const bool) (public)
+- nlohmann::basic_json::sax_parse(IteratorType, SentinelType, SAX *, input_format_t, const bool, const bool, const bool) (public)
+- nlohmann::basic_json::sax_parse(detail::span_input_adapter &&, SAX *, input_format_t, const bool, const bool, const bool) (public)
+
+## Diff of the library source (before -> after)
+```diff
+diff --git a/include/nlohmann/json.hpp b/include/nlohmann/json.hpp
+index 788cc999c..397b253ad 100644
+--- a/include/nlohmann/json.hpp
++++ b/include/nlohmann/json.hpp
+@@ -5671,12 +5671,13 @@ public:
+                           input_format_t format = input_format_t::json,
+                           const bool strict = true,
+                           const bool ignore_comments = false,
+-                          const bool ignore_trailing_commas = false)
++                          const bool ignore_trailing_commas = false,
++                          const cbor_tag_handler_t tag_handler = cbor_tag_handler_t::error)
+     {
+         auto ia = detail::input_adapter(std::forward<InputType>(i));
+         return format == input_format_t::json
+                ? parser(std::move(ia), nullptr, true, ignore_comments, ignore_trailing_commas).sax_parse(sax, strict)
+-               : detail::binary_reader<basic_json, decltype(ia), SAX>(std::move(ia), format).sax_parse(sax, strict);
++               : detail::binary_reader<basic_json, decltype(ia), SAX>(std::move(ia), format).sax_parse(sax, strict, tag_handler);
+     }
+ 
+     /// @brief generate SAX events (iterator pair, or iterator+sentinel pair for C++20 ranges support)
+@@ -5688,12 +5689,13 @@ public:
+                           input_format_t format = input_format_t::json,
+                           const bool strict = true,
+                           const bool ignore_comments = false,
+-                          const bool ignore_trailing_commas = false)
++                          const bool ignore_trailing_commas = false,
++                          const cbor_tag_handler_t tag_handler = cbor_tag_handler_t::error)
+     {
+         auto ia = detail::input_adapter(std::move(first), std::move(last));
+         return format == input_format_t::json
+                ? parser(std::move(ia), nullptr, true, ignore_comments, ignore_trailing_commas).sax_parse(sax, strict)
+-               : detail::binary_reader<basic_json, decltype(ia), SAX>(std::move(ia), format).sax_parse(sax, strict);
++               : detail::binary_reader<basic_json, decltype(ia), SAX>(std::move(ia), format).sax_parse(sax, strict, tag_handler);
+     }
+ 
+     /// @brief generate SAX events
+@@ -5721,7 +5723,8 @@ public:
+                           input_format_t format = input_format_t::json,
+                           const bool strict = true,
+                           const bool ignore_comments = false,
+-                          const bool ignore_trailing_commas = false)
++                          const bool ignore_trailing_commas = false,
++                          const cbor_tag_handler_t tag_handler = cbor_tag_handler_t::error)
+ #if JSON_DELETE_DEPRECATED_FUNCTIONS
+     = delete;
+ #else
+@@ -5731,7 +5734,7 @@ public:
+                // NOLINTNEXTLINE(hicpp-move-const-arg,performance-move-const-arg)
+                ? parser(std::move(ia), nullptr, true, ignore_comments, ignore_trailing_commas).sax_parse(sax, strict)
+                // NOLINTNEXTLINE(hicpp-move-const-arg,performance-move-const-arg)
+-               : detail::binary_reader<basic_json, decltype(ia), SAX>(std::move(ia), format).sax_parse(sax, strict);
++               : detail::binary_reader<basic_json, decltype(ia), SAX>(std::move(ia), format).sax_parse(sax, strict, tag_handler);
+     }
+ #endif
+ #if defined(__clang__)
+```
+
+# Task
+Write 20 test programs for this pull request. Return JSON with a "tests" array; each item has "name" (short snake_case), "intent" (one sentence: what behavior it probes) and "code" (the complete C++ program).

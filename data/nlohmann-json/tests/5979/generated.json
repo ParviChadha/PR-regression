@@ -1,0 +1,203 @@
+{
+  "target": "nlohmann-json",
+  "pr": 5979,
+  "model": "gemini-3.5-flash-lite",
+  "prompt_sha256": "0b5522bfff7699a6ef091c3f0ec4b4c1de66ee9726ae9a6eff1d23913f7e13d3",
+  "n_requested": 20,
+  "dropped": 0,
+  "usage": {
+    "promptTokenCount": 12860,
+    "candidatesTokenCount": 4298,
+    "totalTokenCount": 17158,
+    "promptTokensDetails": [
+      {
+        "modality": "TEXT",
+        "tokenCount": 12860
+      }
+    ],
+    "serviceTier": "standard"
+  },
+  "tests": [
+    {
+      "file": "gen_01.cpp",
+      "name": "bson_one_pass_basic_object",
+      "intent": "Probes to_bson() single-pass writing on a simple flat object with various primitive types.",
+      "round": 0
+    },
+    {
+      "file": "gen_02.cpp",
+      "name": "bson_one_pass_nested_containers",
+      "intent": "Probes single-pass BSON generation with deeply nested objects and arrays.",
+      "round": 0
+    },
+    {
+      "file": "gen_03.cpp",
+      "name": "bson_two_pass_fallback_vector_ref",
+      "intent": "Probes to_bson() overload taking an explicit vector reference, which forces the two-pass fallback path.",
+      "round": 0
+    },
+    {
+      "file": "gen_04.cpp",
+      "name": "bson_two_pass_stream_output",
+      "intent": "Probes to_bson() writing to an output adapter stream, exercising the two-pass behavior.",
+      "round": 0
+    },
+    {
+      "file": "gen_05.cpp",
+      "name": "bson_error_handler_replace",
+      "intent": "Probes single-pass fallback behavior when error handler is set to replace ill-formed UTF-8.",
+      "round": 0
+    },
+    {
+      "file": "gen_06.cpp",
+      "name": "bson_error_handler_ignore",
+      "intent": "Probes single-pass behavior when error handler is set to ignore invalid characters.",
+      "round": 0
+    },
+    {
+      "file": "gen_07.cpp",
+      "name": "bson_error_handler_strict",
+      "intent": "Probes exception handling under strict error handler for invalid key strings in single-pass.",
+      "round": 0
+    },
+    {
+      "file": "gen_08.cpp",
+      "name": "bson_zero_byte_in_key",
+      "intent": "Probes rejection of null characters (U+0000) inside object keys during single pass.",
+      "round": 0
+    },
+    {
+      "file": "gen_09.cpp",
+      "name": "bson_array_fixed_entries",
+      "intent": "Probes specialized writing of arrays containing homogeneous primitive numbers/booleans/nulls.",
+      "round": 0
+    },
+    {
+      "file": "gen_10.cpp",
+      "name": "bson_binary_values",
+      "intent": "Probes BSON serialization of binary data values with various subtypes.",
+      "round": 0
+    },
+    {
+      "file": "gen_11.cpp",
+      "name": "bson_discarded_value",
+      "intent": "Probes handling of discarded values inside objects during single-pass serialization.",
+      "round": 0
+    },
+    {
+      "file": "gen_12.cpp",
+      "name": "bson_empty_containers",
+      "intent": "Probes BSON generation for empty objects and empty arrays.",
+      "round": 0
+    },
+    {
+      "file": "gen_13.cpp",
+      "name": "bson_large_array_indices",
+      "intent": "Probes single-pass index boundary expansion in arrays with many elements.",
+      "round": 0
+    },
+    {
+      "file": "gen_14.cpp",
+      "name": "bson_invalid_binary_subtype",
+      "intent": "Probes exception handling when binary subtype exceeds valid limits.",
+      "round": 0,
+      "superseded_by": "gen_26.cpp"
+    },
+    {
+      "file": "gen_15.cpp",
+      "name": "bson_mixed_array_types",
+      "intent": "Probes arrays containing mixed types (objects, arrays, strings, numbers) forcing non-fixed layout.",
+      "round": 0
+    },
+    {
+      "file": "gen_16.cpp",
+      "name": "bson_integer_limits",
+      "intent": "Probes single-pass serialization of integer values at the boundaries of 32-bit and 64-bit limits.",
+      "round": 0
+    },
+    {
+      "file": "gen_17.cpp",
+      "name": "bson_multiple_keys_ordering",
+      "intent": "Probes single-pass BSON serialization on objects with numerous keys to check order and structure integrity.",
+      "round": 0
+    },
+    {
+      "file": "gen_18.cpp",
+      "name": "bson_utf8_validation_keys",
+      "intent": "Probes strict UTF-8 validation checks on object keys during single-pass BSON writing.",
+      "round": 0
+    },
+    {
+      "file": "gen_19.cpp",
+      "name": "bson_deeply_nested_arrays",
+      "intent": "Probes deeply nested array structures processed via single-pass BSON writer.",
+      "round": 0
+    },
+    {
+      "file": "gen_20.cpp",
+      "name": "bson_roundtrip_equivalence",
+      "intent": "Probes equivalence between single-pass to_bson() and explicit vector reference two-pass to_bson().",
+      "round": 0,
+      "superseded_by": "gen_27.cpp"
+    },
+    {
+      "file": "gen_21.cpp",
+      "name": "test_sink_written_and_single_pass_traits",
+      "intent": "Instantiate templates and verify detection of sink_written_t, bson_integers_fit_64_bits, and bson_single_pass_sink traits using explicit json to_bson generation.",
+      "round": 1
+    },
+    {
+      "file": "gen_22.cpp",
+      "name": "test_array_fixed_entries_break",
+      "intent": "Exercise the break condition within the fixed-size array writing loop in single pass when an array of homogeneous integers reaches the end completely.",
+      "round": 1
+    },
+    {
+      "file": "gen_23.cpp",
+      "name": "test_output_adapter_char_overwrite_static_assert",
+      "intent": "Ensure that output adapter using char type instantiates and successfully runs character-level writing and code paths leading to overwrite routines.",
+      "round": 1
+    },
+    {
+      "file": "gen_24.cpp",
+      "name": "test_bson_entry_fits_overflow_fallback",
+      "intent": "Trigger a scenario where the calculated BSON container or entry size approaches or exceeds INT32_MAX, forcing the single pass to return false and fallback to two-pass writer.",
+      "round": 1
+    },
+    {
+      "file": "gen_25.cpp",
+      "name": "test_nested_container_close_and_else_branches",
+      "intent": "Exercise else branches for non-structured object entries and deeply nested container closing logic in single-pass BSON serialization.",
+      "round": 1
+    },
+    {
+      "file": "gen_26.cpp",
+      "name": "bson_invalid_binary_subtype_fixed",
+      "intent": "Probes exception handling when binary subtype exceeds valid limits.",
+      "round": 2,
+      "fixes": "gen_14.cpp",
+      "kind": "compile",
+      "superseded_by": "gen_28.cpp"
+    },
+    {
+      "file": "gen_27.cpp",
+      "name": "bson_roundtrip_equivalence_fixed",
+      "intent": "Probes equivalence between single-pass to_bson() and explicit vector reference two-pass to_bson().",
+      "round": 2,
+      "fixes": "gen_20.cpp",
+      "kind": "compile"
+    },
+    {
+      "file": "gen_28.cpp",
+      "name": "bson_invalid_binary_subtype_fixed_fixed",
+      "intent": "Probes exception handling when binary subtype exceeds valid limits.",
+      "round": 3,
+      "fixes": "gen_26.cpp",
+      "kind": "compile"
+    }
+  ],
+  "fix": {
+    "rounds_max": 2,
+    "model": "gemini-3.5-flash-lite"
+  }
+}

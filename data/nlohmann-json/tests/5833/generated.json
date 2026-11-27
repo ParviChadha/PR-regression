@@ -1,0 +1,185 @@
+{
+  "target": "nlohmann-json",
+  "pr": 5833,
+  "model": "gemini-3.5-flash-lite",
+  "prompt_sha256": "d77e7e85b9ba38ed5cb21f1c9ba4cabd63b5b37d95071b63c7d619c0c9a6d56e",
+  "n_requested": 20,
+  "dropped": 0,
+  "usage": {
+    "promptTokenCount": 3473,
+    "candidatesTokenCount": 4236,
+    "totalTokenCount": 7709,
+    "promptTokensDetails": [
+      {
+        "modality": "TEXT",
+        "tokenCount": 3473
+      }
+    ],
+    "serviceTier": "standard"
+  },
+  "tests": [
+    {
+      "file": "gen_01.cpp",
+      "name": "vector_int_conversion",
+      "intent": "Probes from_json optimization for std::vector of integers from a JSON array.",
+      "round": 0
+    },
+    {
+      "file": "gen_02.cpp",
+      "name": "deque_string_conversion",
+      "intent": "Probes from_json optimization for std::deque of strings using push_back append pathway.",
+      "round": 0
+    },
+    {
+      "file": "gen_03.cpp",
+      "name": "set_int_conversion",
+      "intent": "Probes from_json fallback to insert(end(), ...) for containers lacking push_back such as std::set.",
+      "round": 0
+    },
+    {
+      "file": "gen_04.cpp",
+      "name": "multiset_conversion",
+      "intent": "Probes array conversion into std::multiset using insert fallback pathways.",
+      "round": 0
+    },
+    {
+      "file": "gen_05.cpp",
+      "name": "list_conversion",
+      "intent": "Probes array conversion into std::list exercising push_back append specialization.",
+      "round": 0
+    },
+    {
+      "file": "gen_06.cpp",
+      "name": "forward_list_conversion",
+      "intent": "Probes array conversion into std::forward_list via insert fallback since it lacks push_back.",
+      "round": 0
+    },
+    {
+      "file": "gen_07.cpp",
+      "name": "empty_array_vector",
+      "intent": "Probes conversion of an empty JSON array to std::vector edge case.",
+      "round": 0
+    },
+    {
+      "file": "gen_08.cpp",
+      "name": "nested_vector_conversion",
+      "intent": "Probes multi-dimensional array conversion to std::vector of std::vectors.",
+      "round": 0
+    },
+    {
+      "file": "gen_09.cpp",
+      "name": "map_emplace_hint_conversion",
+      "intent": "Probes object conversion to std::map using emplace_hint optimization.",
+      "round": 0
+    },
+    {
+      "file": "gen_10.cpp",
+      "name": "ordered_map_fallback_conversion",
+      "intent": "Probes object conversion into a container backed by ordered_map which lacks emplace_hint, testing fallback to emplace.",
+      "round": 0,
+      "superseded_by": "gen_26.cpp"
+    },
+    {
+      "file": "gen_11.cpp",
+      "name": "empty_object_map",
+      "intent": "Probes conversion of an empty JSON object to std::map edge case.",
+      "round": 0
+    },
+    {
+      "file": "gen_12.cpp",
+      "name": "vector_to_basic_json_elements",
+      "intent": "Probes container conversion where value_type is nlohmann::json itself.",
+      "round": 0
+    },
+    {
+      "file": "gen_13.cpp",
+      "name": "incompatible_type_exception",
+      "intent": "Probes exception handling when array elements cannot be converted to target vector type.",
+      "round": 0
+    },
+    {
+      "file": "gen_14.cpp",
+      "name": "valarray_conversion",
+      "intent": "Probes array conversion into std::valarray utilizing push_back or standard fallback pathways.",
+      "round": 0
+    },
+    {
+      "file": "gen_15.cpp",
+      "name": "unordered_set_conversion",
+      "intent": "Probes array conversion into std::unordered_set exercising insert fallback.",
+      "round": 0
+    },
+    {
+      "file": "gen_16.cpp",
+      "name": "vector_reserve_check",
+      "intent": "Probes whether from_json array reserve works correctly with large sizes.",
+      "round": 0
+    },
+    {
+      "file": "gen_17.cpp",
+      "name": "unordered_map_conversion",
+      "intent": "Probes object conversion to std::unordered_map using emplace fallback.",
+      "round": 0
+    },
+    {
+      "file": "gen_18.cpp",
+      "name": "multimap_conversion",
+      "intent": "Probes object conversion to std::multimap exercising emplace_hint.",
+      "round": 0
+    },
+    {
+      "file": "gen_19.cpp",
+      "name": "adl_serializer_explicit_call",
+      "intent": "Probes explicit invocation of adl_serializer::from_json for standard vector container.",
+      "round": 0
+    },
+    {
+      "file": "gen_20.cpp",
+      "name": "adl_serializer_object_call",
+      "intent": "Probes explicit invocation of adl_serializer::from_json for map-like container.",
+      "round": 0
+    },
+    {
+      "file": "gen_21.cpp",
+      "name": "gen_21",
+      "intent": "Exercise from_json_array_append priority_tag<1> SFINAE declaration and definition directly via a vector container.",
+      "round": 1
+    },
+    {
+      "file": "gen_22.cpp",
+      "name": "gen_22",
+      "intent": "Exercise from_json_array_append priority_tag<0> fallback using std::set where using std::end is invoked for array insertion.",
+      "round": 1
+    },
+    {
+      "file": "gen_23.cpp",
+      "name": "gen_23",
+      "intent": "Exercise from_json_object_emplace priority_tag<1> SFINAE declaration and definition via std::map supporting emplace_hint.",
+      "round": 1
+    },
+    {
+      "file": "gen_24.cpp",
+      "name": "gen_24",
+      "intent": "Exercise from_json_object_emplace priority_tag<0> fallback via an ordered container like nlohmann::ordered_json::object_t or similar standard containers lacking emplace_hint if applicable, or simulate standard fallback logic.",
+      "round": 1
+    },
+    {
+      "file": "gen_25.cpp",
+      "name": "gen_25",
+      "intent": "Exercise both array append and object emplace helper mechanisms simultaneously with nested containers.",
+      "round": 1
+    },
+    {
+      "file": "gen_26.cpp",
+      "name": "ordered_map_fallback_conversion_fixed",
+      "intent": "Probes object conversion into a container backed by ordered_map which lacks emplace_hint, testing fallback to emplace.",
+      "round": 2,
+      "fixes": "gen_10.cpp",
+      "kind": "compile"
+    }
+  ],
+  "fix": {
+    "rounds_max": 2,
+    "model": "gemini-3.5-flash-lite"
+  }
+}

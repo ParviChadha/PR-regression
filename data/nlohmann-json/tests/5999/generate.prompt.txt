@@ -1,0 +1,380 @@
+[system]
+You write test programs that probe a C++ library for behavioral changes made by one pull request.
+Each program is compiled and run twice, once against the library before the change and once after, and the two
+outputs are compared. Your job is to produce programs whose output reveals whether the change altered behavior,
+including side effects the author did not intend.
+
+Rules for every program:
+- It is standalone: one file with its own int main(), compiled as C++17, printing results to stdout.
+- Use only the library's documented public API. Never include internal headers or use detail/impl namespaces,
+  private members or undocumented macros.
+- Do not judge results (no assert, no expected-value comparisons): just print what the library returns. Print
+  enough to make differences visible, one fact per line.
+- Output must be deterministic. Never print pointers or addresses, uninitialized data, the order of
+  hash-based containers, timings, thread ids, random values, file paths or environment data. Print floating point
+  values with an explicit precision. No input, files, network, threads, clocks or randomness.
+- Wrap calls that may throw in try/catch and print the exception's type and message, so an exception is an
+  observable result. Do not crash on purpose.
+- Aim at the code the diff changes. Prefer calls that compile against both the old and the new library; one or two
+  programs may use an API the PR adds. Cover ordinary inputs and edge cases (empty, minimum and maximum values,
+  boundaries, special values, nesting, unusual types) and also neighbouring behavior the change could disturb.
+- When the diff changes which types or inputs an API accepts or rejects (constraints, overloads, traits,
+  conversions), test it with the detection idiom (std::void_t or requires) and `if constexpr`, so the program
+  compiles against both versions, prints whether the expression is well-formed, and exercises it when it is.
+  Accepting an input is not enough: also use it through every entry point that should follow (const and
+  non-const, read, write, insert, erase, lookup, nested use), because a change that admits new inputs can leave
+  later code unable to handle them.
+- If the changed code is internal (a detail, impl or internal namespace, a trait, a helper), do not name it in the
+  program. Reach it through the public API that depends on it, using detection (as above) where needed.
+- Use the exact types and values the diff is about (the new trait's argument types, the new overload's
+  parameters), not stand-ins.
+- Spread the programs over distinct public entry points and overloads, one main idea per program. Do not write
+  several programs that only rename a type or change a literal.
+- Make the programs differ from each other: different inputs, different entry points, different features.
+
+Rules specific to this library:
+- Include the library with #include <nlohmann/json.hpp>. The public API is nlohmann::json (nlohmann::basic_json), nlohmann::ordered_json, json_pointer, json patch/merge_patch and the documented SAX and conversion interfaces. Never use the detail namespace.
+- It is a header-only library: nothing to link. Programs are compiled as C++17.
+- Print JSON values with dump() (compact) or dump(2). Keys of nlohmann::json objects print in sorted order, so output is deterministic; do not depend on insertion order except with ordered_json.
+
+[user]
+# Pull request #5999: json_view: dump() without StringType::capacity()
+
+## Description
+Fixes #5994.
+
+## What
+
+`output_buffer::grow()` in `detail/view/serializer.hpp` compared the output size with `m_out.capacity()` to decide how far a growth step may go and whether to `reserve()`. `capacity()` is not part of the StringType requirements, so `basic_json_view::dump()` did not compile with the tests' `alt_string`.
+
+The buffer now remembers what it last passed to `reserve()` (`m_reserved`, initialized to the estimate). That is a lower bound of the real capacity, so the growth steps behave as before; at worst a `reserve()` is issued that the string would not have needed, which is then a no-op.
+
+## Docs
+
+`template_parameters.md`, StringType "Required for other functionality": `basic_json_view::dump` needs `reserve(n)` and `resize(n)` (one argument); `capacity()` is not required.
+
+## Tests
+
+`unit-alt-string.cpp`, new test case "alternative string type with json_view": a read-only document over `alt_json` (dump plain, indented, ensure_ascii, against `alt_json::dump()`; materialize; `contains`/`operator[]` with `alt_string` keys), a dump large enough for several growth steps, and an editable document (`set`, `push_back`, `save()`/`load()`). Without the fix, the file does not compile (`no member named 'capacity' in 'alt_string'`); with it, it passes under C++11 and C++17 (Apple clang).
+
+## Public API
+
+No breaking changes.
+
+🤖 Generated with [Claude Code](https://claude.com/claude-code)
+
+## Commit message
+* json_view: dump() without StringType::capacity() (#5994)
+
+output_buffer::grow() compared the output size with m_out.capacity(),
+which the StringType requirements do not include, so dump() did not
+compile with the tests' alt_string. Keep what was last reserved in the
+buffer itself and use it as a lower bound of the capacity instead.
+
+Add json_view tests with alt_string (read-only and editable documents,
+dump with several growth steps, save/load), and document reserve(n) and
+resize(n) as the StringType requirements of basic_json_view::dump.
+
+Signed-off-by: Niels Lohmann <mail@nlohmann.me>
+
+* Use a raw string literal in the alt-string json_view test
+
+clang-tidy (modernize-raw-string-literal) rejects the escaped literal.
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+Claude-Session: https://claude.ai/code/session_01N5NasAgbDGG28MqXjQvLqp
+Signed-off-by: Claude <noreply@anthropic.com>
+
+---------
+
+Signed-off-by: Niels Lohmann <mail@nlohmann.me>
+Signed-off-by: Claude <noreply@anthropic.com>
+Co-authored-by: Claude <noreply@anthropic.com>
+
+## Linked issue #5994: json_view: dump() requires StringType::capacity(), which the documented StringType contract (the tests' alt_string) does not provide
+### Description
+
+`basic_json_view::dump()` (json_view, merged 2026-10-21) does not compile with a `StringType` that satisfies the documented StringType requirements but has no `capacity()` member. The library's own reference for the minimal `StringType` is the `alt_string` class in `tests/src/unit-alt-string.cpp`: `basic_json<std::map, std::vector, alt_string>` compiles and passes its unit test, but `basic_json_document<...>::parse(...)` followed by `root().dump()` fails with
+
+```
+include/nlohmann/detail/view/serializer.hpp:120:83: error: no member named 'capacity' in 'alt_string'
+```
+
+`capacity()` is the only missing piece: with a one-line `capacity()` added to `alt_string`, parse, dump (plain, indented, ensure_ascii), materialize, `get<alt_json>`, `find`/`at`/`operator[]`/`contains`/`count` with `alt_string` keys, `items()`, `shrink_to_fit()`, `memory_usage()`, and the editable document's `set`/`push_back`/`save()`/`load()` all compile and run correctly.
+
+The DOM never calls `capacity()` on `string_t`; the StringType section of `docs/mkdocs/docs/features/types/template_parameters.md` does not list it (it lists `reserve(n)` only for "JSON Pointer, flatten, diff", so the view's `reserve()` call is a second requirement the docs do not tie to dump; `alt_string` happens to have it). Nothing under `docs/mkdocs/docs/api/basic_json_view`, `basic_json_document` or `features/json_view.md` mentions StringType requirements, and no json_view test instantiates `alt_string`, which is why CI did not catch it.
+
+### Reproduction steps
+
+```sh
+clang++ -std=c++17 -I include -I tests/src view_alt.cpp   # alt_string copied from tests/src/unit-alt-string.cpp
+```
+
+### Expected vs. actual results
+
+Expected: json_view compiles with every `StringType` that `basic_json` accepts (or the extra requirement is documented in `template_parameters.md` and checked by a test).
+
+Actual: compile error in `detail/view/serializer.hpp:120`.
+
+### Minimal code example
+
+```cpp
+#include <map>
+#include <vector>
+[... truncated, 2312 more characters]
+
+## Discussion before merge
+- nlohmann: ### Performance check
+
+**No performance impact.** `output_buffer::grow()` now tracks the reserved size in a member instead of calling `capacity()`. `grow()` only runs when the size estimate is exceeded, so this is a cold path.
+
+- **Generated code** (clang, arm64): two functions differ. `output_buffer::grow()` is **one 16-byte block shorter**, because it no longer decodes libc++'s short-string capacity. The `dump()` entry stores the new member, which is one or two instructions per `dump()` call. Everything else is identical.
+- **Instruction counts**: all 38 rows are within ±0.4 %. The view `dump()` rows (twitter 1.0001, citm_catalog 1.0005, canada 1.0006, ensure_ascii twitter 1.0008) sit inside the noise band. The rows with identical code move by the same +0.05–0.1 %.
+- With the default `std::string`, growth is the same up to allocator rounding. `m_reserved` is the last size passed to `reserve()`, so it never exceeds `capacity()`. Doubling now starts from the requested size instead of the rounded capacity. If the caller passes a string that already has more capacity, the extra `reserve()` is a no-op, so the number of reallocations does not grow.
+
+<details><summary>Method</summary>
+
+
+[... truncated, 940 more characters]
+- gregmarr: https://www.cppreference.com/cpp/string/basic_string/reserve
+
+> (until C++20)
+> If new_cap is less than the current [capacity()](https://www.cppreference.com/cpp/string/basic_string/capacity), this is a non-binding shrink request.
+> If new_cap is less than the current [size()](https://www.cppreference.com/cpp/string/basic_string/size), this is a non-binding shrink-to-fit request equivalent to [shrink_to_fit()](https://www.cppreference.com/cpp/string/basic_string/shrink_to_fit)(since C++11).
+
+I don't know if any library actually implemented that shrink request.  I assume not, since it was changed to a no-op for C++20.
+- nlohmann: @gregmarr Right, before C++20 a `reserve(n)` below `capacity()` is allowed to act as a shrink request, so "a no-op" in the description is stronger than the standard promises. I checked the two libraries I can run: libc++ (C++11 and C++17) and libstdc++ 16 (C++11, C++17 and C++20) leave the capacity alone in all of these cases (`reserve` below the capacity, and after a `resize`), so I don't expect any implementation to shrink either; MSVC's STL I could not test.
+
+It could only matter when the caller's string already has a capacity above `m_reserved`. There, a library that did shrink would reallocate to a size that is still at least what `grow()` needs, so the result stays correct and only costs one copy. The `out.reserve(estimate)` in `start()` has had the same exposure all along, and the old `capacity()` check was the only thing that avoided it in `grow()`. Avoiding it entirely would need a detected `capacity()`, which I think is more machinery than it is worth. Do you see it differently?
+
+*(Written by Claude Code on behalf of @nlohmann.)*
+- gregmarr: I think it's probably safe, I just wanted you to confirm for yourself that you also think it's safe.
+
+## Headers the programs must include
+- Also write #include <nlohmann/json_view.hpp>. The json_view feature (json_document, json_view and their image loading and editing API) is declared only in this header; nlohmann/json.hpp does not include it, so without this line those names do not exist. Use only names you can see in the diff or the context below.
+
+## Changed functions (from changes.py)
+- nlohmann::detail::view::output_buffer::grow(std::size_t) (private); reached from the public API through: nlohmann::basic_json_view::dump(const int, const char, const bool, const number_format)
+- nlohmann::detail::view::output_buffer::output_buffer<StringType>(StringType &, std::size_t) (private); reached from the public API through: nlohmann::basic_json_view::dump(const int, const char, const bool, const number_format)
+- nlohmann::detail::view::output_buffer (private); reached from the public API through: nlohmann::basic_json_view::dump(const int, const char, const bool, const number_format)
+- nlohmann::detail::view::output_buffer::m_reserved (private); reached from the public API through: nlohmann::basic_json_view::dump(const int, const char, const bool, const number_format)
+- nlohmann::detail::view::output_buffer::m_end (private); reached from the public API through: nlohmann::basic_json_view::dump(const int, const char, const bool, const number_format)
+
+## Diff of the library source (before -> after)
+```diff
+diff --git a/include/nlohmann/detail/view/serializer.hpp b/include/nlohmann/detail/view/serializer.hpp
+index 2bfa2d2c0..28e1d647a 100644
+--- a/include/nlohmann/detail/view/serializer.hpp
++++ b/include/nlohmann/detail/view/serializer.hpp
+@@ -47,6 +47,7 @@ class output_buffer
+         : m_out(sized(out, estimate))
+         , m_pos(&m_out[0])
+         , m_end(m_pos + m_out.size())
++        , m_reserved((std::max)(estimate, m_out.size()))
+     {}
+ 
+     void finish()
+@@ -116,11 +117,12 @@ class output_buffer
+         const auto used = static_cast<std::size_t>(m_pos - m_out.data());
+         // (a step does not go beyond the reserved estimate, so that a good
+         // estimate is never copied to a larger allocation; not a clamp: the
+-        // lower bound used + n + 256 can exceed capacity(), and then it must win)
+-        const std::size_t size = (std::max)((std::min)(m_out.size() + step, m_out.capacity()), used + n + 256);
+-        if (size > m_out.capacity())
++        // lower bound used + n + 256 can exceed m_reserved, and then it must win)
++        const std::size_t size = (std::max)((std::min)(m_out.size() + step, m_reserved), used + n + 256);
++        if (size > m_reserved)
+         {
+-            m_out.reserve((std::max)(m_out.capacity() * 2, size));
++            m_reserved = (std::max)(m_reserved * 2, size);
++            m_out.reserve(m_reserved);
+         }
+         m_out.resize(size);
+         m_pos = &m_out[0] + used;
+@@ -130,6 +132,9 @@ class output_buffer
+     StringType& m_out;
+     char* m_pos;
+     char* m_end;
++    /// what was last passed to reserve(), a lower bound of the capacity
++    /// (StringType need not have a capacity() member)
++    std::size_t m_reserved;
+ };
+ 
+ /// The length of the run at s that dump() writes unchanged without
+```
+
+## Existing upstream tests that call the changed code (for style and API usage)
+// Upstream tests at the PR's parent commit 66e2eeeec that use the changed code.
+// Names searched (test lines using each): dump (729), grow (0), output_buffer (0), m_reserved (0), m_end (0)
+
+// ---- tests/src/unit-json_view_dump.cpp:44-77  (uses: dump)
+    SECTION("the output of ordered_json::dump()")
+    {
+        generator g;
+        for (int i = 0; i < 2000; ++i)
+        {
+            std::string text;
+            g.value(text, 0);
+            const ordered_json_document d = ordered_json_document::parse(text);
+            if (has_duplicate_keys(d.root()))
+            {
+                continue;
+            }
+            CAPTURE(text)
+            const ordered_json j = ordered_json::parse(text);
+            for (const int indent :
+                    {
+                        -1, 0, 2
+                    })
+            {
+                for (const bool ensure_ascii :
+                        {
+                            false, true
+                        })
+                {
+                    CHECK(d.root().dump(indent, i % 2 == 0 ? ' ' : '\t', ensure_ascii) == j.dump(indent, i % 2 == 0 ? ' ' : '\t', ensure_ascii));
+                }
+            }
+            // also of each element
+            for (const ordered_json_view e : d.root())
+            {
+                CHECK(e.dump() == e.materialize().dump());
+            }
+        }
+    }
+
+// ---- tests/src/unit-json_view_dump.cpp:79-91  (uses: dump)
+    SECTION("strings")
+    {
+        const std::string text = R"(["plain", "\u0000\u0001\u001f\u007f\u0080é€￿😀", "\"\\\/\b\f\n\r\t", "aéあ😀b", "long text beyond the eight bytes of a word \n with an escape in the middle"])";
+        const ordered_json_document d = ordered_json_document::parse(text);
+        const ordered_json j = ordered_json::parse(text);
+        CHECK(d.root().dump() == j.dump());
+        CHECK(d.root().dump(-1, ' ', true) == j.dump(-1, ' ', true));
+        CHECK(d.root().dump(4, ' ', true) == j.dump(4, ' ', true));
+        const std::string key_text = R"({"é\n": {"\"": [], "": {}}})";
+        const ordered_json_document keys = ordered_json_document::parse(key_text);
+        const ordered_json key_json = ordered_json::parse(key_text);
+        CHECK(keys.root().dump(2, ' ', true) == key_json.dump(2, ' ', true));
+    }
+
+// ---- tests/src/unit-json_view_dump_escape.cpp:40-47  (uses: dump)
+    SECTION("members in document order, all of them")
+    {
+        const json_document d = json_document::parse(R"({"b": 1, "a": 2, "b": 3})");
+        CHECK(d.root().dump() == R"({"b":1,"a":2,"b":3})");
+        CHECK(d.root().dump(1) == "{\n \"b\": 1,\n \"a\": 2,\n \"b\": 3\n}");
+        // dump() writes all members, though the lookup finds the first
+        CHECK(d.root()["b"].dump() == "1");
+    }
+
+// ---- tests/src/unit-json_view_dump_escape.cpp:49-54  (uses: dump)
+    SECTION("deep nesting")
+    {
+        const std::string deep = std::string(100000, '[') + std::string(100000, ']');
+        const json_document deep_document = json_document::parse(deep);
+        CHECK(deep_document.root().dump() == deep);
+    }
+
+// ---- tests/src/bjdata_round_trip.hpp:71-95  (uses: dump)
+        for (const auto& initial : all_options)
+        {
+            if (initial.version != initial_version)
+            {
+                continue;
+            }
+
+            const json j1 = json::from_bjdata(json::to_bjdata(j0, initial.use_size, initial.use_type, initial.version));
+            const bool has_binary = utils::round_trip_corpus::contains_binary(j1);
+
+            for (const auto& o : all_options)
+            {
+                INFO("j1 = " << j1.dump() << ", use_size = " << o.use_size << ", use_type = " << o.use_type
+                     << ", draft3 = " << (o.version == json::bjdata_version_t::draft3));
+
+                const std::vector<std::uint8_t> vec = json::to_bjdata(j1, o.use_size, o.use_type, o.version);
+                json j2;
+                // anything the library writes must be parsable by the library
+                REQUIRE_NOTHROW(j2 = json::from_bjdata(vec));
+                const std::vector<std::uint8_t> vec2 = json::to_bjdata(j2, o.use_size, o.use_type, o.version);
+                CHECK(json::from_bjdata(vec2).dump() == j2.dump());
+
+                if (!has_binary)
+                {
+                    CHECK(j2.dump() == j1.dump());
+
+// ---- tests/src/fuzzer-json_view_image.cpp:50-74  (uses: dump)
+        try
+        {
+            d = json_document::load(data, size, check);
+        }
+        catch (const json::parse_error& e)
+        {
+            assert(e.id == 116);
+            continue;
+        }
+        std::string dumped;
+        try
+        {
+            dumped = d.root().dump();
+        }
+        catch (const json::type_error& e)
+        {
+            // invalid UTF-8 can only pass the bounds check
+            assert(check == image_check::bounds && e.id == 316);
+            continue;
+        }
+        const json j = d.root().materialize();
+        if (check == image_check::full)
+        {
+            assert(json::parse(dumped) == j);
+            // an image of the loaded document is the input
+
+// ---- tests/src/fuzzer-json_view_image.cpp:79-95  (uses: dump)
+    // the input as a JSON text
+    const std::string text(reinterpret_cast<const char*>(data), size); // NOLINT(cppcoreguidelines-pro-type-reinterpret-cast)
+    const json_document parsed = json_document::parse(text, false);
+    if (!parsed.is_discarded())
+    {
+        const std::vector<std::uint8_t> image = parsed.save();
+        for (const image_check check :
+                {
+                    image_check::full, image_check::bounds, image_check::none
+                })
+        {
+            const json_document loaded = json_document::load(image, check);
+            assert(loaded.root().dump() == parsed.root().dump());
+        }
+    }
+    return 0;
+}
+
+// ---- tests/src/fuzzer-parse_bjdata.cpp:66-90  (uses: dump)
+    template<typename... Args>
+    json operator()(Args&& ... args) const
+    {
+        return json::from_bjdata(std::forward<Args>(args)...);
+    }
+};
+} // namespace
+
+// value-stable comparison for the round-trip checks below; see the note
+// above on why this compares dump()s rather than the json values directly
+static bool is_value_stable(const json& lhs, const json& rhs)
+{
+    return lhs.dump() == rhs.dump();
+}
+
+// see http://llvm.org/docs/LibFuzzer.html
+extern "C" int LLVMFuzzerTestOneInput(const uint8_t* data, size_t size)
+{
+    std::vector<uint8_t> const vec1(data, data + size);
+
+    // step 0: parse input without exceptions
+    bool noexcept_threw = false;
+    json const j_noexcept = parse_without_exceptions([&] { return json::from_bjdata(vec1, true, false); }, noexcept_threw);
+    // whether step 1 succeeded; if not, the catch blocks below check that
+    // step 0 failed, too
+
+# Task
+Write 20 test programs for this pull request. Return JSON with a "tests" array; each item has "name" (short snake_case), "intent" (one sentence: what behavior it probes) and "code" (the complete C++ program).

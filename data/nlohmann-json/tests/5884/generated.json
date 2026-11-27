@@ -1,0 +1,206 @@
+{
+  "target": "nlohmann-json",
+  "pr": 5884,
+  "model": "gemini-3.5-flash-lite",
+  "prompt_sha256": "2f82b1504392e3001df0cb1b9e490912c1198b627e2f35a7fcb3eb7f3c037cb8",
+  "n_requested": 20,
+  "dropped": 0,
+  "usage": {
+    "promptTokenCount": 18386,
+    "candidatesTokenCount": 4358,
+    "totalTokenCount": 22744,
+    "promptTokensDetails": [
+      {
+        "modality": "TEXT",
+        "tokenCount": 18386
+      }
+    ],
+    "serviceTier": "standard"
+  },
+  "tests": [
+    {
+      "file": "gen_01.cpp",
+      "name": "stream_adapter_cbor_ifstream_parsing",
+      "intent": "Probes binary input stream adapter with CBOR deserialization via std::ifstream optimization path.",
+      "round": 0
+    },
+    {
+      "file": "gen_02.cpp",
+      "name": "stream_adapter_msgpack_ifstream_parsing",
+      "intent": "Probes binary input stream adapter with MessagePack deserialization via fast bulk copying.",
+      "round": 0
+    },
+    {
+      "file": "gen_03.cpp",
+      "name": "stream_adapter_ubjson_ifstream_parsing",
+      "intent": "Probes input stream adapter with UBJSON deserialization using get-area optimized bulk reads.",
+      "round": 0
+    },
+    {
+      "file": "gen_04.cpp",
+      "name": "stream_adapter_unbuffered_streambuf",
+      "intent": "Probes the unbuffered streambuf path where characters are fetched through uflow or direct methods.",
+      "round": 0
+    },
+    {
+      "file": "gen_05.cpp",
+      "name": "stream_adapter_custom_streambuf_get_area",
+      "intent": "Probes custom streambufs featuring a delayed or split get area interacting with fast get_character steps.",
+      "round": 0
+    },
+    {
+      "file": "gen_06.cpp",
+      "name": "stream_adapter_accept_method",
+      "intent": "Probes basic_json::accept performance path with stream inputs and token tracking states.",
+      "round": 0
+    },
+    {
+      "file": "gen_07.cpp",
+      "name": "stream_adapter_token_carry_growth",
+      "intent": "Probes token carry buffer growth behavior during lengthy string token accumulations.",
+      "round": 0
+    },
+    {
+      "file": "gen_08.cpp",
+      "name": "stream_adapter_bson_deserialization",
+      "intent": "Probes input stream adapter paths via BSON parser entry points.",
+      "round": 0
+    },
+    {
+      "file": "gen_09.cpp",
+      "name": "stream_adapter_bjdata_deserialization",
+      "intent": "Probes input stream adapter paths via BJData parser entry points.",
+      "round": 0
+    },
+    {
+      "file": "gen_10.cpp",
+      "name": "stream_adapter_empty_stream",
+      "intent": "Probes empty stream input handling and EOF behavior across inline get area checks.",
+      "round": 0
+    },
+    {
+      "file": "gen_11.cpp",
+      "name": "stream_adapter_sax_parse_strict",
+      "intent": "Probes sax_parse with stream inputs testing direct stream adapter consumption.",
+      "round": 0
+    },
+    {
+      "file": "gen_12.cpp",
+      "name": "stream_adapter_bon8_deserialization",
+      "intent": "Probes Bon8 format deserialization from stream adapters.",
+      "round": 0
+    },
+    {
+      "file": "gen_13.cpp",
+      "name": "stream_adapter_large_binary_read",
+      "intent": "Probes stream adapter bulk read boundaries with counts exceeding available buffers.",
+      "round": 0
+    },
+    {
+      "file": "gen_14.cpp",
+      "name": "stream_adapter_stream_state_preservation",
+      "intent": "Probes whether stream states like failbit or eofbit are preserved properly during parsing.",
+      "round": 0
+    },
+    {
+      "file": "gen_15.cpp",
+      "name": "stream_adapter_consecutive_parses",
+      "intent": "Probes consecutive parse calls on the same input stream to verify lookahead and stream positions.",
+      "round": 0
+    },
+    {
+      "file": "gen_16.cpp",
+      "name": "stream_adapter_nested_containers",
+      "intent": "Probes deep nesting input parsing to stress character-by-character get area transitions.",
+      "round": 0
+    },
+    {
+      "file": "gen_17.cpp",
+      "name": "stream_adapter_utf8_multibyte",
+      "intent": "Probes multi-byte UTF-8 character handling through the inline get-area character path.",
+      "round": 0
+    },
+    {
+      "file": "gen_18.cpp",
+      "name": "stream_adapter_error_handling",
+      "intent": "Probes invalid syntax streams to confirm exception safety and message correctness.",
+      "round": 0
+    },
+    {
+      "file": "gen_19.cpp",
+      "name": "stream_adapter_mixed_whitespace",
+      "intent": "Probes stream adapters with heavy whitespace skipping and get-area refilling cycles.",
+      "round": 0
+    },
+    {
+      "file": "gen_20.cpp",
+      "name": "stream_adapter_nul_byte_handling",
+      "intent": "Probes operator>> stream behavior when trailing NUL bytes follow a valid JSON payload.",
+      "round": 0
+    },
+    {
+      "file": "gen_21.cpp",
+      "name": "gen_21_cpp",
+      "intent": "Trigger token_carry_buffer instantiation and grow/memcpy paths by parsing a long string via stream adapter with a custom buffered streambuf whose get area boundaries force token segment carry.",
+      "round": 1,
+      "superseded_by": "gen_25.cpp"
+    },
+    {
+      "file": "gen_22.cpp",
+      "name": "gen_22_cpp",
+      "intent": "Exercise get_character_slow fallback path where refill happens when get_ptr == get_end, ensuring current_in_get_area is set or false branches are executed.",
+      "round": 1,
+      "superseded_by": "gen_26.cpp"
+    },
+    {
+      "file": "gen_23.cpp",
+      "name": "gen_24_cpp",
+      "intent": "Trigger no_get_area tracking flag paths and explicit slow character extraction routines using an unbuffered streambuf parsing JSON structures.",
+      "round": 1,
+      "superseded_by": "gen_27.cpp"
+    },
+    {
+      "file": "gen_24.cpp",
+      "name": "gen_25_cpp",
+      "intent": "Invoke token_carry_buffer growth and copy operations when parsing a deeply nested object or long quoted keys with chunked buffering.",
+      "round": 1,
+      "superseded_by": "gen_28.cpp"
+    },
+    {
+      "file": "gen_25.cpp",
+      "name": "gen_21_cpp_fixed",
+      "intent": "Trigger token_carry_buffer instantiation and grow/memcpy paths by parsing a long string via stream adapter with a custom buffered streambuf whose get area boundaries force token segment carry.",
+      "round": 2,
+      "fixes": "gen_21.cpp",
+      "kind": "compile"
+    },
+    {
+      "file": "gen_26.cpp",
+      "name": "gen_22_cpp_fixed",
+      "intent": "Exercise get_character_slow fallback path where refill happens when get_ptr == get_end, ensuring current_in_get_area is set or false branches are executed.",
+      "round": 2,
+      "fixes": "gen_22.cpp",
+      "kind": "compile"
+    },
+    {
+      "file": "gen_27.cpp",
+      "name": "gen_24_cpp_fixed",
+      "intent": "Trigger no_get_area tracking flag paths and explicit slow character extraction routines using an unbuffered streambuf parsing JSON structures.",
+      "round": 2,
+      "fixes": "gen_23.cpp",
+      "kind": "compile"
+    },
+    {
+      "file": "gen_28.cpp",
+      "name": "gen_25_cpp_fixed",
+      "intent": "Invoke token_carry_buffer growth and copy operations when parsing a deeply nested object or long quoted keys with chunked buffering.",
+      "round": 2,
+      "fixes": "gen_24.cpp",
+      "kind": "compile"
+    }
+  ],
+  "fix": {
+    "rounds_max": 2,
+    "model": "gemini-3.5-flash-lite"
+  }
+}

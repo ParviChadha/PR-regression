@@ -1,0 +1,207 @@
+[system]
+You write test programs that probe a C++ library for behavioral changes made by one pull request.
+Each program is compiled and run twice, once against the library before the change and once after, and the two
+outputs are compared. Your job is to produce programs whose output reveals whether the change altered behavior,
+including side effects the author did not intend.
+
+Rules for every program:
+- It is standalone: one file with its own int main(), compiled as C++17, printing results to stdout.
+- Use only the library's documented public API. Never include internal headers or use detail/impl namespaces,
+  private members or undocumented macros.
+- Do not judge results (no assert, no expected-value comparisons): just print what the library returns. Print
+  enough to make differences visible, one fact per line.
+- Output must be deterministic. Never print pointers or addresses, uninitialized data, the order of
+  hash-based containers, timings, thread ids, random values, file paths or environment data. Print floating point
+  values with an explicit precision. No input, files, network, threads, clocks or randomness.
+- Wrap calls that may throw in try/catch and print the exception's type and message, so an exception is an
+  observable result. Do not crash on purpose.
+- Aim at the code the diff changes. Prefer calls that compile against both the old and the new library; one or two
+  programs may use an API the PR adds. Cover ordinary inputs and edge cases (empty, minimum and maximum values,
+  boundaries, special values, nesting, unusual types) and also neighbouring behavior the change could disturb.
+- When the diff changes which types or inputs an API accepts or rejects (constraints, overloads, traits,
+  conversions), test it with the detection idiom (std::void_t or requires) and `if constexpr`, so the program
+  compiles against both versions, prints whether the expression is well-formed, and exercises it when it is.
+  Accepting an input is not enough: also use it through every entry point that should follow (const and
+  non-const, read, write, insert, erase, lookup, nested use), because a change that admits new inputs can leave
+  later code unable to handle them.
+- If the changed code is internal (a detail, impl or internal namespace, a trait, a helper), do not name it in the
+  program. Reach it through the public API that depends on it, using detection (as above) where needed.
+- Use the exact types and values the diff is about (the new trait's argument types, the new overload's
+  parameters), not stand-ins.
+- Spread the programs over distinct public entry points and overloads, one main idea per program. Do not write
+  several programs that only rename a type or change a literal.
+- Make the programs differ from each other: different inputs, different entry points, different features.
+
+Rules specific to this library:
+- Include the library with #include <nlohmann/json.hpp>. The public API is nlohmann::json (nlohmann::basic_json), nlohmann::ordered_json, json_pointer, json patch/merge_patch and the documented SAX and conversion interfaces. Never use the detail namespace.
+- It is a header-only library: nothing to link. Programs are compiled as C++17.
+- Print JSON values with dump() (compact) or dump(2). Keys of nlohmann::json objects print in sorted order, so output is deterministic; do not depend on insertion order except with ordered_json.
+
+[user]
+# Pull request #5813: Export client-facing headers from json.hpp for IWYU / include-cleaner, and check clients in CI
+
+## Description
+Include analyzers (include-what-you-use, clang-tidy's `misc-include-cleaner`) told code that includes only `<nlohmann/json.hpp>` to also include internal headers, because `json.hpp` did not mark them as exported. Worst case, the suggested fix replaced `json.hpp` with `json_fwd.hpp` and the code stopped compiling (#5812).
+
+### Changes
+
+- `include/nlohmann/json.hpp`: `// IWYU pragma: export` on the includes whose names client code uses:
+
+  | Header | Client use |
+  |---|---|
+  | `json_fwd.hpp` | `nlohmann::json`, `ordered_json` (#5812) |
+  | `detail/json_ref.hpp` | brace initialization (IWYU only) |
+  | `json_literals.hpp` | `_json`, `_json_pointer` |
+  | `adl_serializer.hpp` | `adl_serializer` specializations (was `keep`) |
+  | `detail/macro_scope.hpp` | `NLOHMANN_DEFINE_*` macros |
+  | `detail/abi_macros.hpp` | `NLOHMANN_JSON_NAMESPACE_*` macros |
+
+- **CI:** `ci_single_binaries` only checked each header on its own, so it could not catch this. It now also builds three small client programs in `tests/iwyu_consumer/` and runs IWYU (`iwyu_tool --error`) and `clang-tidy --checks=-*,misc-include-cleaner --warnings-as-errors=*` on them.
+- With the exports, IWYU no longer gives `json_literals.hpp` the "use json_fwd.hpp" suggestion that kept it out of the IWYU gate, so it is gated again.
+- `single_include` is re-amalgamated. The amalgamated `json.hpp` contains `json_fwd.hpp` itself, so single-header users were not affected. It only gains pragma comment lines.
+
+### Verification
+
+I ran `ci_single_binaries` in the CI image (`silkeh/clang:22`, IWYU 0.23, clang-tidy 22):
+
+- **This branch:** passes.
+- **With develop's `json.hpp`:** fails. Both IWYU and include-cleaner flag all three client files, and IWYU also flags `json_literals.hpp`.
+
+I also ran clang-tidy 23 on the reproducer from the issue: clean with this change, two findings on develop.
+
+`NLOHMANN_JSON_SERIALIZE_ENUM` is not covered by the client programs. IWYU attributes the `basic_json` comparison inside its expansion to `<map>`, the same ambiguity that keeps `json.hpp` itself out of the gate. Its header is still covered by `NLOHMANN_DEFINE_TYPE_INTRUSIVE`.
+
+Fixes #5812
+
+## Public API
+
+No breaking changes. Only comment pragmas are added to the public headers.
+
+🤖 Generated with [Claude Code](https://claude.com/claude-code)
+
+## Commit message
+* Mark json_fwd.hpp as exported by json.hpp for IWYU / include-cleaner
+
+json_fwd.hpp is the only header declaring the nlohmann::json alias, so
+include-what-you-use and clang-tidy's misc-include-cleaner attributed
+the name to it and told users of <nlohmann/json.hpp> to include
+json_fwd.hpp as well (or instead, which breaks compilation).
+
+Fixes #5812
+
+Signed-off-by: Niels Lohmann <mail@nlohmann.me>
+
+* Export the remaining client-facing headers from json.hpp and check clients with IWYU
+
+Besides json_fwd.hpp, include analyzers also told clients of
+<nlohmann/json.hpp> to include detail/json_ref.hpp (brace
+initialization), json_literals.hpp (_json, _json_pointer),
+adl_serializer.hpp, detail/macro_scope.hpp (NLOHMANN_DEFINE_*) and
+detail/abi_macros.hpp. Mark those includes as exported, too.
+
+ci_single_binaries only checked each header on its own, so it could not
+notice this. It now also runs IWYU and clang-tidy's misc-include-cleaner
+on small client programs in tests/iwyu_consumer, which fail on develop.
+With the exports, json_literals.hpp no longer gets the json_fwd.hpp
+suggestion that kept it out of the IWYU gate, so it is gated again.
+
+Signed-off-by: Niels Lohmann <mail@nlohmann.me>
+
+---------
+
+Signed-off-by: Niels Lohmann <mail@nlohmann.me>
+
+## Linked issue #5812: Mark json_fwd.hpp as exported by json.hpp for include-what-you-use / clang-tidy misc-include-cleaner
+### Description
+
+`nlohmann/json.hpp` includes `nlohmann/json_fwd.hpp`, which is the only header that declares the `nlohmann::json` alias (`using json = basic_json<>;`), but the include is not marked as exported. Include analysers that follow the IWYU model, such as clang-tidy's `misc-include-cleaner` and include-what-you-use, therefore attribute the `nlohmann::json` name to `json_fwd.hpp` and the class members to `json.hpp`.
+
+As a result:
+
+- Any source that names `nlohmann::json` and uses it is told to include **both** headers, although `json.hpp` already provides everything `json_fwd.hpp` declares.
+- A source whose only uses are implicit (for example brace-initialising a `json` value) is told that `json_fwd.hpp` is sufficient. Applying the suggested fix replaces `json.hpp` with `json_fwd.hpp` and the code stops compiling with "implicit instantiation of undefined template `nlohmann::basic_json<>`".
+
+### Reproduction
+
+```cpp
+#include <nlohmann/json.hpp>
+
+auto Make() -> nlohmann::json { return { { "a", 1 } }; }
+```
+
+`clang-tidy --checks=-*,misc-include-cleaner` reports that no header providing `nlohmann::json` is directly included and suggests adding `<nlohmann/json_fwd.hpp>`.
+
+### Suggested fix
+
+Mark the include in `json.hpp` (and the amalgamated single header's equivalent) as exported:
+
+```cpp
+#include <nlohmann/json_fwd.hpp> // IWYU pragma: export
+```
+
+Both clang-tidy's include-cleaner and include-what-you-use honour this pragma, so users would only need `json.hpp` in sources and could keep `json_fwd.hpp` for headers that only need the declaration.
+
+### Version
+
+3.11.3, observed with clang-tidy 23 (`misc-include-cleaner`).
+
+### Workaround
+
+Add `nlohmann/json_fwd\.hpp` to `misc-include-cleaner.IgnoreHeaders`.
+
+## Diff of the library source (before -> after)
+```diff
+diff --git a/include/nlohmann/json.hpp b/include/nlohmann/json.hpp
+index fae89829a..3bad024f1 100644
+--- a/include/nlohmann/json.hpp
++++ b/include/nlohmann/json.hpp
+@@ -42,9 +42,14 @@
+ // each of these, not only the forward declarations from json_fwd.hpp, so IWYU's suggestion to
+ // drop them (nothing in this file otherwise names the type) would break every downstream
+ // translation unit that relies on basic_json<>'s defaults actually being usable.
+-#include <nlohmann/adl_serializer.hpp> // IWYU pragma: keep
++// export: client code names what these headers declare (nlohmann::json and ordered_json from
++// json_fwd.hpp, adl_serializer for specializations, json_ref behind brace initialization, the
++// NLOHMANN_DEFINE_* and NLOHMANN_JSON_NAMESPACE_* macros, and the literals at the end of this file), and include analyzers must
++// attribute it to this header, not tell clients to include the internal ones (issue #5812).
++// tests/iwyu_consumer checks this.
++#include <nlohmann/adl_serializer.hpp> // IWYU pragma: export
+ #include <nlohmann/byte_container_with_subtype.hpp>
+-#include <nlohmann/detail/abi_macros.hpp>
++#include <nlohmann/detail/abi_macros.hpp> // IWYU pragma: export
+ #include <nlohmann/detail/conversions/from_json.hpp> // IWYU pragma: keep
+ #include <nlohmann/detail/conversions/to_json.hpp> // IWYU pragma: keep
+ #include <nlohmann/detail/exceptions.hpp>
+@@ -61,8 +66,8 @@
+ #include <nlohmann/detail/iterators/primitive_iterator.hpp>
+ #include <nlohmann/detail/json_custom_base_class.hpp>
+ #include <nlohmann/detail/json_pointer.hpp>
+-#include <nlohmann/detail/json_ref.hpp>
+-#include <nlohmann/detail/macro_scope.hpp>
++#include <nlohmann/detail/json_ref.hpp> // IWYU pragma: export
++#include <nlohmann/detail/macro_scope.hpp> // IWYU pragma: export
+ #include <nlohmann/detail/meta/detected.hpp>
+ #include <nlohmann/detail/string_concat.hpp>
+ #include <nlohmann/detail/string_escape.hpp>
+@@ -74,7 +79,7 @@
+ #include <nlohmann/detail/output/serializer.hpp>
+ #include <nlohmann/detail/recursion_depth_limit.hpp>
+ #include <nlohmann/detail/value_t.hpp>
+-#include <nlohmann/json_fwd.hpp>
++#include <nlohmann/json_fwd.hpp> // IWYU pragma: export
+ #include <nlohmann/ordered_map.hpp> // IWYU pragma: keep
+ #include <nlohmann/thirdparty/hedley/hedley.hpp>
+ 
+@@ -7795,7 +7800,7 @@ struct formatter<nlohmann::NLOHMANN_BASIC_JSON_TPL, char> // NOLINT(cert-dcl58-c
+ // where needed.
+ #ifndef JSON_NO_AUTOMATIC_UDLS
+     // NOLINTNEXTLINE(misc-header-include-cycle): json_literals.hpp includes this header
+-    #include <nlohmann/json_literals.hpp>
++    #include <nlohmann/json_literals.hpp> // IWYU pragma: export
+ #endif
+ 
+ #endif  // INCLUDE_NLOHMANN_JSON_HPP_
+```
+
+# Task
+Write 20 test programs for this pull request. Return JSON with a "tests" array; each item has "name" (short snake_case), "intent" (one sentence: what behavior it probes) and "code" (the complete C++ program).

@@ -1,0 +1,370 @@
+[system]
+You write test programs that probe a C++ library for behavioral changes made by one pull request.
+Each program is compiled and run twice, once against the library before the change and once after, and the two
+outputs are compared. Your job is to produce programs whose output reveals whether the change altered behavior,
+including side effects the author did not intend.
+
+Rules for every program:
+- It is standalone: one file with its own int main(), compiled as C++17, printing results to stdout.
+- Use only the library's documented public API. Never include internal headers or use detail/impl namespaces,
+  private members or undocumented macros.
+- Do not judge results (no assert, no expected-value comparisons): just print what the library returns. Print
+  enough to make differences visible, one fact per line.
+- Output must be deterministic. Never print pointers or addresses, uninitialized data, the order of
+  hash-based containers, timings, thread ids, random values, file paths or environment data. Print floating point
+  values with an explicit precision. No input, files, network, threads, clocks or randomness.
+- Wrap calls that may throw in try/catch and print the exception's type and message, so an exception is an
+  observable result. Do not crash on purpose.
+- Aim at the code the diff changes. Prefer calls that compile against both the old and the new library; one or two
+  programs may use an API the PR adds. Cover ordinary inputs and edge cases (empty, minimum and maximum values,
+  boundaries, special values, nesting, unusual types) and also neighbouring behavior the change could disturb.
+- When the diff changes which types or inputs an API accepts or rejects (constraints, overloads, traits,
+  conversions), test it with the detection idiom (std::void_t or requires) and `if constexpr`, so the program
+  compiles against both versions, prints whether the expression is well-formed, and exercises it when it is.
+  Accepting an input is not enough: also use it through every entry point that should follow (const and
+  non-const, read, write, insert, erase, lookup, nested use), because a change that admits new inputs can leave
+  later code unable to handle them.
+- If the changed code is internal (a detail, impl or internal namespace, a trait, a helper), do not name it in the
+  program. Reach it through the public API that depends on it, using detection (as above) where needed.
+- Use the exact types and values the diff is about (the new trait's argument types, the new overload's
+  parameters), not stand-ins.
+- Spread the programs over distinct public entry points and overloads, one main idea per program. Do not write
+  several programs that only rename a type or change a literal.
+- Make the programs differ from each other: different inputs, different entry points, different features.
+
+Rules specific to this library:
+- Include the library with #include <nlohmann/json.hpp>. The public API is nlohmann::json (nlohmann::basic_json), nlohmann::ordered_json, json_pointer, json patch/merge_patch and the documented SAX and conversion interfaces. Never use the detail namespace.
+- It is a header-only library: nothing to link. Programs are compiled as C++17.
+- Print JSON values with dump() (compact) or dump(2). Keys of nlohmann::json objects print in sorted order, so output is deterministic; do not depend on insertion order except with ordered_json.
+
+[user]
+# Pull request #5971: json_view: skip the digits of a fraction 16 bytes at a time (SSE2)
+
+## Description
+## What
+
+The digits after the decimal point were skipped by `skip_digits()`: 16 compare-and-branch steps in a row, about 3.5 instructions per
+digit and an exit branch that is mispredicted when the lengths vary. On x86 with SSE2, the fraction is now skipped by
+`skip_fraction_digits()`: 16 bytes are compared at once and the end of the run is taken from the bit mask, about a third of the
+instructions for a fraction of 12 digits. The last bytes of the input are skipped one at a time as before. Without SSE2 (AArch64, other targets,
+`JSON_NO_SIMD`) `skip_fraction_digits()` is `skip_digits()`: nothing changes there. Integer digits keep `skip_digits()`
+(their exit is predictable; an earlier try with word arithmetic for integers made `citm_catalog` 6 % slower).
+
+**GCC-specific part:** GCC unrolls the scalar loop over the last bytes in every inlined copy (`number()` is inlined into the parse loop at several places),
+which made the parse loop 4 KiB larger (31,980 -> 35,926 bytes) and files with few fractions 1-4 % slower with more instructions. For GCC
+that loop is out of line (`skip_digits_tail()`, +167 bytes instead of +4 KiB); Clang is faster with it inline (an out-of-line tail costs it 5 % on
+`instruments`). It is the only compiler-specific `#if` of the change.
+
+## Performance
+
+`json_document::parse()`, A/B in one binary (this branch against `origin/develop`), 6 code layouts, 20 pairs each, x86-64 Haswell, time after / before.
+AArch64 is not affected (same code).
+
+| row | GCC 16.2 | Clang 23 |
+|---|---|---|
+| **numbers.json** (10,001 floats) | **0.717** | **0.683** |
+| **canada.json** | **0.775** | **0.783** |
+| **mesh.json** | **0.909** | **0.878** |
+| **marine_ik.json** | **0.919** | **0.927** |
+| **mesh.pretty.json** | **0.914** | **0.945** |
+| tree-pretty / instruments | 1.002 / 0.993 | 0.990 / 1.017 |
+| gsoc-2018 / twitter | 0.996 / 1.011 | 0.999 / 1.003 |
+| prices (20,000 objects with two-decimal prices) | 0.998 | 1.004 |
+| fixed6 (60,000 pairs with six decimals) | 1.064 (3) | 0.993 |
+| citm_catalog | **1.078** (4) | 0.996 |
+
+(3) Spread 0.99-1.33: one layout of a loaded run; callgrind says -9 % instructions, -19 % branches, -15 % mispredicts for this row.
+(4) Stable over the layouts (1.06-1.09) but the instruction count is +0.3 % and mispredicts -11 %: a code-placement effect of GCC on this file. In earlier runs of
+the same code on a slightly different base this row was 1.000-1.05, and the same file moved by +-7 % between builds of unrelated variants.
+Please weigh it: if you consider a +8 % on one guard row on GCC unacceptable, the other rows show that the idea works and the GCC part could be limited
+further, but I have not found a form without it.
+
+Instruction counts (callgrind, GCC 16.2, per parse): `numbers` 0.68 (branches 0.57, simulated mispredicts 0.03), `canada` 0.75 (mispredicts 0.59);
+`prices` 1.00 (mispredicts 0.91). The gain is the instruction count; an earlier variant that kept the instruction count and removed only the
+mispredicts gained nothing.
+
+## Tests
+
+`json_view builder`, new test case `fraction digits`: fractions of every length from 0 to 40 digits followed by every kind of byte that ends a number
+or lies next to the digits in ASCII (`, ] } / : . e E + - x` space, newline, tab, `"`, `0`, `9`), as a root value, in arrays, in objects, and cut in
+every place near the end of the text (the length of the number token is what `value_of()` compares with `json::parse()`), for all option combinations and
+with and without a terminating NUL. Checked against a deliberate off-by-one at the 16th byte (1,401 assertions fail).
+
+Run locally: all `unit-json_view*.cpp` with clang++ `-std=c++11` on arm64; the builder test on x86-64 with Apple clang (Rosetta), g++ 16 and Clang 23 on Linux
+(the compiler-specific tail is only compiled there); `make amalgamate` run. The full CI matrix has not run; MSVC (`_mm_cmplt_epi8` etc. are in
+`<emmintrin.h>`, the same header the other SSE2 code uses) and 32-bit x86 are untested.
+
+## Breaking A
+[... truncated, 126 more characters]
+
+## Commit message
+Signed-off-by: Niels Lohmann <mail@nlohmann.me>
+
+## Discussion before merge
+- gregmarr: ```
+std::string pair;
+pair.reserve(number.size() * 2 + 3);
+pair += '[';
+pair += number;
+pair += ',';
+pair += number;
+pair += ']';
+check_same(pair);
+```
+- nlohmann: Done in `9124dea82f`, as you suggested: `pair` is reserved first and built with character appends.
+
+*(Written by Claude Code on behalf of @nlohmann.)*
+
+## Headers the programs must include
+- Also write #include <nlohmann/json_view.hpp>. The json_view feature (json_document, json_view and their image loading and editing API) is declared only in this header; nlohmann/json.hpp does not include it, so without this line those names do not exist. Use only names you can see in the diff or the context below.
+
+## Changed functions (from changes.py)
+- nlohmann::detail::view::builder::cursor::number() (private); reached from the public API through: nlohmann::basic_json_document::read(InputType &&, const bool, const bool, const bool), nlohmann::basic_json_document::basic_json_document<BasicJsonType, Mode>(basic_json_document<BasicJsonType, Mode> &&), nlohmann::basic_json_document::basic_json_document<BasicJsonType, Mode>(const basic_json_document<BasicJsonType, Mode> &), nlohmann::basic_json_document::load(std::vector<std::uint8_t> &&, const image_check), nlohmann::basic_json_document::load(const std::vector<std::uint8_t> &, const image_check), nlohmann::basic_json_document::load(const std::uint8_t *, std::size_t, const image_check), nlohmann::basic_json_document::operator=(basic_json_document<BasicJsonType, Mode> &&), nlohmann::basic_json_document::operator=(const basic_json_document<BasicJsonType, Mode> &), nlohmann::basic_json_document::accept(InputType &&, const bool, const bool), nlohmann::basic_json_document::parse(InputType &&, const bool, const bool, const bool)
+- nlohmann::detail::view::skip_fraction_digits(const unsigned char *, const unsigned char *) (private); reached from the public API through: nlohmann::basic_json_document::read(InputType &&, const bool, const bool, const bool), nlohmann::basic_json_document::basic_json_document<BasicJsonType, Mode>(basic_json_document<BasicJsonType, Mode> &&), nlohmann::basic_json_document::basic_json_document<BasicJsonType, Mode>(const basic_json_document<BasicJsonType, Mode> &), nlohmann::basic_json_document::load(std::vector<std::uint8_t> &&, const image_check), nlohmann::basic_json_document::load(const std::vector<std::uint8_t> &, const image_check), nlohmann::basic_json_document::load(const std::uint8_t *, std::size_t, const image_check), nlohmann::basic_json_document::operator=(basic_json_document<BasicJsonType, Mode> &&), nlohmann::basic_json_document::operator=(const basic_json_document<BasicJsonType, Mode> &), nlohmann::basic_json_document::accept(InputType &&, const bool, const bool), nlohmann::basic_json_document::parse(InputType &&, const bool, const bool, const bool)
+- nlohmann::detail::view::skip_digits_tail(const unsigned char *, const unsigned char *) (private); reached from the public API through: nlohmann::basic_json_document::read(InputType &&, const bool, const bool, const bool), nlohmann::basic_json_document::basic_json_document<BasicJsonType, Mode>(basic_json_document<BasicJsonType, Mode> &&), nlohmann::basic_json_document::basic_json_document<BasicJsonType, Mode>(const basic_json_document<BasicJsonType, Mode> &), nlohmann::basic_json_document::load(std::vector<std::uint8_t> &&, const image_check), nlohmann::basic_json_document::load(const std::vector<std::uint8_t> &, const image_check), nlohmann::basic_json_document::load(const std::uint8_t *, std::size_t, const image_check), nlohmann::basic_json_document::operator=(basic_json_document<BasicJsonType, Mode> &&), nlohmann::basic_json_document::operator=(const basic_json_document<BasicJsonType, Mode> &), nlohmann::basic_json_document::accept(InputType &&, const bool, const bool), nlohmann::basic_json_document::parse(InputType &&, const bool, const bool, const bool)
+
+## Diff of the library source (before -> after)
+```diff
+diff --git a/include/nlohmann/detail/view/builder.hpp b/include/nlohmann/detail/view/builder.hpp
+index 4b729ce39..938d6d73b 100644
+--- a/include/nlohmann/detail/view/builder.hpp
++++ b/include/nlohmann/detail/view/builder.hpp
+@@ -1189,7 +1189,7 @@ indent_done:
+             {
+                 ++p;
+                 const unsigned char* const f0 = p;
+-                p = skip_digits(p, e);
++                p = skip_fraction_digits(p, e);
+                 if (NLOHMANN_VIEW_UNLIKELY(p == f0))
+                 {
+                     return fail(error_code::number_after_dot);
+diff --git a/include/nlohmann/detail/view/scan.hpp b/include/nlohmann/detail/view/scan.hpp
+index b8d862203..9cea6b05c 100644
+--- a/include/nlohmann/detail/view/scan.hpp
++++ b/include/nlohmann/detail/view/scan.hpp
+@@ -198,6 +198,57 @@ inline const unsigned char* find_block_comment_end(const unsigned char* p, const
+     return p;
+ }
+ 
++/// The digits of a fraction, whose number varies from one number to the next: skip_digits() with 16 bytes compared at
++/// once and the end of the run taken from a bit mask (SSE2), instead of a compare and a branch for each digit. That
++/// is about a third of the instructions for a fraction of 12 digits, and no branch that is mispredicted when the
++/// lengths vary. Where there is no SSE2, skip_digits() is used.
++#if NLOHMANN_VIEW_SSE2
++// The last bytes of the input, one at a time. GCC unrolls this loop in every inlined copy of the function below, which
++// makes the parse loop 4 KiB larger and slows down documents that have hardly any fractions; out of line, it does
++// not. Clang does better with the loop inline (a call in the parse loop costs it more than the unrolling).
++#if defined(__GNUC__) && !defined(__clang__)
++inline NLOHMANN_VIEW_NOINLINE const unsigned char* skip_digits_tail(const unsigned char* p, const unsigned char* e) noexcept
++{
++    while (p != e && is_digit(*p))
++    {
++        ++p;
++    }
++    return p;
++}
++#else
++NLOHMANN_VIEW_ALWAYS_INLINE const unsigned char* skip_digits_tail(const unsigned char* p, const unsigned char* e) noexcept
++{
++    while (p != e && is_digit(*p))
++    {
++        ++p;
++    }
++    return p;
++}
++#endif
++
++NLOHMANN_VIEW_ALWAYS_INLINE const unsigned char* skip_fraction_digits(const unsigned char* p, const unsigned char* e) noexcept
++{
++    while (e - p >= 16)
++    {
++        const __m128i in = _mm_loadu_si128(static_cast<const __m128i*>(static_cast<const void*>(p))); // NOLINT(bugprone-casting-through-void)
++        // a digit is above '/' and below ':' (signed compares: a byte with the top bit set is negative, and neither)
++        const __m128i digits = _mm_and_si128(_mm_cmpgt_epi8(in, _mm_set1_epi8('/')), _mm_cmplt_epi8(in, _mm_set1_epi8(':')));
++        const auto not_digit = static_cast<std::uint64_t>(~static_cast<unsigned>(_mm_movemask_epi8(digits)) & 0xFFFFu);
++        if (not_digit != 0)
++        {
++            return p + count_trailing_zeros(not_digit);
++        }
++        p += 16;
++    }
++    return skip_digits_tail(p, e);
++}
++#else
++NLOHMANN_VIEW_ALWAYS_INLINE const unsigned char* skip_fraction_digits(const unsigned char* p, const unsigned char* e) noexcept
++{
++    return skip_digits(p, e);
++}
++#endif
++
+ /// powers of ten up to 10^19 as integers
+ inline std::uint64_t int_pow10(unsigned k) noexcept
+ {
+```
+
+## Existing upstream tests that call the changed code (for style and API usage)
+// Upstream tests at the PR's parent commit 1a018577c that use the changed code.
+// Names searched (test lines using each): read (19), basic_json_document (0), load (0), accept (12), parse (11), operator= (28), number (0), skip_fraction_digits (0), skip_digits_tail (0)
+
+// ---- tests/src/unit-class_parser.cpp:47-71  (uses: parse)
+using utils::SaxEventLogger;
+
+namespace
+{
+json parser_helper(const std::string& s);
+bool accept_helper(const std::string& s);
+void comments_helper(const std::string& s);
+void trailing_comma_helper(const std::string& s);
+
+json parser_helper(const std::string& s)
+{
+    json j;
+    json::parser(nlohmann::detail::input_adapter(s)).parse(true, j);
+
+    // if this line was reached, no exception occurred
+    // -> check if result is the same without exceptions
+    json j_nothrow;
+    CHECK_NOTHROW(json::parser(nlohmann::detail::input_adapter(s), nullptr, false).parse(true, j_nothrow));
+    CHECK(j_nothrow == j);
+
+    json j_sax;
+    nlohmann::detail::json_sax_dom_parser<json, nlohmann::detail::string_input_adapter_type> sdp(j_sax);
+    json::sax_parse(s, &sdp);
+    CHECK(j_sax == j);
+
+
+// ---- tests/src/unit-class_parser.cpp:73-97  (uses: parse)
+
+    trailing_comma_helper(s);
+
+    return j;
+}
+
+bool accept_helper(const std::string& s)
+{
+    CAPTURE(s)
+
+    // 1. parse s without exceptions
+    json j;
+    CHECK_NOTHROW(json::parser(nlohmann::detail::input_adapter(s), nullptr, false).parse(true, j));
+    const bool ok_noexcept = !j.is_discarded();
+
+    // 2. accept s
+    const bool ok_accept = json::parser(nlohmann::detail::input_adapter(s)).accept(true);
+
+    // 3. check if both approaches come to the same result
+    CHECK(ok_noexcept == ok_accept);
+
+    // 4. parse with SAX (compare with relaxed accept result)
+    SaxEventLogger el;
+    CHECK_NOTHROW(json::sax_parse(s, &el, json::input_format_t::json, false));
+    CHECK(json::parser(nlohmann::detail::input_adapter(s)).accept(false) == !el.errored);
+
+// ---- tests/src/unit-std-format.cpp:105-126  (uses: parse)
+    SECTION("a format spec may run to the end of the parse context")
+    {
+        // std::format always hands parse() a range that still holds the closing
+        // '}', but a parse context may also end right after the spec
+        const auto parse = [](const char* spec)
+        {
+            std::format_parse_context ctx(spec);
+            std::formatter<json> f;
+            CHECK(f.parse(ctx) == ctx.end());
+            return f;
+        };
+
+        CHECK(parse("").indent == -1);
+        CHECK(parse(">").indent == -1);
+        CHECK(parse("#").indent == 4);
+        CHECK(parse("3").indent == 3);
+        CHECK(parse("#12").indent == 12);
+
+        const auto f = parse(".>");
+        CHECK(f.indent == -1);
+        CHECK(f.indent_char == '.');
+    }
+
+// ---- tests/src/unit-json_view.cpp:82-106  (uses: read)
+        return claimed;
+    }
+};
+
+// detection of calls that must not compile
+template<typename... Args>
+using parse_call_t = decltype(json_document::parse(std::declval<Args>()...));
+template<typename... Args>
+using parse_copy_call_t = decltype(json_document::parse_copy(std::declval<Args>()...));
+template<typename... Args>
+using accept_call_t = decltype(json_document::accept(std::declval<Args>()...));
+template<typename... Args>
+using read_call_t = decltype(std::declval<json_document&>().read(std::declval<Args>()...));
+template<typename Document>
+using root_call_t = decltype(std::declval<Document>().root());
+template<typename View>
+using bool_conversion_t = decltype(static_cast<bool>(std::declval<View>()));
+
+#if !defined(JSON_NOEXCEPTION)
+// the exception parse() throws for a text, or "" if it accepts it
+std::string parse_exception(const std::string& text, bool comments = false, bool trailing_commas = false)
+{
+    try
+    {
+        const json j = json::parse(text, nullptr, true, comments, trailing_commas);
+
+// ---- tests/src/unit-json_view.cpp:346-370  (uses: read)
+        const json_document from_rvalue = json_document::parse(std::move(moved));
+        CHECK(from_rvalue.owns_source());
+        CHECK(from_rvalue.root().materialize() == expected);
+        CHECK(json_document::parse(std::vector<char>(text.begin(), text.end())).owns_source());
+        // a const rvalue cannot be moved from, and is not borrowed (it may be a
+        // temporary): it is copied, as is a const rvalue of any container
+        const std::string const_text = text; // NOLINT(performance-unnecessary-copy-initialization)
+        const json_document from_const_rvalue = json_document::parse(std::move(const_text)); // NOLINT(performance-move-const-arg,hicpp-move-const-arg)
+        CHECK(from_const_rvalue.owns_source());
+        CHECK(from_const_rvalue.source().data() != const_text.data()); // NOLINT(bugprone-use-after-move,hicpp-invalid-access-moved): const, not moved from
+        CHECK(from_const_rvalue.root().materialize() == expected);
+        json_document read_const_rvalue;
+        read_const_rvalue.read(std::move(const_text)); // NOLINT(performance-move-const-arg,hicpp-move-const-arg,bugprone-use-after-move,hicpp-invalid-access-moved)
+        CHECK(read_const_rvalue.owns_source());
+        CHECK(read_const_rvalue.root().materialize() == expected);
+        const std::vector<char> const_chars(text.begin(), text.end());
+        CHECK(json_document::parse(std::move(const_chars)).owns_source()); // NOLINT(performance-move-const-arg,hicpp-move-const-arg)
+        CHECK(json_document::parse_copy(text).owns_source());
+        CHECK(materialized_copy<json_document>(text) == expected);
+        std::istringstream stream(text);
+        const json_document from_stream = json_document::parse(stream);
+        CHECK(from_stream.owns_source());
+        CHECK(from_stream.root().materialize() == expected);
+        const std::list<char> list(text.begin(), text.end());
+        CHECK(json_document::parse(list.begin(), list.end()).owns_source());
+
+// ---- tests/src/unit-json_view_edit_values.cpp:288-304  (uses: read)
+    SECTION("reuse and memory")
+    {
+        json_editable_document d = json_editable_document::parse("[1, 2, 3]");
+        const std::size_t before = d.memory_usage();
+        for (int i = 0; i < 100; ++i)
+        {
+            d.push_back(d.root(), "some text");
+        }
+        CHECK(d.memory_usage() > before);
+        const json_editable_view first = d.root()[0];
+        d.shrink_to_fit(); // (with edits, the index stays in place)
+        CHECK(first.get<int>() == 1);
+        d.read(std::string("[true]"));
+        CHECK(d.root().dump() == "[true]");
+        d.push_back(d.root(), false);
+        CHECK(d.root().dump() == "[true,false]");
+    }
+
+// ---- tests/src/unit-class_iterator.cpp:46-52  (uses: operator=)
+        SECTION("copy assignment")
+        {
+            json j(json::value_t::null);
+            json::iterator const it(&j);
+            json::iterator it2(&j);
+            it2 = it;
+        }
+
+# Task
+Write 20 test programs for this pull request. Return JSON with a "tests" array; each item has "name" (short snake_case), "intent" (one sentence: what behavior it probes) and "code" (the complete C++ program).

@@ -1,0 +1,551 @@
+[system]
+You write test programs that probe a C++ library for behavioral changes made by one pull request.
+Each program is compiled and run twice, once against the library before the change and once after, and the two
+outputs are compared. Your job is to produce programs whose output reveals whether the change altered behavior,
+including side effects the author did not intend.
+
+Rules for every program:
+- It is standalone: one file with its own int main(), compiled as C++17, printing results to stdout.
+- Use only the library's documented public API. Never include internal headers or use detail/impl namespaces,
+  private members or undocumented macros.
+- Do not judge results (no assert, no expected-value comparisons): just print what the library returns. Print
+  enough to make differences visible, one fact per line.
+- Output must be deterministic. Never print pointers or addresses, uninitialized data, the order of
+  hash-based containers, timings, thread ids, random values, file paths or environment data. Print floating point
+  values with an explicit precision. No input, files, network, threads, clocks or randomness.
+- Wrap calls that may throw in try/catch and print the exception's type and message, so an exception is an
+  observable result. Do not crash on purpose.
+- Aim at the code the diff changes. Prefer calls that compile against both the old and the new library; one or two
+  programs may use an API the PR adds. Cover ordinary inputs and edge cases (empty, minimum and maximum values,
+  boundaries, special values, nesting, unusual types) and also neighbouring behavior the change could disturb.
+- When the diff changes which types or inputs an API accepts or rejects (constraints, overloads, traits,
+  conversions), test it with the detection idiom (std::void_t or requires) and `if constexpr`, so the program
+  compiles against both versions, prints whether the expression is well-formed, and exercises it when it is.
+  Accepting an input is not enough: also use it through every entry point that should follow (const and
+  non-const, read, write, insert, erase, lookup, nested use), because a change that admits new inputs can leave
+  later code unable to handle them.
+- If the changed code is internal (a detail, impl or internal namespace, a trait, a helper), do not name it in the
+  program. Reach it through the public API that depends on it, using detection (as above) where needed.
+- Use the exact types and values the diff is about (the new trait's argument types, the new overload's
+  parameters), not stand-ins.
+- Spread the programs over distinct public entry points and overloads, one main idea per program. Do not write
+  several programs that only rename a type or change a literal.
+- Make the programs differ from each other: different inputs, different entry points, different features.
+
+Rules specific to this library:
+- Include the library with #include <nlohmann/json.hpp>. The public API is nlohmann::json (nlohmann::basic_json), nlohmann::ordered_json, json_pointer, json patch/merge_patch and the documented SAX and conversion interfaces. Never use the detail namespace.
+- It is a header-only library: nothing to link. Programs are compiled as C++17.
+- Print JSON values with dump() (compact) or dump(2). Keys of nlohmann::json objects print in sorted order, so output is deterministic; do not depend on insertion order except with ordered_json.
+
+[user]
+# Pull request #5975: CBOR reader: read runs of scalar array elements in one loop
+
+## Description
+## What
+
+When a definite-length CBOR array opens and the input is contiguous, the reader now reads the integers, floats, booleans and nulls that follow in one tight loop (`parse_cbor_scalar_run`). It switches on the head byte, loads the big-endian value straight from the input buffer and calls the SAX handler. Elements no longer go one by one through `parse_cbor_internal`'s container bookkeeping and `parse_cbor_value`'s dispatch.
+
+- The loop stops at any other kind of value (strings, containers, tags, half floats, simple values) and when fewer than 9 bytes are left. Those values go through the existing path, which reads them exactly as before, so positions, errors and SAX events do not change.
+- It runs only once, when the array opens. A check in the main loop, run for every element, cost +3 % on citm_catalog, whose arrays mix scalars and objects.
+- Non-contiguous inputs (streams, `std::list` iterators) are not affected. Tag dispatch on the bulk-scan capability means they never instantiate the bulk calls.
+- `number_float` now receives a member empty `string_t` as its source, instead of a `std::string` constructed for every float.
+
+This is the CBOR part of the binary-format research (see #5968 for the BSON part).
+
+## Measurements
+
+Instructions and time per parse, B/A (A = develop 755bb16d7a), from the ab-harness one-binary A/B (both layouts). The Mac is an M1 Max with Apple clang (instructions retired, 60 reps); GCC 13 is x86-64 under callgrind.
+
+| | Mac instr | Mac time | GCC 13 instr |
+|---|---|---|---|
+| SAX canada | 0.523 | **0.471** | 0.854 |
+| DOM read canada | 0.909 | 0.926 | 0.935 |
+| SAX citm_catalog | 0.989 | 0.985 | 1.008 |
+| DOM read citm_catalog | 0.998 | 0.993 | 1.001 |
+| SAX twitter | 0.999 | 0.999 | 1.006 |
+| DOM read twitter | 0.999 | 0.995 | 0.998 |
+| strict UTF-8, citm_catalog | 0.998 | 0.991 | 1.001 |
+| `std::istringstream`, citm_catalog | 0.999 | 0.992 | 1.006 |
+
+Canada is mostly arrays of doubles; citm_catalog and twitter mix scalars with strings and objects. No row is more than 1 % worse.
+
+Two more changes were tried and left out because each made GCC's stream path (`input_stream_adapter`) 0.5–4 % worse through inlining changes:
+- a `memcpy` + `bit_ops::byteswap` `byte_swap` for floats (another −3.5 % on GCC DOM read canada);
+- taking the container frame by reference in `parse_cbor_internal`.
+
+## Tests
+
+New test case "CBOR arrays of scalars from contiguous and non-contiguous input" in `unit-cbor.cpp`. It reads a document containing every scalar head the loop handles, among them the 1/2/4/8-byte integers, −2^64 as a float, int64 min, half/single/double floats, booleans and null. It checks values and then, for every truncation of the document, compares contiguous against non-contiguous input:
+- the result or error of `from_cbor`,
+- the full SAX event log,
+- a SAX handler that stops after each of the first 60 events.
+
+The full ctest suite passes with ASan/UBSan (184/184).
+
+## Update: review commit
+
+The second commit removes the `cbor_scalar_follows()` pre-check, since `parse_cbor_scalar_run` returns on the same conditions anyway, and sets the value size explicitly in every case. Measured against the first commit:
+
+| B/A | GCC 13 instr | Mac instr |
+|---|---|---|
+| SAX canada | **0.915** | 0.914 |
+| DOM read canada | 0.990 | 0.988 |
+| SAX citm_catalog | 1.003 | 1.004 |
+| DOM read citm_catalog | – | 1.002 |
+| SAX twitter | 1.000 | 1.001 |
+| `std::istringstream`, citm_catalog | 1.000 | – |
+
+The table above is for the first commit alone. With both commits, SAX canada is about 0.78 (GCC) and 0.48 (Mac) of develop's instruction count.
+
+## Breaking changes
+
+None. Values, error messages, error positions and SAX events are unchanged. The public API is untouched.
+
+🤖 Generated with [Claude Code](https://claude.com/claude-code)
+
+## Commit message
+* CBOR reader: read runs of scalar array elements in one loop
+
+When a definite-length CBOR array opens and the input is contiguous, read
+the integers, floats, booleans, and nulls that follow in a tight loop
+instead of going through parse_cbor_internal's container logic and
+parse_cbor_value's dispatch for every element. The loop stops at any other
+kind of value and when fewer than 9 bytes are left; those values are read
+by the general path exactly as before. Non-contiguous inputs are not
+affected (tag dispatch on the bulk-scan capability).
+
+Also pass a member empty string as the number source to number_float
+instead of constructing a std::string for every float.
+
+Signed-off-by: Niels Lohmann <mail@nlohmann.me>
+
+* CBOR reader: address review of the scalar-run reader
+
+- parse_cbor_scalar_run: set the size explicitly in every case that
+  reads a value, instead of relying on a default that every other case
+  overwrites.
+- Remove cbor_scalar_follows(): parse_cbor_scalar_run already returns on
+  the same conditions, and without the pre-check SAX canada needs another
+  8.5 % fewer instructions with GCC 13 (0.915 against the previous
+  version), with no row more than 0.5 % worse (Mac and GCC).
+- Restore the comment on why parse_cbor_internal copies the container
+  frame.
+
+Signed-off-by: Niels Lohmann <mail@nlohmann.me>
+
+* CBOR reader: enter the scalar run only when a scalar follows
+
+An array of containers or strings called the out-of-line run start once per
+array only to leave it at once; on nested data (arrays of objects) that call
+made reading slower than before the run reader. enter_cbor_array now tests the
+first byte and the remaining length inline and calls the run only for a
+scalar, so the run's loop condition moves to the end (do-while).
+
+Signed-off-by: Niels Lohmann <mail@nlohmann.me>
+
+* CBOR reader: mark the initial accepted in the scalar run as a false-positive dead store
+
+ci_infer reports DEAD_STORE for 'bool accepted = true;' in
+parse_cbor_scalar_run because ever
+[... truncated, 1754 more characters]
+
+## Discussion before merge
+- gregmarr: explicit `size = 1` in all cases that rely on the default, so that it's obviously intentional?  Could maybe then leave `size` uninit to remove a duplicate store in the other cases?
+- gregmarr: Why is this function needed?  Calling `parse_cbor_scalar_run` will immediately return false exactly on these conditions.  The only thing this avoids is the `container_stack.back()`.  Is that expensive enough that calls to `bulk_remaining()`, `bulk_data()` and a test of `head` are far less expensive?
+- gregmarr: Why delete this comment?
+- github-advanced-security[bot]: ## Flawfinder / Does not check for buffer overflows when copying to destination (CWE-120).
+
+buffer/memcpy:Does not check for buffer overflows when copying to destination (CWE-120).
+
+[Show more details](https://github.com/nlohmann/json/security/code-scanning/1109)
+- nlohmann: Done in 43665e5. `size` is now left uninitialised, and every case that relied on the default (`false`/`true`/`null` and the one-byte integers) sets `size = 1` itself. The bail-out branch never reads it. gcc and clang give no uninitialised-variable warnings at -O0 to -O3, and the instruction counts are unchanged.
+
+---
+_Generated by [Claude Code](https://claude.ai/code)_
+- nlohmann: You're right, it was redundant, and I removed it in 43665e5. `parse_cbor_array_start` now calls `parse_cbor_scalar_run` directly. With callgrind on synthetic CBOR shaped like citm_catalog, canada and string/object arrays (I could not download the real files here), the pre-check saved about 0.2-0.6 % of instructions on arrays that start with a non-scalar and cost about 0.8 % on arrays of numbers, so it was a wash. I have not re-run the real citm_catalog and canada timings; the CI benchmarks will show whether the numbers in the description still hold.
+
+---
+_Generated by [Claude Code](https://claude.ai/code)_
+
+## Changed functions (from changes.py)
+- nlohmann::detail::binary_reader (private); reached from the public API through: nlohmann::basic_json::sax_parse(detail::span_input_adapter &&, SAX *, input_format_t, const bool, const bool, const bool, const cbor_tag_handler_t), nlohmann::basic_json::sax_parse(InputType &&, SAX *, input_format_t, const bool, const bool, const bool, const cbor_tag_handler_t), nlohmann::basic_json::sax_parse(IteratorType, SentinelType, SAX *, input_format_t, const bool, const bool, const bool, const cbor_tag_handler_t), nlohmann::basic_json::from_bson(detail::span_input_adapter &&, const bool, const bool), nlohmann::basic_json::from_cbor(detail::span_input_adapter &&, const bool, const bool, const cbor_tag_handler_t), nlohmann::basic_json::from_msgpack(detail::span_input_adapter &&, const bool, const bool), nlohmann::basic_json::from_ubjson(detail::span_input_adapter &&, const bool, const bool), nlohmann::basic_json::from_bjdata(InputType &&, const bool, const bool, const error_handler_t), nlohmann::basic_json::from_bon8(InputType &&, const bool, const bool), nlohmann::basic_json::from_bson(InputType &&, const bool, const bool, const error_handler_t)
+- nlohmann::detail::binary_reader::parse_cbor_internal(const cbor_tag_handler_t) (private); reached from the public API through: nlohmann::basic_json::sax_parse(detail::span_input_adapter &&, SAX *, input_format_t, const bool, const bool, const bool, const cbor_tag_handler_t), nlohmann::basic_json::sax_parse(InputType &&, SAX *, input_format_t, const bool, const bool, const bool, const cbor_tag_handler_t), nlohmann::basic_json::sax_parse(IteratorType, SentinelType, SAX *, input_format_t, const bool, const bool, const bool, const cbor_tag_handler_t), nlohmann::basic_json::from_bson(detail::span_input_adapter &&, const bool, const bool), nlohmann::basic_json::from_cbor(detail::span_input_adapter &&, const bool, const bool, const cbor_tag_handler_t), nlohmann::basic_json::from_msgpack(detail::span_input_adapter &&, const bool, const bool), nlohmann::basic_json::from_ubjson(detail::span_input_adapter &&, const bool, const bool), nlohmann::basic_json::from_bjdata(InputType &&, const bool, const bool, const error_handler_t), nlohmann::basic_json::from_bon8(InputType &&, const bool, const bool), nlohmann::basic_json::from_bson(InputType &&, const bool, const bool, const error_handler_t)
+- nlohmann::detail::binary_reader::get_cbor_negative_integer() (private); reached from the public API through: nlohmann::basic_json::sax_parse(detail::span_input_adapter &&, SAX *, input_format_t, const bool, const bool, const bool, const cbor_tag_handler_t), nlohmann::basic_json::sax_parse(InputType &&, SAX *, input_format_t, const bool, const bool, const bool, const cbor_tag_handler_t), nlohmann::basic_json::sax_parse(IteratorType, SentinelType, SAX *, input_format_t, const bool, const bool, const bool, const cbor_tag_handler_t), nlohmann::basic_json::from_bson(detail::span_input_adapter &&, const bool, const bool), nlohmann::basic_json::from_cbor(detail::span_input_adapter &&, const bool, const bool, const cbor_tag_handler_t), nlohmann::basic_json::from_msgpack(detail::span_input_adapter &&, const bool, const bool), nlohmann::basic_json::from_ubjson(detail::span_input_adapter &&, const bool, const bool), nlohmann::basic_json::from_bjdata(InputType &&, const bool, const bool, const error_handler_t), nlohmann::basic_json::from_bon8(InputType &&, const bool, const bool), nlohmann::basic_json::from_bson(InputType &&, const bool, const bool, const error_handler_t)
+- nlohmann::detail::binary_reader::parse_bon8_value() (private); reached from the public API through: nlohmann::basic_json::sax_parse(detail::span_input_adapter &&, SAX *, input_format_t, const bool, const bool, const bool, const cbor_tag_handler_t), nlohmann::basic_json::sax_parse(InputType &&, SAX *, input_format_t, const bool, const bool, const bool, const cbor_tag_handler_t), nlohmann::basic_json::sax_parse(IteratorType, SentinelType, SAX *, input_format_t, const bool, const bool, const bool, const cbor_tag_handler_t), nlohmann::basic_json::from_bson(detail::span_input_adapter &&, const bool, const bool), nlohmann::basic_json::from_cbor(detail::span_input_adapter &&, const bool, const bool, const cbor_tag_handler_t), nlohmann::basic_json::from_msgpack(detail::span_input_adapter &&, const bool, const bool), nlohmann::basic_json::from_ubjson(detail::span_input_adapter &&, const bool, const bool), nlohmann::basic_json::from_bjdata(InputType &&, const bool, const bool, const error_handler_t), nlohmann::basic_json::from_bon8(InputType &&, const bool, const bool), nlohmann::basic_json::from_bson(InputType &&, const bool, const bool, const error_handler_t)
+- nlohmann::detail::binary_reader::parse_cbor_value(const bool, const cbor_tag_handler_t, bool &, bool &) (private); reached from the public API through: nlohmann::basic_json::sax_parse(detail::span_input_adapter &&, SAX *, input_format_t, const bool, const bool, const bool, const cbor_tag_handler_t), nlohmann::basic_json::sax_parse(InputType &&, SAX *, input_format_t, const bool, const bool, const bool, const cbor_tag_handler_t), nlohmann::basic_json::sax_parse(IteratorType, SentinelType, SAX *, input_format_t, const bool, const bool, const bool, const cbor_tag_handler_t), nlohmann::basic_json::from_bson(detail::span_input_adapter &&, const bool, const bool), nlohmann::basic_json::from_cbor(detail::span_input_adapter &&, const bool, const bool, const cbor_tag_handler_t), nlohmann::basic_json::from_msgpack(detail::span_input_adapter &&, const bool, const bool), nlohmann::basic_json::from_ubjson(detail::span_input_adapter &&, const bool, const bool), nlohmann::basic_json::from_bjdata(InputType &&, const bool, const bool, const error_handler_t), nlohmann::basic_json::from_bon8(InputType &&, const bool, const bool), nlohmann::basic_json::from_bson(InputType &&, const bool, const bool, const error_handler_t)
+- nlohmann::detail::binary_reader::emit_float(const NumberType) (private); reached from the public API through: nlohmann::basic_json::sax_parse(detail::span_input_adapter &&, SAX *, input_format_t, const bool, const bool, const bool, const cbor_tag_handler_t), nlohmann::basic_json::sax_parse(InputType &&, SAX *, input_format_t, const bool, const bool, const bool, const cbor_tag_handler_t), nlohmann::basic_json::sax_parse(IteratorType, SentinelType, SAX *, input_format_t, const bool, const bool, const bool, const cbor_tag_handler_t), nlohmann::basic_json::from_bson(detail::span_input_adapter &&, const bool, const bool), nlohmann::basic_json::from_cbor(detail::span_input_adapter &&, const bool, const bool, const cbor_tag_handler_t), nlohmann::basic_json::from_msgpack(detail::span_input_adapter &&, const bool, const bool), nlohmann::basic_json::from_ubjson(detail::span_input_adapter &&, const bool, const bool), nlohmann::basic_json::from_bjdata(InputType &&, const bool, const bool, const error_handler_t), nlohmann::basic_json::from_bon8(InputType &&, const bool, const bool), nlohmann::basic_json::from_bson(InputType &&, const bool, const bool, const error_handler_t)
+- nlohmann::detail::binary_reader::get_half_float(const bool) (private); reached from the public API through: nlohmann::basic_json::sax_parse(detail::span_input_adapter &&, SAX *, input_format_t, const bool, const bool, const bool, const cbor_tag_handler_t), nlohmann::basic_json::sax_parse(InputType &&, SAX *, input_format_t, const bool, const bool, const bool, const cbor_tag_handler_t), nlohmann::basic_json::sax_parse(IteratorType, SentinelType, SAX *, input_format_t, const bool, const bool, const bool, const cbor_tag_handler_t), nlohmann::basic_json::from_bson(detail::span_input_adapter &&, const bool, const bool), nlohmann::basic_json::from_cbor(detail::span_input_adapter &&, const bool, const bool, const cbor_tag_handler_t), nlohmann::basic_json::from_msgpack(detail::span_input_adapter &&, const bool, const bool), nlohmann::basic_json::from_ubjson(detail::span_input_adapter &&, const bool, const bool), nlohmann::basic_json::from_bjdata(InputType &&, const bool, const bool, const error_handler_t), nlohmann::basic_json::from_bon8(InputType &&, const bool, const bool), nlohmann::basic_json::from_bson(InputType &&, const bool, const bool, const error_handler_t)
+- nlohmann::detail::binary_reader::parse_cbor_scalar_run(std::true_type) (private); reached from the public API through: nlohmann::basic_json::sax_parse(detail::span_input_adapter &&, SAX *, input_format_t, const bool, const bool, const bool, const cbor_tag_handler_t), nlohmann::basic_json::sax_parse(InputType &&, SAX *, input_format_t, const bool, const bool, const bool, const cbor_tag_handler_t), nlohmann::basic_json::sax_parse(IteratorType, SentinelType, SAX *, input_format_t, const bool, const bool, const bool, const cbor_tag_handler_t), nlohmann::basic_json::from_bson(detail::span_input_adapter &&, const bool, const bool), nlohmann::basic_json::from_cbor(detail::span_input_adapter &&, const bool, const bool, const cbor_tag_handler_t), nlohmann::basic_json::from_msgpack(detail::span_input_adapter &&, const bool, const bool), nlohmann::basic_json::from_ubjson(detail::span_input_adapter &&, const bool, const bool), nlohmann::basic_json::from_bjdata(InputType &&, const bool, const bool, const error_handler_t), nlohmann::basic_json::from_bon8(InputType &&, const bool, const bool), nlohmann::basic_json::from_bson(InputType &&, const bool, const bool, const error_handler_t)
+- nlohmann::detail::binary_reader::load_big_endian(const unsigned char *) (private); reached from the public API through: nlohmann::basic_json::sax_parse(detail::span_input_adapter &&, SAX *, input_format_t, const bool, const bool, const bool, const cbor_tag_handler_t), nlohmann::basic_json::sax_parse(InputType &&, SAX *, input_format_t, const bool, const bool, const bool, const cbor_tag_handler_t), nlohmann::basic_json::sax_parse(IteratorType, SentinelType, SAX *, input_format_t, const bool, const bool, const bool, const cbor_tag_handler_t), nlohmann::basic_json::from_bson(detail::span_input_adapter &&, const bool, const bool), nlohmann::basic_json::from_cbor(detail::span_input_adapter &&, const bool, const bool, const cbor_tag_handler_t), nlohmann::basic_json::from_msgpack(detail::span_input_adapter &&, const bool, const bool), nlohmann::basic_json::from_ubjson(detail::span_input_adapter &&, const bool, const bool), nlohmann::basic_json::from_bjdata(InputType &&, const bool, const bool, const error_handler_t), nlohmann::basic_json::from_bon8(InputType &&, const bool, const bool), nlohmann::basic_json::from_bson(InputType &&, const bool, const bool, const error_handler_t)
+- nlohmann::detail::binary_reader::enter_cbor_array(const std::size_t) (private); reached from the public API through: nlohmann::basic_json::sax_parse(detail::span_input_adapter &&, SAX *, input_format_t, const bool, const bool, const bool, const cbor_tag_handler_t), nlohmann::basic_json::sax_parse(InputType &&, SAX *, input_format_t, const bool, const bool, const bool, const cbor_tag_handler_t), nlohmann::basic_json::sax_parse(IteratorType, SentinelType, SAX *, input_format_t, const bool, const bool, const bool, const cbor_tag_handler_t), nlohmann::basic_json::from_bson(detail::span_input_adapter &&, const bool, const bool), nlohmann::basic_json::from_cbor(detail::span_input_adapter &&, const bool, const bool, const cbor_tag_handler_t), nlohmann::basic_json::from_msgpack(detail::span_input_adapter &&, const bool, const bool), nlohmann::basic_json::from_ubjson(detail::span_input_adapter &&, const bool, const bool), nlohmann::basic_json::from_bjdata(InputType &&, const bool, const bool, const error_handler_t), nlohmann::basic_json::from_bon8(InputType &&, const bool, const bool), nlohmann::basic_json::from_bson(InputType &&, const bool, const bool, const error_handler_t)
+- nlohmann::detail::binary_reader::parse_cbor_scalar_run(std::false_type) (private); reached from the public API through: nlohmann::basic_json::sax_parse(detail::span_input_adapter &&, SAX *, input_format_t, const bool, const bool, const bool, const cbor_tag_handler_t), nlohmann::basic_json::sax_parse(InputType &&, SAX *, input_format_t, const bool, const bool, const bool, const cbor_tag_handler_t), nlohmann::basic_json::sax_parse(IteratorType, SentinelType, SAX *, input_format_t, const bool, const bool, const bool, const cbor_tag_handler_t), nlohmann::basic_json::from_bson(detail::span_input_adapter &&, const bool, const bool), nlohmann::basic_json::from_cbor(detail::span_input_adapter &&, const bool, const bool, const cbor_tag_handler_t), nlohmann::basic_json::from_msgpack(detail::span_input_adapter &&, const bool, const bool), nlohmann::basic_json::from_ubjson(detail::span_input_adapter &&, const bool, const bool), nlohmann::basic_json::from_bjdata(InputType &&, const bool, const bool, const error_handler_t), nlohmann::basic_json::from_bon8(InputType &&, const bool, const bool), nlohmann::basic_json::from_bson(InputType &&, const bool, const bool, const error_handler_t)
+- nlohmann::detail::binary_reader::emit_cbor_negative_integer(const NumberType) (private); reached from the public API through: nlohmann::basic_json::sax_parse(detail::span_input_adapter &&, SAX *, input_format_t, const bool, const bool, const bool, const cbor_tag_handler_t), nlohmann::basic_json::sax_parse(InputType &&, SAX *, input_format_t, const bool, const bool, const bool, const cbor_tag_handler_t), nlohmann::basic_json::sax_parse(IteratorType, SentinelType, SAX *, input_format_t, const bool, const bool, const bool, const cbor_tag_handler_t), nlohmann::basic_json::from_bson(detail::span_input_adapter &&, const bool, const bool), nlohmann::basic_json::from_cbor(detail::span_input_adapter &&, const bool, const bool, const cbor_tag_handler_t), nlohmann::basic_json::from_msgpack(detail::span_input_adapter &&, const bool, const bool), nlohmann::basic_json::from_ubjson(detail::span_input_adapter &&, const bool, const bool), nlohmann::basic_json::from_bjdata(InputType &&, const bool, const bool, const error_handler_t), nlohmann::basic_json::from_bon8(InputType &&, const bool, const bool), nlohmann::basic_json::from_bson(InputType &&, const bool, const bool, const error_handler_t)
+- nlohmann::detail::binary_reader::no_source (private); reached from the public API through: nlohmann::basic_json::sax_parse(detail::span_input_adapter &&, SAX *, input_format_t, const bool, const bool, const bool, const cbor_tag_handler_t), nlohmann::basic_json::sax_parse(InputType &&, SAX *, input_format_t, const bool, const bool, const bool, const cbor_tag_handler_t), nlohmann::basic_json::sax_parse(IteratorType, SentinelType, SAX *, input_format_t, const bool, const bool, const bool, const cbor_tag_handler_t), nlohmann::basic_json::from_bson(detail::span_input_adapter &&, const bool, const bool), nlohmann::basic_json::from_cbor(detail::span_input_adapter &&, const bool, const bool, const cbor_tag_handler_t), nlohmann::basic_json::from_msgpack(detail::span_input_adapter &&, const bool, const bool), nlohmann::basic_json::from_ubjson(detail::span_input_adapter &&, const bool, const bool), nlohmann::basic_json::from_bjdata(InputType &&, const bool, const bool, const error_handler_t), nlohmann::basic_json::from_bon8(InputType &&, const bool, const bool), nlohmann::basic_json::from_bson(InputType &&, const bool, const bool, const error_handler_t)
+
+## Diff of the library source (before -> after)
+```diff
+diff --git a/include/nlohmann/detail/input/binary_reader.hpp b/include/nlohmann/detail/input/binary_reader.hpp
+index b671fd84e..40df891bc 100644
+--- a/include/nlohmann/detail/input/binary_reader.hpp
++++ b/include/nlohmann/detail/input/binary_reader.hpp
+@@ -745,11 +745,13 @@ class binary_reader
+     bool get_cbor_negative_integer()
+     {
+         NumberType number{};
+-        if (JSON_HEDLEY_UNLIKELY(!get_number(number)))
+-        {
+-            return false;
+-        }
++        return get_number(number) && emit_cbor_negative_integer(number);
++    }
+ 
++    /// pass the CBOR negative integer -1 - @a number to the SAX parser
++    template<typename NumberType>
++    bool emit_cbor_negative_integer(const NumberType number)
++    {
+         // the value is -1 - number, which fits into number_integer_t
+         // whenever number does; the outer cast undoes the integral promotion
+         // for number_integer_t types narrower than int
+@@ -974,7 +976,7 @@ class binary_reader
+             case 0x95:
+             case 0x96:
+             case 0x97:
+-                return enter_array(conditional_static_cast<std::size_t>(static_cast<unsigned int>(current) & 0x1Fu));
++                return enter_cbor_array(conditional_static_cast<std::size_t>(static_cast<unsigned int>(current) & 0x1Fu));
+ 
+             case 0x98: // array (one-byte uint8_t for n follows)
+             case 0x99: // array (two-byte uint16_t for n follow)
+@@ -983,7 +985,7 @@ class binary_reader
+             {
+                 std::uint64_t len{};
+                 std::size_t size{};
+-                return get_cbor_argument(len) && get_cbor_container_size(len, size, "array") && enter_array(size);
++                return get_cbor_argument(len) && get_cbor_container_size(len, size, "array") && enter_cbor_array(size);
+             }
+ 
+             case 0x9F: // array (indefinite length)
+@@ -1680,6 +1682,155 @@ class binary_reader
+         return true;
+     }
+ 
++    /*!
++    @brief read a big-endian number of type @a NumberType at @a data
++    */
++    template<typename NumberType>
++    NumberType load_big_endian(const unsigned char* data) const noexcept
++    {
++        NumberType result{};
++        std::memcpy(&result, data, sizeof(NumberType));
++        if (is_little_endian)
++        {
++            byte_swap(result);
++        }
++        return result;
++    }
++
++    /*!
++    @brief read the integers, floats, booleans, and nulls that follow in a
++           definite-length array, without the per-element bookkeeping of
++           @ref parse_cbor_internal
++
++    Stops at the end of the array, at any other kind of value, and when fewer
++    than 9 bytes (the longest of these values) are left in the input, leaving
++    those to @ref parse_cbor_value, which reads them the same way.
++
++    Out of line, so that @ref parse_cbor_value stays small enough to be inlined.
++
++    The array is the one on top of @ref container_stack; its count of
++    elements not yet read is updated.
++
++    @return whether the SAX parser accepted the values
++    */
++    JSON_HEDLEY_NEVER_INLINE
++    bool parse_cbor_scalar_run(std::true_type /*bulk*/)
++    {
++        // nothing pushes onto the stack while the run reads scalars
++        std::size_t& remaining = container_stack.back().remaining;
++        while (remaining != 0 && ia.bulk_remaining() >= 9)
++        {
++            const auto* const data = reinterpret_cast<const unsigned char*>(ia.bulk_data());
++            const unsigned char head = data[0];
++            std::size_t size = 0;
++            bool accepted = false;
++            switch (head)
++            {
++                case 0x18:
++                    size = 2;
++                    accepted = emit_unsigned(data[1]);
++                    break;
++                case 0x19:
++                    size = 3;
++                    accepted = emit_unsigned(load_big_endian<std::uint16_t>(data + 1));
++                    break;
++                case 0x1A:
++                    size = 5;
++                    accepted = emit_unsigned(load_big_endian<std::uint32_t>(data + 1));
++                    break;
++                case 0x1B:
++                    size = 9;
++                    accepted = emit_unsigned(load_big_endian<std::uint64_t>(data + 1));
++                    break;
++                case 0x38:
++                    size = 2;
++                    accepted = emit_cbor_negative_integer(data[1]);
++                    break;
++                case 0x39:
++                    size = 3;
++                    accepted = emit_cbor_negative_integer(load_big_endian<std::uint16_t>(data + 1));
++                    break;
++                case 0x3A:
++                    size = 5;
++                    accepted = emit_cbor_negative_integer(load_big_endian<std::uint32_t>(data + 1));
++                    break;
++                case 0x3B:
++                    size = 9;
++                    accepted = emit_cbor_negative_integer(load_big_endian<std::uint64_t>(data + 1));
++                    break;
++                case 0xF4:
++                    size = 1;
++                    accepted = sax->boolean(false);
++                    break;
++                case 0xF5:
++                    size = 1;
++                    accepted = sax->boolean(true);
++                    break;
++                case 0xF6:
++                    size = 1;
++                    accepted = sax->null();
++                    break;
++                case 0xFA:
++                    size = 5;
++                    accepted = emit_float(load_big_endian<float>(data + 1));
++                    break;
++                case 0xFB:
++                    size = 9;
++                    accepted = emit_float(load_big_endian<double>(data + 1));
++                    break;
++                default:
++                    if (head <= 0x17)
++                    {
++                        size = 1;
++                        accepted = sax->number_unsigned(static_cast<number_unsigned_t>(head));
++                    }
++                    else if (head >= 0x20 && head <= 0x37)
++                    {
++                        size = 1;
++                        accepted = sax->number_integer(static_cast<std::int8_t>(0x20 - 1 - head));
++                    }
++                    else
++                    {
++                        // any other value is read by parse_cbor_value
++                        return true;
++                    }
++                    break;
++            }
++            // as if read by get() and get_number(): current is the head byte
++            ia.bulk_skip(size);
++            chars_read += size;
++            current = head;
++            --remaining;
++            if (JSON_HEDLEY_UNLIKELY(!accepted))
++            {
++                return false;
++            }
++        }
++        return true;
++    }
++
++    /*!
++    @brief open a definite-length array and read the scalars it begins with
++           (see @ref parse_cbor_scalar_run)
++
++    Only the start of an array is tried, which covers arrays of numbers
++    (e.g. coordinates) but costs arrays of other values only one call, not one
++    per element.
++
++    @param[in] len  the number of elements
++    @return whether the SAX parser accepted the array and the values read
++    */
++    bool enter_cbor_array(const std::size_t len)
++    {
++        return enter_array(len) && (len == 0 || parse_cbor_scalar_run(std::integral_constant<bool, bulk_scan> {}));
++    }
++
++    /// input that is not contiguous: every value is read by parse_cbor_value
++    bool parse_cbor_scalar_run(std::false_type /*bulk*/) const noexcept
++    {
++        return true;
++    }
++
+     /*!
+     @brief read a CBOR value and everything nested inside it
+ 
+@@ -1709,6 +1860,7 @@ class binary_reader
+                 // pop_back() below, which destroys the container_stack element
+                 // it would otherwise alias
+                 const container_frame top = container_stack.back();
++                const bool is_object = top.is_object;
+                 bool at_end = false;
+ 
+                 if (top.remaining != npos)
+@@ -1720,7 +1872,7 @@ class binary_reader
+                     {
+                         // claim the element about to be read
+                         --container_stack.back().remaining;
+-                        if (top.is_object)
++                        if (is_object)
+                         {
+                             get();
+                         }
+@@ -1733,7 +1885,7 @@ class binary_reader
+                     // Testing for it consumes a byte, which is the first byte
+                     // of the next element when it is not one.
+                     at_end = (get() == 0xFF);
+-                    fetch = top.is_object;
++                    fetch = is_object;
+                 }
+ 
+                 if (at_end)
+@@ -1750,7 +1902,7 @@ class binary_reader
+                     continue;
+                 }
+ 
+-                if (top.is_object)
++                if (is_object)
+                 {
+                     if (JSON_HEDLEY_UNLIKELY(!skip_cbor_key_tags(tag_handler)))
+                     {
+@@ -3695,13 +3847,13 @@ class binary_reader
+                 return sax->null();
+ 
+             case 0xFB:
+-                return sax->number_float(static_cast<number_float_t>(-1.0), "");
++                return sax->number_float(static_cast<number_float_t>(-1.0), no_source);
+ 
+             case 0xFC:
+-                return sax->number_float(static_cast<number_float_t>(0.0), "");
++                return sax->number_float(static_cast<number_float_t>(0.0), no_source);
+ 
+             case 0xFD:
+-                return sax->number_float(static_cast<number_float_t>(1.0), "");
++                return sax->number_float(static_cast<number_float_t>(1.0), no_source);
+ 
+             case 0xFF: // empty string
+             {
+@@ -4205,7 +4357,7 @@ class binary_reader
+         {
+             return out_of_range_error(exception_id::number_overflow, "number overflow", "value");
+         }
+-        return sax->number_float(result, "");
++        return sax->number_float(result, no_source);
+     }
+ 
+     /*!
+@@ -4265,7 +4417,7 @@ class binary_reader
+         }();
+         return sax->number_float((half & 0x8000u) != 0
+                                  ? static_cast<number_float_t>(-val)
+-                                 : static_cast<number_float_t>(val), "");
++                                 : static_cast<number_float_t>(val), no_source);
+     }
+ 
+     /*!
+@@ -4590,6 +4742,10 @@ class binary_reader
+     /// the SAX parser
+     json_sax_t* sax = nullptr;
+ 
++    /// the (empty) source text of every number_float event: binary formats
++    /// have none, and a string_t built for each float would cost more
++    const string_t no_source{};
++
+     /// the containers that have been opened and not closed yet; see @ref container_frame
+     std::vector<container_frame> container_stack{};
+```
+
+## Existing upstream tests that call the changed code (for style and API usage)
+// Upstream tests at the PR's parent commit 5337d841d that use the changed code.
+// Names searched (test lines using each): sax_parse (0), from_bson (0), from_cbor (0), from_msgpack (0), from_ubjson (0), from_bjdata (0), from_bon8 (0), binary_reader (2), parse_cbor_internal (0), get_cbor_negative_integer (0), parse_bon8_value (0), parse_cbor_value (0), emit_float (0), get_half_float (0), parse_cbor_scalar_run (0), load_big_endian (0), enter_cbor_array (0), emit_cbor_negative_integer (0), no_source (0)
+
+// ---- tests/src/unit-bjdata.cpp:76-111  (uses: binary_reader)
+    SECTION("binary_reader BJData lookup tables")
+    {
+        // both lookups are static member functions
+        std::vector<std::uint8_t> const data;
+        using reader_t = nlohmann::detail::binary_reader<json, decltype(nlohmann::detail::input_adapter(data))>;
+
+        // the excluded optimized-type markers must match binary_writer's
+        // is_bjdata_excluded_type_marker(), which encodes the same 8 markers
+        for (const char marker :
+                {'[', '{', 'S', 'H', 'T', 'F', 'N', 'Z'
+                })
+        {
+            CHECK(reader_t::is_bjd_excluded_optimized_type(static_cast<unsigned char>(marker)));
+        }
+        for (const char marker :
+                {'U', 'i', 'u', 'I', 'm', 'l', 'M', 'L', 'd', 'D', 'C', 'B', 'x'
+                })
+        {
+            CHECK(!reader_t::is_bjd_excluded_optimized_type(static_cast<unsigned char>(marker)));
+        }
+
+        // every dtype marker must round-trip to its ND-array type name
+        const std::vector<std::pair<char, std::string>> types
+        {
+            {'B', "byte"}, {'C', "char"}, {'D', "double"}, {'I', "int16"},
+            {'L', "int64"}, {'M', "uint64"}, {'U', "uint8"}, {'d', "single"},
+            {'i', "int8"}, {'l', "int32"}, {'m', "uint32"}, {'u', "uint16"}
+        };
+        for (const auto& type : types)
+        {
+            const char* name = reader_t::bjd_type_name(static_cast<unsigned char>(type.first));
+            REQUIRE(name != nullptr);
+            CHECK(std::string(name) == type.second);
+        }
+        CHECK(reader_t::bjd_type_name(static_cast<unsigned char>('x')) == nullptr);
+    }
+
+# Programs to repair
+
+## gen_27.cpp (compile)
+Intent: Exercise sax parser returning false during parse_cbor_scalar_run, verifying it returns false cleanly.
+COMPILE ERROR. The program fails to compile, the same way against the old and the new library. Fix the error (wrong or missing include, typo, misuse of the public API) and keep the intent: the call under test must stay. Include only headers that exist; if you are unsure a header exists, use the library's main header.
+Compiler errors:
+```
+gen_27.cpp:25:40: error: ‘span_input_adapter’ is not a member of ‘nlohmann::json_abi_v3_12_0::json’ {aka ‘nlohmann::json_abi_v3_12_0::basic_json<>’}
+```
+Source:
+```cpp
+#include <nlohmann/json.hpp>
+#include <iostream>
+#include <vector>
+struct RejectingSax : public nlohmann::json::json_sax_t {
+    bool null() override { return true; }
+    bool boolean(bool) override { return false; }
+    bool number_integer(number_integer_t) override { return true; }
+    bool number_unsigned(number_unsigned_t) override { return true; }
+    bool number_float(number_float_t, const string_t&) override { return true; }
+    bool string(string_t&) override { return true; }
+    bool binary(binary_t&) override { return true; }
+    bool start_object(std::size_t) override { return true; }
+    bool key(string_t&) override { return true; }
+    bool end_object() override { return true; }
+    bool start_array(std::size_t) override { return true; }
+    bool end_array() override { return true; }
+    bool parse_error(std::size_t, const std::string&, const nlohmann::json::exception&) override { return true; }
+};
+int main() {
+    try {
+        std::vector<uint8_t> data = {0x82, 0xF5, 0xF6};
+        RejectingSax sax;
+        auto adapter = nlohmann::json::span_input_adapter(data.data(), data.data() + data.size());
+        bool res = nlohmann::json::sax_parse(std::move(adapter), &sax);
+        std::cout << "Parsed successfully: " << (res ? "true" : "false") << std::endl;
+    } catch (const std::exception& e) {
+        std::cout << "Exception: " << e.what() << std::endl;
+    }
+    return 0;
+}
+```
+
+# Task
+Return JSON with a "fixes" array: one item per program above, with "file" (exactly as given) and "code" (the complete repaired program, standalone, with its own int main). Do not return programs you cannot repair.

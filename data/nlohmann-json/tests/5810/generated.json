@@ -1,0 +1,185 @@
+{
+  "target": "nlohmann-json",
+  "pr": 5810,
+  "model": "gemini-3.5-flash-lite",
+  "prompt_sha256": "370dc88de0770371b62a9a07c321a8986fa39d4eb3f7b5ad050337d9fbbcdd19",
+  "n_requested": 20,
+  "dropped": 0,
+  "usage": {
+    "promptTokenCount": 7049,
+    "candidatesTokenCount": 4221,
+    "totalTokenCount": 11270,
+    "promptTokensDetails": [
+      {
+        "modality": "TEXT",
+        "tokenCount": 7049
+      }
+    ],
+    "serviceTier": "standard"
+  },
+  "tests": [
+    {
+      "file": "gen_01.cpp",
+      "name": "skip_indentation_spaces_parsing",
+      "intent": "Verify that parsing pretty-printed JSON with various counts of space indentation works correctly via contiguous span input.",
+      "round": 0
+    },
+    {
+      "file": "gen_02.cpp",
+      "name": "skip_indentation_with_tabs_and_newlines",
+      "intent": "Check behavior when indentation contains mixed tabs, carriage returns, and spaces following newlines.",
+      "round": 0
+    },
+    {
+      "file": "gen_03.cpp",
+      "name": "skip_indentation_short_input",
+      "intent": "Ensure input with very few bytes remaining after a newline does not trigger out-of-bounds reads in skip_indentation.",
+      "round": 0
+    },
+    {
+      "file": "gen_04.cpp",
+      "name": "skip_indentation_exact_eight_bytes",
+      "intent": "Test indentation running exactly 8 bytes of spaces after a newline.",
+      "round": 0
+    },
+    {
+      "file": "gen_05.cpp",
+      "name": "skip_indentation_multiple_lines_deep",
+      "intent": "Probe nested pretty-printed structures where multiple consecutive lines have different space indentation lengths.",
+      "round": 0
+    },
+    {
+      "file": "gen_06.cpp",
+      "name": "skip_indentation_error_position",
+      "intent": "Verify that parsing syntax errors occurring after indented lines still reports accurate location context.",
+      "round": 0
+    },
+    {
+      "file": "gen_07.cpp",
+      "name": "skip_indentation_trailing_spaces_only",
+      "intent": "Test behavior when a newline is followed only by spaces up to the end of the input stream.",
+      "round": 0
+    },
+    {
+      "file": "gen_08.cpp",
+      "name": "skip_indentation_non_contiguous_stream",
+      "intent": "Confirm that non-contiguous stream inputs bypass the bulk skip optimization safely and produce correct outputs.",
+      "round": 0
+    },
+    {
+      "file": "gen_09.cpp",
+      "name": "skip_indentation_zero_spaces",
+      "intent": "Check newline followed immediately by non-space characters (0 space indent).",
+      "round": 0
+    },
+    {
+      "file": "gen_10.cpp",
+      "name": "skip_indentation_large_indent",
+      "intent": "Probe indentation exceeding multiple 8-byte words of contiguous spaces.",
+      "round": 0
+    },
+    {
+      "file": "gen_11.cpp",
+      "name": "skip_indentation_with_comments",
+      "intent": "Test whitespace and comment handling when lines contain leading spaces followed by comments under accept_comments configuration.",
+      "round": 0
+    },
+    {
+      "file": "gen_12.cpp",
+      "name": "skip_indentation_sax_parse_api",
+      "intent": "Exercise low-level sax_parse entry point with contiguous span input and pretty-printed content.",
+      "round": 0
+    },
+    {
+      "file": "gen_13.cpp",
+      "name": "skip_indentation_vector_char_input",
+      "intent": "Parse pretty-printed JSON provided as a std::vector<char> container to fully exercise bulk_scan requirements.",
+      "round": 0
+    },
+    {
+      "file": "gen_14.cpp",
+      "name": "skip_indentation_empty_input",
+      "intent": "Verify behavior of lexer skipping on empty string input.",
+      "round": 0
+    },
+    {
+      "file": "gen_15.cpp",
+      "name": "skip_indentation_only_newlines",
+      "intent": "Check input consisting solely of multiple newlines and spaces.",
+      "round": 0
+    },
+    {
+      "file": "gen_16.cpp",
+      "name": "skip_indentation_accept_method",
+      "intent": "Validate json::accept() performance path with indented contiguous inputs.",
+      "round": 0
+    },
+    {
+      "file": "gen_17.cpp",
+      "name": "skip_indentation_ubjson_fallback",
+      "intent": "Ensure binary formats like UBJSON ignore text indentation paths while successfully parsing or rejecting input.",
+      "round": 0,
+      "superseded_by": "gen_26.cpp"
+    },
+    {
+      "file": "gen_18.cpp",
+      "name": "skip_indentation_consecutive_newlines",
+      "intent": "Test parsing when multiple consecutive newline characters appear without characters in between.",
+      "round": 0
+    },
+    {
+      "file": "gen_19.cpp",
+      "name": "skip_indentation_ordered_json",
+      "intent": "Verify skip_indentation works identically with nlohmann::ordered_json container types.",
+      "round": 0
+    },
+    {
+      "file": "gen_20.cpp",
+      "name": "skip_indentation_unclosed_object",
+      "intent": "Test error handling on pretty-printed JSON that terminates abruptly mid-indentation.",
+      "round": 0
+    },
+    {
+      "file": "gen_21.cpp",
+      "name": "gen_21",
+      "intent": "Exercise count_trailing_zeros portable fallback path if compiled under non-GCC/non-clang compilers, or simulate fallback code patterns via macro detection/compiler configuration flags if applicable.",
+      "round": 1
+    },
+    {
+      "file": "gen_22.cpp",
+      "name": "gen_22",
+      "intent": "Test trailing zero count for a single-bit 64-bit value via internal path integration by parsing indentation with non_space ending at specific byte boundaries.",
+      "round": 1
+    },
+    {
+      "file": "gen_23.cpp",
+      "name": "gen_23",
+      "intent": "Exercise count_trailing_zeros through multi-line indentation ending with different non-space bit patterns.",
+      "round": 1
+    },
+    {
+      "file": "gen_24.cpp",
+      "name": "gen_24",
+      "intent": "Trigger skip_indentation with exactly 8 spaces on a line before a token to ensure non_space detection uses count_trailing_zeros correctly.",
+      "round": 1
+    },
+    {
+      "file": "gen_25.cpp",
+      "name": "gen_25",
+      "intent": "Test 16 spaces indentation after newline to force multiple 8-byte chunks processing inside skip_indentation and trailing zeros calculation on partial words.",
+      "round": 1
+    },
+    {
+      "file": "gen_26.cpp",
+      "name": "skip_indentation_ubjson_fallback_fixed",
+      "intent": "Ensure binary formats like UBJSON ignore text indentation paths while successfully parsing or rejecting input.",
+      "round": 2,
+      "fixes": "gen_17.cpp",
+      "kind": "compile"
+    }
+  ],
+  "fix": {
+    "rounds_max": 2,
+    "model": "gemini-3.5-flash-lite"
+  }
+}

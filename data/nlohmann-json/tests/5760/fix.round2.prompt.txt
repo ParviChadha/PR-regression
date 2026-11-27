@@ -1,0 +1,220 @@
+[system]
+You write test programs that probe a C++ library for behavioral changes made by one pull request.
+Each program is compiled and run twice, once against the library before the change and once after, and the two
+outputs are compared. Your job is to produce programs whose output reveals whether the change altered behavior,
+including side effects the author did not intend.
+
+Rules for every program:
+- It is standalone: one file with its own int main(), compiled as C++17, printing results to stdout.
+- Use only the library's documented public API. Never include internal headers or use detail/impl namespaces,
+  private members or undocumented macros.
+- Do not judge results (no assert, no expected-value comparisons): just print what the library returns. Print
+  enough to make differences visible, one fact per line.
+- Output must be deterministic. Never print pointers or addresses, uninitialized data, the order of
+  hash-based containers, timings, thread ids, random values, file paths or environment data. Print floating point
+  values with an explicit precision. No input, files, network, threads, clocks or randomness.
+- Wrap calls that may throw in try/catch and print the exception's type and message, so an exception is an
+  observable result. Do not crash on purpose.
+- Aim at the code the diff changes. Prefer calls that compile against both the old and the new library; one or two
+  programs may use an API the PR adds. Cover ordinary inputs and edge cases (empty, minimum and maximum values,
+  boundaries, special values, nesting, unusual types) and also neighbouring behavior the change could disturb.
+- When the diff changes which types or inputs an API accepts or rejects (constraints, overloads, traits,
+  conversions), test it with the detection idiom (std::void_t or requires) and `if constexpr`, so the program
+  compiles against both versions, prints whether the expression is well-formed, and exercises it when it is.
+  Accepting an input is not enough: also use it through every entry point that should follow (const and
+  non-const, read, write, insert, erase, lookup, nested use), because a change that admits new inputs can leave
+  later code unable to handle them.
+- If the changed code is internal (a detail, impl or internal namespace, a trait, a helper), do not name it in the
+  program. Reach it through the public API that depends on it, using detection (as above) where needed.
+- Use the exact types and values the diff is about (the new trait's argument types, the new overload's
+  parameters), not stand-ins.
+- Spread the programs over distinct public entry points and overloads, one main idea per program. Do not write
+  several programs that only rename a type or change a literal.
+- Make the programs differ from each other: different inputs, different entry points, different features.
+
+Rules specific to this library:
+- Include the library with #include <nlohmann/json.hpp>. The public API is nlohmann::json (nlohmann::basic_json), nlohmann::ordered_json, json_pointer, json patch/merge_patch and the documented SAX and conversion interfaces. Never use the detail namespace.
+- It is a header-only library: nothing to link. Programs are compiled as C++17.
+- Print JSON values with dump() (compact) or dump(2). Keys of nlohmann::json objects print in sorted order, so output is deterministic; do not depend on insertion order except with ordered_json.
+
+[user]
+# Pull request #5760: Fix NUL bytes in UBJSON/BJData high-precision numbers
+
+## Description
+Reject NUL bytes inside length-delimited UBJSON/BJData high-precision (`H`) number payloads. `H i 3 1 NUL x` used to be accepted as the unsigned integer `1`, because the lexer stops at the NUL and never sees the rest of the payload. It now produces `parse_error.115`.
+
+The payload read loop returns the error as soon as it reads a NUL, so the byte offset points at the NUL and the payload is not lexed. The message follows the other binary reader errors: `invalid number text; last byte: 0x00`. A payload that is cut off after a NUL reports the NUL rather than end of input.
+
+Regression cases in both format suites cover hidden bytes after a NUL, a trailing NUL, a truncated payload containing a NUL, a nested array, non-throwing parsing, and a valid number. `single_include/nlohmann/json.hpp` carries the same change.
+
+Fixes #5753.
+
+Validation on Windows x86_64, MinGW GCC 15.1.0, C++11:
+
+- The new cases fail without the fix, because the malformed payloads are accepted.
+- The UBJSON and BJData suites pass with both `include/` and `single_include/`, and with `JSON_STRICT_NUL_HANDLING=1`.
+- Coverage was not measured locally.
+
+- [x] The changes are described in detail, both the what and why.
+- [x] An existing issue is referenced.
+- [ ] Code coverage remained at 100% (not measured locally; awaiting CI).
+- [x] Source code is amalgamated.
+
+OSS-Fuzz and documentation checklist items are not applicable to this change.
+
+## Commit message
+* Fix NUL-terminated UBJSON and BJData high-precision payloads
+
+Signed-off-by: fhgffy <102001626+fhgffy@users.noreply.github.com>
+
+* Use English comments for the high-precision NUL fix
+
+Signed-off-by: fhgffy <102001626+fhgffy@users.noreply.github.com>
+
+* Track NUL bytes while reading high-precision payloads
+
+Signed-off-by: fhgffy <102001626+fhgffy@users.noreply.github.com>
+
+* Drop dates from code comments.
+
+Signed-off-by: fhgffy <102001626+fhgffy@users.noreply.github.com>
+
+* Report a NUL in a high-precision number where it is read
+
+Return the parse error from the read loop so the byte offset points at the NUL, and drop the separate check after lexing.
+
+Signed-off-by: fhgffy <102001626+fhgffy@users.noreply.github.com>
+
+* Use fixed text for the high-precision NUL error
+
+2026-10-06: Use the known zero byte directly instead of formatting and concatenating it. Preserve the SAX token, error message, and byte offset.
+Signed-off-by: fhgffy <102001626+fhgffy@users.noreply.github.com>
+
+---------
+
+Signed-off-by: fhgffy <102001626+fhgffy@users.noreply.github.com>
+
+## Linked issue #5753: UBJSON/BJData high-precision numbers accept a NUL-terminated prefix inside their payload
+### Description
+
+UBJSON and BJData high-precision (`H`) numbers have a length-delimited text payload. With the default NUL handling, the reader accepts a valid numeric prefix followed by a NUL and arbitrary bytes inside that payload.
+
+For example, `48 69 03 31 00 78` (`H`, `i`, length 3, `1`, NUL, `x`) is accepted as the unsigned integer `1` by both `from_ubjson` and `from_bjdata`.
+
+### Expected vs. actual results
+
+Expected: reject the malformed high-precision number, as for other invalid number text (parse_error.115). The [UBJSON specification](https://ubjson.org/type-reference/value-types/#high-precision-numbers-larger-than-64-bit) requires high-precision values to follow JSON's number syntax. A NUL is not a number character or whitespace, and the payload length is explicit.
+
+Actual: the JSON lexer reports end_of_input at the NUL; `get_ubjson_high_precision_number()` checks that token but does not distinguish a NUL from the real end of the bounded payload. Bytes following the NUL are consumed by the binary reader and silently ignored by the number lexer. This also makes these binary inputs behave differently with JSON_STRICT_NUL_HANDLING enabled, despite that macro being documented as affecting only JSON text.
+
+### Minimal code example
+
+```cpp
+#include <nlohmann/json.hpp>
+#include <iostream>
+#include <vector>
+
+int main()
+{
+    const std::vector<std::uint8_t> input = {'H', 'i', 3, '1', 0, 'x'};
+    std::cout << nlohmann::json::from_ubjson(input) << '\n';
+    std::cout << nlohmann::json::from_bjdata(input) << '\n';
+}
+```
+
+Both calls print `1`.
+
+### Compiler and operating system
+
+MinGW GCC 15.1.0, Windows x86_64, `g++ -std=c++11 -I include repro.cpp`.
+
+### Library version
+
+Unmodified `develop` at `6d0867a85f0148ae184f457ec6755f9d4e184132`. The same token-only check is present on `master` at `55f93686c01528224f448c19128836e7df245f72` (source inspection; not run there).
+
+I intend to submit a small check in the shared high-precision reader, with regression coverage for 
+[... truncated, 291 more characters]
+
+## Discussion before merge
+- gregmarr: Your most recent commit did not contain the DCO signoff.
+- fhgffy: The GCC/C++26 failure is the existing CBOR narrowing warning at binary_reader.hpp:668, already covered by #5764. I checked that get_cbor_negative_integer() is unchanged from this PR's base (4f69be8). The other five GCC standard jobs were cancelled by fail-fast. I'll keep this PR focused on the NUL fix and pick up the develop fix if a branch update is needed.
+- nlohmann: Sorry about the CI noise. PR #5764 hopefully fixes this. I'll check back on this PR once #5764 is green.
+- fhgffy: The [sanitizer job](https://github.com/nlohmann/json/actions/runs/37229375914/job/111523198491) has a separate failure: 137/138 tests passed, with `test-std-format_cpp20` stopping at libstdc++ 14's `format:3906` when `-1` is converted to `size_t`. This matches [GCC bug 119429](https://gcc.gnu.org/pipermail/gcc-bugs/2025-March/906275.html), whose reproducer uses only `std::print`. I checked that `unit-std-format.cpp` and the sanitizer flags are unchanged from this PR's base. It may need separate toolchain handling from the CBOR and documentation fixes in #5764.
+- nlohmann: Thanks for tracking this down! Your analysis is right: libstdc++ 14's `<format>` has `_Scanner(basic_string_view<_CharT>, size_t __nargs = -1)`, so with `-fsanitize=integer`, every `std::format` call fails as `implicit-integer-sign-change` ([GCC bug 119429](https://gcc.gnu.org/bugzilla/show_bug.cgi?id=119429)). develop fails the same way, so this has nothing to do with your change.
+
+#5764 now also fixes this. It adds `cmake/clang_sanitizer_ignorelist.txt`, which `ci_test_clang_sanitizer` passes via `-fsanitize-ignorelist`. The list excludes only that check, and only for libstdc++'s `<format>` header, so sign changes in the library and the tests are still reported. Once #5764 is merged, updating this branch from develop should make the sanitizer job pass.
+
+(This comment was written by Claude Code on my behalf.)
+- nlohmann: The develop branch is green now. Please rebase a last time and we're should be good to go!
+
+## Changed functions (from changes.py)
+- nlohmann::detail::binary_reader::get_ubjson_high_precision_number() (private); reached from the public API through: nlohmann::basic_json::sax_parse(detail::span_input_adapter &&, SAX *, input_format_t, const bool, const bool, const bool), nlohmann::basic_json::sax_parse(InputType &&, SAX *, input_format_t, const bool, const bool, const bool), nlohmann::basic_json::sax_parse(IteratorType, SentinelType, SAX *, input_format_t, const bool, const bool, const bool), nlohmann::basic_json::from_bson(detail::span_input_adapter &&, const bool, const bool), nlohmann::basic_json::from_cbor(detail::span_input_adapter &&, const bool, const bool, const cbor_tag_handler_t), nlohmann::basic_json::from_msgpack(detail::span_input_adapter &&, const bool, const bool), nlohmann::basic_json::from_ubjson(detail::span_input_adapter &&, const bool, const bool), nlohmann::basic_json::from_bjdata(InputType &&, const bool, const bool, const error_handler_t), nlohmann::basic_json::from_bon8(InputType &&, const bool, const bool), nlohmann::basic_json::from_bson(InputType &&, const bool, const bool, const error_handler_t)
+
+## Diff of the library source (before -> after)
+```diff
+diff --git a/include/nlohmann/detail/input/binary_reader.hpp b/include/nlohmann/detail/input/binary_reader.hpp
+index e6c698fa0..d26e5fad4 100644
+--- a/include/nlohmann/detail/input/binary_reader.hpp
++++ b/include/nlohmann/detail/input/binary_reader.hpp
+@@ -3249,6 +3249,12 @@ class binary_reader
+             {
+                 return false;
+             }
++            // the lexer would stop at a NUL and accept the digits before it
++            if (JSON_HEDLEY_UNLIKELY(current == '\0'))
++            {
++                return sax->parse_error(chars_read, "00", parse_error::create(115, chars_read,
++                                        exception_message("invalid number text; last byte: 0x00", "high-precision number"), nullptr));
++            }
+             number_vector.push_back(static_cast<char>(current));
+         }
+```
+
+# Programs to repair
+
+## gen_21.cpp (compile)
+Intent: Probes from_ubjson non-throwing overload behavior via parameter when parsing a NUL-containing high-precision payload.
+COMPILE ERROR. The program fails to compile, the same way against the old and the new library. Fix the error (wrong or missing include, typo, misuse of the public API) and keep the intent: the call under test must stay. Include only headers that exist; if you are unsure a header exists, use the library's main header.
+Compiler errors:
+```
+gen_21.cpp:9:42: error: no matching function for call to ‘nlohmann::json_abi_v3_12_0::basic_json<>::accept(std::vector<unsigned char>&, std::nullptr_t, bool)’
+json.hpp:5563:100: error: no type named ‘type’ in ‘struct std::enable_if<false, int>’
+```
+Source:
+```cpp
+#include <nlohmann/json.hpp>
+#include <vector>
+#include <iostream>
+
+int main() {
+    std::vector<std::uint8_t> input = {'H', 'i', 3, '1', 0, 'x'};
+    bool success = nlohmann::json::accept(input, nullptr, false);
+    std::cout << "Accept UBJSON result: " << (success ? "true" : "false") << "\n";
+    return 0;
+}
+```
+
+## gen_22.cpp (compile)
+Intent: Probes from_bjdata non-throwing behavior via accept_bjdata when parsing a NUL-containing high-precision payload.
+COMPILE ERROR. The program fails to compile, the same way against the old and the new library. Fix the error (wrong or missing include, typo, misuse of the public API) and keep the intent: the call under test must stay. Include only headers that exist; if you are unsure a header exists, use the library's main header.
+Compiler errors:
+```
+gen_22.cpp:9:42: error: no matching function for call to ‘nlohmann::json_abi_v3_12_0::basic_json<>::accept(std::vector<unsigned char>&, std::nullptr_t, bool)’
+json.hpp:5563:100: error: no type named ‘type’ in ‘struct std::enable_if<false, int>’
+```
+Source:
+```cpp
+#include <nlohmann/json.hpp>
+#include <vector>
+#include <iostream>
+
+int main() {
+    std::vector<std::uint8_t> input = {'H', 'i', 3, '1', 0, 'x'};
+    bool success = nlohmann::json::accept(input, nullptr, false);
+    std::cout << "Accept BJData result: " << (success ? "true" : "false") << "\n";
+    return 0;
+}
+```
+
+# Task
+Return JSON with a "fixes" array: one item per program above, with "file" (exactly as given) and "code" (the complete repaired program, standalone, with its own int main). Do not return programs you cannot repair.

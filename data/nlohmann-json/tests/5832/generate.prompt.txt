@@ -1,0 +1,690 @@
+[system]
+You write test programs that probe a C++ library for behavioral changes made by one pull request.
+Each program is compiled and run twice, once against the library before the change and once after, and the two
+outputs are compared. Your job is to produce programs whose output reveals whether the change altered behavior,
+including side effects the author did not intend.
+
+Rules for every program:
+- It is standalone: one file with its own int main(), compiled as C++17, printing results to stdout.
+- Use only the library's documented public API. Never include internal headers or use detail/impl namespaces,
+  private members or undocumented macros.
+- Do not judge results (no assert, no expected-value comparisons): just print what the library returns. Print
+  enough to make differences visible, one fact per line.
+- Output must be deterministic. Never print pointers or addresses, uninitialized data, the order of
+  hash-based containers, timings, thread ids, random values, file paths or environment data. Print floating point
+  values with an explicit precision. No input, files, network, threads, clocks or randomness.
+- Wrap calls that may throw in try/catch and print the exception's type and message, so an exception is an
+  observable result. Do not crash on purpose.
+- Aim at the code the diff changes. Prefer calls that compile against both the old and the new library; one or two
+  programs may use an API the PR adds. Cover ordinary inputs and edge cases (empty, minimum and maximum values,
+  boundaries, special values, nesting, unusual types) and also neighbouring behavior the change could disturb.
+- When the diff changes which types or inputs an API accepts or rejects (constraints, overloads, traits,
+  conversions), test it with the detection idiom (std::void_t or requires) and `if constexpr`, so the program
+  compiles against both versions, prints whether the expression is well-formed, and exercises it when it is.
+  Accepting an input is not enough: also use it through every entry point that should follow (const and
+  non-const, read, write, insert, erase, lookup, nested use), because a change that admits new inputs can leave
+  later code unable to handle them.
+- If the changed code is internal (a detail, impl or internal namespace, a trait, a helper), do not name it in the
+  program. Reach it through the public API that depends on it, using detection (as above) where needed.
+- Use the exact types and values the diff is about (the new trait's argument types, the new overload's
+  parameters), not stand-ins.
+- Spread the programs over distinct public entry points and overloads, one main idea per program. Do not write
+  several programs that only rename a type or change a literal.
+- Make the programs differ from each other: different inputs, different entry points, different features.
+
+Rules specific to this library:
+- Include the library with #include <nlohmann/json.hpp>. The public API is nlohmann::json (nlohmann::basic_json), nlohmann::ordered_json, json_pointer, json patch/merge_patch and the documented SAX and conversion interfaces. Never use the detail namespace.
+- It is a header-only library: nothing to link. Programs are compiled as C++17.
+- Print JSON values with dump() (compact) or dump(2). Keys of nlohmann::json objects print in sorted order, so output is deterministic; do not depend on insertion order except with ordered_json.
+
+[user]
+# Pull request #5832: Fix quadratic parent updates for ordered_json with JSON_DIAGNOSTICS
+
+## Description
+With `JSON_DIAGNOSTICS=1`, `set_parent()` called the full `set_parents()` for `ordered_json` on every call: `push_back`/`emplace_back`, `at()`, and `operator[]`/`at()` on existing keys. Building an `ordered_json` array was therefore quadratic.
+
+## Changes
+- `at()` and array append set only the one child's `m_parent`.
+- Object `operator[]`/`push_back`/`emplace` record the container capacity before the insert and call `set_parents()` only if it changed. Arrays and objects share one `container_capacity()` and one `set_parent_after_insert()` helper (arrays report their `capacity()`; for objects, only the node-based standard containers (`std::map`, `std::multimap`, `std::unordered_map`, `std::unordered_multimap`) report 0 = never moves, only `nlohmann::ordered_map` reports its `capacity()`, and any other object type reports unknown = always re-parent).
+- `update()` (all overloads, incl. `merge_objects` and the iterative variant) now assigns through `operator[]` instead of calling `set_parent()` per key; `merge_patch()` already goes through `operator[]`, so it benefits too. `erase` keeps its `set_parents_after_object_erase()` (O(n) for `ordered_map` anyway).
+- Remove the redundant `set_parents()` in the copy constructor (`copy_level`/`copy_iteratively` already re-parent each level). The move constructor keeps its `set_parents()` (required).
+- New tests: parent-pointer invariant checker (`json` and `ordered_json`) across parse, copy, move, copy-assign, swap, push_back/emplace_back/emplace/operator[] growth and `at()`; `update()` (both overloads, `merge_objects`) and `merge_patch()` on `json`/`ordered_json` checking parents and diagnostic paths. No timing test (would be flaky).
+
+## Numbers (ordered_json, nested-array push_back, -O2, diagnostics on)
+| n | before | after |
+|---|---|---|
+| 25k | 101 ms | ~8 ms |
+| 50k | 412 ms | ~5 ms |
+| 100k | 1635 ms | ~11 ms |
+| 200k | 6482 ms | 27 ms |
+
+`ordered_json::update()` with 20k new keys: 372 → 295 ms (no diagnostics: 259 ms), i.e. the diagnostics overhead is gone; the rest is `ordered_map`'s inherent linear key lookup (100k keys: 14.0 → 10.0 s).
+
+`at(i)` x10000: 31.7 → 0.017 ms. Parse unchanged; copies −5–8 % with diagnostics.
+
+## Breaking changes
+None. No public API change; behaviour without `JSON_DIAGNOSTICS` is unchanged.
+
+Tested with `-DJSON_DIAGNOSTICS=1`: unit-diagnostics, unit-ordered_json, unit-element_access1/2, unit-modifiers. `make amalgamate` run.
+
+## Commit message
+* Fix quadratic parent updates for ordered_json with JSON_DIAGNOSTICS
+
+Signed-off-by: Niels Lohmann <mail@nlohmann.me>
+
+* Only trust containers known to keep their elements in place
+
+Address review: decide whether an insertion may have moved the other
+members by naming the containers that are known not to, instead of the
+ones that are known to.
+
+- detail::has_stable_elements: std::map, std::multimap,
+  std::unordered_map and std::unordered_multimap; object_capacity()
+  reports 0 for them.
+- detail::is_nlohmann_ordered_map: only the real nlohmann::ordered_map
+  (which only appends) reports its capacity().
+- Any other object type reports unknown_size(), so it gets a full
+  set_parents() on every insertion. Before, an object type without
+  capacity() was treated as never moving, and one with capacity() (a
+  sorted flat map, say) was trusted to move only on reallocation.
+- set_parents_after_object_erase() re-parents unless the object type is
+  stable; the unused set_parent() is removed.
+- Comments say "the object type" instead of "ordered_json".
+- New test with an object type that moves its members without changing
+  its capacity; it fails without this change.
+
+Signed-off-by: Niels Lohmann <mail@nlohmann.me>
+
+---------
+
+Signed-off-by: Niels Lohmann <mail@nlohmann.me>
+
+## Discussion before merge
+- nlohmann: Reworked in c1d349338 (written by Claude Code, on Niels's behalf):
+
+- **Missed site fixed:** `update_members` and `update_members_iteratively` called `set_parent()` per key, which re-parented the whole `ordered_json` each time. They now assign through `operator[]`, which re-parents everything only when the vector reallocated. `merge_patch()` already used `operator[]`, so it is covered. I found no other per-element `set_parent(` loops over objects or arrays.
+- **Deduplicated:** `array_capacity`/`object_capacity` are now one `container_capacity()`, and the two after-insert helpers are one `set_parent_after_insert()`. `set_parent_plain` and `set_parent_at` are merged.
+- **Tests:** `update()` (both overloads, with `merge_objects`) and `merge_patch()` on `json` and `ordered_json`, checking parent pointers and diagnostic paths.
+- **Timing:** `ordered_json::update()` of 20k keys with diagnostics goes from 372 to 295 ms; without diagnostics it takes 259 ms. 100k keys goes from 14.0 to 10.0 s. What remains is the linear key lookup of `ordered_map`, not the parent updates.
+
+unit-diagnostics passes. unit-modifiers and unit-ordered_json pass with and without `JSON_DIAGNOSTICS`.
+- gregmarr: Should `detail::unknown_size()` be the default unless the container is known to not move?  In other words, we check for containers that we know don't move and return "may move" for everything else, rather than checking for containers that we know move, and return "won't move" for everything else?
+- gregmarr: Similar comment to https://github.com/nlohmann/json/pull/5832/changes#r4285291400
+- gregmarr: Should these all say "the container" rather than "ordered_json"?
+- nlohmann: Agreed, and it was worse than it looked: `is_ordered_map` is just `has_capacity`, so in that overload the check was always false, and every object type without `capacity()` counted as "never moves". Fixed in 80692a15a. Only `std::map`, `std::multimap`, `std::unordered_map` and `std::unordered_multimap` count as stable (new `detail::has_stable_elements`), and only the real `nlohmann::ordered_map` has its capacity tracked (new `detail::is_nlohmann_ordered_map`). Everything else is treated as "may move". That also covers a sorted flat map that has `capacity()` but shifts members on a middle insert. The new test uses an object type that moves its members without changing its capacity; it fails without the change.
+
+*(Written by Claude Code on my behalf.)*
+- nlohmann: Done. `set_parents_after_object_erase()` now re-parents unless `has_stable_elements<object_t>`. After this PR, `set_parent()` had no callers left, so I removed it instead of changing it (80692a15a).
+
+*(Written by Claude Code on my behalf.)*
+
+## Changed functions (from changes.py)
+- nlohmann::basic_json::update_members(const iterator &, const iterator &, const bool, const std::size_t) (private); reached from the public API through: nlohmann::basic_json::update(const_reference, bool), nlohmann::basic_json::update(const_iterator, const_iterator, bool)
+- nlohmann::basic_json::update_members_iteratively(iterator, iterator) (private); reached from the public API through: nlohmann::basic_json::update(const_reference, bool), nlohmann::basic_json::update(const_iterator, const_iterator, bool)
+- nlohmann::basic_json::set_parents_after_object_erase() (private); reached from the public API through: nlohmann::basic_json::erase(IteratorType), nlohmann::basic_json::erase(IteratorType, IteratorType), nlohmann::basic_json::erase(const typename object_t::key_type &), nlohmann::basic_json::erase(KeyType &&)
+- nlohmann::basic_json::set_parent_after_insert(reference, std::size_t) (private); reached from the public API through: nlohmann::basic_json::operator[](typename object_t::key_type), nlohmann::basic_json::push_back(basic_json<...> &&), nlohmann::basic_json::push_back(const basic_json<...> &), nlohmann::basic_json::push_back(const typename object_t::value_type &), nlohmann::basic_json::emplace(Args &&...), nlohmann::basic_json::emplace_back(Args &&...), nlohmann::basic_json::operator[](KeyType &&)
+- nlohmann::basic_json::set_parent_at(reference) (private); reached from the public API through: nlohmann::basic_json::at(const typename object_t::key_type &), nlohmann::basic_json::at(size_type), nlohmann::basic_json::at(KeyType &&), nlohmann::basic_json::operator[](typename object_t::key_type), nlohmann::basic_json::push_back(basic_json<...> &&), nlohmann::basic_json::push_back(const basic_json<...> &), nlohmann::basic_json::push_back(const typename object_t::value_type &), nlohmann::basic_json::emplace(Args &&...), nlohmann::basic_json::emplace_back(Args &&...), nlohmann::basic_json::operator[](KeyType &&)
+- nlohmann::detail::has_stable_elements (private)
+- nlohmann::detail::has_stable_elements (private)
+- nlohmann::detail::has_stable_elements (private)
+- nlohmann::detail::has_stable_elements (private)
+- nlohmann::detail::has_stable_elements (private)
+- nlohmann::detail::is_nlohmann_ordered_map (private)
+- nlohmann::detail::is_nlohmann_ordered_map (private)
+- nlohmann::basic_json::container_capacity() (private); reached from the public API through: nlohmann::basic_json::operator[](typename object_t::key_type), nlohmann::basic_json::push_back(basic_json<...> &&), nlohmann::basic_json::push_back(const basic_json<...> &), nlohmann::basic_json::push_back(const typename object_t::value_type &), nlohmann::basic_json::emplace(Args &&...), nlohmann::basic_json::emplace_back(Args &&...), nlohmann::basic_json::operator[](KeyType &&)
+- nlohmann::basic_json::set_parent(reference) (private); reached from the public API through: nlohmann::basic_json::at(const typename object_t::key_type &), nlohmann::basic_json::at(size_type), nlohmann::basic_json::operator[](typename object_t::key_type), nlohmann::basic_json::push_back(const typename object_t::value_type &), nlohmann::basic_json::emplace(Args &&...), nlohmann::basic_json::at(KeyType &&), nlohmann::basic_json::operator[](KeyType &&), nlohmann::basic_json::push_back(basic_json<...> &&), nlohmann::basic_json::push_back(const basic_json<...> &), nlohmann::basic_json::emplace_back(Args &&...)
+- nlohmann::basic_json::set_parent_after_array_insert(reference, std::size_t) (private); reached from the public API through: nlohmann::basic_json::push_back(basic_json<...> &&), nlohmann::basic_json::push_back(const basic_json<...> &), nlohmann::basic_json::emplace_back(Args &&...)
+- nlohmann::basic_json::array_capacity() (private); reached from the public API through: nlohmann::basic_json::push_back(basic_json<...> &&), nlohmann::basic_json::push_back(const basic_json<...> &), nlohmann::basic_json::emplace_back(Args &&...)
+- nlohmann::basic_json (public)
+- nlohmann::basic_json::emplace(Args &&...) (public)
+- nlohmann::basic_json::emplace_back(Args &&...) (public)
+- nlohmann::basic_json::operator[](KeyType &&) (public)
+- nlohmann::basic_json::operator[](size_type) (public)
+- nlohmann::basic_json::operator[](typename object_t::key_type) (public)
+- nlohmann::basic_json::push_back(basic_json<...> &&) (public)
+- nlohmann::basic_json::push_back(const basic_json<...> &) (public)
+- nlohmann::basic_json::push_back(const typename object_t::value_type &) (public)
+- nlohmann::basic_json::at(KeyType &&) (public)
+- nlohmann::basic_json::at(const typename object_t::key_type &) (public)
+- nlohmann::basic_json::at(size_type) (public)
+- nlohmann::basic_json::basic_json<...>(const basic_json<...> &) (public)
+
+## Diff of the library source (before -> after)
+```diff
+diff --git a/include/nlohmann/detail/meta/type_traits.hpp b/include/nlohmann/detail/meta/type_traits.hpp
+index a08ad1500..206572a80 100644
+--- a/include/nlohmann/detail/meta/type_traits.hpp
++++ b/include/nlohmann/detail/meta/type_traits.hpp
+@@ -9,9 +9,11 @@
+ #pragma once
+ 
+ #include <limits> // numeric_limits
++#include <map> // map, multimap
+ #include <string> // char_traits
+ #include <tuple> // tuple
+ #include <type_traits> // false_type, is_constructible, is_integral, is_same, true_type
++#include <unordered_map> // unordered_map, unordered_multimap
+ #include <utility> // declval
+ #include <vector> // vector
+ #if defined(__cpp_lib_byte) && __cpp_lib_byte >= 201603L
+@@ -897,6 +899,31 @@ struct has_capacity : std::integral_constant<bool, is_detected<detect_capacity,
+ template <typename T>
+ struct is_ordered_map : has_capacity<T> {};
+ 
++// whether T is a specialization of nlohmann::ordered_map, which only ever
++// appends members, so they can only move when its capacity changes
++template<typename T>
++struct is_nlohmann_ordered_map : std::false_type {};
++
++template<class Key, class T, class IgnoredLess, class Allocator>
++struct is_nlohmann_ordered_map<ordered_map<Key, T, IgnoredLess, Allocator>> : std::true_type {};
++
++// whether adding or erasing elements never moves the other elements of the
++// container T; only node-based standard containers are known to guarantee this
++template<typename T>
++struct has_stable_elements : std::false_type {};
++
++template<class Key, class T, class Compare, class Allocator>
++struct has_stable_elements<std::map<Key, T, Compare, Allocator>> : std::true_type {};
++
++template<class Key, class T, class Compare, class Allocator>
++struct has_stable_elements<std::multimap<Key, T, Compare, Allocator>> : std::true_type {};
++
++template<class Key, class T, class Hash, class KeyEqual, class Allocator>
++struct has_stable_elements<std::unordered_map<Key, T, Hash, KeyEqual, Allocator>> : std::true_type {};
++
++template<class Key, class T, class Hash, class KeyEqual, class Allocator>
++struct has_stable_elements<std::unordered_multimap<Key, T, Hash, KeyEqual, Allocator>> : std::true_type {};
++
+ // to avoid useless casts (see https://github.com/nlohmann/json/issues/2893#issuecomment-889152324)
+ template < typename T, typename U, enable_if_t < !std::is_same<T, U>::value, int > = 0 >
+ T conditional_static_cast(U value)
+diff --git a/include/nlohmann/json.hpp b/include/nlohmann/json.hpp
+index 665ebb8e1..f822b1406 100644
+--- a/include/nlohmann/json.hpp
++++ b/include/nlohmann/json.hpp
+@@ -1079,11 +1079,16 @@ public:
+         return next;
+     }
+ 
+-    /// @brief the capacity of the stored array, or unknown_size()
+-    /// Only JSON_DIAGNOSTICS uses the value, to detect a reallocation that
+-    /// would invalidate the parent pointers. Array types that do not have a
+-    /// capacity() member function report unknown_size(), which is treated as
+-    /// "the elements may have moved".
++    /// @brief the capacity of the stored array or object, or unknown_size()
++    /// Only JSON_DIAGNOSTICS uses the value, to detect an insertion that may
++    /// have moved the other elements and so invalidated their parent pointers.
++    /// unknown_size() means "the elements may have moved". Arrays only grow at
++    /// the end, so their capacity tells whether they reallocated; arrays
++    /// without a capacity() member report unknown_size(). For objects, only
++    /// types known to keep their elements in place (std::map and the other
++    /// node-based standard containers) report a fixed 0, and only
++    /// nlohmann::ordered_map, which appends members, reports its capacity; any
++    /// other object type (a sorted flat map, say) reports unknown_size().
+ #if JSON_DIAGNOSTICS
+     template < typename A = array_t, detail::enable_if_t < detail::has_capacity<A>::value, int > = 0 >
+     std::size_t array_capacity() const noexcept
+@@ -1096,57 +1101,63 @@ public:
+     {
+         return detail::unknown_size();
+     }
++
++    template < typename O = object_t, detail::enable_if_t < detail::has_stable_elements<O>::value, int > = 0 >
++    static constexpr std::size_t object_capacity() noexcept
++    {
++        return 0;
++    }
++
++    template < typename O = object_t, detail::enable_if_t < !detail::has_stable_elements<O>::value && detail::is_nlohmann_ordered_map<O>::value, int > = 0 >
++    std::size_t object_capacity() const noexcept
++    {
++        return m_data.m_value.object->capacity();
++    }
++
++    template < typename O = object_t, detail::enable_if_t < !detail::has_stable_elements<O>::value && !detail::is_nlohmann_ordered_map<O>::value, int > = 0 >
++    static constexpr std::size_t object_capacity() noexcept
++    {
++        return detail::unknown_size();
++    }
++
++    std::size_t container_capacity() const noexcept
++    {
++        return is_array() ? array_capacity() : object_capacity();
++    }
+ #else
+-    static constexpr std::size_t array_capacity() noexcept
++    static constexpr std::size_t container_capacity() noexcept
+     {
+         return detail::unknown_size();
+     }
+ #endif
+ 
+-    /// @brief set the parent of a value that has just been added to an array
+-    /// @param j the added value
+-    /// @param old_capacity the value @ref array_capacity() returned before the
++    /// @brief set the parent of a value that has just been added to an array or object
++    /// @param j the added (or looked-up) value
++    /// @param old_capacity the value @ref container_capacity() returned before the
+     ///        insertion
+-    reference set_parent_after_array_insert(reference j, std::size_t old_capacity)
++    reference set_parent_after_insert(reference j, std::size_t old_capacity)
+     {
+ #if JSON_DIAGNOSTICS
+         // see https://github.com/nlohmann/json/issues/2838
+-        JSON_ASSERT(type() == value_t::array);
+         if (JSON_HEDLEY_UNLIKELY(old_capacity == detail::unknown_size()
+-                                 || array_capacity() != old_capacity))
++                                 || container_capacity() != old_capacity))
+         {
+-            // the capacity has changed, or the array type does not let us tell:
+-            // the elements may have moved, so update all parents
++            // the capacity has changed, or the container type does not let us
++            // tell: the elements may have moved, so update all parents
+             set_parents();
+             return j;
+         }
+ #else
+         static_cast<void>(old_capacity);
+ #endif
+-        return set_parent(j);
++        return set_parent_at(j);
+     }
+ 
+-    reference set_parent(reference j)
++    /// @brief set the parent of an element accessed via at(); never moves elements
++    reference set_parent_at(reference j) noexcept
+     {
+ #if JSON_DIAGNOSTICS
+-        // ordered_json uses a vector internally, so pointers could have
+-        // been invalidated; see https://github.com/nlohmann/json/issues/2962
+-#ifdef JSON_HEDLEY_MSVC_VERSION
+-#pragma warning(push )
+-#pragma warning(disable : 4127) // ignore warning to replace if with if constexpr
+-#endif
+-        if (detail::is_ordered_map<object_t>::value)
+-        {
+-            set_parents();
+-            return j;
+-        }
+-#ifdef JSON_HEDLEY_MSVC_VERSION
+-#pragma warning( pop )
+-#endif
+-
+         j.m_parent = this;
+-#else
+-        static_cast<void>(j);
+ #endif
+         return j;
+     }
+@@ -2136,9 +2147,11 @@ public:
+ 
+ 
+     /// @brief restore the parent pointers after erasing from an object
+-    /// ordered_json keeps its members in a vector, and erasing a member
+-    /// re-constructs every member after it in place, which resets their
+-    /// parent pointers
++    /// Unless the object type is known to keep its elements in place (see
++    /// detail::has_stable_elements), erasing a member may move the members
++    /// after it; ordered_json, for instance, keeps its members in a vector
++    /// and re-constructs every member after the erased one in place, which
++    /// resets their parent pointers
+     void set_parents_after_object_erase()
+     {
+ #if JSON_DIAGNOSTICS
+@@ -2146,7 +2159,7 @@ public:
+ #pragma warning(push )
+ #pragma warning(disable : 4127) // ignore warning to replace if with if constexpr
+ #endif
+-        if (detail::is_ordered_map<object_t>::value)
++        if (!detail::has_stable_elements<object_t>::value)
+         {
+             set_parents();
+         }
+@@ -2557,7 +2570,6 @@ public:
+             copy_leaf_value(other, *this);
+         }
+ 
+-        set_parents();
+         assert_invariant();
+     }
+ 
+@@ -3445,7 +3457,7 @@ public:
+     /// @sa https://json.nlohmann.me/api/basic_json/at/
+     reference at(size_type idx)
+     {
+-        return set_parent(array_at(*this, idx));
++        return set_parent_at(array_at(*this, idx));
+     }
+ 
+     /// @brief access specified array element with bounds checking
+@@ -3459,7 +3471,7 @@ public:
+     /// @sa https://json.nlohmann.me/api/basic_json/at/
+     reference at(const typename object_t::key_type& key)
+     {
+-        return set_parent(object_at(*this, key));
++        return set_parent_at(object_at(*this, key));
+     }
+ 
+     /// @brief access specified object element with bounds checking
+@@ -3468,7 +3480,7 @@ public:
+                  detail::is_usable_as_basic_json_key_type<basic_json_t, KeyType>::value, int> = 0>
+     reference at(KeyType && key)
+     {
+-        return set_parent(object_at(*this, std::forward<KeyType>(key)));
++        return set_parent_at(object_at(*this, std::forward<KeyType>(key)));
+     }
+ 
+     /// @brief access specified object element with bounds checking
+@@ -3513,13 +3525,13 @@ public:
+ #if JSON_DIAGNOSTICS
+                 // remember array size & capacity before resizing
+                 const auto old_size = m_data.m_value.array->size();
+-                const auto old_capacity = array_capacity();
++                const auto old_capacity = container_capacity();
+ #endif
+                 m_data.m_value.array->resize(idx + 1);
+ 
+ #if JSON_DIAGNOSTICS
+                 if (JSON_HEDLEY_UNLIKELY(old_capacity == detail::unknown_size()
+-                                         || array_capacity() != old_capacity))
++                                         || container_capacity() != old_capacity))
+                 {
+                     // capacity has changed: update all parents
+                     set_parents();
+@@ -3566,8 +3578,9 @@ public:
+         // operator[] only works for objects
+         if (JSON_HEDLEY_LIKELY(is_object()))
+         {
++            const auto old_capacity = container_capacity();
+             auto result = m_data.m_value.object->emplace(std::move(key), nullptr);
+-            return set_parent(result.first->second);
++            return set_parent_after_insert(result.first->second, old_capacity);
+         }
+ 
+         throw_subscript_wrong_type("string");
+@@ -3617,8 +3630,9 @@ public:
+         // operator[] only works for objects
+         if (JSON_HEDLEY_LIKELY(is_object()))
+         {
++            const auto old_capacity = container_capacity();
+             auto result = m_data.m_value.object->emplace(lookup_key(std::forward<KeyType>(key)), nullptr);
+-            return set_parent(result.first->second);
++            return set_parent_after_insert(result.first->second, old_capacity);
+         }
+ 
+         throw_subscript_wrong_type("string");
+@@ -4524,9 +4538,9 @@ public:
+         }
+ 
+         // add the element to the array (move semantics)
+-        const auto old_capacity = array_capacity();
++        const auto old_capacity = container_capacity();
+         m_data.m_value.array->push_back(std::move(val));
+-        set_parent_after_array_insert(m_data.m_value.array->back(), old_capacity);
++        set_parent_after_insert(m_data.m_value.array->back(), old_capacity);
+         // if val is moved from, basic_json move constructor marks it null, so we do not call the destructor
+     }
+ 
+@@ -4555,9 +4569,9 @@ public:
+         }
+ 
+         // add the element to the array
+-        const auto old_capacity = array_capacity();
++        const auto old_capacity = container_capacity();
+         m_data.m_value.array->push_back(val);
+-        set_parent_after_array_insert(m_data.m_value.array->back(), old_capacity);
++        set_parent_after_insert(m_data.m_value.array->back(), old_capacity);
+     }
+ 
+     /// @brief add an object to an array
+@@ -4585,8 +4599,9 @@ public:
+         }
+ 
+         // add the element to the object
++        const auto old_capacity = container_capacity();
+         auto res = m_data.m_value.object->insert(val);
+-        set_parent(res.first->second);
++        set_parent_after_insert(res.first->second, old_capacity);
+     }
+ 
+     /// @brief add an object to an object
+@@ -4639,9 +4654,9 @@ public:
+         }
+ 
+         // add the element to the array (perfect forwarding)
+-        const auto old_capacity = array_capacity();
++        const auto old_capacity = container_capacity();
+         m_data.m_value.array->emplace_back(std::forward<Args>(args)...);
+-        return set_parent_after_array_insert(m_data.m_value.array->back(), old_capacity);
++        return set_parent_after_insert(m_data.m_value.array->back(), old_capacity);
+     }
+ 
+     /// @brief add an object to an object if key does not exist
+@@ -4662,8 +4677,9 @@ public:
+         }
+ 
+         // add the element to the array (perfect forwarding)
++        const auto old_capacity = container_capacity();
+         auto res = m_data.m_value.object->emplace(std::forward<Args>(args)...);
+-        set_parent(res.first->second);
++        set_parent_after_insert(res.first->second, old_capacity);
+ 
+         // create a result iterator and set iterator to the result of emplace
+         auto it = begin();
+@@ -4962,9 +4978,9 @@ public:
+                     continue;
+                 }
+             }
+-            // set_parent() also repairs the other members, which ordered_json
+-            // relocates when adding a key makes its vector grow
+-            set_parent(m_data.m_value.object->operator[](it.key()) = std::move(it.value()));
++            // operator[] repairs the other members if the object type moves
++            // them; assigning through it keeps this O(1) per key
++            operator[](it.key()) = std::move(it.value());
+         }
+     }
+ 
+@@ -5014,9 +5030,8 @@ public:
+                     continue;
+                 }
+             }
+-            // set_parent() also repairs the other members, which ordered_json
+-     
+[... truncated, 371 more characters]
+```
+
+## Existing upstream tests that call the changed code (for style and API usage)
+// Upstream tests at the PR's parent commit ca7740fef that use the changed code.
+// Names searched (test lines using each): basic_json (34), emplace (67), emplace_back (37), push_back (331), at (396), update (45), erase (228), operator[] (18), update_members (0), update_members_iteratively (0), set_parents_after_object_erase (0), set_parent_after_insert (0), set_parent_at (0), has_stable_elements (0), is_nlohmann_ordered_map (0), container_capacity (0), set_parent (0), set_parent_after_array_insert (0), array_capacity (0)
+
+// ---- tests/src/unit-allocator.cpp:675-720  (uses: emplace, emplace_back, push_back, update)
+    SECTION("turning a null value into an array or object")
+    {
+        my_json j;
+
+        next_construct_fails = true;
+        CHECK_THROWS_AS(j[0], std::bad_alloc&);
+        CHECK(j.is_null());
+
+        next_construct_fails = true;
+        CHECK_THROWS_AS(j["key"], std::bad_alloc&);
+        CHECK(j.is_null());
+
+#ifdef JSON_HAS_CPP_17
+        next_construct_fails = true;
+        CHECK_THROWS_AS(j[std::string_view("key")], std::bad_alloc&);
+        CHECK(j.is_null());
+#endif
+
+        next_construct_fails = true;
+        CHECK_THROWS_AS(j.push_back(my_json(1)), std::bad_alloc&);
+        CHECK(j.is_null());
+
+        const my_json one = 1;
+        next_construct_fails = true;
+        CHECK_THROWS_AS(j.push_back(one), std::bad_alloc&);
+        CHECK(j.is_null());
+
+        next_construct_fails = true;
+        CHECK_THROWS_AS(j.push_back(my_json::object_t::value_type("key", 1)), std::bad_alloc&);
+        CHECK(j.is_null());
+
+        next_construct_fails = true;
+        CHECK_THROWS_AS(j.emplace_back(1), std::bad_alloc&);
+        CHECK(j.is_null());
+
+        next_construct_fails = true;
+        CHECK_THROWS_AS(j.emplace("key", 1), std::bad_alloc&);
+        CHECK(j.is_null());
+
+        const my_json object = {{"key", 1}};
+        next_construct_fails = true;
+        CHECK_THROWS_AS(j.update(object), std::bad_alloc&);
+        CHECK(j.is_null());
+
+        next_construct_fails = false;
+    }
+
+// ---- tests/src/unit-diagnostics.cpp:191-239  (uses: at, push_back, update)
+    SECTION("Regression test for issue #3007 - Parent pointers properly set when using update()")
+    {
+        // void update(const_reference j)
+        {
+            json j = json::object();
+
+            {
+                json j2 = json::object();
+                j2["one"] = 1;
+
+                j.update(j2);
+            }
+
+            // Must call operator[] on const element, otherwise m_parent gets updated.
+            auto const& constJ = j;
+            CHECK_THROWS_WITH_AS(constJ["one"].at(0), "[json.exception.type_error.304] (/one) cannot use at() with number", json::type_error);
+        }
+
+        // void update(const_iterator first, const_iterator last)
+        {
+            json j = json::object();
+
+            {
+                json j2 = json::object();
+                j2["one"] = 1;
+
+                j.update(j2.begin(), j2.end());
+            }
+
+            // Must call operator[] on const element, otherwise m_parent gets updated.
+            auto const& constJ = j;
+            CHECK_THROWS_WITH_AS(constJ["one"].at(0), "[json.exception.type_error.304] (/one) cannot use at() with number", json::type_error);
+        }
+
+        // Code from #3007 triggering unwanted assertion without fix to update().
+        {
+            json root = json::array();
+            json lower = json::object();
+
+            {
+                json lowest = json::object();
+                lowest["one"] = 1;
+
+                lower.update(lowest);
+            }
+
+            root.push_back(lower);
+        }
+    }
+
+// ---- tests/src/unit-custom-array-type.cpp:71-83  (uses: emplace_back, push_back)
+    SECTION("adding elements")
+    {
+        deque_json j = deque_json::array();
+        j.push_back(1);
+        j.push_back("two");
+        j.emplace_back(3);
+        j += 4;
+
+        CHECK(j.size() == 4);
+        CHECK(j == deque_json({1, "two", 3, 4}));
+        CHECK(j.back() == 4);
+        CHECK(j.front() == 1);
+    }
+
+// ---- tests/src/unit-custom-base-class.cpp:62-75  (uses: at, emplace_back)
+    SECTION("type vector<int>")
+    {
+        using json = json_with_metadata<std::vector<int>>;
+        json value;
+        value.metadata().emplace_back(1);
+        auto copy = value;
+        value.metadata().emplace_back(2);
+
+        CHECK(copy.metadata().size()  == 1);
+        CHECK(copy.metadata().at(0)   == 1);
+        CHECK(value.metadata().size() == 2);
+        CHECK(value.metadata().at(0)  == 1);
+        CHECK(value.metadata().at(1)  == 2);
+    }
+
+// ---- tests/src/unit-custom-base-class.cpp:76-95  (uses: at, emplace_back)
+    SECTION("copy ctor")
+    {
+        using json = json_with_metadata<std::vector<int>>;
+        json value;
+        value.metadata().emplace_back(1);
+        value.metadata().emplace_back(2);
+
+        json copy = value;
+
+        CHECK(copy.metadata().size()  == 2);
+        CHECK(copy.metadata().at(0)   == 1);
+        CHECK(copy.metadata().at(1)   == 2);
+        CHECK(value.metadata().size() == 2);
+        CHECK(value.metadata().at(0)  == 1);
+        CHECK(value.metadata().at(1)  == 2);
+
+        value.metadata().clear();
+        CHECK(copy.metadata().size()  == 2);
+        CHECK(value.metadata().size() == 0);
+    }
+
+// ---- tests/src/unit-ordered_map.cpp:416-429  (uses: at, emplace)
+        SECTION("with T&& (rvalue)")
+        {
+            auto res1 = om.emplace("eins", std::string("1"));
+            CHECK(res1.first == om.begin());
+            CHECK(res1.second == false);
+            CHECK(om.size() == 3);
+            CHECK(om.at("eins") == "one"); // existing key is not overwritten
+
+            auto res4 = om.emplace("vier", std::string("four"));
+            CHECK(res4.first == om.begin() + 3);
+            CHECK(res4.second == true);
+            CHECK(om.size() == 4);
+            CHECK(om.at("vier") == "four");
+        }
+
+// ---- tests/src/unit-ordered_map.cpp:431-448  (uses: at, emplace)
+        SECTION("with T& (lvalue)")
+        {
+            std::string one = "1"; // NOLINT(misc-const-correctness): emplace must accept a non-const lvalue
+            std::string four = "four"; // NOLINT(misc-const-correctness): see above
+
+            auto res1 = om.emplace("eins", one);
+            CHECK(res1.first == om.begin());
+            CHECK(res1.second == false);
+            CHECK(om.size() == 3);
+            CHECK(om.at("eins") == "one"); // existing key is not overwritten
+
+            auto res4 = om.emplace("vier", four);
+            CHECK(res4.first == om.begin() + 3);
+            CHECK(res4.second == true);
+            CHECK(om.size() == 4);
+            CHECK(om.at("vier") == "four");
+            CHECK(four == "four"); // source was copied, not moved from
+        }
+
+# Task
+Write 20 test programs for this pull request. Return JSON with a "tests" array; each item has "name" (short snake_case), "intent" (one sentence: what behavior it probes) and "code" (the complete C++ program).

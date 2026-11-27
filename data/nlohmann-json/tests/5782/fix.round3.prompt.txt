@@ -1,0 +1,245 @@
+[system]
+You write test programs that probe a C++ library for behavioral changes made by one pull request.
+Each program is compiled and run twice, once against the library before the change and once after, and the two
+outputs are compared. Your job is to produce programs whose output reveals whether the change altered behavior,
+including side effects the author did not intend.
+
+Rules for every program:
+- It is standalone: one file with its own int main(), compiled as C++17, printing results to stdout.
+- Use only the library's documented public API. Never include internal headers or use detail/impl namespaces,
+  private members or undocumented macros.
+- Do not judge results (no assert, no expected-value comparisons): just print what the library returns. Print
+  enough to make differences visible, one fact per line.
+- Output must be deterministic. Never print pointers or addresses, uninitialized data, the order of
+  hash-based containers, timings, thread ids, random values, file paths or environment data. Print floating point
+  values with an explicit precision. No input, files, network, threads, clocks or randomness.
+- Wrap calls that may throw in try/catch and print the exception's type and message, so an exception is an
+  observable result. Do not crash on purpose.
+- Aim at the code the diff changes. Prefer calls that compile against both the old and the new library; one or two
+  programs may use an API the PR adds. Cover ordinary inputs and edge cases (empty, minimum and maximum values,
+  boundaries, special values, nesting, unusual types) and also neighbouring behavior the change could disturb.
+- When the diff changes which types or inputs an API accepts or rejects (constraints, overloads, traits,
+  conversions), test it with the detection idiom (std::void_t or requires) and `if constexpr`, so the program
+  compiles against both versions, prints whether the expression is well-formed, and exercises it when it is.
+  Accepting an input is not enough: also use it through every entry point that should follow (const and
+  non-const, read, write, insert, erase, lookup, nested use), because a change that admits new inputs can leave
+  later code unable to handle them.
+- If the changed code is internal (a detail, impl or internal namespace, a trait, a helper), do not name it in the
+  program. Reach it through the public API that depends on it, using detection (as above) where needed.
+- Use the exact types and values the diff is about (the new trait's argument types, the new overload's
+  parameters), not stand-ins.
+- Spread the programs over distinct public entry points and overloads, one main idea per program. Do not write
+  several programs that only rename a type or change a literal.
+- Make the programs differ from each other: different inputs, different entry points, different features.
+
+Rules specific to this library:
+- Include the library with #include <nlohmann/json.hpp>. The public API is nlohmann::json (nlohmann::basic_json), nlohmann::ordered_json, json_pointer, json patch/merge_patch and the documented SAX and conversion interfaces. Never use the detail namespace.
+- It is a header-only library: nothing to link. Programs are compiled as C++17.
+- Print JSON values with dump() (compact) or dump(2). Keys of nlohmann::json objects print in sorted order, so output is deterministic; do not depend on insertion order except with ordered_json.
+
+[user]
+# Pull request #5782: Use MSVC intrinsics for full multiplication
+
+## Description
+`full_multiplication()` currently uses `unsigned __int128` on GCC/Clang and falls back to four 32-bit partial products everywhere else. This adds the native intrinsics for the two MSVC targets that have them.
+
+- **x64:** `_umul128(a, b, &high)` gives both halves of the 128-bit product.
+- **ARM64:** `a * b` provides the low half and `__umulh(a, b)` provides the high half.
+- `<intrin.h>` is included only for MSVC x64/ARM64 builds, so other compilers and platforms are unaffected.
+- The `__SIZEOF_INT128__` branch remains first. This is important for clang-cl, which defines that macro and should continue using `unsigned __int128`.
+- 32-bit MSVC and other compilers continue to use the existing portable fallback unchanged.
+
+I extended the existing "128-bit products and leading zeros" test section with fixed edge cases checked against the existing big-integer reference, including `0`, `1`, `UINT64_MAX`, values around `2^32`, and large boundary values. The existing deterministic random-pair coverage is also preserved.
+
+`single_include/nlohmann/json.hpp` is synchronized with the implementation change.
+
+**Testing:** the touched tests pass locally with ASan and UBSan, and `git diff --check` is clean. MSVC/clang-cl are not available in my local environment, so the new MSVC branches have not been compiled locally. The repository's Windows CI jobs should provide compiler-specific validation.
+
+**Performance:** I have not benchmarked this change. The goal is to use the native 64×64-bit multiplication support provided by MSVC rather than the portable partial-product implementation.
+
+Closes #5780
+
+## Commit message
+* Use MSVC intrinsics for full multiplication
+
+Signed-off-by: Suyog Verma <suyogverma0057@gmail.com>
+
+* Fix formatting in unit-class_lexer
+
+Signed-off-by: Suyog Verma <suyogverma0057@gmail.com>
+
+* Address review feedback
+
+Signed-off-by: Suyog Verma <suyogverma0057@gmail.com>
+
+---------
+
+Signed-off-by: Suyog Verma <suyogverma0057@gmail.com>
+
+## Linked issue #5780: Use MSVC intrinsics for the 64×64-bit multiplication in full_multiplication()
+`detail::full_multiplication()` in `include/nlohmann/detail/bit_ops.hpp` (added in #5617) computes the 128-bit product of two 64-bit numbers. GCC and Clang use `unsigned __int128`. All other compilers, including MSVC, fall back to four 32-bit partial products. MSVC has intrinsics for this:
+
+- x64: `_umul128(a, b, &high)` returns the low half and stores the high half (`<intrin.h>`).
+- ARM64: `a * b` for the low half and `__umulh(a, b)` for the high half.
+
+## Proposal
+
+Add an `#elif defined(_MSC_VER) && (defined(_M_X64) || defined(_M_ARM64))` branch to `full_multiplication()` and keep the portable fallback for everything else (32-bit MSVC, other compilers). `clang-cl` defines `__SIZEOF_INT128__` and takes the first branch, so the order of the branches matters. Add a unit test that compares the result with the portable formula for edge values: 0, 1, `UINT64_MAX`, values around 2^32, and a few random pairs.
+
+## Why now, and why not yet
+
+- **On `develop`, MSVC gains little.** The only caller is the Eisel–Lemire fallback in `number_parse.hpp`, which is only used when `std::from_chars` for floating-point is unavailable. Current MSVC has it.
+- **With the zero-copy view stack (#5768) it matters.** #5634 writes doubles with Żmij (`detail/conversions/zmij.hpp`), which calls `full_multiplication()` several times per number, and #5738 parses floats with it. MSVC would then run the slow fallback in the hot path of `dump()` for every double.
+
+So this is worth doing once that stack is merged (or with it), and should be measured on MSVC x64 with `dump()` of a float-heavy file such as canada.json.
+
+## Background
+
+Discussion #3782 asked for intrinsics in Grisu2's `diyfp::mul()` in `to_chars.hpp`, which uses the same 32-bit partial products. After #5634, Grisu2 is only used for `float`, so changing `diyfp::mul()` is not worth it on its own. It could call `full_multiplication()` to remove the duplicate code, keeping its rounding of the low half.
+
+Written by Claude Code.
+
+## Discussion before merge
+- github-actions[bot]: ## 🔴 Amalgamation check failed! 🔴
+The source code has not been amalgamated and/or formatted correctly, or `BUILD.bazel` is out of date.
+
+📎 A ready-to-apply patch is attached to the [failed workflow run](https://github.com/nlohmann/json/actions/runs/37615881592) as the `amalgamation-patch` artifact. Download it, then apply it locally from the repository root with:
+
+```shell
+git apply amalgamation.patch
+```
+
+This does not require installing astyle yourself.
+
+@commit-msuyog Please read and follow the [Contribution Guidelines](https://github.com/nlohmann/json/blob/develop/.github/CONTRIBUTING.md#amalgamate-the-source-code).
+- nlohmann: Please rebase to the latest develop: CI on develop is green again since #5779, so a rebase should give this PR a clean CI run.
+
+_(Comment written by Claude Code on behalf of @nlohmann.)_
+- nlohmann: The branch is still based on 30e542e52, so the GCC, Clang and Infer failures already fixed on develop by #5779 will probably come back. Those failures aren't caused by this PR. The new commits only touch bit_ops.hpp and the test, which don't affect them.
+- commit-msuyog: Rebased onto the latest `develop` including #5779.
+- nlohmann: Thanks! Now let's wait for the Windows jobs and AppVeyor to pick this up.
+- nlohmann: Two points about this include:
+
+1. The comment a few lines below says these helpers "need no platform headers". That is no longer true for MSVC x64/ARM64. Please update it.
+2. `<intrin.h>` is a large header, and every MSVC x64/ARM64 translation unit that includes `json.hpp` now pulls it in. Compile time is an open concern (#5294). Could you check whether `<intrin0.h>`, the lighter header the MSVC STL uses internally, declares both `_umul128` and `__umulh`? If not, keeping `<intrin.h>` is fine.
+
+## Changed functions (from changes.py)
+- nlohmann::detail::full_multiplication(std::uint64_t, std::uint64_t) (private); reached from the public API through: nlohmann::basic_json::sax_parse(detail::span_input_adapter &&, SAX *, input_format_t, const bool, const bool, const bool, const cbor_tag_handler_t), nlohmann::basic_json::sax_parse(InputType &&, SAX *, input_format_t, const bool, const bool, const bool, const cbor_tag_handler_t), nlohmann::basic_json::sax_parse(IteratorType, SentinelType, SAX *, input_format_t, const bool, const bool, const bool, const cbor_tag_handler_t), nlohmann::basic_json::from_bson(detail::span_input_adapter &&, const bool, const bool), nlohmann::basic_json::from_cbor(detail::span_input_adapter &&, const bool, const bool, const cbor_tag_handler_t), nlohmann::basic_json::from_msgpack(detail::span_input_adapter &&, const bool, const bool), nlohmann::basic_json::from_ubjson(detail::span_input_adapter &&, const bool, const bool), nlohmann::basic_json::from_bjdata(InputType &&, const bool, const bool, const error_handler_t), nlohmann::basic_json::from_bon8(InputType &&, const bool, const bool), nlohmann::basic_json::from_bson(InputType &&, const bool, const bool, const error_handler_t)
+
+## Diff of the library source (before -> after)
+```diff
+diff --git a/include/nlohmann/detail/bit_ops.hpp b/include/nlohmann/detail/bit_ops.hpp
+index 9655ff18b..9ccb82c66 100644
+--- a/include/nlohmann/detail/bit_ops.hpp
++++ b/include/nlohmann/detail/bit_ops.hpp
+@@ -9,12 +9,15 @@
+ #pragma once
+ 
+ #include <cstdint> // uint64_t
++#if !defined(__SIZEOF_INT128__) && defined(_MSC_VER) && (defined(_M_X64) || defined(_M_ARM64))
++    #include <intrin0.h> // __umulh, _umul128
++#endif
+ 
+ #include <nlohmann/detail/abi_macros.hpp>
+ 
+ // Portable bit-level helpers for the number and string scanners. They use
+-// compiler builtins where available and plain C++ otherwise, so they need no
+-// platform headers and work regardless of byte order.
++// compiler builtins or platform-specific intrinsics where available and plain
++// C++ otherwise, so they work regardless of byte order.
+ 
+ NLOHMANN_JSON_NAMESPACE_BEGIN
+ namespace detail
+@@ -52,6 +55,12 @@ inline uint128_parts full_multiplication(std::uint64_t a, std::uint64_t b) noexc
+     __extension__ using uint128 = unsigned __int128;
+     const uint128 r = static_cast<uint128>(a) * b;
+     return {static_cast<std::uint64_t>(r), static_cast<std::uint64_t>(r >> 64u)};
++#elif defined(_MSC_VER) && defined(_M_X64)
++    std::uint64_t high = 0;
++    const std::uint64_t low = _umul128(a, b, &high);
++    return {low, high};
++#elif defined(_MSC_VER) && defined(_M_ARM64)
++    return {a * b, __umulh(a, b)};
+ #else
+     const std::uint64_t a_lo = a & 0xFFFFFFFFu;
+     const std::uint64_t a_hi = a >> 32u;
+```
+
+## Existing upstream tests that call the changed code (for style and API usage)
+// Upstream tests at the PR's parent commit ed8ba0201 that use the changed code.
+// Names searched (test lines using each): sax_parse (0), from_bson (0), from_cbor (0), from_msgpack (0), from_ubjson (0), from_bjdata (0), from_bon8 (0), full_multiplication (1)
+
+// ---- tests/src/unit-class_lexer.cpp:892-911  (uses: full_multiplication)
+    SECTION("128-bit products and leading zeros")
+    {
+        // whichever implementation the compiler gets (with or without a
+        // 128-bit integer type or a builtin)
+        std::uint64_t state = 42;
+        for (int i = 0; i < 10000; ++i)
+        {
+            state ^= state << 13u;
+            state ^= state >> 7u;
+            state ^= state << 17u;
+            const std::uint64_t a = state;
+            const std::uint64_t b = (state * 0x9E3779B97F4A7C15u) >> (i % 64);
+            const auto product = nlohmann::detail::full_multiplication(a, b);
+            CHECK(big_from(product.high, product.low) == big_mul(big_from(0, a), big_from(0, b)));
+
+            const int k = i % 64;
+            const std::uint64_t x = (std::uint64_t{1} << k) | (a & ((std::uint64_t{1} << k) - 1));
+            CHECK(nlohmann::detail::count_leading_zeros(x) == 63 - k);
+        }
+    }
+
+# Programs to repair
+
+## gen_26.cpp (compile)
+Intent: Exercises sax_parse indirectly exercising floating point parsing and multiplication paths with empty stream.
+COMPILE ERROR. The program fails to compile, the same way against the old and the new library. Fix the error (wrong or missing include, typo, misuse of the public API) and keep the intent: the call under test must stay. Include only headers that exist; if you are unsure a header exists, use the library's main header.
+Compiler errors:
+```
+gen_26.cpp:21:77: error: ‘detail’ in ‘using nlohmann::json_abi_v3_12_0::json = class nlohmann::json_abi_v3_12_0::basic_json<>’ {aka ‘class nlohmann::json_abi_v3_12_0::basic_json<>’} does not name a type
+21 |     bool parse_error(std::size_t, const std::string&, const nlohmann::json::detail::exception&) override { return true; }
+gen_26.cpp:21:94: error: expected unqualified-id before ‘&’ token
+21 |     bool parse_error(std::size_t, const std::string&, const nlohmann::json::detail::exception&) override { return true; }
+gen_26.cpp:21:94: error: expected ‘)’ before ‘&’ token
+21 |     bool parse_error(std::size_t, const std::string&, const nlohmann::json::detail::exception&) override { return true; }
+```
+Source:
+```cpp
+#include <nlohmann/json.hpp>
+#include <iostream>
+#include <sstream>
+
+class DummySAX : public nlohmann::json::json_sax_t {
+public:
+    bool null() override { return true; }
+    bool boolean(bool) override { return true; }
+    bool number_integer(number_integer_t) override { return true; }
+    bool number_unsigned(number_unsigned_t) override { return true; }
+    bool number_float(number_float_t, const string_t&) override { return true; }
+    bool string(string_t&) override { return true; }
+    bool binary(binary_t&) override { return true; }
+    bool start_object(std::size_t) override { return true; }
+    bool key(string_t&) override { return true; }
+    bool end_object() override { return true; }
+    bool start_array(std::size_t) override { return true; }
+    bool end_array() override { return true; }
+    bool parse_error(std::size_t, const std::string&, const nlohmann::json::detail::exception&) override { return true; }
+};
+
+int main() {
+    try {
+        DummySAX sax;
+        std::string s = "";
+        bool res = nlohmann::json::sax_parse(s, &sax);
+        std::cout << "sax_parse empty result: " << std::boolalpha << res << "\n";
+    } catch (const std::exception& e) {
+        std::cout << "Exception: " << typeid(e).name() << " " << e.what() << "\n";
+    }
+    return 0;
+}
+```
+
+# Task
+Return JSON with a "fixes" array: one item per program above, with "file" (exactly as given) and "code" (the complete repaired program, standalone, with its own int main). Do not return programs you cannot repair.

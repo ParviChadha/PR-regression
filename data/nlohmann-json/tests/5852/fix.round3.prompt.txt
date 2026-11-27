@@ -1,0 +1,793 @@
+[system]
+You write test programs that probe a C++ library for behavioral changes made by one pull request.
+Each program is compiled and run twice, once against the library before the change and once after, and the two
+outputs are compared. Your job is to produce programs whose output reveals whether the change altered behavior,
+including side effects the author did not intend.
+
+Rules for every program:
+- It is standalone: one file with its own int main(), compiled as C++17, printing results to stdout.
+- Use only the library's documented public API. Never include internal headers or use detail/impl namespaces,
+  private members or undocumented macros.
+- Do not judge results (no assert, no expected-value comparisons): just print what the library returns. Print
+  enough to make differences visible, one fact per line.
+- Output must be deterministic. Never print pointers or addresses, uninitialized data, the order of
+  hash-based containers, timings, thread ids, random values, file paths or environment data. Print floating point
+  values with an explicit precision. No input, files, network, threads, clocks or randomness.
+- Wrap calls that may throw in try/catch and print the exception's type and message, so an exception is an
+  observable result. Do not crash on purpose.
+- Aim at the code the diff changes. Prefer calls that compile against both the old and the new library; one or two
+  programs may use an API the PR adds. Cover ordinary inputs and edge cases (empty, minimum and maximum values,
+  boundaries, special values, nesting, unusual types) and also neighbouring behavior the change could disturb.
+- When the diff changes which types or inputs an API accepts or rejects (constraints, overloads, traits,
+  conversions), test it with the detection idiom (std::void_t or requires) and `if constexpr`, so the program
+  compiles against both versions, prints whether the expression is well-formed, and exercises it when it is.
+  Accepting an input is not enough: also use it through every entry point that should follow (const and
+  non-const, read, write, insert, erase, lookup, nested use), because a change that admits new inputs can leave
+  later code unable to handle them.
+- If the changed code is internal (a detail, impl or internal namespace, a trait, a helper), do not name it in the
+  program. Reach it through the public API that depends on it, using detection (as above) where needed.
+- Use the exact types and values the diff is about (the new trait's argument types, the new overload's
+  parameters), not stand-ins.
+- Spread the programs over distinct public entry points and overloads, one main idea per program. Do not write
+  several programs that only rename a type or change a literal.
+- Make the programs differ from each other: different inputs, different entry points, different features.
+
+Rules specific to this library:
+- Include the library with #include <nlohmann/json.hpp>. The public API is nlohmann::json (nlohmann::basic_json), nlohmann::ordered_json, json_pointer, json patch/merge_patch and the documented SAX and conversion interfaces. Never use the detail namespace.
+- It is a header-only library: nothing to link. Programs are compiled as C++17.
+- Print JSON values with dump() (compact) or dump(2). Keys of nlohmann::json objects print in sorted order, so output is deterministic; do not depend on insertion order except with ordered_json.
+
+[user]
+# Pull request #5852: Copy the text of float tokens only when a SAX handler asks for it
+
+## Description
+## Summary
+
+After the previous PR, the biggest remaining cost of parsing floats was copying the token text into `token_buffer`: an out-of-line `std::string::append` per float, about 10 % of parsing `canada.json`. The only reader of that text is the string argument of `json_sax::number_float()`. The library's own handlers ignore it: `json_sax_dom_parser`, `json_sax_dom_callback_parser` and `json_sax_acceptor`.
+
+This PR copies the text only when it is asked for:
+
+- **Lazy copy:** for contiguous input, the fast path keeps a pointer to the token in the input, and `get_string()` copies it on first use.
+- **Built-in handlers:** the parser passes them an empty string instead of calling `get_string()`. They are marked by the new internal trait `sax_ignores_number_text`. So `json::parse()` and `json::accept()` never copy float text.
+- **Everyone else still sees the exact text:**
+  - user SAX handlers, including classes derived from `json_sax_dom_parser`, which the trait does not match;
+  - `JSON_DIAGNOSTIC_POSITIONS`, which reads `get_string().size()`.
+- **Keys and strings** never have pending text and use the unchecked `get_string_token()`. This avoids a 2–3 % cost on string-heavy input that a check in `get_string()` caused.
+- **Stream windows (#5828):** input read through a window into a `std::istream` or `FILE*` copies the text right away, because the next read may refill the window.
+
+Stacked on the previous PR.
+
+## Performance
+
+Change of the best-of-runs time against the previous PR (the first: against #5828), negative is faster. *accept* is `json::accept()` (no allocations), *parse* is `json::parse()`. Apple M1 Max: Apple Clang 21 and Homebrew GCC 16; x86-64 (Haswell VM): GCC 13, and Clang 18 with `-falign-loops=64 -falign-functions=64` on both sides (without it, code placement alone moves Clang's numbers by up to ±5 % between builds). Improvements of 3 % or more are bold.
+
+| file | M1 Clang accept | M1 Clang parse | M1 GCC 16 accept | M1 GCC 16 parse | x86 GCC accept | x86 Clang accept |
+|---|--:|--:|--:|--:|--:|--:|
+| `canada.json` | **−17.1 %** | **−10.5 %** | **−16.4 %** | **−9.4 %** | **−21.0 %** | **−13.1 %** |
+| `citm_catalog.json` | +3.0 % | −0.9 % | +1.1 % | −1.7 % | **−3.3 %** | **−4.2 %** |
+| `twitter.json` | +2.9 % | +0.4 % | +2.4 % | −1.7 % | **−5.1 %** | +1.3 % |
+| `numbers.json` | **−23.1 %** | **−21.8 %** | **−22.0 %** | **−23.2 %** | **−18.8 %** | **−17.9 %** |
+| `long_strings.json` | −0.5 % | +0.7 % | +0.2 % | −0.3 % | −2.2 % | −0.7 % |
+| `twitterescaped.json` | +2.7 % | −0.6 % | +1.6 % | +0.5 % | **−5.0 %** | +1.5 % |
+| `mesh.json` | **−13.1 %** | **−8.4 %** | **−15.2 %** | **−13.0 %** | **−15.5 %** | **−9.7 %** |
+
+The library's own handlers no longer touch the float text, so `json::parse()` and `json::accept()` gain on float-heavy input. User SAX handlers still get the text and run as before. On M1, `accept()` of twitter.json is about 2.5–3 % slower with both compilers (it stays with aligned code; `parse()` is unaffected), most likely from clearing the pending pointer at every token. The next PR makes twitter.json 10–22 % faster.
+
+## Tests
+
+- **New test case "text of float tokens"** in `unit-class_parser.cpp`:
+  - checks the exact text a user SAX handler receives, for contiguous, byte, stream and non-contiguous input;
+  - checks the trait for the three built-in handlers and that a user handler is not matched.
+- **Mutation check:** if `get_string()` does not copy the pending text, this test fails.
+- **Configurations:** the parser and diagnostic-positions tests pass with and without `JSON_DIAGNOSTIC_POSITIONS`.
+- **Differential check against #5828's head** (string, `std::istream`, `FILE*`; M1 and x86-64): identical, including the float text in the SAX event stream.
+- **Full test suite:** passes under ASan/UBSan on macOS and Linux x86-64.
+
+## Breaking changes
+
+None.
+
+- **Public API:** unchanged, and SAX handlers written by users receive the same text as before.
+- **Internals:**
+  - the built-in handlers' `number_f
+[... truncated, 383 more characters]
+
+## Commit message
+After the digits are converted while scanning, copying the token text into
+token_buffer (an out-of-line std::string::append) was about 10% of parsing
+canada.json. The only reader is the string argument of
+json_sax::number_float(), and the library's own handlers
+(json_sax_dom_parser, json_sax_dom_callback_parser, json_sax_acceptor)
+ignore it.
+
+For contiguous input, the fast path now keeps a pointer to the token in the
+input, and get_string() copies it on first use. The parser passes an empty
+string to the handlers marked by the new internal trait
+sax_ignores_number_text instead of calling get_string(), so json::parse()
+and json::accept() never copy float text. User handlers, and
+JSON_DIAGNOSTIC_POSITIONS (which reads get_string().size()), still see the
+exact text. Keys and strings, which never have pending text, use the
+unchecked get_string_token(). Input read through a window into a stream
+(std::istream, FILE*) copies the text right away, because the next read may
+refill the window.
+
+Signed-off-by: Niels Lohmann <mail@nlohmann.me>
+
+## Changed functions (from changes.py)
+- nlohmann::detail::lexer::scan_number_bulk_contiguous() (private); reached from the public API through: nlohmann::basic_json::sax_parse(detail::span_input_adapter &&, SAX *, input_format_t, const bool, const bool, const bool, const cbor_tag_handler_t), nlohmann::basic_json::sax_parse(InputType &&, SAX *, input_format_t, const bool, const bool, const bool, const cbor_tag_handler_t), nlohmann::basic_json::sax_parse(IteratorType, SentinelType, SAX *, input_format_t, const bool, const bool, const bool, const cbor_tag_handler_t), nlohmann::basic_json::from_bson(detail::span_input_adapter &&, const bool, const bool), nlohmann::basic_json::from_cbor(detail::span_input_adapter &&, const bool, const bool, const cbor_tag_handler_t), nlohmann::basic_json::from_msgpack(detail::span_input_adapter &&, const bool, const bool), nlohmann::basic_json::from_ubjson(detail::span_input_adapter &&, const bool, const bool), nlohmann::basic_json::from_bjdata(InputType &&, const bool, const bool, const error_handler_t), nlohmann::basic_json::from_bon8(InputType &&, const bool, const bool), nlohmann::basic_json::from_bson(InputType &&, const bool, const bool, const error_handler_t)
+- nlohmann::detail::lexer (private); reached from the public API through: nlohmann::basic_json::sax_parse(detail::span_input_adapter &&, SAX *, input_format_t, const bool, const bool, const bool, const cbor_tag_handler_t), nlohmann::basic_json::sax_parse(InputType &&, SAX *, input_format_t, const bool, const bool, const bool, const cbor_tag_handler_t), nlohmann::basic_json::sax_parse(IteratorType, SentinelType, SAX *, input_format_t, const bool, const bool, const bool, const cbor_tag_handler_t), nlohmann::basic_json::from_bson(detail::span_input_adapter &&, const bool, const bool), nlohmann::basic_json::from_cbor(detail::span_input_adapter &&, const bool, const bool, const cbor_tag_handler_t), nlohmann::basic_json::from_msgpack(detail::span_input_adapter &&, const bool, const bool), nlohmann::basic_json::from_ubjson(detail::span_input_adapter &&, const bool, const bool), nlohmann::basic_json::from_bjdata(InputType &&, const bool, const bool, const error_handler_t), nlohmann::basic_json::from_bon8(InputType &&, const bool, const bool), nlohmann::basic_json::from_bson(InputType &&, const bool, const bool, const error_handler_t)
+- nlohmann::detail::parser::sax_parse_internal(SAX *) (private); reached from the public API through: nlohmann::operator>>(std::istream &, basic_json<...> &), nlohmann::basic_json::accept(detail::span_input_adapter &&, const bool, const bool), nlohmann::basic_json::parse(detail::span_input_adapter &&, parser_callback_t, const bool, const bool, const bool), nlohmann::basic_json::accept(InputType &&, const bool, const bool), nlohmann::basic_json::parse(InputType &&, parser_callback_t, const bool, const bool, const bool), nlohmann::basic_json::sax_parse(detail::span_input_adapter &&, SAX *, input_format_t, const bool, const bool, const bool, const cbor_tag_handler_t), nlohmann::basic_json::sax_parse(InputType &&, SAX *, input_format_t, const bool, const bool, const bool, const cbor_tag_handler_t), nlohmann::basic_json::accept(IteratorType, SentinelType, const bool, const bool), nlohmann::basic_json::parse(IteratorType, SentinelType, parser_callback_t, const bool, const bool, const bool), nlohmann::basic_json::sax_parse(IteratorType, SentinelType, SAX *, input_format_t, const bool, const bool, const bool, const cbor_tag_handler_t)
+- nlohmann::detail::lexer::get_string() (private); reached from the public API through: nlohmann::basic_json::sax_parse(detail::span_input_adapter &&, SAX *, input_format_t, const bool, const bool, const bool, const cbor_tag_handler_t), nlohmann::basic_json::sax_parse(InputType &&, SAX *, input_format_t, const bool, const bool, const bool, const cbor_tag_handler_t), nlohmann::basic_json::sax_parse(IteratorType, SentinelType, SAX *, input_format_t, const bool, const bool, const bool, const cbor_tag_handler_t), nlohmann::basic_json::from_bson(detail::span_input_adapter &&, const bool, const bool), nlohmann::basic_json::from_cbor(detail::span_input_adapter &&, const bool, const bool, const cbor_tag_handler_t), nlohmann::basic_json::from_msgpack(detail::span_input_adapter &&, const bool, const bool), nlohmann::basic_json::from_ubjson(detail::span_input_adapter &&, const bool, const bool), nlohmann::basic_json::from_bjdata(InputType &&, const bool, const bool, const error_handler_t), nlohmann::basic_json::from_bon8(InputType &&, const bool, const bool), nlohmann::basic_json::from_bson(InputType &&, const bool, const bool, const error_handler_t)
+- nlohmann::detail::parser (private); reached from the public API through: nlohmann::operator>>(std::istream &, basic_json<...> &), nlohmann::basic_json::accept(detail::span_input_adapter &&, const bool, const bool), nlohmann::basic_json::parse(detail::span_input_adapter &&, parser_callback_t, const bool, const bool, const bool), nlohmann::basic_json::accept(InputType &&, const bool, const bool), nlohmann::basic_json::parse(InputType &&, parser_callback_t, const bool, const bool, const bool), nlohmann::basic_json::sax_parse(detail::span_input_adapter &&, SAX *, input_format_t, const bool, const bool, const bool, const cbor_tag_handler_t), nlohmann::basic_json::sax_parse(InputType &&, SAX *, input_format_t, const bool, const bool, const bool, const cbor_tag_handler_t), nlohmann::basic_json::accept(IteratorType, SentinelType, const bool, const bool), nlohmann::basic_json::parse(IteratorType, SentinelType, parser_callback_t, const bool, const bool, const bool), nlohmann::basic_json::sax_parse(IteratorType, SentinelType, SAX *, input_format_t, const bool, const bool, const bool, const cbor_tag_handler_t)
+- nlohmann::detail::lexer::reset() (private); reached from the public API through: nlohmann::basic_json::sax_parse(detail::span_input_adapter &&, SAX *, input_format_t, const bool, const bool, const bool, const cbor_tag_handler_t), nlohmann::basic_json::sax_parse(InputType &&, SAX *, input_format_t, const bool, const bool, const bool, const cbor_tag_handler_t), nlohmann::basic_json::sax_parse(IteratorType, SentinelType, SAX *, input_format_t, const bool, const bool, const bool, const cbor_tag_handler_t), nlohmann::basic_json::from_bson(detail::span_input_adapter &&, const bool, const bool), nlohmann::basic_json::from_cbor(detail::span_input_adapter &&, const bool, const bool, const cbor_tag_handler_t), nlohmann::basic_json::from_msgpack(detail::span_input_adapter &&, const bool, const bool), nlohmann::basic_json::from_ubjson(detail::span_input_adapter &&, const bool, const bool), nlohmann::basic_json::from_bjdata(InputType &&, const bool, const bool, const error_handler_t), nlohmann::basic_json::from_bon8(InputType &&, const bool, const bool), nlohmann::basic_json::from_bson(InputType &&, const bool, const bool, const error_handler_t)
+- nlohmann::detail::lexer::get_string_token() (private); reached from the public API through: nlohmann::basic_json::sax_parse(detail::span_input_adapter &&, SAX *, input_format_t, const bool, const bool, const bool, const cbor_tag_handler_t), nlohmann::basic_json::sax_parse(InputType &&, SAX *, input_format_t, const bool, const bool, const bool, const cbor_tag_handler_t), nlohmann::basic_json::sax_parse(IteratorType, SentinelType, SAX *, input_format_t, const bool, const bool, const bool, const cbor_tag_handler_t), nlohmann::basic_json::from_bson(detail::span_input_adapter &&, const bool, const bool), nlohmann::basic_json::from_cbor(detail::span_input_adapter &&, const bool, const bool, const cbor_tag_handler_t), nlohmann::basic_json::from_msgpack(detail::span_input_adapter &&, const bool, const bool), nlohmann::basic_json::from_ubjson(detail::span_input_adapter &&, const bool, const bool), nlohmann::basic_json::from_bjdata(InputType &&, const bool, const bool, const error_handler_t), nlohmann::basic_json::from_bon8(InputType &&, const bool, const bool), nlohmann::basic_json::from_bson(InputType &&, const bool, const bool, const error_handler_t)
+- nlohmann::detail::parser::number_float_text(SAX *) (private); reached from the public API through: nlohmann::operator>>(std::istream &, basic_json<...> &), nlohmann::basic_json::accept(detail::span_input_adapter &&, const bool, const bool), nlohmann::basic_json::parse(detail::span_input_adapter &&, parser_callback_t, const bool, const bool, const bool), nlohmann::basic_json::accept(InputType &&, const bool, const bool), nlohmann::basic_json::parse(InputType &&, parser_callback_t, const bool, const bool, const bool), nlohmann::basic_json::sax_parse(detail::span_input_adapter &&, SAX *, input_format_t, const bool, const bool, const bool, const cbor_tag_handler_t), nlohmann::basic_json::sax_parse(InputType &&, SAX *, input_format_t, const bool, const bool, const bool, const cbor_tag_handler_t), nlohmann::basic_json::accept(IteratorType, SentinelType, const bool, const bool), nlohmann::basic_json::parse(IteratorType, SentinelType, parser_callback_t, const bool, const bool, const bool), nlohmann::basic_json::sax_parse(IteratorType, SentinelType, SAX *, input_format_t, const bool, const bool, const bool, const cbor_tag_handler_t)
+- nlohmann::detail::lexer::get_ignored_number_text() (private); reached from the public API through: nlohmann::basic_json::sax_parse(detail::span_input_adapter &&, SAX *, input_format_t, const bool, const bool, const bool, const cbor_tag_handler_t), nlohmann::basic_json::sax_parse(InputType &&, SAX *, input_format_t, const bool, const bool, const bool, const cbor_tag_handler_t), nlohmann::basic_json::sax_parse(IteratorType, SentinelType, SAX *, input_format_t, const bool, const bool, const bool, const cbor_tag_handler_t), nlohmann::basic_json::from_bson(detail::span_input_adapter &&, const bool, const bool), nlohmann::basic_json::from_cbor(detail::span_input_adapter &&, const bool, const bool, const cbor_tag_handler_t), nlohmann::basic_json::from_msgpack(detail::span_input_adapter &&, const bool, const bool), nlohmann::basic_json::from_ubjson(detail::span_input_adapter &&, const bool, const bool), nlohmann::basic_json::from_bjdata(InputType &&, const bool, const bool, const error_handler_t), nlohmann::basic_json::from_bon8(InputType &&, const bool, const bool), nlohmann::basic_json::from_bson(InputType &&, const bool, const bool, const error_handler_t)
+- nlohmann::detail::parser::number_float_text(std::false_type) (private); reached from the public API through: nlohmann::operator>>(std::istream &, basic_json<...> &), nlohmann::basic_json::accept(detail::span_input_adapter &&, const bool, const bool), nlohmann::basic_json::parse(detail::span_input_adapter &&, parser_callback_t, const bool, const bool, const bool), nlohmann::basic_json::accept(InputType &&, const bool, const bool), nlohmann::basic_json::parse(InputType &&, parser_callback_t, const bool, const bool, const bool), nlohmann::basic_json::sax_parse(detail::span_input_adapter &&, SAX *, input_format_t, const bool, const bool, const bool, const cbor_tag_handler_t), nlohmann::basic_json::sax_parse(InputType &&, SAX *, input_format_t, const bool, const bool, const bool, const cbor_tag_handler_t), nlohmann::basic_json::accept(IteratorType, SentinelType, const bool, const bool), nlohmann::basic_json::parse(IteratorType, SentinelType, parser_callback_t, const bool, const bool, const bool), nlohmann::basic_json::sax_parse(IteratorType, SentinelType, SAX *, input_format_t, const bool, const bool, const bool, const cbor_tag_handler_t)
+- nlohmann::detail::parser::number_float_text(std::true_type) (private); reached from the public API through: nlohmann::operator>>(std::istream &, basic_json<...> &), nlohmann::basic_json::accept(detail::span_input_adapter &&, const bool, const bool), nlohmann::basic_json::parse(detail::span_input_adapter &&, parser_callback_t, const bool, const bool, const bool), nlohmann::basic_json::accept(InputType &&, const bool, const bool), nlohmann::basic_json::parse(InputType &&, parser_callback_t, const bool, const bool, const bool), nlohmann::basic_json::sax_parse(detail::span_input_adapter &&, SAX *, input_format_t, const bool, const bool, const bool, const cbor_tag_handler_t), nlohmann::basic_json::sax_parse(InputType &&, SAX *, input_format_t, const bool, const bool, const bool, const cbor_tag_handler_t), nlohmann::basic_json::accept(IteratorType, SentinelType, const bool, const bool), nlohmann::basic_json::parse(IteratorType, SentinelType, parser_callback_t, const bool, const bool, const bool), nlohmann::basic_json::sax_parse(IteratorType, SentinelType, SAX *, input_format_t, const bool, const bool, const bool, const cbor_tag_handler_t)
+- nlohmann::detail::sax_ignores_number_text (private); reached from the public API through: nlohmann::operator>>(std::istream &, basic_json<...> &), nlohmann::basic_json::accept(detail::span_input_adapter &&, const bool, const bool), nlohmann::basic_json::parse(detail::span_input_adapter &&, parser_callback_t, const bool, const bool, const bool), nlohmann::basic_json::accept(InputType &&, const bool, const bool), nlohmann::basic_json::parse(InputType &&, parser_callback_t, const bool, const bool, const bool), nlohmann::basic_json::sax_parse(detail::span_input_adapter &&, SAX *, input_format_t, const bool, const bool, const bool, const cbor_tag_handler_t), nlohmann::basic_json::sax_parse(InputType &&, SAX *, input_format_t, const bool, const bool, const bool, const cbor_tag_handler_t), nlohmann::basic_json::accept(IteratorType, SentinelType, const bool, const bool), nlohmann::basic_json::parse(IteratorType, SentinelType, parser_callback_t, const bool, const bool, const bool), nlohmann::basic_json::sax_parse(IteratorType, SentinelType, SAX *, input_format_t, const bool, const bool, const bool, const cbor_tag_handler_t)
+- nlohmann::detail::sax_ignores_number_text (private); reached from the public API through: nlohmann::operator>>(std::istream &, basic_json<...> &), nlohmann::basic_json::accept(detail::span_input_adapter &&, const bool, const bool), nlohmann::basic_json::parse(detail::span_input_adapter &&, parser_callback_t, const bool, const bool, const bool), nlohmann::basic_json::accept(InputType &&, const bool, const bool), nlohmann::basic_json::parse(InputType &&, parser_callback_t, const bool, const bool, const bool), nlohmann::basic_json::sax_parse(detail::span_input_adapter &&, SAX *, input_format_t, const bool, const bool, const bool, const cbor_tag_handler_t), nlohmann::basic_json::sax_parse(InputType &&, SAX *, input_format_t, const bool, const bool, const bool, const cbor_tag_handler_t), nlohmann::basic_json::accept(IteratorType, SentinelType, const bool, const bool), nlohmann::basic_json::parse(IteratorType, SentinelType, parser_callback_t, const bool, const bool, const bool), nlohmann::basic_json::sax_parse(IteratorType, SentinelType, SAX *, input_format_t, const bool, const bool, const bool, const cbor_tag_handler_t)
+- nlohmann::detail::sax_ignores_number_text (private); reached from the public API through: nlohmann::operator>>(std::istream &, basic_json<...> &), nlohmann::basic_json::accept(detail::span_input_adapter &&, const bool, const bool), nlohmann::basic_json::parse(detail::span_input_adapter &&, parser_callback_t, const bool, const bool, const bool), nlohmann::basic_json::accept(InputType &&, const bool, const bool), nlohmann::basic_json::parse(InputType &&, parser_callback_t, const bool, const bool, const bool), nlohmann::basic_json::sax_parse(detail::span_input_adapter &&, SAX *, input_format_t, const bool, const bool, const bool, const cbor_tag_handler_t), nlohmann::basic_json::sax_parse(InputType &&, SAX *, input_format_t, const bool, const bool, const bool, const cbor_tag_handler_t), nlohmann::basic_json::accept(IteratorType, SentinelType, const bool, const bool), nlohmann::basic_json::parse(IteratorType, SentinelType, parser_callback_t, const bool, const bool, const bool), nlohmann::basic_json::sax_parse(IteratorType, SentinelType, SAX *, input_format_t, const bool, const bool, const bool, const cbor_tag_handler_t)
+- nlohmann::detail::sax_ignores_number_text (private); reached from the public API through: nlohmann::operator>>(std::istream &, basic_json<...> &), nlohmann::basic_json::accept(detail::span_input_adapter &&, const bool, const bool), nlohmann::basic_json::parse(detail::span_input_adapter &&, parser_callback_t, const bool, const bool, const bool), nlohmann::basic_json::accept(InputType &&, const bool, const bool), nlohmann::basic_json::parse(InputType &&, parser_callback_t, const bool, const bool, const bool), nlohmann::basic_json::sax_parse(detail::span_input_adapter &&, SAX *, input_format_t, const bool, const bool, const bool, const cbor_tag_handler_t), nlohmann::basic_json::sax_parse(InputType &&, SAX *, input_format_t, const bool, const bool, const bool, const cbor_tag_handler_t), nlohmann::basic_json::accept(IteratorType, SentinelType, const bool, const bool), nlohmann::basic_json::parse(IteratorType, SentinelType, parser_callback_t, const bool, const bool, const bool), nlohmann::basic_json::sax_parse(IteratorType, SentinelType, SAX *, input_format_t, const bool, const bool, const bool, const cbor_tag_handler_t)
+- nlohmann::detail::lexer::pending_number_length (private); reached from the public API through: nlohmann::basic_json::sax_parse(detail::span_input_adapter &&, SAX *, input_format_t, const bool, const bool, const bool, const cbor_tag_handler_t), nlohmann::basic_json::sax_parse(InputType &&, SAX *, input_format_t, const bool, const bool, const bool, const cbor_tag_handler_t), nlohmann::basic_json::sax_parse(IteratorType, SentinelType, SAX *, input_format_t, const bool, const bool, const bool, const cbor_tag_handler_t), nlohmann::basic_json::from_bson(detail::span_input_adapter &&, const bool, const bool), nlohmann::basic_json::from_cbor(detail::span_input_adapter &&, const bool, const bool, const cbor_tag_handler_t), nlohmann::basic_json::from_msgpack(detail::span_input_adapter &&, const bool, const bool), nlohmann::basic_json::from_ubjson(detail::span_input_adapter &&, const bool, const bool), nlohmann::basic_json::from_bjdata(InputType &&, const bool, const bool, const error_handler_t), nlohmann::basic_json::from_bon8(InputType &&, const bool, const bool), nlohmann::basic_json::from_bson(InputType &&, const bool, const bool, const error_handler_t)
+- nlohmann::detail::lexer::pending_number_text (private); reached from the public API through: nlohmann::basic_json::sax_parse(detail::span_input_adapter &&, SAX *, input_format_t, const bool, const bool, const bool, const cbor_tag_handler_t), nlohmann::basic_json::sax_parse(InputType &&, SAX *, input_format_t, const bool, const bool, const bool, const cbor_tag_handler_t), nlohmann::basic_json::sax_parse(IteratorType, SentinelType, SAX *, input_format_t, const bool, const bool, const bool, const cbor_tag_handler_t), nlohmann::basic_json::from_bson(detail::span_input_adapter &&, const bool, const bool), nlohmann::basic_json::from_cbor(detail::span_input_adapter &&, const bool, const bool, const cbor_tag_handler_t), nlohmann::basic_json::from_msgpack(detail::span_input_adapter &&, const bool, const bool), nlohmann::basic_json::from_ubjson(detail::span_input_adapter &&, const bool, const bool), nlohmann::basic_json::from_bjdata(InputType &&, const bool, const bool, const error_handler_t), nlohmann::basic_json::from_bon8(InputType &&, const bool, const bool), nlohmann::basic_json::from_bson(InputType &&, const bool, const bool, const error_handler_t)
+
+## Diff of the library source (before -> after)
+```diff
+diff --git a/include/nlohmann/detail/input/lexer.hpp b/include/nlohmann/detail/input/lexer.hpp
+index 0f10af759..64e0dafbd 100644
+--- a/include/nlohmann/detail/input/lexer.hpp
++++ b/include/nlohmann/detail/input/lexer.hpp
+@@ -1734,10 +1734,6 @@ scan_number_done:
+         }
+ #endif
+ 
+-        // materialize the token exactly as scan_number() would. reset() already
+-        // cleared token_buffer, so append() fills it (assign() is avoided
+-        // because custom string_t types need not provide it)
+-        token_buffer.append(reinterpret_cast<const typename string_t::value_type*>(data), len);
+         decimal_point_position = dot_index;
+ 
+         bulk_consume(data + 1, len - 1);
+@@ -1753,10 +1749,27 @@ scan_number_done:
+             s.negative = data[0] == '-';
+             if (convert_accumulated_float(s, std::integral_constant<bool, has_native_float_format<number_float_t>::value> {}))
+             {
++                // the token text is only copied into token_buffer when
++                // get_string() asks for it; the library's own SAX handlers
++                // ignore it. A window into a stream may be refilled by the
++                // next read, so there the text is copied right away.
++                if (bulk_window)
++                {
++                    token_buffer.append(reinterpret_cast<const typename string_t::value_type*>(data), len);
++                }
++                else
++                {
++                    pending_number_text = data;
++                    pending_number_length = len;
++                }
+                 return token_type::value_float;
+             }
+         }
+ 
++        // materialize the token exactly as scan_number() would. reset() already
++        // cleared token_buffer, so append() fills it (assign() is avoided
++        // because custom string_t types need not provide it)
++        token_buffer.append(reinterpret_cast<const typename string_t::value_type*>(data), len);
+         return convert_number(number_type, mantissa_end);
+     }
+ 
+@@ -1856,6 +1869,7 @@ scan_number_done:
+     void reset() noexcept
+     {
+         token_buffer.clear();
++        pending_number_text = nullptr;
+         decimal_point_position = std::string::npos;
+ 
+ #if JSON_DIAGNOSTIC_POSITIONS
+@@ -2115,10 +2129,30 @@ scan_number_done:
+     /// return current string value
+     string_t& get_string()
+     {
++        if (pending_number_text != nullptr)
++        {
++            token_buffer.append(reinterpret_cast<const typename string_t::value_type*>(pending_number_text), pending_number_length);
++            pending_number_text = nullptr;
++        }
+         // a number token holds '.' regardless of the locale (#4084)
+         return token_buffer;
+     }
+ 
++    /// the value of a string token (key or string), which never has pending
++    /// number text, so get_string()'s check is not needed
++    string_t& get_string_token() noexcept
++    {
++        JSON_ASSERT(pending_number_text == nullptr);
++        return token_buffer;
++    }
++
++    /// the text of a float token for a SAX handler that ignores it (the
++    /// library's own handlers): empty, without copying the token
++    const string_t& get_ignored_number_text() const noexcept
++    {
++        return token_buffer;
++    }
++
+     /////////////////////
+     // diagnostics
+     /////////////////////
+@@ -2514,6 +2548,11 @@ scan_number_done:
+     /// whether the next get() call should just return current
+     bool next_unget = false;
+ 
++    /// the text of the current float token in the input, not yet copied into
++    /// token_buffer (see get_string()), or nullptr
++    const char* pending_number_text = nullptr;
++    std::size_t pending_number_length = 0;
++
+     /// the start position of the current token
+     position_t position {};
+diff --git a/include/nlohmann/detail/input/parser.hpp b/include/nlohmann/detail/input/parser.hpp
+index 9f1618c84..493ff6f68 100644
+--- a/include/nlohmann/detail/input/parser.hpp
++++ b/include/nlohmann/detail/input/parser.hpp
+@@ -51,6 +51,20 @@ template<typename BasicJsonType>
+ using parser_callback_t =
+     std::function<bool(int /*depth*/, parse_event_t /*event*/, BasicJsonType& /*parsed*/)>;
+ 
++/// whether a SAX handler ignores the text of float tokens (the library's own
++/// handlers do), so that the parser need not materialize it
++template<typename SAX>
++struct sax_ignores_number_text : std::false_type {};
++
++template<typename BasicJsonType, typename InputAdapterType>
++struct sax_ignores_number_text<json_sax_dom_parser<BasicJsonType, InputAdapterType>> : std::true_type {};
++
++template<typename BasicJsonType, typename InputAdapterType>
++struct sax_ignores_number_text<json_sax_dom_callback_parser<BasicJsonType, InputAdapterType>> : std::true_type {};
++
++template<typename BasicJsonType>
++struct sax_ignores_number_text<json_sax_acceptor<BasicJsonType>> : std::true_type {};
++
+ /*!
+ @brief syntax analysis
+ 
+@@ -171,6 +185,23 @@ class parser
+     }
+ 
+   private:
++    /// the text of the current float token for @a sax (see sax_ignores_number_text)
++    template<typename SAX>
++    const string_t& number_float_text(SAX* /*sax*/)
++    {
++        return number_float_text(std::integral_constant<bool, sax_ignores_number_text<SAX>::value> {});
++    }
++
++    const string_t& number_float_text(std::true_type /*ignored*/) const noexcept
++    {
++        return m_lexer.get_ignored_number_text();
++    }
++
++    string_t& number_float_text(std::false_type /*ignored*/)
++    {
++        return m_lexer.get_string();
++    }
++
+     /*!
+     @brief run a DOM SAX parser to completion and position the lexer
+ 
+@@ -247,7 +278,7 @@ class parser
+                         {
+                             return syntax_error(*sax, exception_message(token_type::value_string, "object key"));
+                         }
+-                        if (JSON_HEDLEY_UNLIKELY(!sax->key(m_lexer.get_string())))
++                        if (JSON_HEDLEY_UNLIKELY(!sax->key(m_lexer.get_string_token())))
+                         {
+                             return false;
+                         }
+@@ -301,7 +332,7 @@ class parser
+                                                     out_of_range::create(exception_id::number_overflow, concat("number overflow parsing '", m_lexer.get_token_string(), '\''), nullptr));
+                         }
+ 
+-                        if (JSON_HEDLEY_UNLIKELY(!sax->number_float(res, m_lexer.get_string())))
++                        if (JSON_HEDLEY_UNLIKELY(!sax->number_float(res, number_float_text(sax))))
+                         {
+                             return false;
+                         }
+@@ -347,7 +378,7 @@ class parser
+ 
+                     case token_type::value_string:
+                     {
+-                        if (JSON_HEDLEY_UNLIKELY(!sax->string(m_lexer.get_string())))
++                        if (JSON_HEDLEY_UNLIKELY(!sax->string(m_lexer.get_string_token())))
+                         {
+                             return false;
+                         }
+@@ -456,7 +487,7 @@ class parser
+                         return syntax_error(*sax, exception_message(token_type::value_string, "object key"));
+                     }
+ 
+-                    if (JSON_HEDLEY_UNLIKELY(!sax->key(m_lexer.get_string())))
++                    if (JSON_HEDLEY_UNLIKELY(!sax->key(m_lexer.get_string_token())))
+                     {
+                         return false;
+                     }
+```
+
+## Existing upstream tests that call the changed code (for style and API usage)
+// Upstream tests at the PR's parent commit e13e97680 that use the changed code.
+// Names searched (test lines using each): sax_parse (0), from_bson (0), from_cbor (0), from_msgpack (0), from_ubjson (0), from_bjdata (0), from_bon8 (0), accept (12), parse (11), operator>> (91), scan_number_bulk_contiguous (0), lexer (96), sax_parse_internal (0), get_string (13), parser (42), reset (5), get_string_token (0), number_float_text (0), get_ignored_number_text (0), sax_ignores_number_text (0), pending_number_length (0), pending_number_text (0)
+
+// ---- tests/src/unit-class_parser.cpp:45-69  (uses: parse, parser)
+using utils::SaxEventLogger;
+
+namespace
+{
+json parser_helper(const std::string& s);
+bool accept_helper(const std::string& s);
+void comments_helper(const std::string& s);
+void trailing_comma_helper(const std::string& s);
+
+json parser_helper(const std::string& s)
+{
+    json j;
+    json::parser(nlohmann::detail::input_adapter(s)).parse(true, j);
+
+    // if this line was reached, no exception occurred
+    // -> check if result is the same without exceptions
+    json j_nothrow;
+    CHECK_NOTHROW(json::parser(nlohmann::detail::input_adapter(s), nullptr, false).parse(true, j_nothrow));
+    CHECK(j_nothrow == j);
+
+    json j_sax;
+    nlohmann::detail::json_sax_dom_parser<json, nlohmann::detail::string_input_adapter_type> sdp(j_sax);
+    json::sax_parse(s, &sdp);
+    CHECK(j_sax == j);
+
+
+// ---- tests/src/unit-class_parser.cpp:71-95  (uses: parse, parser)
+
+    trailing_comma_helper(s);
+
+    return j;
+}
+
+bool accept_helper(const std::string& s)
+{
+    CAPTURE(s)
+
+    // 1. parse s without exceptions
+    json j;
+    CHECK_NOTHROW(json::parser(nlohmann::detail::input_adapter(s), nullptr, false).parse(true, j));
+    const bool ok_noexcept = !j.is_discarded();
+
+    // 2. accept s
+    const bool ok_accept = json::parser(nlohmann::detail::input_adapter(s)).accept(true);
+
+    // 3. check if both approaches come to the same result
+    CHECK(ok_noexcept == ok_accept);
+
+    // 4. parse with SAX (compare with relaxed accept result)
+    SaxEventLogger el;
+    CHECK_NOTHROW(json::sax_parse(s, &el, json::input_format_t::json, false));
+    CHECK(json::parser(nlohmann::detail::input_adapter(s)).accept(false) == !el.errored);
+
+// ---- tests/src/unit-custom-base-class.cpp:144-153  (uses: reset)
+    SECTION("type unique_ptr<int>")
+    {
+        using json = json_with_metadata<std::unique_ptr<int>>;
+        json value;
+        value.metadata().reset(new int(42)); // NOLINT(cppcoreguidelines-owning-memory)
+        auto moved = std::move(value);
+
+        CHECK(moved.metadata() != nullptr);
+        CHECK(*moved.metadata() == 42);
+    }
+
+// ---- tests/src/unit-json_view_builder.cpp:43-67  (uses: reset)
+struct built
+{
+    std::unique_ptr<document_data, document_data::deleter> data{}; // NOLINT(readability-redundant-member-init)
+    std::vector<char> copy{}; // NOLINT(readability-redundant-member-init)
+    bool ok = false;
+    nlohmann::detail::view::parse_failure failure{};
+};
+
+template<typename FloatType = double>
+built build(const std::string& text, bool comments, bool trailing_commas, bool sentinel)
+{
+    built r;
+    r.data.reset(document_data::create(nlohmann::detail::view::estimate_nodes(text.data(), text.size())));
+    const char* src = text.c_str();
+    if (!sentinel)
+    {
+        r.copy.assign(text.begin(), text.end());
+        src = r.copy.data();
+    }
+    r.ok = nlohmann::detail::view::build < FloatType, !nlohmann::detail::abi_config::strict_nul_handling > (*r.data, src, text.size(), comments, trailing_commas, sentinel, r.failure);
+    r.data->src = src;
+    r.data->base[0] = src;
+    r.data->base[1] = r.data->arena.data();
+    return r;
+}
+
+// ---- tests/src/unit-udt.cpp:393-417  (uses: reset)
+            j = nullptr;
+        }
+    }
+
+    static void from_json(const json& j, std::shared_ptr<T>& opt)
+    {
+        if (j.is_null())
+        {
+            opt = nullptr;
+        }
+        else
+        {
+            opt.reset(new T(j.get<T>())); // NOLINT(cppcoreguidelines-owning-memory)
+        }
+    }
+};
+
+template <>
+struct adl_serializer<udt::legacy_type>
+{
+    static void to_json(json& j, const udt::legacy_type& l)
+    {
+        j = std::stoi(l.number);
+    }
+
+
+// ---- tests/src/unit-udt.cpp:429-441  (uses: reset)
+        SECTION("to_json")
+        {
+            std::shared_ptr<udt::person> optPerson;
+
+            json j = optPerson;
+            CHECK(j.is_null());
+
+            optPerson.reset(new udt::person{{42}, {"John Doe"}, udt::country::russia}); // NOLINT(cppcoreguidelines-owning-memory,modernize-make-shared)
+            j = optPerson;
+            CHECK_FALSE(j.is_null());
+
+            CHECK(j.get<udt::person>() == *optPerson);
+        }
+
+// ---- tests/src/unit-json_view.cpp:1116-1140  (uses: get_string)
+            }
+            CHECK(bits(v.get<double>()) == bits(j.get<double>()));
+            if (std::abs(j.get<double>()) < 1e9)
+            {
+                CHECK(v.get<int>() == j.get<int>());
+            }
+            const auto token = v.number_token();
+            CHECK(text.compare(v.source_offset(), token.size(), token.data(), token.size()) == 0);
+            break;
+        }
+        case json::value_t::string:
+            CHECK(v.get<std::string>() == j.get<std::string>());
+            CHECK(std::string(v.get_string().data(), v.get_string().size()) == j.get<std::string>());
+            break;
+        case json::value_t::boolean:
+            CHECK(v.get<bool>() == j.get<bool>());
+            CHECK(v.get<int>() == j.get<int>());
+            break;
+        case json::value_t::null:
+            CHECK(v.get<std::nullptr_t>() == nullptr);
+            break;
+        case json::value_t::array:
+            CHECK(v.get<std::vector<ordered_json>>() == j.get<std::vector<ordered_json>>());
+            break;
+        case json::value_t::object:
+
+// ---- tests/src/unit-json_view.cpp:1297-1309  (uses: get_string)
+    SECTION("number tokens")
+    {
+        const json_document d = json_document::parse(R"([1.50, 1E2, -0, 123456789012345678901234567890, -12, 7, "x"])");
+        const json_view v = d.root();
+        CHECK(v[0].number_token() == "1.50");
+        CHECK(v[1].number_token() == "1E2");
+        CHECK(v[2].number_token() == "-0");
+        CHECK(v[3].number_token() == "123456789012345678901234567890");
+        CHECK(v[4].number_token() == "-12");
+        CHECK(v[5].number_token() == "7");
+        CHECK_THROWS_WITH_AS(v[6].number_token(), "[json.exception.type_error.302] type must be number, but is string", json::type_error&);
+        CHECK_THROWS_WITH_AS(v.get_string(), "[json.exception.type_error.302] type must be string, but is array", json::type_error&);
+    }
+
+// ---- tests/src/unit-regression1.cpp:1448-1451  (uses: parser)
+    SECTION("issue #971 - Add a SAX parser - late bug")
+    {
+        // a JSON text
+        const auto* text = R"(
+
+# Programs to repair
+
+## gen_26.cpp (compile)
+Intent: Verify that a custom SAX handler receives the exact text of float tokens during parsing.
+COMPILE ERROR. The program fails to compile, the same way against the old and the new library. Fix the error (wrong or missing include, typo, misuse of the public API) and keep the intent: the call under test must stay. Include only headers that exist; if you are unsure a header exists, use the library's main header.
+Compiler errors:
+```
+gen_26.cpp:19:10: error: ‘bool FloatCapturingSax::string(const nlohmann::json_abi_v3_12_0::json_sax<nlohmann::json_abi_v3_12_0::basic_json<> >::string_t&)’ marked ‘override’, but does not override
+gen_26.cpp:21:10: error: ‘bool FloatCapturingSax::key(const nlohmann::json_abi_v3_12_0::json_sax<nlohmann::json_abi_v3_12_0::basic_json<> >::string_t&)’ marked ‘override’, but does not override
+gen_26.cpp:33:27: error: cannot declare variable ‘sax’ to be of abstract type ‘FloatCapturingSax’
+```
+Source:
+```cpp
+#include <nlohmann/json.hpp>
+#include <iostream>
+#include <string>
+
+class FloatCapturingSax : public nlohmann::json_sax<nlohmann::json>
+{
+public:
+    bool null() override { return true; }
+    bool boolean(bool) override { return true; }
+    bool number_integer(nlohmann::json::number_integer_t) override { return true; }
+    bool number_unsigned(nlohmann::json::number_unsigned_t) override { return true; }
+    bool number_float(nlohmann::json::number_float_t, const string_t& val) override
+    {
+        std::cout << "float text: " << val << "\n";
+        return true;
+    }
+    bool string(const string_t&) override { return true; }
+    bool start_object(std::size_t) override { return true; }
+    bool key(const string_t&) override { return true; }
+    bool end_object() override { return true; }
+    bool start_array(std::size_t) override { return true; }
+    bool end_array() override { return true; }
+    bool parse_error(std::size_t, const std::string&, const nlohmann::json::exception&) override { return true; }
+};
+
+int main()
+{
+    try
+    {
+        std::string input = "[123.456, -0.789E+2]";
+        FloatCapturingSax sax;
+        nlohmann::json::sax_parse(input, &sax);
+    }
+    catch (const std::exception& e)
+    {
+        std::cout << "Exception: " << e.what() << "\n";
+    }
+    return 0;
+}
+```
+
+## gen_29.cpp (compile)
+Intent: Verify sax_parse using a pair of iterators over a contiguous string containing floats.
+COMPILE ERROR. The program fails to compile, the same way against the old and the new library. Fix the error (wrong or missing include, typo, misuse of the public API) and keep the intent: the call under test must stay. Include only headers that exist; if you are unsure a header exists, use the library's main header.
+Compiler errors:
+```
+gen_29.cpp:19:10: error: ‘bool DummySax::string(const nlohmann::json_abi_v3_12_0::json_sax<nlohmann::json_abi_v3_12_0::basic_json<> >::string_t&)’ marked ‘override’, but does not override
+gen_29.cpp:21:10: error: ‘bool DummySax::key(const nlohmann::json_abi_v3_12_0::json_sax<nlohmann::json_abi_v3_12_0::basic_json<> >::string_t&)’ marked ‘override’, but does not override
+gen_29.cpp:33:18: error: cannot declare variable ‘sax’ to be of abstract type ‘DummySax’
+```
+Source:
+```cpp
+#include <nlohmann/json.hpp>
+#include <iostream>
+#include <string>
+
+class DummySax : public nlohmann::json_sax<nlohmann::json>
+{
+public:
+    bool null() override { return true; }
+    bool boolean(bool) override { return true; }
+    bool number_integer(nlohmann::json::number_integer_t) override { return true; }
+    bool number_unsigned(nlohmann::json::number_unsigned_t) override { return true; }
+    bool number_float(nlohmann::json::number_float_t val, const string_t&) override 
+    {
+        std::cout << "sax float iter: " << val << "\n";
+        return true;
+    }
+    bool string(const string_t&) override { return true; }
+    bool start_object(std::size_t) override { return true; }
+    bool key(const string_t&) override { return true; }
+    bool end_object() override { return true; }
+    bool start_array(std::size_t) override { return true; }
+    bool end_array() override { return true; }
+    bool parse_error(std::size_t, const std::string&, const nlohmann::json::exception&) override { return true; }
+};
+
+int main()
+{
+    try
+    {
+        std::string input = "[9.81]";
+        DummySax sax;
+        nlohmann::json::sax_parse(input.begin(), input.end(), &sax);
+    }
+    catch (const std::exception& e)
+    {
+        std::cout << "Exception: " << e.what() << "\n";
+    }
+    return 0;
+}
+```
+
+## gen_30.cpp (compile)
+Intent: Verify direct usage of span_input_adapter with basic_json::parse for floats.
+COMPILE ERROR. The program fails to compile, the same way against the old and the new library. Fix the error (wrong or missing include, typo, misuse of the public API) and keep the intent: the call under test must stay. Include only headers that exist; if you are unsure a header exists, use the library's main header.
+Compiler errors:
+```
+input_adapters.hpp:1206:11: error: no matching function for call to ‘nlohmann::json_abi_v3_12_0::detail::iterator_input_adapter<const char*, const char*>::iterator_input_adapter(nlohmann::json_abi_v3_12_0::detail::iterator_input_adapter_factory<char*, char*, void>::a
+```
+Source:
+```cpp
+#include <nlohmann/json.hpp>
+#include <iostream>
+#include <string>
+
+int main()
+{
+    try
+    {
+        char input[] = "[3.14159]";
+        auto j = nlohmann::json::parse(nlohmann::detail::span_input_adapter(input, input + sizeof(input) - 1));
+        std::cout << "span adapter float: " << j[0].get<double>() << "\n";
+    }
+    catch (const std::exception& e)
+    {
+        std::cout << "Exception: " << e.what() << "\n";
+    }
+    return 0;
+}
+```
+
+## gen_31.cpp (compile)
+Intent: Verify that a custom SAX handler calls get_string() on float tokens, exercising the pending_number_text lazy copy mechanism and number_float_text(std::false_type).
+COMPILE ERROR. The program fails to compile, the same way against the old and the new library. Fix the error (wrong or missing include, typo, misuse of the public API) and keep the intent: the call under test must stay. Include only headers that exist; if you are unsure a header exists, use the library's main header.
+Compiler errors:
+```
+gen_31.cpp:16:10: error: ‘bool CustomSaxHandler::string(const nlohmann::json_abi_v3_12_0::json_sax<nlohmann::json_abi_v3_12_0::basic_json<> >::string_t&)’ marked ‘override’, but does not override
+gen_31.cpp:18:10: error: ‘bool CustomSaxHandler::key(const nlohmann::json_abi_v3_12_0::json_sax<nlohmann::json_abi_v3_12_0::basic_json<> >::string_t&)’ marked ‘override’, but does not override
+gen_31.cpp:28:26: error: cannot declare variable ‘handler’ to be of abstract type ‘CustomSaxHandler’
+```
+Source:
+```cpp
+#include <nlohmann/json.hpp>
+#include <iostream>
+
+class CustomSaxHandler : public nlohmann::json_sax<nlohmann::json> {
+public:
+    bool null() override { return true; }
+    bool boolean(bool) override { return true; }
+    bool number_integer(number_integer_t) override { return true; }
+    bool number_unsigned(number_unsigned_t) override { return true; }
+    bool number_float(number_float_t, const string_t& val) override {
+        std::cout << "float text: " << val << std::endl;
+        return true;
+    }
+    bool string(const string_t&) override { return true; }
+    bool start_object(std::size_t) override { return true; }
+    bool key(const string_t&) override { return true; }
+    bool end_object() override { return true; }
+    bool start_array(std::size_t) override { return true; }
+    bool end_array() override { return true; }
+    bool parse_error(std::size_t, const std::string&, const nlohmann::json::exception&) override { return true; }
+};
+
+int main() {
+    try {
+        std::string input = "[123.456]";
+        CustomSaxHandler handler;
+        nlohmann::json::sax_parse(input, &handler);
+    } catch (const std::exception& e) {
+        std::cout << "Exception: " << e.what() << std::endl;
+    }
+    return 0;
+}
+```
+
+## gen_32.cpp (compile)
+Intent: Verify the sax_ignores_number_text trait structure directly using std::integral_constant and is_base_of or explicit template checks for custom handlers vs built-in handlers.
+COMPILE ERROR. The program fails to compile, the same way against the old and the new library. Fix the error (wrong or missing include, typo, misuse of the public API) and keep the intent: the call under test must stay. Include only headers that exist; if you are unsure a header exists, use the library's main header.
+Compiler errors:
+```
+gen_32.cpp:13:10: error: ‘bool DummyUserSax::string(const nlohmann::json_abi_v3_12_0::json_sax<nlohmann::json_abi_v3_12_0::basic_json<> >::string_t&)’ marked ‘override’, but does not override
+gen_32.cpp:15:10: error: ‘bool DummyUserSax::key(const nlohmann::json_abi_v3_12_0::json_sax<nlohmann::json_abi_v3_12_0::basic_json<> >::string_t&)’ marked ‘override’, but does not override
+gen_32.cpp:26:66: error: ‘sax_ignores_number_text’ in namespace ‘nlohmann::json_abi_v3_12_0::detail’ does not name a template type
+gen_32.cpp:26:89: error: expected template-argument before ‘<’ token
+gen_32.cpp:26:89: error: expected ‘>’ before ‘<’ token
+gen_32.cpp:26:98: error: template argument 1 is invalid
+```
+Source:
+```cpp
+#include <nlohmann/json.hpp>
+#include <iostream>
+
+class DummyUserSax : public nlohmann::json_sax<nlohmann::json> {
+public:
+    bool null() override { return true; }
+    bool boolean(bool) override { return true; }
+    bool number_integer(number_integer_t) override { return true; }
+    bool number_unsigned(number_unsigned_t) override { return true; }
+    bool number_float(number_float_t, const string_t&) override { return true; }
+    bool string(const string_t&) override { return true; }
+    bool start_object(std::size_t) override { return true; }
+    bool key(const string_t&) override { return true; }
+    bool end_object() override { return true; }
+    bool start_array(std::size_t) override { return true; }
+    bool end_array() override { return true; }
+    bool parse_error(std::size_t, const std::string&, const nlohmann::json::exception&) override { return true; }
+};
+
+template <class T, class = void>
+struct has_sax_ignores : std::false_type {};
+
+template <class T>
+struct has_sax_ignores<T, std::void_t<typename nlohmann::detail::sax_ignores_number_text<T>::type>> : std::true_type {};
+
+template <class T>
+void probe() {
+    if constexpr (has_sax_ignores<T>::value) {
+        std::cout << "ignores: " << nlohmann::detail::sax_ignores_number_text<T>::value << std::endl;
+    } else {
+        std::cout << "ignores: unsupported" << std::endl;
+    }
+}
+
+int main() {
+    using json = nlohmann::json;
+    using dom_parser = nlohmann::detail::json_sax_dom_parser<json, nlohmann::detail::string_input_adapter_type>;
+    using acceptor = nlohmann::detail::json_sax_acceptor<json>;
+
+    probe<dom_parser>();
+    probe<acceptor>();
+    probe<DummyUserSax>();
+    return 0;
+}
+```
+
+## gen_33.cpp (compile)
+Intent: Verify that string tokens (object keys and string values) correctly invoke get_string_token() without any pending number text assertions failing, tested via sax_parse with a custom SAX handler.
+COMPILE ERROR. The program fails to compile, the same way against the old and the new library. Fix the error (wrong or missing include, typo, misuse of the public API) and keep the intent: the call under test must stay. Include only headers that exist; if you are unsure a header exists, use the library's main header.
+Compiler errors:
+```
+gen_33.cpp:13:10: error: ‘bool StringSaxHandler::string(const nlohmann::json_abi_v3_12_0::json_sax<nlohmann::json_abi_v3_12_0::basic_json<> >::string_t&)’ marked ‘override’, but does not override
+gen_33.cpp:18:10: error: ‘bool StringSaxHandler::key(const nlohmann::json_abi_v3_12_0::json_sax<nlohmann::json_abi_v3_12_0::basic_json<> >::string_t&)’ marked ‘override’, but does not override
+gen_33.cpp:31:26: error: cannot declare variable ‘handler’ to be of abstract type ‘StringSaxHandler’
+```
+Source:
+```cpp
+#include <nlohmann/json.hpp>
+#include <iostream>
+
+class StringSaxHandler : public nlohmann::json_sax<nlohmann::json> {
+public:
+    bool null() override { return true; }
+    bool boolean(bool) override { return true; }
+    bool number_integer(number_integer_t) override { return true; }
+    bool number_unsigned(number_unsigned_t) override { return true; }
+    bool number_float(number_float_t, const string_t&) override { return true; }
+    bool string(const string_t& val) override {
+        std::cout << "string: " << val << std::endl;
+        return true;
+    }
+    bool start_object(std::size_t) override { return true; }
+    bool key(const string_t& k) override {
+        std::cout << "key: " << k << std::endl;
+        return true;
+    }
+    bool end_object() override { return true; }
+    bool start_array(std::size_t) override { return true; }
+    bool end_array() override { return true; }
+    bool parse_error(std::size_t, const std::string&, const nlohmann::json::exception&) override { return true; }
+};
+
+int main() {
+    try {
+        std::string input = "{\"hello\": \"world\"}";
+        StringSaxHandler handler;
+        nlohmann::json::sax_parse(input, &handler);
+    } catch (const std::exception& e) {
+        std::cout << "Exception: " << e.what() << std::endl;
+    }
+    return 0;
+}
+```
+
+# Task
+Return JSON with a "fixes" array: one item per program above, with "file" (exactly as given) and "code" (the complete repaired program, standalone, with its own int main). Do not return programs you cannot repair.

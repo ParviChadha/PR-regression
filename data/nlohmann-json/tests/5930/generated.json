@@ -1,0 +1,194 @@
+{
+  "target": "nlohmann-json",
+  "pr": 5930,
+  "model": "gemini-3.5-flash-lite",
+  "prompt_sha256": "1f7039a9d3dc69284ebfa59a401f2f47d504839f137275f968cf1d0d49ab0d98",
+  "n_requested": 20,
+  "dropped": 0,
+  "usage": {
+    "promptTokenCount": 10449,
+    "candidatesTokenCount": 5707,
+    "totalTokenCount": 16156,
+    "promptTokensDetails": [
+      {
+        "modality": "TEXT",
+        "tokenCount": 10449
+      }
+    ],
+    "serviceTier": "standard"
+  },
+  "tests": [
+    {
+      "file": "gen_01.cpp",
+      "name": "bson_binary_subtype_0x02_roundtrip",
+      "intent": "Verify that a binary value with subtype 0x02 round-trips correctly through BSON serialization and deserialization.",
+      "round": 0
+    },
+    {
+      "file": "gen_02.cpp",
+      "name": "bson_binary_subtype_other_subtypes_unaffected",
+      "intent": "Verify that binary values with subtypes other than 0x02 continue to serialize and deserialize normally.",
+      "round": 0
+    },
+    {
+      "file": "gen_03.cpp",
+      "name": "bson_binary_subtype_0x02_reject_missing_inner_length",
+      "intent": "Verify that from_bson rejects subtype 0x02 binary payload lacking the inner int32 length.",
+      "round": 0
+    },
+    {
+      "file": "gen_04.cpp",
+      "name": "bson_binary_subtype_0x02_reject_mismatched_inner_length",
+      "intent": "Verify that from_bson rejects subtype 0x02 binary payload where inner length does not match outer length.",
+      "round": 0
+    },
+    {
+      "file": "gen_05.cpp",
+      "name": "bson_document_size_too_small",
+      "intent": "Verify that from_bson rejects BSON documents with a declared size less than 5 bytes.",
+      "round": 0
+    },
+    {
+      "file": "gen_06.cpp",
+      "name": "bson_embedded_document_size_exceeds_parent",
+      "intent": "Verify that from_bson rejects embedded documents whose declared size exceeds the parent document boundaries.",
+      "round": 0
+    },
+    {
+      "file": "gen_07.cpp",
+      "name": "bson_element_size_fits_content",
+      "intent": "Verify that valid nested BSON documents are successfully parsed without size errors.",
+      "round": 0
+    },
+    {
+      "file": "gen_08.cpp",
+      "name": "bson_element_header_fits_declared_size",
+      "intent": "Verify that from_bson rejects elements that lack space for name terminator and document terminator within declared size.",
+      "round": 0
+    },
+    {
+      "file": "gen_09.cpp",
+      "name": "bson_binary_scalar_reservation_skips_subtype_0x02",
+      "intent": "Verify scalar writing fast-path logic declines subtype 0x02 appropriately (exercised via to_bson).",
+      "round": 0
+    },
+    {
+      "file": "gen_10.cpp",
+      "name": "bson_binary_zero_length_subtype_0x02",
+      "intent": "Verify zero-length binary data with subtype 0x02 correctly serializes and deserializes.",
+      "round": 0
+    },
+    {
+      "file": "gen_11.cpp",
+      "name": "bson_binary_uuid_md5_subtypes",
+      "intent": "Verify binary values with UUID (0x04) or MD5 (0x03) subtypes handle correctly alongside old binary subtype.",
+      "round": 0
+    },
+    {
+      "file": "gen_12.cpp",
+      "name": "bson_multiple_binary_fields_mixed_subtypes",
+      "intent": "Verify documents containing both old binary (0x02) and standard binary (0x00) serialize and deserialize correctly.",
+      "round": 0
+    },
+    {
+      "file": "gen_13.cpp",
+      "name": "bson_sax_parse_valid_document",
+      "intent": "Verify sax_parse correctly processes a valid BSON document under the updated size checks.",
+      "round": 0
+    },
+    {
+      "file": "gen_14.cpp",
+      "name": "bson_large_binary_subtype_0x02",
+      "intent": "Verify large binary data with subtype 0x02 correctly serializes and deserializes its inner length.",
+      "round": 0
+    },
+    {
+      "file": "gen_15.cpp",
+      "name": "bson_document_size_less_than_five_bytes_edge",
+      "intent": "Verify boundary check rejecting BSON document size exactly equal to 4.",
+      "round": 0
+    },
+    {
+      "file": "gen_16.cpp",
+      "name": "bson_document_size_zero",
+      "intent": "Verify that from_bson rejects BSON document with declared size zero.",
+      "round": 0
+    },
+    {
+      "file": "gen_17.cpp",
+      "name": "bson_binary_subtype_0x02_negative_inner_length_check",
+      "intent": "Verify that from_bson rejects subtype 0x02 binary payload with an invalid negative inner length representation.",
+      "round": 0
+    },
+    {
+      "file": "gen_18.cpp",
+      "name": "bson_nested_objects_valid_sizes",
+      "intent": "Verify multiple levels of properly sized nested BSON documents parse correctly.",
+      "round": 0
+    },
+    {
+      "file": "gen_19.cpp",
+      "name": "bson_binary_subtype_0x02_exact_length_match",
+      "intent": "Verify exact match condition between outer length and inner length for subtype 0x02.",
+      "round": 0
+    },
+    {
+      "file": "gen_20.cpp",
+      "name": "bson_empty_document_valid",
+      "intent": "Verify an empty BSON document (size 5, just terminator) parses successfully.",
+      "round": 0
+    },
+    {
+      "file": "gen_21.cpp",
+      "name": "gen_21",
+      "intent": "Exercise document_end calculation without overflow when size approaches numeric limits (executing line 388).",
+      "round": 1
+    },
+    {
+      "file": "gen_22.cpp",
+      "name": "gen_22",
+      "intent": "Exercise get_number failure inside get_bson_old_binary by truncating input stream while reading the inner int32 length (executing line 644).",
+      "round": 1
+    },
+    {
+      "file": "gen_23.cpp",
+      "name": "gen_23",
+      "intent": "Directly invoke bson_document_size_error via custom SAX parser parsing an invalidly sized BSON document (executing line 4468).",
+      "round": 1,
+      "superseded_by": "gen_26.cpp"
+    },
+    {
+      "file": "gen_24.cpp",
+      "name": "gen_24",
+      "intent": "Verify that container_frame end_position and frame fields are populated and successfully enforce embedded document boundary limits.",
+      "round": 1
+    },
+    {
+      "file": "gen_25.cpp",
+      "name": "gen_25",
+      "intent": "Trigger bson_document_size_error when an element's type byte and key leave no room for terminators within the container's end_position.",
+      "round": 1
+    },
+    {
+      "file": "gen_26.cpp",
+      "name": "gen_23_fixed",
+      "intent": "Directly invoke bson_document_size_error via custom SAX parser parsing an invalidly sized BSON document (executing line 4468).",
+      "round": 2,
+      "fixes": "gen_23.cpp",
+      "kind": "compile",
+      "superseded_by": "gen_27.cpp"
+    },
+    {
+      "file": "gen_27.cpp",
+      "name": "gen_23_fixed_fixed",
+      "intent": "Directly invoke bson_document_size_error via custom SAX parser parsing an invalidly sized BSON document (executing line 4468).",
+      "round": 3,
+      "fixes": "gen_26.cpp",
+      "kind": "compile"
+    }
+  ],
+  "fix": {
+    "rounds_max": 2,
+    "model": "gemini-3.5-flash-lite"
+  }
+}

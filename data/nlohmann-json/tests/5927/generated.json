@@ -1,0 +1,116 @@
+{
+  "target": "nlohmann-json",
+  "pr": 5927,
+  "model": "gemini-3.5-flash-lite",
+  "prompt_sha256": "31af5cf039b85f5986eeb69a8dbb715988a46b7fbc4ca823bdd0c3842edf0064",
+  "n_requested": 20,
+  "dropped": 0,
+  "usage": {
+    "promptTokenCount": 7706,
+    "candidatesTokenCount": 1001,
+    "totalTokenCount": 8707,
+    "promptTokensDetails": [
+      {
+        "modality": "TEXT",
+        "tokenCount": 7706
+      }
+    ],
+    "serviceTier": "standard"
+  },
+  "tests": [
+    {
+      "file": "gen_01.cpp",
+      "name": "cbor_tag_in_front_of_map_key_ignore",
+      "intent": "Verify that nlohmann::json::from_cbor successfully skips a CBOR tag in front of a map key when tag handler is ignore.",
+      "round": 0,
+      "superseded_by": "gen_10.cpp"
+    },
+    {
+      "file": "gen_02.cpp",
+      "name": "cbor_tag_in_front_of_map_key_store",
+      "intent": "Verify that nlohmann::json::from_cbor successfully processes a CBOR tag in front of a map key when tag handler is store.",
+      "round": 0,
+      "superseded_by": "gen_11.cpp"
+    },
+    {
+      "file": "gen_03.cpp",
+      "name": "cbor_tag_in_front_of_map_key_error",
+      "intent": "Verify that nlohmann::json::from_cbor throws parse_error when a CBOR tag is placed in front of a map key and the tag handler is error.",
+      "round": 0,
+      "superseded_by": "gen_12.cpp"
+    },
+    {
+      "file": "gen_04.cpp",
+      "name": "cbor_indefinite_text_split_codepoint_strict",
+      "intent": "Verify that an indefinite-length text string with a split code point across chunks is rejected under strict UTF-8 checking.",
+      "round": 0,
+      "superseded_by": "gen_13.cpp"
+    },
+    {
+      "file": "gen_05.cpp",
+      "name": "gen_05",
+      "intent": "Verify that indefinite-length text strings with error_handler_t::replace validate chunks individually and replace invalid ones per chunk.",
+      "round": 1
+    },
+    {
+      "file": "gen_06.cpp",
+      "name": "gen_06",
+      "intent": "Verify that an indefinite-length text string with error_handler_t::keep processes chunks without per-chunk validation.",
+      "round": 1
+    },
+    {
+      "file": "gen_07.cpp",
+      "name": "gen_07",
+      "intent": "Verify that parsing CBOR with an extended tag (>= 0xD8) in front of a map key using ignore tag handler successfully skips the tag and parses the map.",
+      "round": 1
+    },
+    {
+      "file": "gen_08.cpp",
+      "name": "gen_08",
+      "intent": "Verify that a malformed extended tag in front of a map key (truncated argument) returns false/throws during parsing.",
+      "round": 1
+    },
+    {
+      "file": "gen_09.cpp",
+      "name": "gen_09",
+      "intent": "Verify that a definite-length text string goes through get_cbor_string_chunk and check_string_utf8 normally.",
+      "round": 1
+    },
+    {
+      "file": "gen_10.cpp",
+      "name": "cbor_tag_in_front_of_map_key_ignore_fixed",
+      "intent": "Verify that nlohmann::json::from_cbor successfully skips a CBOR tag in front of a map key when tag handler is ignore.",
+      "round": 2,
+      "fixes": "gen_01.cpp",
+      "kind": "compile"
+    },
+    {
+      "file": "gen_11.cpp",
+      "name": "cbor_tag_in_front_of_map_key_store_fixed",
+      "intent": "Verify that nlohmann::json::from_cbor successfully processes a CBOR tag in front of a map key when tag handler is store.",
+      "round": 2,
+      "fixes": "gen_02.cpp",
+      "kind": "compile"
+    },
+    {
+      "file": "gen_12.cpp",
+      "name": "cbor_tag_in_front_of_map_key_error_fixed",
+      "intent": "Verify that nlohmann::json::from_cbor throws parse_error when a CBOR tag is placed in front of a map key and the tag handler is error.",
+      "round": 2,
+      "fixes": "gen_03.cpp",
+      "kind": "compile"
+    },
+    {
+      "file": "gen_13.cpp",
+      "name": "cbor_indefinite_text_split_codepoint_strict_fixed",
+      "intent": "Verify that an indefinite-length text string with a split code point across chunks is rejected under strict UTF-8 checking.",
+      "round": 2,
+      "fixes": "gen_04.cpp",
+      "kind": "compile"
+    }
+  ],
+  "fix": {
+    "rounds_max": 2,
+    "model": "gemini-3.5-flash-lite"
+  }
+}

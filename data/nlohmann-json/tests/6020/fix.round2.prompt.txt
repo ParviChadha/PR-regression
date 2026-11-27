@@ -1,0 +1,302 @@
+[system]
+You write test programs that probe a C++ library for behavioral changes made by one pull request.
+Each program is compiled and run twice, once against the library before the change and once after, and the two
+outputs are compared. Your job is to produce programs whose output reveals whether the change altered behavior,
+including side effects the author did not intend.
+
+Rules for every program:
+- It is standalone: one file with its own int main(), compiled as C++17, printing results to stdout.
+- Use only the library's documented public API. Never include internal headers or use detail/impl namespaces,
+  private members or undocumented macros.
+- Do not judge results (no assert, no expected-value comparisons): just print what the library returns. Print
+  enough to make differences visible, one fact per line.
+- Output must be deterministic. Never print pointers or addresses, uninitialized data, the order of
+  hash-based containers, timings, thread ids, random values, file paths or environment data. Print floating point
+  values with an explicit precision. No input, files, network, threads, clocks or randomness.
+- Wrap calls that may throw in try/catch and print the exception's type and message, so an exception is an
+  observable result. Do not crash on purpose.
+- Aim at the code the diff changes. Prefer calls that compile against both the old and the new library; one or two
+  programs may use an API the PR adds. Cover ordinary inputs and edge cases (empty, minimum and maximum values,
+  boundaries, special values, nesting, unusual types) and also neighbouring behavior the change could disturb.
+- When the diff changes which types or inputs an API accepts or rejects (constraints, overloads, traits,
+  conversions), test it with the detection idiom (std::void_t or requires) and `if constexpr`, so the program
+  compiles against both versions, prints whether the expression is well-formed, and exercises it when it is.
+  Accepting an input is not enough: also use it through every entry point that should follow (const and
+  non-const, read, write, insert, erase, lookup, nested use), because a change that admits new inputs can leave
+  later code unable to handle them.
+- If the changed code is internal (a detail, impl or internal namespace, a trait, a helper), do not name it in the
+  program. Reach it through the public API that depends on it, using detection (as above) where needed.
+- Use the exact types and values the diff is about (the new trait's argument types, the new overload's
+  parameters), not stand-ins.
+- Spread the programs over distinct public entry points and overloads, one main idea per program. Do not write
+  several programs that only rename a type or change a literal.
+- Make the programs differ from each other: different inputs, different entry points, different features.
+
+Rules specific to this library:
+- Include the library with #include <nlohmann/json.hpp>. The public API is nlohmann::json (nlohmann::basic_json), nlohmann::ordered_json, json_pointer, json patch/merge_patch and the documented SAX and conversion interfaces. Never use the detail namespace.
+- It is a header-only library: nothing to link. Programs are compiled as C++17.
+- Print JSON values with dump() (compact) or dump(2). Keys of nlohmann::json objects print in sorted order, so output is deterministic; do not depend on insertion order except with ordered_json.
+
+[user]
+# Pull request #6020: Binary writers: zero only a window ahead of the vector sink's position
+
+## Description
+## Summary
+
+`output_vector_sink` (the sink behind `to_cbor(j)`, `to_msgpack(j)`, `to_ubjson(j)`, `to_bjdata(j)`, `to_bon8(j)` and `to_bson(j)` returning a `std::vector`) grew the vector by resizing it to its whole new capacity. `resize()` zeroes the characters it adds, so each doubling zeroed megabytes of a fresh allocation at once. That faults in all the pages and pushes them out of the cache before the writer gets there, so the writer's stores miss again.
+
+The sink now reserves the same capacity as before, but resizes the vector only to 64 KiB (`vector_sink_window`) ahead of the write position, which is still in the cache when the writer's stores come. The vector's capacity and growth stay as they were. The destructor still trims the vector to the bytes written, and `binary_reserve_hint` is unchanged: it is still a lower bound.
+
+## Why
+
+The 3.13.0 writers gained much less on x86 than on Apple M1. For example, `to_cbor` of a number array got 2.4× faster on a Skylake laptop and 4.8× faster on an M1 Max. A/B runs (3.12.0 and develop in one binary, alternating samples, 4 code layouts) found the reason:
+
+- **Not the compiler.** GCC 16 and Clang 23 on a Haswell VPS behave like Apple clang 13 on the Skylake laptop.
+- **Not the encoders.** With output reused between repetitions, the Skylake laptop takes 1.8–2.2× as long as the M1, the same as across the whole suite.
+- **Fresh output memory.** The rest is page faults, zero-filling and reallocation copies of a 9–80 MB output. That is 30–76 % of the 3.13.0 time on x86 and 13–40 % on the M1. The cost is the same as in 3.12.0; the encoding around it got faster.
+
+This PR removes the part of that cost the sink adds itself: zeroing the whole doubled capacity ahead of the writer.
+
+## Measurements
+
+develop vs this branch, 33 rows (to_cbor/msgpack/ubjson/bjdata/bon8/bson of number arrays and the nativejson documents), geometric mean over 4 layouts, 15 pairs each:
+
+| | Apple M1 Max | Skylake laptop, Apple clang 13 | Haswell VPS, GCC 16 | Haswell VPS, Clang 23 |
+|---|---|---|---|---|
+| cbor/msgpack, 1M ints | −1.4 … −1.6 % | −10 … −11 % | −13 … −18 % | −11 … −15 % |
+| cbor/msgpack, 1M floats | −2.5 % | −13 … −15 % | −18 % | −21 … −22 % |
+| ubjson/bjdata/bon8, ints and floats | −1 … −2.5 % | −9 … −17 % | −10 … −22 % | −14 … −26 % |
+| small_signed_ints | −1 % | −4.5 % | −5 % | −4.5 % |
+| twitter, citm, canada (all formats) | within 0.4 % | within 0.4 % (rerun, 60 pairs) | within 0.4 % | within 0.4 % (rerun, 60 pairs) |
+
+The rows that first read 1–2 % slower on the noisy x86 machines were within 0.4 % in reruns, and their callgrind instruction counts go down (cbor twitter −2.4 %, canada −0.5 %). On the M1 the gain is below 3 %; no row there is slower.
+
+## Tests
+
+`unit-binary_writer_sinks.cpp` gets a test value whose output spans several 64 KiB windows in every format, so the windowed growth is compared against the adapter sink byte for byte. The full suite passes with ASan/UBSan.
+
+## Breaking changes
+
+No breaking changes. The public API, the output bytes and the capacity of the returned vector are unchanged. `vector_sink_window` is a new constant in `nlohmann::detail`.
+
+🤖 Generated with [Claude Code](https://claude.com/claude-code)
+
+## Commit message
+output_vector_sink grew the vector by resizing it to its whole new
+capacity. resize() zeroes the characters it adds, so every doubling
+zeroed megabytes of a fresh allocation at once: that faults in all its
+pages and evicts them from the cache before the writer reaches them,
+and the writer's stores then miss again. The sink now reserves the same
+capacity as before but resizes the vector only to 64 KiB
+(vector_sink_window) ahead of the position, which is still cached when
+the writer's stores come.
+
+to_cbor(), to_msgpack(), to_ubjson(), to_bjdata() and to_bon8() of an
+array of one million numbers into a fresh vector: 4-26 % faster on x86
+(Skylake laptop with Apple clang 13, Haswell VPS with GCC 16 and
+Clang 23), 1-2.5 % on Apple M1 Max; other documents unchanged (within
+0.4 % in reruns). The capacity and growth of the vector are as before.
+
+Signed-off-by: Niels Lohmann <mail@nlohmann.me>
+
+## Changed functions (from changes.py)
+- nlohmann::detail::output_vector_sink::grow(const std::size_t) (private); reached from the public API through: nlohmann::basic_json::to_bjdata(const basic_json<...> &, const bool, const bool, const bjdata_version_t, const error_handler_t), nlohmann::basic_json::to_bon8(const basic_json<...> &), nlohmann::basic_json::to_bson(const basic_json<...> &, const error_handler_t), nlohmann::basic_json::to_cbor(const basic_json<...> &, const error_handler_t), nlohmann::basic_json::to_msgpack(const basic_json<...> &, const error_handler_t), nlohmann::basic_json::to_ubjson(const basic_json<...> &, const bool, const bool, const error_handler_t)
+- nlohmann::detail::vector_sink_window (private); reached from the public API through: nlohmann::basic_json::to_bjdata(const basic_json<...> &, const bool, const bool, const bjdata_version_t, const error_handler_t), nlohmann::basic_json::to_bon8(const basic_json<...> &), nlohmann::basic_json::to_bson(const basic_json<...> &, const error_handler_t), nlohmann::basic_json::to_cbor(const basic_json<...> &, const error_handler_t), nlohmann::basic_json::to_msgpack(const basic_json<...> &, const error_handler_t), nlohmann::basic_json::to_ubjson(const basic_json<...> &, const bool, const bool, const error_handler_t)
+
+## Diff of the library source (before -> after)
+```diff
+diff --git a/include/nlohmann/detail/output/output_adapters.hpp b/include/nlohmann/detail/output/output_adapters.hpp
+index e9e57ab9a..b1ea305b9 100644
+--- a/include/nlohmann/detail/output/output_adapters.hpp
++++ b/include/nlohmann/detail/output/output_adapters.hpp
+@@ -116,6 +116,10 @@ inline void copy_short(CharType* dst, const CharType* src, const std::size_t len
+ /// the number of characters an empty vector is grown to by output_vector_sink
+ constexpr std::size_t min_vector_sink_capacity = 64;
+ 
++/// the number of characters output_vector_sink makes writable ahead of its
++/// position at a time: 64 KiB of the vector's capacity, not all of it
++constexpr std::size_t vector_sink_window = 65536;
++
+ /// @brief non-virtual output sink writing into a std::vector
+ ///
+ /// This sink is not part of the virtual output_adapter_protocol hierarchy: it is
+@@ -129,7 +133,8 @@ constexpr std::size_t min_vector_sink_capacity = 64;
+ /// encoding them: insert() is an out-of-line call into a routine that can insert
+ /// anywhere, and resize() is one as well with libstdc++. The sink therefore keeps
+ /// its own write position: it grows the vector geometrically ahead of the
+-/// position and copies each write to it, so a write is a capacity check and a
++/// position (making @ref vector_sink_window characters of it writable at a
++/// time) and copies each write to it, so a write is a capacity check and a
+ /// short copy. The destructor shrinks the vector to the bytes actually written,
+ /// also when a write throws; shrinking a vector never allocates. The sink owns
+ /// that trim, so it can be moved but not copied, and the vector must not be used
+@@ -277,9 +282,17 @@ class output_vector_sink
+         // reallocate for every few bytes
+         const std::size_t written = position();
+         const std::size_t needed = written + length;
+-        v->resize((std::max)(min_vector_sink_capacity, needed <= v->capacity()
+-                             ? v->capacity()
+-                             : (std::max)(needed, v->capacity() * 2)));
++        const std::size_t capacity = (std::max)(min_vector_sink_capacity, needed <= v->capacity()
++                                                ? v->capacity()
++                                                : (std::max)(needed, v->capacity() * 2));
++        v->reserve(capacity);
++        // resize() zeroes the characters it adds. Zeroing all of a doubled
++        // capacity, megabytes of a fresh allocation, at once faults in its
++        // pages and evicts them from the cache before the writer gets there,
++        // so its stores miss again; a window ahead of the position is still
++        // cached when they come (the binary writers on a long array of
++        // numbers: 4-26 % faster on x86, 1-2.5 % on Apple M1)
++        v->resize((std::min)(capacity, (std::max)(needed, written + vector_sink_window)));
+         cursor = v->data() + written;
+         limit = v->data() + v->size();
+     }
+```
+
+# Programs to repair
+
+## gen_21.cpp (compile)
+Intent: Exercise BON8 binary serialization of a large numeric array to hit the vector sink window logic and ensure all generated bytes match.
+COMPILE ERROR. The program fails to compile, the same way against the old and the new library. Fix the error (wrong or missing include, typo, misuse of the public API) and keep the intent: the call under test must stay. Include only headers that exist; if you are unsure a header exists, use the library's main header.
+Compiler errors:
+```
+gen_21.cpp:13:44: error: ‘to_bon8’ is not a member of ‘nlohmann’
+```
+Source:
+```cpp
+#include <nlohmann/json.hpp>
+#include <iostream>
+#include <vector>
+
+int main() {
+    try {
+        nlohmann::json j = nlohmann::json::array();
+        for (int i = 0; i < 20000; ++i) {
+            j.push_back(i);
+        }
+        std::vector<uint8_t> v = nlohmann::to_bon8(j);
+        std::cout << "BON8 size: " << v.size() << "\n";
+        if (!v.empty()) {
+            std::cout << "BON8 first byte: " << static_cast<int>(v[0]) << "\n";
+        }
+    } catch (const std::exception& e) {
+        std::cout << "Exception: " << e.what() << "\n";
+    }
+    return 0;
+}
+```
+
+## gen_22.cpp (compile)
+Intent: Exercise CBOR serialization of a large nested structure exceeding the 64KB vector sink window size.
+COMPILE ERROR. The program fails to compile, the same way against the old and the new library. Fix the error (wrong or missing include, typo, misuse of the public API) and keep the intent: the call under test must stay. Include only headers that exist; if you are unsure a header exists, use the library's main header.
+Compiler errors:
+```
+gen_22.cpp:13:44: error: ‘to_cbor’ is not a member of ‘nlohmann’
+```
+Source:
+```cpp
+#include <nlohmann/json.hpp>
+#include <iostream>
+#include <vector>
+
+int main() {
+    try {
+        nlohmann::json j;
+        for (int i = 0; i < 5000; ++i) {
+            j["key_" + std::to_string(i)] = std::string(30, 'x');
+        }
+        std::vector<uint8_t> v = nlohmann::to_cbor(j);
+        std::cout << "CBOR nested size: " << v.size() << "\n";
+    } catch (const std::exception& e) {
+        std::cout << "Exception: " << e.what() << "\n";
+    }
+    return 0;
+}
+```
+
+## gen_23.cpp (compile)
+Intent: Exercise MessagePack serialization of an array containing large byte strings forcing repeated window expansions.
+COMPILE ERROR. The program fails to compile, the same way against the old and the new library. Fix the error (wrong or missing include, typo, misuse of the public API) and keep the intent: the call under test must stay. Include only headers that exist; if you are unsure a header exists, use the library's main header.
+Compiler errors:
+```
+gen_23.cpp:13:44: error: ‘to_msgpack’ is not a member of ‘nlohmann’
+```
+Source:
+```cpp
+#include <nlohmann/json.hpp>
+#include <iostream>
+#include <vector>
+
+int main() {
+    try {
+        nlohmann::json j = nlohmann::json::array();
+        for (int i = 0; i < 1000; ++i) {
+            j.push_back(std::string(100, 'm'));
+        }
+        std::vector<uint8_t> v = nlohmann::to_msgpack(j);
+        std::cout << "Msgpack string array size: " << v.size() << "\n";
+    } catch (const std::exception& e) {
+        std::cout << "Exception: " << e.what() << "\n";
+    }
+    return 0;
+}
+```
+
+## gen_24.cpp (compile)
+Intent: Exercise BJData serialization of a large floating point array crossing the vector sink window boundary multiple times.
+COMPILE ERROR. The program fails to compile, the same way against the old and the new library. Fix the error (wrong or missing include, typo, misuse of the public API) and keep the intent: the call under test must stay. Include only headers that exist; if you are unsure a header exists, use the library's main header.
+Compiler errors:
+```
+gen_24.cpp:13:44: error: ‘to_bjdata’ is not a member of ‘nlohmann’
+```
+Source:
+```cpp
+#include <nlohmann/json.hpp>
+#include <iostream>
+#include <vector>
+
+int main() {
+    try {
+        nlohmann::json j = nlohmann::json::array();
+        for (int i = 0; i < 15000; ++i) {
+            j.push_back(static_cast<double>(i) * 0.1);
+        }
+        std::vector<uint8_t> v = nlohmann::to_bjdata(j);
+        std::cout << "BJData float array size: " << v.size() << "\n";
+    } catch (const std::exception& e) {
+        std::cout << "Exception: " << e.what() << "\n";
+    }
+    return 0;
+}
+```
+
+## gen_25.cpp (compile)
+Intent: Exercise UBJSON serialization of a large boolean vector forcing incremental growth of the vector sink window.
+COMPILE ERROR. The program fails to compile, the same way against the old and the new library. Fix the error (wrong or missing include, typo, misuse of the public API) and keep the intent: the call under test must stay. Include only headers that exist; if you are unsure a header exists, use the library's main header.
+Compiler errors:
+```
+gen_25.cpp:13:44: error: ‘to_ubjson’ is not a member of ‘nlohmann’
+```
+Source:
+```cpp
+#include <nlohmann/json.hpp>
+#include <iostream>
+#include <vector>
+
+int main() {
+    try {
+        nlohmann::json j = nlohmann::json::array();
+        for (int i = 0; i < 40000; ++i) {
+            j.push_back(i % 2 == 0);
+        }
+        std::vector<uint8_t> v = nlohmann::to_ubjson(j);
+        std::cout << "UBJSON boolean array size: " << v.size() << "\n";
+    } catch (const std::exception& e) {
+        std::cout << "Exception: " << e.what() << "\n";
+    }
+    return 0;
+}
+```
+
+# Task
+Return JSON with a "fixes" array: one item per program above, with "file" (exactly as given) and "code" (the complete repaired program, standalone, with its own int main). Do not return programs you cannot repair.

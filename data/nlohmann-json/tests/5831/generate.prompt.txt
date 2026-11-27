@@ -1,0 +1,302 @@
+[system]
+You write test programs that probe a C++ library for behavioral changes made by one pull request.
+Each program is compiled and run twice, once against the library before the change and once after, and the two
+outputs are compared. Your job is to produce programs whose output reveals whether the change altered behavior,
+including side effects the author did not intend.
+
+Rules for every program:
+- It is standalone: one file with its own int main(), compiled as C++17, printing results to stdout.
+- Use only the library's documented public API. Never include internal headers or use detail/impl namespaces,
+  private members or undocumented macros.
+- Do not judge results (no assert, no expected-value comparisons): just print what the library returns. Print
+  enough to make differences visible, one fact per line.
+- Output must be deterministic. Never print pointers or addresses, uninitialized data, the order of
+  hash-based containers, timings, thread ids, random values, file paths or environment data. Print floating point
+  values with an explicit precision. No input, files, network, threads, clocks or randomness.
+- Wrap calls that may throw in try/catch and print the exception's type and message, so an exception is an
+  observable result. Do not crash on purpose.
+- Aim at the code the diff changes. Prefer calls that compile against both the old and the new library; one or two
+  programs may use an API the PR adds. Cover ordinary inputs and edge cases (empty, minimum and maximum values,
+  boundaries, special values, nesting, unusual types) and also neighbouring behavior the change could disturb.
+- When the diff changes which types or inputs an API accepts or rejects (constraints, overloads, traits,
+  conversions), test it with the detection idiom (std::void_t or requires) and `if constexpr`, so the program
+  compiles against both versions, prints whether the expression is well-formed, and exercises it when it is.
+  Accepting an input is not enough: also use it through every entry point that should follow (const and
+  non-const, read, write, insert, erase, lookup, nested use), because a change that admits new inputs can leave
+  later code unable to handle them.
+- If the changed code is internal (a detail, impl or internal namespace, a trait, a helper), do not name it in the
+  program. Reach it through the public API that depends on it, using detection (as above) where needed.
+- Use the exact types and values the diff is about (the new trait's argument types, the new overload's
+  parameters), not stand-ins.
+- Spread the programs over distinct public entry points and overloads, one main idea per program. Do not write
+  several programs that only rename a type or change a literal.
+- Make the programs differ from each other: different inputs, different entry points, different features.
+
+Rules specific to this library:
+- Include the library with #include <nlohmann/json.hpp>. The public API is nlohmann::json (nlohmann::basic_json), nlohmann::ordered_json, json_pointer, json patch/merge_patch and the documented SAX and conversion interfaces. Never use the detail namespace.
+- It is a header-only library: nothing to link. Programs are compiled as C++17.
+- Print JSON values with dump() (compact) or dump(2). Keys of nlohmann::json objects print in sorted order, so output is deterministic; do not depend on insertion order except with ordered_json.
+
+[user]
+# Pull request #5831: Look up the key only once in the callback parser's key()
+
+## Description
+## Summary
+
+Since #5466, `json_sax_dom_callback_parser::key()` searched the object for a duplicate key with `find()` and then looked the key up a second time with `operator[]` to insert the placeholder. That doubled the tree lookups per member and made `json::parse(s, callback)` on one very wide object slower than in 3.12.0. This replaces both lookups by a single `emplace()`; duplicate-key semantics (stash and restore) are unchanged.
+
+Callback parse of `{"k0":0,…,"k31999":31999}` (Apple M1 Max, clang, -O3, median of 31, interleaved, machine under load):
+
+| | 3.12.0 | develop | this PR |
+|---|---|---|---|
+| 8k members | 1.9 ms | 2.4 ms | 1.7 ms |
+| 32k members | 8.3 ms | 10.5 ms | 7.2–8.1 ms |
+| 128k members | 35 ms | 45 ms | 31 ms |
+
+Comparing #5466 with its parent at 32k members: 7.3 ms vs 10.4 ms. Plain parsing is unchanged.
+
+Tests: `unit-class_parser`, `unit-diagnostic-positions`, `unit-regression2` pass.
+
+## API
+
+No breaking changes.
+
+🤖 Generated with [Claude Code](https://claude.com/claude-code)
+
+## Commit message
+Signed-off-by: Niels Lohmann <mail@nlohmann.me>
+
+## Changed functions (from changes.py)
+- nlohmann::detail::json_sax_dom_callback_parser::key(string_t &) (private); reached from the public API through: nlohmann::operator>>(std::istream &, basic_json<...> &), nlohmann::basic_json::accept(detail::span_input_adapter &&, const bool, const bool), nlohmann::basic_json::parse(detail::span_input_adapter &&, parser_callback_t, const bool, const bool, const bool), nlohmann::basic_json::accept(InputType &&, const bool, const bool), nlohmann::basic_json::parse(InputType &&, parser_callback_t, const bool, const bool, const bool), nlohmann::basic_json::sax_parse(detail::span_input_adapter &&, SAX *, input_format_t, const bool, const bool, const bool, const cbor_tag_handler_t), nlohmann::basic_json::sax_parse(InputType &&, SAX *, input_format_t, const bool, const bool, const bool, const cbor_tag_handler_t), nlohmann::basic_json::accept(IteratorType, SentinelType, const bool, const bool), nlohmann::basic_json::parse(IteratorType, SentinelType, parser_callback_t, const bool, const bool, const bool), nlohmann::basic_json::sax_parse(IteratorType, SentinelType, SAX *, input_format_t, const bool, const bool, const bool, const cbor_tag_handler_t)
+
+## Diff of the library source (before -> after)
+```diff
+diff --git a/include/nlohmann/detail/input/json_sax.hpp b/include/nlohmann/detail/input/json_sax.hpp
+index 161568ded..b7e08c870 100644
+--- a/include/nlohmann/detail/input/json_sax.hpp
++++ b/include/nlohmann/detail/input/json_sax.hpp
+@@ -674,16 +674,19 @@ class json_sax_dom_callback_parser
+         if (keep && ref_stack.back())
+         {
+             auto& obj = *ref_stack.back()->m_data.m_value.object;
+-            const auto it = obj.find(val);
+-            if (it != obj.end())
++            // a single lookup: insert the placeholder, or find the existing member
++            const auto inserted = obj.emplace(val, discarded);
++            const auto it = inserted.first;
++            if (!inserted.second)
+             {
+                 // this is a duplicate key (legal in JSON); remember its
+                 // current value so it can be restored later if the new
+                 // value is rejected by the callback, instead of being
+                 // erased together with the discarded placeholder
+                 duplicate_key_stash.emplace_back(&(it->second), it->second);
++                it->second = discarded;
+             }
+-            object_element = &(obj[val] = discarded);
++            object_element = &(it->second);
+         }
+ 
+         return true;
+```
+
+## Existing upstream tests that call the changed code (for style and API usage)
+// Upstream tests at the PR's parent commit 4e294f4b1 that use the changed code.
+// Names searched (test lines using each): accept (12), parse (11), sax_parse (0), operator>> (79), key (159)
+
+// ---- tests/src/unit-class_parser.cpp:45-69  (uses: parse)
+using utils::SaxEventLogger;
+
+namespace
+{
+json parser_helper(const std::string& s);
+bool accept_helper(const std::string& s);
+void comments_helper(const std::string& s);
+void trailing_comma_helper(const std::string& s);
+
+json parser_helper(const std::string& s)
+{
+    json j;
+    json::parser(nlohmann::detail::input_adapter(s)).parse(true, j);
+
+    // if this line was reached, no exception occurred
+    // -> check if result is the same without exceptions
+    json j_nothrow;
+    CHECK_NOTHROW(json::parser(nlohmann::detail::input_adapter(s), nullptr, false).parse(true, j_nothrow));
+    CHECK(j_nothrow == j);
+
+    json j_sax;
+    nlohmann::detail::json_sax_dom_parser<json, nlohmann::detail::string_input_adapter_type> sdp(j_sax);
+    json::sax_parse(s, &sdp);
+    CHECK(j_sax == j);
+
+
+// ---- tests/src/unit-class_parser.cpp:71-95  (uses: parse)
+
+    trailing_comma_helper(s);
+
+    return j;
+}
+
+bool accept_helper(const std::string& s)
+{
+    CAPTURE(s)
+
+    // 1. parse s without exceptions
+    json j;
+    CHECK_NOTHROW(json::parser(nlohmann::detail::input_adapter(s), nullptr, false).parse(true, j));
+    const bool ok_noexcept = !j.is_discarded();
+
+    // 2. accept s
+    const bool ok_accept = json::parser(nlohmann::detail::input_adapter(s)).accept(true);
+
+    // 3. check if both approaches come to the same result
+    CHECK(ok_noexcept == ok_accept);
+
+    // 4. parse with SAX (compare with relaxed accept result)
+    SaxEventLogger el;
+    CHECK_NOTHROW(json::sax_parse(s, &el, json::input_format_t::json, false));
+    CHECK(json::parser(nlohmann::detail::input_adapter(s)).accept(false) == !el.errored);
+
+// ---- tests/src/unit-deserialization.cpp:97-109  (uses: operator>>)
+TEST_CASE("deserialization")
+{
+    SECTION("successful deserialization")
+    {
+        SECTION("stream")
+        {
+            std::stringstream ss1;
+            std::stringstream ss2;
+            std::stringstream ss3;
+            ss1 << R"(["foo",1,2,3,false,{"one":1}])";
+            ss2 << R"(["foo",1,2,3,false,{"one":1}])";
+            ss3 << R"(["foo",1,2,3,false,{"one":1}])";
+            const json j = json::parse(ss1);
+
+// ---- tests/src/unit-deserialization.cpp:174-181  (uses: operator>>)
+        SECTION("operator>>")
+        {
+            std::stringstream ss;
+            ss << R"(["foo",1,2,3,false,{"one":1}])";
+            json j;
+            ss >> j;
+            CHECK(j == json({"foo", 1, 2, 3, false, {{"one", 1}}}));
+        }
+
+// ---- tests/src/unit-precise-stream-position.cpp:88-100  (uses: operator>>)
+TEST_CASE("JSON_PRECISE_STREAM_POSITION")
+{
+    SECTION("the macro is part of the ABI tag")
+    {
+        const std::string ns = STRINGIZE(NLOHMANN_JSON_NAMESPACE);
+        // other tags may come before it, e.g. json_abi_diag_psp
+        CHECK(ns.find("_psp") != std::string::npos);
+    }
+
+    SECTION("a number does not consume the character that terminates it")
+    {
+        // a number is only terminated by the character following it; that
+        // character must be given back so the stream is positioned right
+
+// ---- tests/src/unit-precise-stream-position.cpp:146-158  (uses: operator>>)
+    SECTION("a number at the end of the input leaves nothing behind")
+    {
+        for (const std::string s :
+                {"1", "12", "-3.5e2", " 7 "
+                })
+        {
+            CAPTURE(s)
+            std::istringstream ss(s);
+            json j;
+            ss >> j;
+            CHECK(remaining(ss).find_first_not_of(" \t\n\r") == std::string::npos);
+        }
+    }
+
+// ---- tests/src/unit-std-format.cpp:105-126  (uses: parse)
+    SECTION("a format spec may run to the end of the parse context")
+    {
+        // std::format always hands parse() a range that still holds the closing
+        // '}', but a parse context may also end right after the spec
+        const auto parse = [](const char* spec)
+        {
+            std::format_parse_context ctx(spec);
+            std::formatter<json> f;
+            CHECK(f.parse(ctx) == ctx.end());
+            return f;
+        };
+
+        CHECK(parse("").indent == -1);
+        CHECK(parse(">").indent == -1);
+        CHECK(parse("#").indent == 4);
+        CHECK(parse("3").indent == 3);
+        CHECK(parse("#12").indent == 12);
+
+        const auto f = parse(".>");
+        CHECK(f.indent == -1);
+        CHECK(f.indent_char == '.');
+    }
+
+// ---- tests/src/unit-alt-string.cpp:269-296  (uses: key)
+    SECTION("items")
+    {
+        auto doc = alt_json::parse(R"({"foo": "bar"})");
+
+        for (const auto& item : doc.items())
+        {
+            CHECK(item.key() == "foo");
+            CHECK(item.value() == "bar");
+        }
+
+        auto doc_array = alt_json::parse(R"(["foo", "bar"])");
+
+        for (const auto& item : doc_array.items())
+        {
+            if (item.key() == "0" )
+            {
+                CHECK( item.value() == "foo" );
+            }
+            else if (item.key() == "1" )
+            {
+                CHECK(item.value() == "bar");
+            }
+            else
+            {
+                CHECK(false);
+            }
+        }
+    }
+
+// ---- tests/src/unit-binary_utf8_error_handler.cpp:302-321  (uses: key)
+    SECTION("well-formed UTF-8 is unaffected by error_handler")
+    {
+        const json jval = valid_sequence();
+        json jobj;
+        jobj[valid_sequence()] = valid_sequence();
+
+        for (const auto h : all_handlers())
+        {
+            CAPTURE(static_cast<int>(h))
+
+            CHECK(json::from_cbor(json::to_cbor(jval, h)).get<std::string>() == valid_sequence());
+            CHECK(json::from_msgpack(json::to_msgpack(jval, h)).get<std::string>() == valid_sequence());
+            CHECK(json::from_ubjson(json::to_ubjson(jval, false, false, h)).get<std::string>() == valid_sequence());
+            CHECK(json::from_bjdata(json::to_bjdata(jval, false, false, json::bjdata_version_t::draft2, h)).get<std::string>() == valid_sequence());
+            CHECK(json::from_bson(json::to_bson(jobj, h)).begin().key() == valid_sequence());
+
+            CHECK(json::from_cbor(json::to_cbor(jval, eh::keep), true, true, json::cbor_tag_handler_t::error, h).get<std::string>() == valid_sequence());
+            CHECK(json::from_msgpack(json::to_msgpack(jval), true, true, h).get<std::string>() == valid_sequence());
+        }
+    }
+
+// ---- tests/src/unit-bon8.cpp:812-818  (uses: operator>>)
+            SECTION("std::ostringstream")
+            {
+                std::basic_ostringstream<char> ss;
+                json::to_bon8(j1, ss);
+                json j3 = json::from_bon8(ss.str());
+                CHECK(j1 == j3);
+            }
+
+# Task
+Write 20 test programs for this pull request. Return JSON with a "tests" array; each item has "name" (short snake_case), "intent" (one sentence: what behavior it probes) and "code" (the complete C++ program).

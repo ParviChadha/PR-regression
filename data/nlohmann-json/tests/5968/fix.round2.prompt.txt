@@ -1,0 +1,510 @@
+[system]
+You write test programs that probe a C++ library for behavioral changes made by one pull request.
+Each program is compiled and run twice, once against the library before the change and once after, and the two
+outputs are compared. Your job is to produce programs whose output reveals whether the change altered behavior,
+including side effects the author did not intend.
+
+Rules for every program:
+- It is standalone: one file with its own int main(), compiled as C++17, printing results to stdout.
+- Use only the library's documented public API. Never include internal headers or use detail/impl namespaces,
+  private members or undocumented macros.
+- Do not judge results (no assert, no expected-value comparisons): just print what the library returns. Print
+  enough to make differences visible, one fact per line.
+- Output must be deterministic. Never print pointers or addresses, uninitialized data, the order of
+  hash-based containers, timings, thread ids, random values, file paths or environment data. Print floating point
+  values with an explicit precision. No input, files, network, threads, clocks or randomness.
+- Wrap calls that may throw in try/catch and print the exception's type and message, so an exception is an
+  observable result. Do not crash on purpose.
+- Aim at the code the diff changes. Prefer calls that compile against both the old and the new library; one or two
+  programs may use an API the PR adds. Cover ordinary inputs and edge cases (empty, minimum and maximum values,
+  boundaries, special values, nesting, unusual types) and also neighbouring behavior the change could disturb.
+- When the diff changes which types or inputs an API accepts or rejects (constraints, overloads, traits,
+  conversions), test it with the detection idiom (std::void_t or requires) and `if constexpr`, so the program
+  compiles against both versions, prints whether the expression is well-formed, and exercises it when it is.
+  Accepting an input is not enough: also use it through every entry point that should follow (const and
+  non-const, read, write, insert, erase, lookup, nested use), because a change that admits new inputs can leave
+  later code unable to handle them.
+- If the changed code is internal (a detail, impl or internal namespace, a trait, a helper), do not name it in the
+  program. Reach it through the public API that depends on it, using detection (as above) where needed.
+- Use the exact types and values the diff is about (the new trait's argument types, the new overload's
+  parameters), not stand-ins.
+- Spread the programs over distinct public entry points and overloads, one main idea per program. Do not write
+  several programs that only rename a type or change a literal.
+- Make the programs differ from each other: different inputs, different entry points, different features.
+
+Rules specific to this library:
+- Include the library with #include <nlohmann/json.hpp>. The public API is nlohmann::json (nlohmann::basic_json), nlohmann::ordered_json, json_pointer, json patch/merge_patch and the documented SAX and conversion interfaces. Never use the detail namespace.
+- It is a header-only library: nothing to link. Programs are compiled as C++17.
+- Print JSON values with dump() (compact) or dump(2). Keys of nlohmann::json objects print in sorted order, so output is deterministic; do not depend on insertion order except with ordered_json.
+
+[user]
+# Pull request #5968: BSON reader: find C-string terminators 8 bytes at a time, skip array element names
+
+## Description
+## What
+
+Two changes to the BSON reader (`binary_reader.hpp`). They speed up `from_bson()` and BSON `sax_parse()` and leave behaviour unchanged.
+
+- **Terminators 8 bytes at a time.** `get_bson_cstr_bulk()` (contiguous input) looked for the `0x00` that ends a key one byte at a time. It now calls the new `find_zero_byte()` in `string_scan.hpp`, which tests 8 bytes per step with the same SWAR zero-byte test the lexer's string scanners use (`(v - 0x01…) & ~v & 0x80…`, first hit via `count_trailing_zeros`).
+- **Array element names are skipped.** BSON names an array's elements `"0"`, `"1"`, … These names are never passed to the SAX parser, yet each one was copied into the key string and run through `check_string_utf8()`. They are now skipped without being copied. The exception is `error_handler_t::strict`, which still reads and checks them, so ill-formed UTF-8 in an element name is rejected exactly as before (same `parse_error.113`, same byte position). `replace`/`ignore` only ever sanitised a string that was then thrown away, so nothing observable changes for them.
+
+This came out of a research session on whether the SIMD/SWAR techniques used for JSON text apply to the binary formats. BSON's NUL-terminated names are one of the few remaining byte scans in CBOR/BSON. More PRs (CBOR runs of scalars, strict-mode UTF-8, BSON writer size pass) may follow.
+
+## Measurements
+
+Paired A/B with my local harness (both variants in one binary, alternating samples, two link orders), A = `develop` (755bb16d7a), B = this PR, nativejson-benchmark files converted with `to_bson()`. The workload runs `from_bson()` and `sax_parse()` on each file.
+
+Instructions per parse (B/A):
+
+| case | Mac, Apple clang 21 | VPS x86-64, GCC 13 (callgrind) |
+|---|---|---|
+| SAX twitter | 0.908 | 0.918 |
+| SAX citm_catalog | 0.892 | 0.906 |
+| SAX canada | 0.684 | 0.749 |
+| `from_bson` twitter | 0.973 | 0.980 |
+| `from_bson` citm_catalog | 0.972 | 0.977 |
+| `from_bson` canada | 0.904 | 0.910 |
+| `from_bson` citm_catalog, `strict` | 0.994 | 0.999 |
+| `from_bson` citm_catalog, `std::istringstream` | 0.942 | 0.983 |
+
+Timings (Mac, geomean over both link orders, 64-byte function alignment) are within noise or better in every row: `from_bson` canada 0.856, citm 0.950, twitter 0.955; SAX citm 0.858, twitter 0.904. SAX canada with a non-virtual SAX handler is flat in time (1.006) despite −32 % instructions. With a `json_sax`-derived (virtual) handler it goes from 2.76 to 2.09 ms. No VPS timings were taken.
+
+## Tests
+
+- `BSON keys from contiguous and stream input` now also has keys of 1 to 17 bytes and arrays of 12 elements, so names end at every position in an 8-byte word. Every truncation of that document is still compared between contiguous and stream input.
+- New `BSON array element names`: an element name with an ill-formed byte and one longer than 8 bytes. `keep`/`replace`/`ignore` and stream input accept the document, and `strict` rejects it with the message and position it had before. Both test cases also pass against `develop`'s headers.
+- Full suite with ASan/UBSan (`ctest`, 184 tests) passes locally.
+
+## Breaking changes
+
+None. No public API, ABI tag or output changes. The only internal signature changes are in private members of `binary_reader`, plus a new `detail::find_zero_byte()`.
+
+🤖 Generated with [Claude Code](https://claude.com/claude-code)
+
+## Commit message
+Signed-off-by: Niels Lohmann <mail@nlohmann.me>
+
+## Discussion before merge
+- gregmarr: Split store and validate?  strict only requires validate, not store, for array indices.
+- gregmarr: Is this not a function that existed already?
+
+## Changed functions (from changes.py)
+- nlohmann::detail::binary_reader::parse_bson_internal() (private); reached from the public API through: nlohmann::basic_json::sax_parse(detail::span_input_adapter &&, SAX *, input_format_t, const bool, const bool, const bool, const cbor_tag_handler_t), nlohmann::basic_json::sax_parse(InputType &&, SAX *, input_format_t, const bool, const bool, const bool, const cbor_tag_handler_t), nlohmann::basic_json::sax_parse(IteratorType, SentinelType, SAX *, input_format_t, const bool, const bool, const bool, const cbor_tag_handler_t), nlohmann::basic_json::from_bson(detail::span_input_adapter &&, const bool, const bool), nlohmann::basic_json::from_cbor(detail::span_input_adapter &&, const bool, const bool, const cbor_tag_handler_t), nlohmann::basic_json::from_msgpack(detail::span_input_adapter &&, const bool, const bool), nlohmann::basic_json::from_ubjson(detail::span_input_adapter &&, const bool, const bool), nlohmann::basic_json::from_bjdata(InputType &&, const bool, const bool, const error_handler_t), nlohmann::basic_json::from_bon8(InputType &&, const bool, const bool), nlohmann::basic_json::from_bson(InputType &&, const bool, const bool, const error_handler_t)
+- nlohmann::detail::binary_reader (private); reached from the public API through: nlohmann::basic_json::sax_parse(detail::span_input_adapter &&, SAX *, input_format_t, const bool, const bool, const bool, const cbor_tag_handler_t), nlohmann::basic_json::sax_parse(InputType &&, SAX *, input_format_t, const bool, const bool, const bool, const cbor_tag_handler_t), nlohmann::basic_json::sax_parse(IteratorType, SentinelType, SAX *, input_format_t, const bool, const bool, const bool, const cbor_tag_handler_t), nlohmann::basic_json::from_bson(detail::span_input_adapter &&, const bool, const bool), nlohmann::basic_json::from_cbor(detail::span_input_adapter &&, const bool, const bool, const cbor_tag_handler_t), nlohmann::basic_json::from_msgpack(detail::span_input_adapter &&, const bool, const bool), nlohmann::basic_json::from_ubjson(detail::span_input_adapter &&, const bool, const bool), nlohmann::basic_json::from_bjdata(InputType &&, const bool, const bool, const error_handler_t), nlohmann::basic_json::from_bon8(InputType &&, const bool, const bool), nlohmann::basic_json::from_bson(InputType &&, const bool, const bool, const error_handler_t)
+- nlohmann::detail::find_zero_byte(const unsigned char *, std::size_t) (private); reached from the public API through: nlohmann::basic_json::sax_parse(detail::span_input_adapter &&, SAX *, input_format_t, const bool, const bool, const bool, const cbor_tag_handler_t), nlohmann::basic_json::sax_parse(InputType &&, SAX *, input_format_t, const bool, const bool, const bool, const cbor_tag_handler_t), nlohmann::basic_json::sax_parse(IteratorType, SentinelType, SAX *, input_format_t, const bool, const bool, const bool, const cbor_tag_handler_t), nlohmann::basic_json::from_bson(detail::span_input_adapter &&, const bool, const bool), nlohmann::basic_json::from_cbor(detail::span_input_adapter &&, const bool, const bool, const cbor_tag_handler_t), nlohmann::basic_json::from_msgpack(detail::span_input_adapter &&, const bool, const bool), nlohmann::basic_json::from_ubjson(detail::span_input_adapter &&, const bool, const bool), nlohmann::basic_json::from_bjdata(InputType &&, const bool, const bool, const error_handler_t), nlohmann::basic_json::from_bon8(InputType &&, const bool, const bool), nlohmann::basic_json::from_bson(InputType &&, const bool, const bool, const error_handler_t)
+- nlohmann::detail::binary_reader::get_bson_cstr_bulk(string_t &, const bool, std::true_type) (private); reached from the public API through: nlohmann::basic_json::sax_parse(detail::span_input_adapter &&, SAX *, input_format_t, const bool, const bool, const bool, const cbor_tag_handler_t), nlohmann::basic_json::sax_parse(InputType &&, SAX *, input_format_t, const bool, const bool, const bool, const cbor_tag_handler_t), nlohmann::basic_json::sax_parse(IteratorType, SentinelType, SAX *, input_format_t, const bool, const bool, const bool, const cbor_tag_handler_t), nlohmann::basic_json::from_bson(detail::span_input_adapter &&, const bool, const bool), nlohmann::basic_json::from_cbor(detail::span_input_adapter &&, const bool, const bool, const cbor_tag_handler_t), nlohmann::basic_json::from_msgpack(detail::span_input_adapter &&, const bool, const bool), nlohmann::basic_json::from_ubjson(detail::span_input_adapter &&, const bool, const bool), nlohmann::basic_json::from_bjdata(InputType &&, const bool, const bool, const error_handler_t), nlohmann::basic_json::from_bon8(InputType &&, const bool, const bool), nlohmann::basic_json::from_bson(InputType &&, const bool, const bool, const error_handler_t)
+- nlohmann::detail::binary_reader::get_bson_cstr(string_t &, const bool) (private); reached from the public API through: nlohmann::basic_json::sax_parse(detail::span_input_adapter &&, SAX *, input_format_t, const bool, const bool, const bool, const cbor_tag_handler_t), nlohmann::basic_json::sax_parse(InputType &&, SAX *, input_format_t, const bool, const bool, const bool, const cbor_tag_handler_t), nlohmann::basic_json::sax_parse(IteratorType, SentinelType, SAX *, input_format_t, const bool, const bool, const bool, const cbor_tag_handler_t), nlohmann::basic_json::from_bson(detail::span_input_adapter &&, const bool, const bool), nlohmann::basic_json::from_cbor(detail::span_input_adapter &&, const bool, const bool, const cbor_tag_handler_t), nlohmann::basic_json::from_msgpack(detail::span_input_adapter &&, const bool, const bool), nlohmann::basic_json::from_ubjson(detail::span_input_adapter &&, const bool, const bool), nlohmann::basic_json::from_bjdata(InputType &&, const bool, const bool, const error_handler_t), nlohmann::basic_json::from_bon8(InputType &&, const bool, const bool), nlohmann::basic_json::from_bson(InputType &&, const bool, const bool, const error_handler_t)
+- nlohmann::detail::binary_reader::get_bson_cstr_bulk(string_t &, const bool, std::false_type) (private); reached from the public API through: nlohmann::basic_json::sax_parse(detail::span_input_adapter &&, SAX *, input_format_t, const bool, const bool, const bool, const cbor_tag_handler_t), nlohmann::basic_json::sax_parse(InputType &&, SAX *, input_format_t, const bool, const bool, const bool, const cbor_tag_handler_t), nlohmann::basic_json::sax_parse(IteratorType, SentinelType, SAX *, input_format_t, const bool, const bool, const bool, const cbor_tag_handler_t), nlohmann::basic_json::from_bson(detail::span_input_adapter &&, const bool, const bool), nlohmann::basic_json::from_cbor(detail::span_input_adapter &&, const bool, const bool, const cbor_tag_handler_t), nlohmann::basic_json::from_msgpack(detail::span_input_adapter &&, const bool, const bool), nlohmann::basic_json::from_ubjson(detail::span_input_adapter &&, const bool, const bool), nlohmann::basic_json::from_bjdata(InputType &&, const bool, const bool, const error_handler_t), nlohmann::basic_json::from_bon8(InputType &&, const bool, const bool), nlohmann::basic_json::from_bson(InputType &&, const bool, const bool, const error_handler_t)
+- nlohmann::detail::binary_reader::get_bson_cstr_bulk(string_t &, std::true_type) (private); reached from the public API through: nlohmann::basic_json::sax_parse(detail::span_input_adapter &&, SAX *, input_format_t, const bool, const bool, const bool, const cbor_tag_handler_t), nlohmann::basic_json::sax_parse(InputType &&, SAX *, input_format_t, const bool, const bool, const bool, const cbor_tag_handler_t), nlohmann::basic_json::sax_parse(IteratorType, SentinelType, SAX *, input_format_t, const bool, const bool, const bool, const cbor_tag_handler_t), nlohmann::basic_json::from_bson(detail::span_input_adapter &&, const bool, const bool), nlohmann::basic_json::from_cbor(detail::span_input_adapter &&, const bool, const bool, const cbor_tag_handler_t), nlohmann::basic_json::from_msgpack(detail::span_input_adapter &&, const bool, const bool), nlohmann::basic_json::from_ubjson(detail::span_input_adapter &&, const bool, const bool), nlohmann::basic_json::from_bjdata(InputType &&, const bool, const bool, const error_handler_t), nlohmann::basic_json::from_bon8(InputType &&, const bool, const bool), nlohmann::basic_json::from_bson(InputType &&, const bool, const bool, const error_handler_t)
+- nlohmann::detail::binary_reader::get_bson_cstr(string_t &) (private); reached from the public API through: nlohmann::basic_json::sax_parse(detail::span_input_adapter &&, SAX *, input_format_t, const bool, const bool, const bool, const cbor_tag_handler_t), nlohmann::basic_json::sax_parse(InputType &&, SAX *, input_format_t, const bool, const bool, const bool, const cbor_tag_handler_t), nlohmann::basic_json::sax_parse(IteratorType, SentinelType, SAX *, input_format_t, const bool, const bool, const bool, const cbor_tag_handler_t), nlohmann::basic_json::from_bson(detail::span_input_adapter &&, const bool, const bool), nlohmann::basic_json::from_cbor(detail::span_input_adapter &&, const bool, const bool, const cbor_tag_handler_t), nlohmann::basic_json::from_msgpack(detail::span_input_adapter &&, const bool, const bool), nlohmann::basic_json::from_ubjson(detail::span_input_adapter &&, const bool, const bool), nlohmann::basic_json::from_bjdata(InputType &&, const bool, const bool, const error_handler_t), nlohmann::basic_json::from_bon8(InputType &&, const bool, const bool), nlohmann::basic_json::from_bson(InputType &&, const bool, const bool, const error_handler_t)
+- nlohmann::detail::binary_reader::get_bson_cstr_bulk(string_t &, std::false_type) (private); reached from the public API through: nlohmann::basic_json::sax_parse(detail::span_input_adapter &&, SAX *, input_format_t, const bool, const bool, const bool, const cbor_tag_handler_t), nlohmann::basic_json::sax_parse(InputType &&, SAX *, input_format_t, const bool, const bool, const bool, const cbor_tag_handler_t), nlohmann::basic_json::sax_parse(IteratorType, SentinelType, SAX *, input_format_t, const bool, const bool, const bool, const cbor_tag_handler_t), nlohmann::basic_json::from_bson(detail::span_input_adapter &&, const bool, const bool), nlohmann::basic_json::from_cbor(detail::span_input_adapter &&, const bool, const bool, const cbor_tag_handler_t), nlohmann::basic_json::from_msgpack(detail::span_input_adapter &&, const bool, const bool), nlohmann::basic_json::from_ubjson(detail::span_input_adapter &&, const bool, const bool), nlohmann::basic_json::from_bjdata(InputType &&, const bool, const bool, const error_handler_t), nlohmann::basic_json::from_bon8(InputType &&, const bool, const bool), nlohmann::basic_json::from_bson(InputType &&, const bool, const bool, const error_handler_t)
+
+## Diff of the library source (before -> after)
+```diff
+diff --git a/include/nlohmann/detail/input/binary_reader.hpp b/include/nlohmann/detail/input/binary_reader.hpp
+index 9ed0e4d1b..b671fd84e 100644
+--- a/include/nlohmann/detail/input/binary_reader.hpp
++++ b/include/nlohmann/detail/input/binary_reader.hpp
+@@ -465,15 +465,17 @@ class binary_reader
+             }
+ 
+             const std::size_t element_type_parse_position = chars_read;
++            // an array's elements are named "0", "1", ... in the wire format,
++            // and those names are not passed on: they are skipped unless
++            // error_handler_t::strict must reject ill-formed UTF-8 in them
++            const bool is_object = container_stack.back().is_object;
+             key.clear();
+-            if (JSON_HEDLEY_UNLIKELY(!get_bson_cstr(key)))
++            if (JSON_HEDLEY_UNLIKELY(!get_bson_cstr(key, is_object || error_handler == error_handler_t::strict)))
+             {
+                 return false;
+             }
+ 
+-            // an array's elements are named "0", "1", ... in the wire format,
+-            // and those names are not passed on
+-            if (container_stack.back().is_object && !sax->key(key))
++            if (is_object && !sax->key(key))
+             {
+                 return false;
+             }
+@@ -489,14 +491,18 @@ class binary_reader
+     @brief Parses a C-style string from the BSON input.
+     @param[in,out] result  A reference to the string variable where the read
+                             string is to be stored.
++    @param[in] store  whether the characters are needed; if not (the names of
++                      an array's elements), they are skipped and @a result may
++                      be left unchanged, and they are not checked against
++                      @ref error_handler
+     @return `true` if the \\x00-byte indicating the end of the string was
+              encountered before the EOF; false` indicates an unexpected EOF.
+     */
+-    bool get_bson_cstr(string_t& result)
++    bool get_bson_cstr(string_t& result, const bool store = true)
+     {
+-        if (get_bson_cstr_bulk(result, std::integral_constant<bool, bulk_scan> {}))
++        if (get_bson_cstr_bulk(result, store, std::integral_constant<bool, bulk_scan> {}))
+         {
+-            return check_string_utf8(result, "key");
++            return !store || check_string_utf8(result, "key");
+         }
+ 
+         auto out = std::back_inserter(result);
+@@ -509,7 +515,7 @@ class binary_reader
+             }
+             if (current == 0x00)
+             {
+-                return check_string_utf8(result, "key");
++                return !store || check_string_utf8(result, "key");
+             }
+             *out++ = static_cast<typename string_t::value_type>(current);
+         }
+@@ -519,10 +525,11 @@ class binary_reader
+     @brief read a C-style string from contiguous input in one step
+ 
+     @param[in,out] result  the string to append to
++    @param[in] store  whether to append the characters to @a result
+     @return whether the string was read; if the input has no \\x00-byte, nothing
+             is read, and @ref get_bson_cstr reports the end of the input
+     */
+-    bool get_bson_cstr_bulk(string_t& result, std::true_type /*bulk*/)
++    bool get_bson_cstr_bulk(string_t& result, const bool store, std::true_type /*bulk*/)
+     {
+         const std::size_t remaining = ia.bulk_remaining();
+         if (remaining == 0)
+@@ -530,18 +537,15 @@ class binary_reader
+             return false;
+         }
+         const auto* const data = reinterpret_cast<const unsigned char*>(ia.bulk_data());
+-        // a plain loop rather than std::memchr: most keys are short (array
+-        // indices are keys, too), and the call would cost more than it saves
+-        std::size_t length = 0;
+-        while (length < remaining && data[length] != 0x00)
+-        {
+-            ++length;
+-        }
++        const std::size_t length = find_zero_byte(data, remaining);
+         if (length == remaining)
+         {
+             return false;
+         }
+-        result.append(reinterpret_cast<const typename string_t::value_type*>(data), length);
++        if (store)
++        {
++            result.append(reinterpret_cast<const typename string_t::value_type*>(data), length);
++        }
+         // consume the string and its \x00-byte, as the byte-wise path does
+         ia.bulk_skip(length + 1);
+         chars_read += length + 1;
+@@ -550,7 +554,7 @@ class binary_reader
+     }
+ 
+     /// input that is not contiguous: C-style strings are read byte by byte
+-    bool get_bson_cstr_bulk(string_t& /*result*/, std::false_type /*bulk*/) const noexcept
++    bool get_bson_cstr_bulk(string_t& /*result*/, const bool /*store*/, std::false_type /*bulk*/) const noexcept
+     {
+         return false;
+     }
+diff --git a/include/nlohmann/detail/input/string_scan.hpp b/include/nlohmann/detail/input/string_scan.hpp
+index d01a2f1a4..daa9697e1 100644
+--- a/include/nlohmann/detail/input/string_scan.hpp
++++ b/include/nlohmann/detail/input/string_scan.hpp
+@@ -90,6 +90,34 @@ JSON_HEDLEY_ALWAYS_INLINE std::size_t find_string_special(const unsigned char* d
+     return n;
+ }
+ 
++// return the index of the first 0x00 byte in [data, data+n), or n if there is
++// none; scans 8 bytes at a time (BSON's C-style strings)
++JSON_HEDLEY_ALWAYS_INLINE std::size_t find_zero_byte(const unsigned char* data, std::size_t n) noexcept
++{
++    constexpr std::uint64_t ones = 0x0101010101010101ull;
++    constexpr std::uint64_t high = 0x8080808080808080ull;
++    std::size_t i = 0;
++    for (; i + 8 <= n; i += 8)
++    {
++        const std::uint64_t v = read_eight_bytes(data + i);
++        const std::uint64_t zero = (v - ones) & ~v & high;
++        if (zero != 0)
++        {
++            // the lowest flagged byte is the first zero byte (see
++            // find_string_special())
++            return i + (static_cast<std::size_t>(count_trailing_zeros(zero)) / 8);
++        }
++    }
++    for (; i < n; ++i)
++    {
++        if (data[i] == 0x00)
++        {
++            return i;
++        }
++    }
++    return n;
++}
++
+ // classify a byte as one the serializer must NOT copy verbatim when
+ // ensure_ascii is requested: the closing quote, an escape, a control character
+ // (< 0x20), DEL (0x7F), or any non-ASCII byte (>= 0x80). Everything else -
+```
+
+## Existing upstream tests that call the changed code (for style and API usage)
+// Upstream tests at the PR's parent commit ec6986c91 that use the changed code.
+// Names searched (test lines using each): sax_parse (0), from_bson (0), from_cbor (0), from_msgpack (0), from_ubjson (0), from_bjdata (0), from_bon8 (0), parse_bson_internal (0), binary_reader (2), find_zero_byte (0), get_bson_cstr_bulk (0), get_bson_cstr (0)
+
+// ---- tests/src/unit-bjdata.cpp:76-111  (uses: binary_reader)
+    SECTION("binary_reader BJData lookup tables")
+    {
+        // both lookups are static member functions
+        std::vector<std::uint8_t> const data;
+        using reader_t = nlohmann::detail::binary_reader<json, decltype(nlohmann::detail::input_adapter(data))>;
+
+        // the excluded optimized-type markers must match binary_writer's
+        // is_bjdata_excluded_type_marker(), which encodes the same 8 markers
+        for (const char marker :
+                {'[', '{', 'S', 'H', 'T', 'F', 'N', 'Z'
+                })
+        {
+            CHECK(reader_t::is_bjd_excluded_optimized_type(static_cast<unsigned char>(marker)));
+        }
+        for (const char marker :
+                {'U', 'i', 'u', 'I', 'm', 'l', 'M', 'L', 'd', 'D', 'C', 'B', 'x'
+                })
+        {
+            CHECK(!reader_t::is_bjd_excluded_optimized_type(static_cast<unsigned char>(marker)));
+        }
+
+        // every dtype marker must round-trip to its ND-array type name
+        const std::vector<std::pair<char, std::string>> types
+        {
+            {'B', "byte"}, {'C', "char"}, {'D', "double"}, {'I', "int16"},
+            {'L', "int64"}, {'M', "uint64"}, {'U', "uint8"}, {'d', "single"},
+            {'i', "int8"}, {'l', "int32"}, {'m', "uint32"}, {'u', "uint16"}
+        };
+        for (const auto& type : types)
+        {
+            const char* name = reader_t::bjd_type_name(static_cast<unsigned char>(type.first));
+            REQUIRE(name != nullptr);
+            CHECK(std::string(name) == type.second);
+        }
+        CHECK(reader_t::bjd_type_name(static_cast<unsigned char>('x')) == nullptr);
+    }
+
+# Programs to repair
+
+## gen_05.cpp (compile)
+Intent: Verify that SAX parsing an array BSON document does not output element index keys.
+COMPILE ERROR. The program fails to compile, the same way against the old and the new library. Fix the error (wrong or missing include, typo, misuse of the public API) and keep the intent: the call under test must stay. Include only headers that exist; if you are unsure a header exists, use the library's main header.
+Compiler errors:
+```
+gen_05.cpp:14:6: error: ‘bool SaxPrinter::binary(const nlohmann::json_abi_v3_12_0::json_sax<nlohmann::json_abi_v3_12_0::basic_json<> >::binary_t&)’ marked ‘override’, but does not override
+gen_05.cpp:19:6: error: ‘bool SaxPrinter::key(const nlohmann::json_abi_v3_12_0::json_sax<nlohmann::json_abi_v3_12_0::basic_json<> >::string_t&)’ marked ‘override’, but does not override
+gen_05.cpp:30:12: error: cannot declare variable ‘sax’ to be of abstract type ‘SaxPrinter’
+input_adapters.hpp:1395:11: error: no matching function for call to ‘nlohmann::json_abi_v3_12_0::detail::iterator_input_adapter<const char*, const char*>::iterator_input_adapter(nlohmann::json_abi_v3_12_0::detail::iterator_input_adapter_factory<unsigned char*, unsign
+```
+Source:
+```cpp
+#include <nlohmann/json.hpp>
+#include <vector>
+#include <iostream>
+class SaxPrinter : public nlohmann::json::json_sax_t {
+public:
+bool null() override { std::cout << "null\n"; return true; }
+bool boolean(bool) override { return true; }
+bool number_integer(number_integer_t) override { return true; }
+bool number_unsigned(number_unsigned_t) override { return true; }
+bool number_float(number_float_t, const string_t&) override { return true; }
+bool string(string_t&) override { return true; }
+bool binary(const binary_t&) override { return true; }
+bool start_object(std::size_t) override { std::cout << "start_object\n"; return true; }
+bool end_object() override { std::cout << "end_object\n"; return true; }
+bool start_array(std::size_t) override { std::cout << "start_array\n"; return true; }
+bool end_array() override { std::cout << "end_array\n"; return true; }
+bool key(const string_t& val) override { std::cout << "key: " << val << "\n"; return true; }
+bool parse_error(std::size_t, const std::string&, const nlohmann::json::exception& e) override {
+std::cout << "error: " << e.what() << "\n"; return false;
+}
+};
+int main() {
+std::vector<std::uint8_t> bson = {
+0x0c, 0x00, 0x00, 0x00,
+0x04, 'a', 0x00, 0x05, 0x00, 0x00, 0x00, 0x00,
+0x00
+};
+SaxPrinter sax;
+nlohmann::json::sax_parse(nlohmann::detail::span_input_adapter(bson.data(), bson.data() + bson.size()), &sax, nlohmann::json::input_format_t::bson);
+return 0;
+}
+```
+
+## gen_06.cpp (compile)
+Intent: Verify BSON reading from stream input adapter where bulk scan is disabled.
+COMPILE ERROR. The program fails to compile, the same way against the old and the new library. Fix the error (wrong or missing include, typo, misuse of the public API) and keep the intent: the call under test must stay. Include only headers that exist; if you are unsure a header exists, use the library's main header.
+Compiler errors:
+```
+gen_06.cpp:7:61: error: expected unqualified-id before numeric constant
+```
+Source:
+```cpp
+#include <nlohmann/json.hpp>
+#include <sstream>
+#include <iostream>
+int main() {
+std::string bson_data = "\x0c\x00\x00\x00\x0a\x6b\x00\x00", 4;
+std::string full_data = "\x0e\x00\x00\x00\x0a\x6b\x65\x79\x00\x0a\x00";
+std::istringstream stream(full_data, std::ios::binary);
+try {
+auto j = nlohmann::json::from_bson(stream);
+std::cout << j.dump() << std::endl;
+} catch (const std::exception& e) {
+std::cout << e.what() << std::endl;
+}
+return 0;
+}
+```
+
+## gen_10.cpp (compile)
+Intent: Verify BSON parsing of an array with more than 10 elements to check multiple skipped element names.
+COMPILE ERROR. The program fails to compile, the same way against the old and the new library. Fix the error (wrong or missing include, typo, misuse of the public API) and keep the intent: the call under test must stay. Include only headers that exist; if you are unsure a header exists, use the library's main header.
+Compiler errors:
+```
+gen_10.cpp:11:1: error: narrowing conversion of ‘6386290’ from ‘int’ to ‘unsigned char’ [-Wnarrowing]
+```
+Source:
+```cpp
+#include <nlohmann/json.hpp>
+#include <vector>
+#include <iostream>
+int main() {
+std::vector<std::uint8_t> bson = {
+0x12, 0x00, 0x00, 0x00,
+0x04, 'arr', 0x00, 0x0a, 0x00, 0x00, 0x00, 0x0a, 0x0a, 0x0a, 0x0a, 0x0a, 0x0a, 0x00,
+0x00
+};
+try {
+auto j = nlohmann::json::from_bson(bson);
+std::cout << j.dump() << std::endl;
+} catch (const std::exception& e) {
+std::cout << e.what() << std::endl;
+}
+return 0;
+}
+```
+
+## gen_11.cpp (compile)
+Intent: Verify sax_parse with strict error handling on invalid UTF-8 string keys in objects.
+COMPILE ERROR. The program fails to compile, the same way against the old and the new library. Fix the error (wrong or missing include, typo, misuse of the public API) and keep the intent: the call under test must stay. Include only headers that exist; if you are unsure a header exists, use the library's main header.
+Compiler errors:
+```
+gen_11.cpp:14:6: error: ‘bool NullSax::binary(const nlohmann::json_abi_v3_12_0::json_sax<nlohmann::json_abi_v3_12_0::basic_json<> >::binary_t&)’ marked ‘override’, but does not override
+gen_11.cpp:19:6: error: ‘bool NullSax::key(const nlohmann::json_abi_v3_12_0::json_sax<nlohmann::json_abi_v3_12_0::basic_json<> >::string_t&)’ marked ‘override’, but does not override
+gen_11.cpp:30:9: error: cannot declare variable ‘sax’ to be of abstract type ‘NullSax’
+input_adapters.hpp:1395:11: error: no matching function for call to ‘nlohmann::json_abi_v3_12_0::detail::iterator_input_adapter<const char*, const char*>::iterator_input_adapter(nlohmann::json_abi_v3_12_0::detail::iterator_input_adapter_factory<unsigned char*, unsign
+```
+Source:
+```cpp
+#include <nlohmann/json.hpp>
+#include <vector>
+#include <iostream>
+class NullSax : public nlohmann::json::json_sax_t {
+public:
+bool null() override { return true; }
+bool boolean(bool) override { return true; }
+bool number_integer(number_integer_t) override { return true; }
+bool number_unsigned(number_unsigned_t) override { return true; }
+bool number_float(number_float_t, const string_t&) override { return true; }
+bool string(string_t&) override { return true; }
+bool binary(const binary_t&) override { return true; }
+bool start_object(std::size_t) override { return true; }
+bool end_object() override { return true; }
+bool start_array(std::size_t) override { return true; }
+bool end_array() override { return true; }
+bool key(const string_t&) override { return true; }
+bool parse_error(std::size_t, const std::string&, const nlohmann::json::exception& e) override {
+std::cout << "sax_error: " << e.what() << "\n"; return false;
+}
+};
+int main() {
+std::vector<std::uint8_t> bson = {
+0x0a, 0x00, 0x00, 0x00,
+0x0a, 0xff, 0x00, 0x00,
+0x00
+};
+NullSax sax;
+bool res = nlohmann::json::sax_parse(nlohmann::detail::span_input_adapter(bson.data(), bson.data() + bson.size()), &sax, nlohmann::json::input_format_t::bson, true, true);
+std::cout << "res: " << res << std::endl;
+return 0;
+}
+```
+
+## gen_23.cpp (compile)
+Intent: Verify that non-contiguous stream input parsing with error_handler_t::strict validates string keys via get_bson_cstr and reaches check_string_utf8 through the byte-by-byte path.
+COMPILE ERROR. The program fails to compile, the same way against the old and the new library. Fix the error (wrong or missing include, typo, misuse of the public API) and keep the intent: the call under test must stay. Include only headers that exist; if you are unsure a header exists, use the library's main header.
+Compiler errors:
+```
+gen_23.cpp:20:81: error: ‘nlohmann::error_handler_t’ has not been declared
+20 |         nlohmann::json j = nlohmann::json::from_bson(iss, true, true, nlohmann::error_handler_t::strict);
+```
+Source:
+```cpp
+#include <nlohmann/json.hpp>
+#include <iostream>
+#include <sstream>
+#include <vector>
+
+int main() {
+    // BSON document with an invalid UTF-8 string key parsed via std::istringstream (non-contiguous stream)
+    std::vector<std::uint8_t> bson_bytes = {
+        0x0B, 0x00, 0x00, 0x00, // length 11
+        0x01,                   // double type
+        0xFF, 0xFE, 0x00,       // invalid UTF-8 key followed by null terminator
+        0x00, 0x00, 0x00, 0x00, 0x00 // value (double 0)
+    };
+    std::string s(reinterpret_cast<const char*>(bson_bytes.data()), bson_bytes.size());
+    std::istringstream iss(s);
+
+    try {
+        nlohmann::json j = nlohmann::json::from_bson(iss, true, true, nlohmann::error_handler_t::strict);
+        std::cout << "Parsed: " << j.dump() << std::endl;
+    } catch (const std::exception& e) {
+        std::cout << "Exception type: " << e.what() << std::endl;
+    }
+    return 0;
+}
+```
+
+## gen_24.cpp (compile)
+Intent: Verify that byte-by-byte C-string fallback path checks string UTF-8 when store is true, returning !store || check_string_utf8(result, "key") correctly under stream input.
+COMPILE ERROR. The program fails to compile, the same way against the old and the new library. Fix the error (wrong or missing include, typo, misuse of the public API) and keep the intent: the call under test must stay. Include only headers that exist; if you are unsure a header exists, use the library's main header.
+Compiler errors:
+```
+gen_24.cpp:20:81: error: ‘nlohmann::error_handler_t’ has not been declared
+20 |         nlohmann::json j = nlohmann::json::from_bson(iss, true, true, nlohmann::error_handler_t::strict);
+```
+Source:
+```cpp
+#include <nlohmann/json.hpp>
+#include <iostream>
+#include <sstream>
+#include <vector>
+
+int main() {
+    // A valid BSON object with a standard key parsed via stream input to use byte-by-byte get_bson_cstr
+    std::vector<std::uint8_t> bson_bytes = {
+        0x0E, 0x00, 0x00, 0x00, // length 14
+        0x0A,                   // null type
+        'k', 'e', 'y', 0x00,    // key "key" with null terminator
+        0x00                    // object terminator
+    };
+    std::string s(reinterpret_cast<const char*>(bson_bytes.data()), bson_bytes.size());
+    std::istringstream iss(s);
+
+    try {
+        nlohmann::json j = nlohmann::json::from_bson(iss, true, true, nlohmann::error_handler_t::strict);
+        std::cout << "Parsed: " << j.dump() << std::endl;
+    } catch (const std::exception& e) {
+        std::cout << "Exception type: " << e.what() << std::endl;
+    }
+    return 0;
+}
+```
+
+# Task
+Return JSON with a "fixes" array: one item per program above, with "file" (exactly as given) and "code" (the complete repaired program, standalone, with its own int main). Do not return programs you cannot repair.

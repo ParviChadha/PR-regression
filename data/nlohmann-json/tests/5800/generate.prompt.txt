@@ -1,0 +1,319 @@
+[system]
+You write test programs that probe a C++ library for behavioral changes made by one pull request.
+Each program is compiled and run twice, once against the library before the change and once after, and the two
+outputs are compared. Your job is to produce programs whose output reveals whether the change altered behavior,
+including side effects the author did not intend.
+
+Rules for every program:
+- It is standalone: one file with its own int main(), compiled as C++17, printing results to stdout.
+- Use only the library's documented public API. Never include internal headers or use detail/impl namespaces,
+  private members or undocumented macros.
+- Do not judge results (no assert, no expected-value comparisons): just print what the library returns. Print
+  enough to make differences visible, one fact per line.
+- Output must be deterministic. Never print pointers or addresses, uninitialized data, the order of
+  hash-based containers, timings, thread ids, random values, file paths or environment data. Print floating point
+  values with an explicit precision. No input, files, network, threads, clocks or randomness.
+- Wrap calls that may throw in try/catch and print the exception's type and message, so an exception is an
+  observable result. Do not crash on purpose.
+- Aim at the code the diff changes. Prefer calls that compile against both the old and the new library; one or two
+  programs may use an API the PR adds. Cover ordinary inputs and edge cases (empty, minimum and maximum values,
+  boundaries, special values, nesting, unusual types) and also neighbouring behavior the change could disturb.
+- When the diff changes which types or inputs an API accepts or rejects (constraints, overloads, traits,
+  conversions), test it with the detection idiom (std::void_t or requires) and `if constexpr`, so the program
+  compiles against both versions, prints whether the expression is well-formed, and exercises it when it is.
+  Accepting an input is not enough: also use it through every entry point that should follow (const and
+  non-const, read, write, insert, erase, lookup, nested use), because a change that admits new inputs can leave
+  later code unable to handle them.
+- If the changed code is internal (a detail, impl or internal namespace, a trait, a helper), do not name it in the
+  program. Reach it through the public API that depends on it, using detection (as above) where needed.
+- Use the exact types and values the diff is about (the new trait's argument types, the new overload's
+  parameters), not stand-ins.
+- Spread the programs over distinct public entry points and overloads, one main idea per program. Do not write
+  several programs that only rename a type or change a literal.
+- Make the programs differ from each other: different inputs, different entry points, different features.
+
+Rules specific to this library:
+- Include the library with #include <nlohmann/json.hpp>. The public API is nlohmann::json (nlohmann::basic_json), nlohmann::ordered_json, json_pointer, json patch/merge_patch and the documented SAX and conversion interfaces. Never use the detail namespace.
+- It is a header-only library: nothing to link. Programs are compiled as C++17.
+- Print JSON values with dump() (compact) or dump(2). Keys of nlohmann::json objects print in sorted order, so output is deterministic; do not depend on insertion order except with ordered_json.
+
+[user]
+# Pull request #5800: Report one-character non-numeric array indices like longer ones
+
+## Description
+Two low-priority findings from a standards-conformance read-through of the library.
+
+## JSON pointer: same error for `/a/x` and `/a/xy`
+
+When a JSON pointer indexes into an array, each reference token must be a number. Before this change, a non-numeric token was reported differently depending only on its length:
+
+| Token | Before | After |
+|---|---|---|
+| `/a/xy` | `parse_error.109` "array index 'xy' is not a number" | unchanged |
+| `/a/x` | `out_of_range.404` "unresolved reference token 'x'" | `parse_error.109` "array index 'x' is not a number" |
+| `/a/-` | `out_of_range.404` | unchanged |
+| `/a/` (empty token) | `out_of_range.404` | unchanged |
+
+The cause is that `parse_array_index` only ran the "begins with a digit" check for tokens longer than one character (since v3.8.0, bfc003cad). The check now covers one-character tokens too. It leaves out `-`, which RFC 6901 defines as "past the end of the array" (`patch.md`/`patch_inplace.md` document 404 for removing it), and the empty token.
+
+The `unflatten.md` example for 404 used `'x'`, so it now uses `'-'`, and the wording names the cases that still give 404.
+
+Docs: the version history of `at`, `operator[]`, `value`, `patch`, `patch_inplace`, and `unflatten` now records the change for 3.13.0. `exceptions.md` says which array indices throw `parse_error.109` and which `out_of_range.404`, and notes the pre-3.13.0 behavior.
+
+## `ordered_map::erase`: comment only
+
+`erase(first, last)` destroys a `std::pair<const Key, T>` and placement-news a new one in the same storage. Before C++20, `[basic.life]/8` did not count such a new object (its type has a const member) as transparently replacing the old one, so access through the vector's existing pointers was formally UB without `std::launder`. `std::launder` doesn't exist before C++17 anyway. C++20 dropped that condition (P1971R0, NB comment US 041), and compilers have always treated the pattern as intended. A comment now records this; the code is unchanged.
+
+## Public API
+
+No signatures change and the ABI is unaffected, but there are behavior changes, **only for one-character array reference tokens that are neither a digit nor `-`**:
+
+- `at()`, `operator[]`, `patch()`/`patch_inplace()`, and `unflatten()` throw `parse_error.109` instead of `out_of_range.404`. Code that catches `json::out_of_range` for this case stops catching it; catching `json::exception` still works.
+- `value(json_pointer, default)` on an array with such a token used to return the default and now throws `parse_error.109`, as it already did for longer tokens like `/foo`.
+- `contains()` does not change; it still returns `false`.
+
+The `ordered_map` change is a comment only and breaks nothing.
+
+## Tests
+
+- `unit-json_pointer.cpp`: `/x` and `/+` with `operator[]`/`at()` (const and non-const), `contains()`, and `unflatten()`; `-` in `unflatten()` still gives 404.
+- `unit-element_access2.cpp`: `value("/x", default)` throws 109.
+- `unit-json_patch.cpp`: `remove` of `/a/-` (404), `/a/x`, and `/a/xy` (both 109).
+
+I ran these locally in C++11/17/20, with `JSON_DIAGNOSTICS` and with `JSON_DIAGNOSTIC_POSITIONS`, together with `unit-alt-string`, `unit-disabled_exceptions`, `unit-ordered_map`, and `unit-ordered_json`.
+
+🤖 Generated with [Claude Code](https://claude.com/claude-code)
+
+## Commit message
+* Report one-character non-numeric array indices like longer ones
+
+A JSON pointer reference token that is not a number but has only one
+character (e.g. "/a/x") was reported as out_of_range.404 ("unresolved
+reference token"), because the "is not a number" check only ran for
+tokens longer than one character; "/a/xy" got parse_error.109. Both now
+throw parse_error.109. "-" and the empty token are still reported as
+out_of_range.404. As a consequence, value(json_pointer, default) on an
+array now throws for "/x" as it already did for "/xy".
+
+Also document why ordered_map::erase's destroy/placement-new loop on
+pair<const Key, T> is kept despite [basic.life]/8 before C++20.
+
+Signed-off-by: Niels Lohmann <mail@nlohmann.me>
+
+* Document the one-character array index change
+
+Add 3.13.0 version-history entries to at, operator[], value, patch,
+patch_inplace, and unflatten, and describe in exceptions.md which array
+indices throw parse_error.109 and which out_of_range.404.
+
+Signed-off-by: Niels Lohmann <mail@nlohmann.me>
+
+---------
+
+Signed-off-by: Niels Lohmann <mail@nlohmann.me>
+
+## Changed functions (from changes.py)
+- nlohmann::json_pointer::parse_array_index(const string_t &, typename BasicJsonType::size_type &) (private); reached from the public API through: nlohmann::operator/(const json_pointer<RefStringType> &, const json_pointer<RefStringType> &), nlohmann::operator/(const json_pointer<RefStringType> &, string_t), nlohmann::operator/(const json_pointer<RefStringType> &, std::size_t), nlohmann::operator<<(std::ostream &, const json_pointer<RefStringType> &), nlohmann::operator!=(const json_pointer<RefStringTypeLhs> &, const json_pointer<RefStringTypeRhs> &), nlohmann::operator!=(const json_pointer<RefStringTypeLhs> &, const StringType &), nlohmann::operator!=(const StringType &, const json_pointer<RefStringTypeRhs> &), nlohmann::operator<(const json_pointer<RefStringTypeLhs> &, const json_pointer<RefStringTypeRhs> &), nlohmann::operator==(const json_pointer<RefStringTypeLhs> &, const json_pointer<RefStringTypeRhs> &), nlohmann::operator==(const json_pointer<RefStringTypeLhs> &, const StringType &)
+- nlohmann::json_pointer::array_index_status::not_a_number (private)
+- nlohmann::ordered_map::erase(iterator, iterator) (public)
+
+## Diff of the library source (before -> after)
+```diff
+diff --git a/include/nlohmann/detail/json_pointer.hpp b/include/nlohmann/detail/json_pointer.hpp
+index cff8420be..1b439f9bf 100644
+--- a/include/nlohmann/detail/json_pointer.hpp
++++ b/include/nlohmann/detail/json_pointer.hpp
+@@ -270,7 +270,7 @@ class json_pointer
+     {
+         ok,                ///< @a s is a valid, representable array index
+         leading_zero,      ///< @a s begins with '0' but has more than one character
+-        not_a_number,      ///< @a s does not begin with a digit
++        not_a_number,      ///< @a s is neither empty nor "-" and does not begin with a digit
+         unresolved,        ///< @a s could not be converted to an integer
+         exceeds_size_type  ///< @a s converts to an integer that exceeds size_type
+     };
+@@ -297,8 +297,10 @@ class json_pointer
+             return array_index_status::leading_zero;
+         }
+ 
+-        // error condition (cf. RFC 6901, Sect. 4)
+-        if (JSON_HEDLEY_UNLIKELY(s.size() > 1 && !(s[0] >= '1' && s[0] <= '9')))
++        // error condition (cf. RFC 6901, Sect. 4); this also covers single-
++        // character tokens, so "/x" and "/xy" fail alike; "-" and the empty
++        // token are left to the conversion below and are reported as unresolved
++        if (JSON_HEDLEY_UNLIKELY(!s.empty() && s != "-" && !(s[0] >= '0' && s[0] <= '9')))
+         {
+             return array_index_status::not_a_number;
+         }
+diff --git a/include/nlohmann/ordered_map.hpp b/include/nlohmann/ordered_map.hpp
+index 5f0be7d28..fdcf4a5c0 100644
+--- a/include/nlohmann/ordered_map.hpp
++++ b/include/nlohmann/ordered_map.hpp
+@@ -240,6 +240,14 @@ public:
+         //               ^        ^
+         //             first    last
+ 
++        // Note on conformance: before C++20, [basic.life]/8 did not allow an
++        // object of a type with a const member (like value_type's const Key)
++        // to transparently replace the destroyed one, so strictly, accessing
++        // it through the vector's existing pointers would have required
++        // std::launder (which does not exist before C++17). C++20 dropped that
++        // condition (P1971R0, NB comment US 041). Compilers have always treated
++        // this pattern as intended, so it is kept deliberately.
++
+         // Since we cannot move const Keys, we re-construct them in place.
+         // We start at first and re-construct (viz. copy) the elements from
+         // the back of the vector. Example for the first iteration:
+```
+
+## Existing upstream tests that call the changed code (for style and API usage)
+// Upstream tests at the PR's parent commit 1649d9eda that use the changed code.
+// Names searched (test lines using each): erase (228), operator/ (0), operator<< (81), operator!= (52), operator< (188), operator== (57), parse_array_index (0), not_a_number (0)
+
+// ---- tests/src/unit-comparison.cpp:911-954  (uses: erase, operator!=, operator<, operator==)
+TEST_CASE("equality of objects whose entries have no fixed order")
+{
+    // Values nested deeper than a bound are compared without the call stack,
+    // entry by entry. That must agree with the object type's own operator==,
+    // which for unordered_object_t (as for std::unordered_map) does not
+    // depend on the order of the entries, and for ordered_map does.
+    REQUIRE(make_unordered_object(true).begin().key() == "9");
+    REQUIRE(make_unordered_object(false).begin().key() == "0");
+
+    for (const std::size_t depth : std::vector<std::size_t> {0, 200})
+    {
+        CAPTURE(depth)
+
+        const unordered_json descending = nest(make_unordered_object(true), depth);
+        const unordered_json ascending = nest(make_unordered_object(false), depth);
+        CHECK(descending == ascending);
+        CHECK_FALSE(descending != ascending);
+
+        // a copy is equal to its original
+        const unordered_json copy = descending; // NOLINT(performance-unnecessary-copy-initialization)
+        CHECK(copy == descending);
+
+        // a different value, a different key, or another entry still count
+        unordered_json other_value = make_unordered_object(true);
+        other_value["5"] = 42;
+        CHECK_FALSE(nest(other_value, depth) == ascending);
+
+        unordered_json other_key = make_unordered_object(true);
+        other_key.erase("5");
+        other_key["50"] = 5;
+        CHECK_FALSE(nest(other_key, depth) == ascending);
+
+        unordered_json more_entries = make_unordered_object(true);
+        more_entries["10"] = 10;
+        CHECK_FALSE(nest(more_entries, depth) == ascending);
+        CHECK_FALSE(ascending == nest(more_entries, depth));
+
+        // ordered_json compares its entries in sequence
+        const nlohmann::ordered_json ab = nest(nlohmann::ordered_json({{"a", 1}, {"b", 2}}), depth);
+        const nlohmann::ordered_json ba = nest(nlohmann::ordered_json({{"b", 2}, {"a", 1}}), depth);
+        CHECK_FALSE(ab == ba);
+        CHECK(ab != ba);
+    }
+}
+
+// ---- tests/src/unit-comparison.cpp:73-85  (uses: operator!=, operator<, operator==)
+TEST_CASE("lexicographical comparison operators")
+{
+    constexpr auto f_ = false;
+    constexpr auto _t = true;
+    constexpr auto nan = std::numeric_limits<json::number_float_t>::quiet_NaN();
+#if JSON_HAS_THREE_WAY_COMPARISON
+    constexpr auto lt = std::partial_ordering::less;
+    constexpr auto gt = std::partial_ordering::greater;
+    constexpr auto eq = std::partial_ordering::equivalent;
+    constexpr auto un = std::partial_ordering::unordered;
+#endif
+
+#if JSON_HAS_THREE_WAY_COMPARISON
+
+// ---- tests/src/unit-algorithms.cpp:125-135  (uses: operator!=, operator<, operator==)
+            SECTION("using user-defined comparison")
+            {
+                // compare objects only by size of its elements
+                json j_array2 = {13, 29, 3, {"Hello", "World"}, true, false, {{"one", 1}, {"two", 2}, {"three", 3}}, "foo", "baz"};
+                CHECK(!std::equal(j_array.begin(), j_array.end(), j_array2.begin()));
+                CHECK(std::equal(j_array.begin(), j_array.end(), j_array2.begin(),
+                                 [](const json & a, const json & b)
+                {
+                    return (a.size() == b.size());
+                }));
+            }
+
+// ---- tests/src/unit-algorithms.cpp:204-209  (uses: operator!=, operator<, operator==)
+            SECTION("with standard comparison")
+            {
+                json j = {13, 29, 3, {{"one", 1}, {"two", 2}}, true, false, {1, 2, 3}, "foo", "baz", nullptr};
+                std::sort(j.begin(), j.end());
+                CHECK(j == json({nullptr, false, true, 3, 13, 29, {{"one", 1}, {"two", 2}}, {1, 2, 3}, "baz", "foo"}));
+            }
+
+// ---- tests/src/unit-byte_container_with_subtype.cpp:78-108  (uses: operator!=, operator<, operator==)
+    SECTION("comparisons")
+    {
+        std::vector<std::uint8_t> const bytes = {{0xCA, 0xFE, 0xBA, 0xBE}};
+        nlohmann::byte_container_with_subtype<std::vector<std::uint8_t>> container1;
+        nlohmann::byte_container_with_subtype<std::vector<std::uint8_t>> container2({}, 42);
+        nlohmann::byte_container_with_subtype<std::vector<std::uint8_t>> container3(bytes);
+        nlohmann::byte_container_with_subtype<std::vector<std::uint8_t>> container4(bytes, 42);
+
+        CHECK(container1 == container1);
+        CHECK(container1 != container2);
+        CHECK(container1 != container3);
+        CHECK(container1 != container4);
+        CHECK(container2 != container1);
+        CHECK(container2 == container2);
+        CHECK(container2 != container3);
+        CHECK(container2 != container4);
+        CHECK(container3 != container1);
+        CHECK(container3 != container2);
+        CHECK(container3 == container3);
+        CHECK(container3 != container4);
+        CHECK(container4 != container1);
+        CHECK(container4 != container2);
+        CHECK(container4 != container3);
+        CHECK(container4 == container4);
+
+        container3.clear();
+        container4.clear();
+
+        CHECK(container1 == container3);
+        CHECK(container2 == container4);
+    }
+
+// ---- tests/src/unit-custom-object-type.cpp:445-457  (uses: operator!=, operator<, operator==)
+TEST_CASE("object type without key_compare")
+{
+    SECTION("object_comparator_t falls back to default_object_comparator_t")
+    {
+        CHECK(std::is_same < no_key_compare_json::object_comparator_t,
+              no_key_compare_json::default_object_comparator_t >::value);
+    }
+
+    SECTION("object types defining key_compare are unaffected")
+    {
+        CHECK(std::is_same<nlohmann::json::object_comparator_t,
+              nlohmann::json::object_t::key_compare>::value);
+        CHECK(std::is_same<nlohmann::ordered_json::object_comparator_t,
+
+// ---- tests/src/unit-enum_keyed_maps.cpp:127-134  (uses: operator!=, operator<, operator==)
+    SECTION("std::map with custom comparator")
+    {
+        using task_map = std::map<TaskState, int, std::greater<TaskState>>;
+        const task_map m = {{TS_STOPPED, 1}, {TS_RUNNING, 2}};
+        const json j = m;
+        CHECK(j == json::parse(R"({"stopped":1,"running":2})"));
+        CHECK(j.get<task_map>() == m);
+    }
+
+// ---- tests/src/unit-regression1.cpp:1034-1036  (uses: operator!=, operator<, operator==)
+    SECTION("issue #414 - compare with literal 0)")
+    {
+#define CHECK_TYPE(v) \
+
+# Task
+Write 20 test programs for this pull request. Return JSON with a "tests" array; each item has "name" (short snake_case), "intent" (one sentence: what behavior it probes) and "code" (the complete C++ program).

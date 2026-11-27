@@ -1,0 +1,403 @@
+[system]
+You write test programs that probe a C++ library for behavioral changes made by one pull request.
+Each program is compiled and run twice, once against the library before the change and once after, and the two
+outputs are compared. Your job is to produce programs whose output reveals whether the change altered behavior,
+including side effects the author did not intend.
+
+Rules for every program:
+- It is standalone: one file with its own int main(), compiled as C++17, printing results to stdout.
+- Use only the library's documented public API. Never include internal headers or use detail/impl namespaces,
+  private members or undocumented macros.
+- Do not judge results (no assert, no expected-value comparisons): just print what the library returns. Print
+  enough to make differences visible, one fact per line.
+- Output must be deterministic. Never print pointers or addresses, uninitialized data, the order of
+  hash-based containers, timings, thread ids, random values, file paths or environment data. Print floating point
+  values with an explicit precision. No input, files, network, threads, clocks or randomness.
+- Wrap calls that may throw in try/catch and print the exception's type and message, so an exception is an
+  observable result. Do not crash on purpose.
+- Aim at the code the diff changes. Prefer calls that compile against both the old and the new library; one or two
+  programs may use an API the PR adds. Cover ordinary inputs and edge cases (empty, minimum and maximum values,
+  boundaries, special values, nesting, unusual types) and also neighbouring behavior the change could disturb.
+- When the diff changes which types or inputs an API accepts or rejects (constraints, overloads, traits,
+  conversions), test it with the detection idiom (std::void_t or requires) and `if constexpr`, so the program
+  compiles against both versions, prints whether the expression is well-formed, and exercises it when it is.
+  Accepting an input is not enough: also use it through every entry point that should follow (const and
+  non-const, read, write, insert, erase, lookup, nested use), because a change that admits new inputs can leave
+  later code unable to handle them.
+- If the changed code is internal (a detail, impl or internal namespace, a trait, a helper), do not name it in the
+  program. Reach it through the public API that depends on it, using detection (as above) where needed.
+- Use the exact types and values the diff is about (the new trait's argument types, the new overload's
+  parameters), not stand-ins.
+- Spread the programs over distinct public entry points and overloads, one main idea per program. Do not write
+  several programs that only rename a type or change a literal.
+- Make the programs differ from each other: different inputs, different entry points, different features.
+
+Rules specific to this library:
+- Include the library with #include <nlohmann/json.hpp>. The public API is nlohmann::json (nlohmann::basic_json), nlohmann::ordered_json, json_pointer, json patch/merge_patch and the documented SAX and conversion interfaces. Never use the detail namespace.
+- It is a header-only library: nothing to link. Programs are compiled as C++17.
+- Print JSON values with dump() (compact) or dump(2). Keys of nlohmann::json objects print in sorted order, so output is deterministic; do not depend on insertion order except with ordered_json.
+
+[user]
+# Pull request #5766: Reject nested indefinite-length CBOR string chunks
+
+## Description
+Closes #5317. Supersedes #5325 by @JosephDemarest. Their commit is kept with their authorship; this PR rebases it onto the current `develop` and adds the remaining review points.
+
+RFC 8949 §3.2.3 doesn't allow indefinite-length strings to be nested. Until now, the CBOR reader accepted nested indefinite-length text and byte strings (it counted the open levels instead of recursing; see #5104). With this change it rejects them at the nested marker with `parse_error.113`. The reader stays iterative.
+
+## Changes
+
+- **54beb8ffa** (JosephDemarest, rebased): reject a second `0x7F`/`0x5F` inside an indefinite-length string, list only the definite-length forms in chunk error messages, keep the byte-for-byte decoding check for the valid prefix of `cbor_binary.cbor`, and add regression tests.
+  - Conflict resolution: `exception_message()` no longer takes the input format. Also, the break marker that closes an indefinite-length text string now runs `check_string_utf8()` again, as it does on `develop` since #5741. A plain auto-merge had silently dropped that check; the existing "ill-formed UTF-8 in indefinite-length string" test covers it.
+- **65bcce35b**: review nits from #5325: rename `is_chunk` → `inside_indefinite`, update the stale test section names, use lowercase comments.
+
+## Public API
+
+No signatures change, but the behavior does: nested indefinite-length CBOR strings or byte arrays that used to parse now throw `parse_error.113` (or return a discarded value if exceptions are disabled). Valid definite- and indefinite-length strings work as before. This will go in the release notes.
+
+## Tests
+
+Ran `unit-cbor`, `unit-regression1`, and `unit-regression3` locally against the modular headers, with the test data: all pass. `make check-amalgamation` is clean.
+
+🤖 Generated with [Claude Code](https://claude.com/claude-code)
+
+## Commit message
+* fix(cbor): reject nested indefinite string chunks
+
+Signed-off-by: Joseph.Demarest <joseph@demarest.dev>
+Signed-off-by: Niels Lohmann <mail@nlohmann.me>
+
+* Address review comments on nested indefinite-length CBOR strings
+
+Rename is_chunk to inside_indefinite, update the stale test section
+names, and use lowercase comments like the surrounding code.
+
+Signed-off-by: Niels Lohmann <mail@nlohmann.me>
+
+---------
+
+Signed-off-by: Joseph.Demarest <joseph@demarest.dev>
+Signed-off-by: Niels Lohmann <mail@nlohmann.me>
+Co-authored-by: Joseph.Demarest <joseph@demarest.dev>
+
+## Linked issue #5317: CBOR: nested indefinite-length strings/byte strings are accepted (RFC 8949 3.2.3 requires definite-length chunks)
+### Description
+
+RFC 8949 §3.2.3 requires that the chunks of an indefinite-length string be *definite-length* strings of the same major type:
+
+> Each chunk of an indefinite-length string is a definite-length string of the same major type.
+
+`get_cbor_string()` and `get_cbor_binary()` read each chunk by recursing into themselves ([`binary_reader.hpp:1025-1037`](https://github.com/nlohmann/json/blob/8ec98e2c9ea9c0adc15a791feb3d4d4468621743/include/nlohmann/detail/input/binary_reader.hpp#L1025-L1037) and [`1125-1137`](https://github.com/nlohmann/json/blob/8ec98e2c9ea9c0adc15a791feb3d4d4468621743/include/nlohmann/detail/input/binary_reader.hpp#L1125-L1137)), and the recursive call re-enters the full `switch` including the `0x7F`/`0x5F` case. So a chunk may itself be an indefinite-length string, to arbitrary depth, and the library accepts it.
+
+The cross-major-type rule is already enforced correctly — a byte-string chunk inside a text string is rejected, and vice versa. It is only the "definite-length" half of the rule that is missing.
+
+Secondary effect: because the nesting is unbounded, `0x7F` repeated ~50 000 times segfaults. That aspect overlaps with #5104 / #5293, but a depth guard alone would only turn the crash into a clean `parse_error` — the two-level case below would still be accepted rather than rejected. The conformance fix is independent and cheaper: reject `0x7F`/`0x5F` when already inside an indefinite-length string, which also removes this particular recursion path entirely.
+
+### Reproduction steps
+
+Parse a two-level indefinite-length text string and byte string.
+
+### Expected vs. actual results
+
+Expected: `parse_error.113`, same as any other invalid chunk head.
+
+Actual:
+
+| input | meaning | result |
+|---|---|---|
+| `7F 7F 61 61 FF FF` | indefinite tstr containing an indefinite tstr | **accepted**, yields `"a"` |
+| `5F 5F 41 61 FF FF` | indefinite bstr containing an indefinite bstr | **accepted**, yields `h'61'` |
+| `7F 41 61 FF` | bstr chunk inside a tstr |
+[... truncated, 2202 more characters]
+
+## Discussion before merge
+- gregmarr: Is this a behavior change that needs an opt-in?  It sounds like they were successfully read before even though they aren't allowed by the standard.
+- nlohmann: @gregmarr Good question. Yes, every release so far has accepted them, but I don't think this needs an opt-in:
+
+- The input is not well-formed CBOR, not just discouraged. RFC 8949 §3.2.3 requires each chunk of an indefinite-length string to be a definite-length string, and Appendix F.1 explicitly lists `5f 5f 41 00 ff ff` and `7f 7f 61 00 ff ff` ("indefinite-length string chunks not definite length") as examples of data items that are not well-formed. §10 says a CBOR decoder, by definition, only accepts well-formed CBOR.
+- No conforming encoder can produce such input, and our own `to_cbor` never emits indefinite-length strings at all. So the only data affected is hand-crafted or broken input.
+- Accepting it was never a design decision. It was a side effect of the old reader recursing into itself for every chunk, which is also why repeated `0x7F` bytes crashed it (#5104).
+
+That's different from cases like #5741, where real-world producers do emit the data (invalid UTF-8) and we kept the readers lenient. We'll document the change in the release notes as a behavior change: nested indefinite-length strings now throw `parse_error.113`.
+
+_(Comment written by Claude Code on behalf of @nloh
+[... truncated, 7 more characters]
+
+## Changed functions (from changes.py)
+- nlohmann::detail::binary_reader::get_cbor_string(string_t &, const char *) (private); reached from the public API through: nlohmann::basic_json::sax_parse(detail::span_input_adapter &&, SAX *, input_format_t, const bool, const bool, const bool, const cbor_tag_handler_t), nlohmann::basic_json::sax_parse(InputType &&, SAX *, input_format_t, const bool, const bool, const bool, const cbor_tag_handler_t), nlohmann::basic_json::sax_parse(IteratorType, SentinelType, SAX *, input_format_t, const bool, const bool, const bool, const cbor_tag_handler_t), nlohmann::basic_json::from_bson(detail::span_input_adapter &&, const bool, const bool), nlohmann::basic_json::from_cbor(detail::span_input_adapter &&, const bool, const bool, const cbor_tag_handler_t), nlohmann::basic_json::from_msgpack(detail::span_input_adapter &&, const bool, const bool), nlohmann::basic_json::from_ubjson(detail::span_input_adapter &&, const bool, const bool), nlohmann::basic_json::from_bjdata(InputType &&, const bool, const bool, const error_handler_t), nlohmann::basic_json::from_bon8(InputType &&, const bool, const bool), nlohmann::basic_json::from_bson(InputType &&, const bool, const bool, const error_handler_t)
+- nlohmann::detail::binary_reader::get_cbor_binary(binary_t &) (private); reached from the public API through: nlohmann::basic_json::sax_parse(detail::span_input_adapter &&, SAX *, input_format_t, const bool, const bool, const bool, const cbor_tag_handler_t), nlohmann::basic_json::sax_parse(InputType &&, SAX *, input_format_t, const bool, const bool, const bool, const cbor_tag_handler_t), nlohmann::basic_json::sax_parse(IteratorType, SentinelType, SAX *, input_format_t, const bool, const bool, const bool, const cbor_tag_handler_t), nlohmann::basic_json::from_bson(detail::span_input_adapter &&, const bool, const bool), nlohmann::basic_json::from_cbor(detail::span_input_adapter &&, const bool, const bool, const cbor_tag_handler_t), nlohmann::basic_json::from_msgpack(detail::span_input_adapter &&, const bool, const bool), nlohmann::basic_json::from_ubjson(detail::span_input_adapter &&, const bool, const bool), nlohmann::basic_json::from_bjdata(InputType &&, const bool, const bool, const error_handler_t), nlohmann::basic_json::from_bon8(InputType &&, const bool, const bool), nlohmann::basic_json::from_bson(InputType &&, const bool, const bool, const error_handler_t)
+- nlohmann::detail::binary_reader (private); reached from the public API through: nlohmann::basic_json::sax_parse(detail::span_input_adapter &&, SAX *, input_format_t, const bool, const bool, const bool, const cbor_tag_handler_t), nlohmann::basic_json::sax_parse(InputType &&, SAX *, input_format_t, const bool, const bool, const bool, const cbor_tag_handler_t), nlohmann::basic_json::sax_parse(IteratorType, SentinelType, SAX *, input_format_t, const bool, const bool, const bool, const cbor_tag_handler_t), nlohmann::basic_json::from_bson(detail::span_input_adapter &&, const bool, const bool), nlohmann::basic_json::from_cbor(detail::span_input_adapter &&, const bool, const bool, const cbor_tag_handler_t), nlohmann::basic_json::from_msgpack(detail::span_input_adapter &&, const bool, const bool), nlohmann::basic_json::from_ubjson(detail::span_input_adapter &&, const bool, const bool), nlohmann::basic_json::from_bjdata(InputType &&, const bool, const bool, const error_handler_t), nlohmann::basic_json::from_bon8(InputType &&, const bool, const bool), nlohmann::basic_json::from_bson(InputType &&, const bool, const bool, const error_handler_t)
+- nlohmann::detail::binary_reader::cbor_indefinite_string_error(const char *, const char *) (private); reached from the public API through: nlohmann::basic_json::sax_parse(detail::span_input_adapter &&, SAX *, input_format_t, const bool, const bool, const bool, const cbor_tag_handler_t), nlohmann::basic_json::sax_parse(InputType &&, SAX *, input_format_t, const bool, const bool, const bool, const cbor_tag_handler_t), nlohmann::basic_json::sax_parse(IteratorType, SentinelType, SAX *, input_format_t, const bool, const bool, const bool, const cbor_tag_handler_t), nlohmann::basic_json::from_bson(detail::span_input_adapter &&, const bool, const bool), nlohmann::basic_json::from_cbor(detail::span_input_adapter &&, const bool, const bool, const cbor_tag_handler_t), nlohmann::basic_json::from_msgpack(detail::span_input_adapter &&, const bool, const bool), nlohmann::basic_json::from_ubjson(detail::span_input_adapter &&, const bool, const bool), nlohmann::basic_json::from_bjdata(InputType &&, const bool, const bool, const error_handler_t), nlohmann::basic_json::from_bon8(InputType &&, const bool, const bool), nlohmann::basic_json::from_bson(InputType &&, const bool, const bool, const error_handler_t)
+- nlohmann::detail::binary_reader::get_cbor_binary_chunk(binary_t &, const bool) (private); reached from the public API through: nlohmann::basic_json::sax_parse(detail::span_input_adapter &&, SAX *, input_format_t, const bool, const bool, const bool, const cbor_tag_handler_t), nlohmann::basic_json::sax_parse(InputType &&, SAX *, input_format_t, const bool, const bool, const bool, const cbor_tag_handler_t), nlohmann::basic_json::sax_parse(IteratorType, SentinelType, SAX *, input_format_t, const bool, const bool, const bool, const cbor_tag_handler_t), nlohmann::basic_json::from_bson(detail::span_input_adapter &&, const bool, const bool), nlohmann::basic_json::from_cbor(detail::span_input_adapter &&, const bool, const bool, const cbor_tag_handler_t), nlohmann::basic_json::from_msgpack(detail::span_input_adapter &&, const bool, const bool), nlohmann::basic_json::from_ubjson(detail::span_input_adapter &&, const bool, const bool), nlohmann::basic_json::from_bjdata(InputType &&, const bool, const bool, const error_handler_t), nlohmann::basic_json::from_bon8(InputType &&, const bool, const bool), nlohmann::basic_json::from_bson(InputType &&, const bool, const bool, const error_handler_t)
+- nlohmann::detail::binary_reader::get_cbor_string_chunk(string_t &, const bool) (private); reached from the public API through: nlohmann::basic_json::sax_parse(detail::span_input_adapter &&, SAX *, input_format_t, const bool, const bool, const bool, const cbor_tag_handler_t), nlohmann::basic_json::sax_parse(InputType &&, SAX *, input_format_t, const bool, const bool, const bool, const cbor_tag_handler_t), nlohmann::basic_json::sax_parse(IteratorType, SentinelType, SAX *, input_format_t, const bool, const bool, const bool, const cbor_tag_handler_t), nlohmann::basic_json::from_bson(detail::span_input_adapter &&, const bool, const bool), nlohmann::basic_json::from_cbor(detail::span_input_adapter &&, const bool, const bool, const cbor_tag_handler_t), nlohmann::basic_json::from_msgpack(detail::span_input_adapter &&, const bool, const bool), nlohmann::basic_json::from_ubjson(detail::span_input_adapter &&, const bool, const bool), nlohmann::basic_json::from_bjdata(InputType &&, const bool, const bool, const error_handler_t), nlohmann::basic_json::from_bon8(InputType &&, const bool, const bool), nlohmann::basic_json::from_bson(InputType &&, const bool, const bool, const error_handler_t)
+- nlohmann::detail::binary_reader::get_cbor_binary_chunk(binary_t &) (private); reached from the public API through: nlohmann::basic_json::sax_parse(detail::span_input_adapter &&, SAX *, input_format_t, const bool, const bool, const bool, const cbor_tag_handler_t), nlohmann::basic_json::sax_parse(InputType &&, SAX *, input_format_t, const bool, const bool, const bool, const cbor_tag_handler_t), nlohmann::basic_json::sax_parse(IteratorType, SentinelType, SAX *, input_format_t, const bool, const bool, const bool, const cbor_tag_handler_t), nlohmann::basic_json::from_bson(detail::span_input_adapter &&, const bool, const bool), nlohmann::basic_json::from_cbor(detail::span_input_adapter &&, const bool, const bool, const cbor_tag_handler_t), nlohmann::basic_json::from_msgpack(detail::span_input_adapter &&, const bool, const bool), nlohmann::basic_json::from_ubjson(detail::span_input_adapter &&, const bool, const bool), nlohmann::basic_json::from_bjdata(InputType &&, const bool, const bool, const error_handler_t), nlohmann::basic_json::from_bon8(InputType &&, const bool, const bool), nlohmann::basic_json::from_bson(InputType &&, const bool, const bool, const error_handler_t)
+- nlohmann::detail::binary_reader::get_cbor_string_chunk(string_t &) (private); reached from the public API through: nlohmann::basic_json::sax_parse(detail::span_input_adapter &&, SAX *, input_format_t, const bool, const bool, const bool, const cbor_tag_handler_t), nlohmann::basic_json::sax_parse(InputType &&, SAX *, input_format_t, const bool, const bool, const bool, const cbor_tag_handler_t), nlohmann::basic_json::sax_parse(IteratorType, SentinelType, SAX *, input_format_t, const bool, const bool, const bool, const cbor_tag_handler_t), nlohmann::basic_json::from_bson(detail::span_input_adapter &&, const bool, const bool), nlohmann::basic_json::from_cbor(detail::span_input_adapter &&, const bool, const bool, const cbor_tag_handler_t), nlohmann::basic_json::from_msgpack(detail::span_input_adapter &&, const bool, const bool), nlohmann::basic_json::from_ubjson(detail::span_input_adapter &&, const bool, const bool), nlohmann::basic_json::from_bjdata(InputType &&, const bool, const bool, const error_handler_t), nlohmann::basic_json::from_bon8(InputType &&, const bool, const bool), nlohmann::basic_json::from_bson(InputType &&, const bool, const bool, const error_handler_t)
+
+## Diff of the library source (before -> after)
+```diff
+diff --git a/include/nlohmann/detail/input/binary_reader.hpp b/include/nlohmann/detail/input/binary_reader.hpp
+index d26e5fad4..3b0e3b021 100644
+--- a/include/nlohmann/detail/input/binary_reader.hpp
++++ b/include/nlohmann/detail/input/binary_reader.hpp
+@@ -1072,6 +1072,20 @@ class binary_reader
+         }
+     }
+ 
++    /*!
++    @brief reports a nested indefinite-length CBOR string or byte array
++    @param[in] type_name  name of the rejected string type
++    @param[in] context  parsing context for the error message
++    @return whether the SAX consumer accepts the parse error
++    */
++    bool cbor_indefinite_string_error(const char* type_name, const char* context)
++    {
++        auto last_token = get_token_string();
++        return sax->parse_error(chars_read, last_token, parse_error::create(113, chars_read,
++                                exception_message(concat("indefinite-length ", type_name,
++                                        " is not allowed inside indefinite-length ", type_name, "; last byte: 0x", last_token), context), nullptr));
++    }
++
+     /*!
+     @brief reads a definite-length CBOR string
+ 
+@@ -1081,12 +1095,13 @@ class binary_reader
+     into the same string.
+ 
+     @param[out] result  string the bytes are appended to
++    @param[in] inside_indefinite  whether the bytes belong to an indefinite-length string
+ 
+     @return whether string creation completed
+ 
+     @pre @a current is not EOF
+     */
+-    bool get_cbor_string_chunk(string_t& result)
++    bool get_cbor_string_chunk(string_t& result, const bool inside_indefinite)
+     {
+         switch (current)
+         {
+@@ -1147,7 +1162,7 @@ class binary_reader
+             {
+                 auto last_token = get_token_string();
+                 return sax->parse_error(chars_read, last_token, parse_error::create(113, chars_read,
+-                                        exception_message(concat("expected length specification (0x60-0x7B) or indefinite string type (0x7F); last byte: 0x", last_token), "string"), nullptr));
++                                        exception_message(concat("expected length specification (0x60-0x7B)", inside_indefinite ? "" : " or indefinite string type (0x7F)", "; last byte: 0x", last_token), "string"), nullptr));
+             }
+         }
+     }
+@@ -1165,13 +1180,9 @@ class binary_reader
+     */
+     bool get_cbor_string(string_t& result, const char* context = "string")
+     {
+-        // number of indefinite-length strings that have been opened and not
+-        // closed yet. RFC 8949, Section 3.2.3 does not permit nesting them,
+-        // but this reader has always accepted it, so the open levels are
+-        // counted instead of recursed through, which overflowed the stack for
+-        // an input of repeated 0x7F bytes (see #5104). Every chunk is appended
+-        // to the same result, so no per-level state is needed.
+-        std::size_t open = 0;
++        // read chunks iteratively, but reject a second indefinite-length
++        // level as required by RFC 8949, Section 3.2.3
++        bool indefinite = false;
+ 
+         while (true)
+         {
+@@ -1182,29 +1193,28 @@ class binary_reader
+ 
+             if (current == 0x7F) // UTF-8 string (indefinite length)
+             {
+-                ++open;
++                if (JSON_HEDLEY_UNLIKELY(indefinite))
++                {
++                    return cbor_indefinite_string_error("string", "string");
++                }
++                indefinite = true;
+                 get();
+                 continue;
+             }
+ 
+-            // a break marker closes the innermost indefinite-length string;
+-            // outside of one it is not a string and falls through to the error
+-            if (open != 0 && current == 0xFF)
++            // a break marker closes the indefinite-length string; outside
++            // of one it falls through to the error below
++            if (indefinite && current == 0xFF)
+             {
+-                if (--open == 0)
+-                {
+-                    return check_string_utf8(result, context);
+-                }
+-                get();
+-                continue;
++                return check_string_utf8(result, context);
+             }
+ 
+-            if (JSON_HEDLEY_UNLIKELY(!get_cbor_string_chunk(result)))
++            if (JSON_HEDLEY_UNLIKELY(!get_cbor_string_chunk(result, indefinite)))
+             {
+                 return false;
+             }
+ 
+-            if (open == 0)
++            if (!indefinite)
+             {
+                 return check_string_utf8(result, context);
+             }
+@@ -1296,12 +1306,13 @@ class binary_reader
+     read into the same byte array.
+ 
+     @param[out] result  byte array the bytes are appended to
++    @param[in] inside_indefinite  whether the bytes belong to an indefinite-length string
+ 
+     @return whether byte array creation completed
+ 
+     @pre @a current is not EOF
+     */
+-    bool get_cbor_binary_chunk(binary_t& result)
++    bool get_cbor_binary_chunk(binary_t& result, const bool inside_indefinite)
+     {
+         switch (current)
+         {
+@@ -1366,7 +1377,7 @@ class binary_reader
+             {
+                 auto last_token = get_token_string();
+                 return sax->parse_error(chars_read, last_token, parse_error::create(113, chars_read,
+-                                        exception_message(concat("expected length specification (0x40-0x5B) or indefinite binary array type (0x5F); last byte: 0x", last_token), "binary"), nullptr));
++                                        exception_message(concat("expected length specification (0x40-0x5B)", inside_indefinite ? "" : " or indefinite binary array type (0x5F)", "; last byte: 0x", last_token), "binary"), nullptr));
+             }
+         }
+     }
+@@ -1384,9 +1395,9 @@ class binary_reader
+     */
+     bool get_cbor_binary(binary_t& result)
+     {
+-        // the open indefinite-length byte arrays are counted rather than
+-        // recursed through, for the reason given in @ref get_cbor_string
+-        std::size_t open = 0;
++        // read chunks iteratively, but reject a second indefinite-length
++        // level as required by RFC 8949, Section 3.2.3
++        bool indefinite = false;
+ 
+         while (true)
+         {
+@@ -1397,29 +1408,28 @@ class binary_reader
+ 
+             if (current == 0x5F) // Binary data (indefinite length)
+             {
+-                ++open;
++                if (JSON_HEDLEY_UNLIKELY(indefinite))
++                {
++                    return cbor_indefinite_string_error("binary array", "binary");
++                }
++                indefinite = true;
+                 get();
+                 continue;
+             }
+ 
+-            // a break marker closes the innermost indefinite-length byte
+-            // array; outside of one it falls through to the error below
+-            if (open != 0 && current == 0xFF)
++            // a break marker closes the indefinite-length string; outside
++            // of one it falls through to the error below
++            if (indefinite && current == 0xFF)
+             {
+-                if (--open == 0)
+-                {
+-                    return true;
+-                }
+-                get();
+-                continue;
++                return true;
+             }
+ 
+-            if (JSON_HEDLEY_UNLIKELY(!get_cbor_binary_chunk(result)))
++            if (JSON_HEDLEY_UNLIKELY(!get_cbor_binary_chunk(result, indefinite)))
+             {
+                 return false;
+             }
+ 
+-            if (open == 0)
++            if (!indefinite)
+             {
+                 return true;
+             }
+```
+
+## Existing upstream tests that call the changed code (for style and API usage)
+// Upstream tests at the PR's parent commit 675e51996 that use the changed code.
+// Names searched (test lines using each): sax_parse (0), from_bson (0), from_cbor (0), from_msgpack (0), from_ubjson (0), from_bjdata (0), from_bon8 (0), get_cbor_string (0), get_cbor_binary (0), binary_reader (2), cbor_indefinite_string_error (0), get_cbor_binary_chunk (0), get_cbor_string_chunk (0)
+
+// ---- tests/src/unit-bjdata.cpp:76-111  (uses: binary_reader)
+    SECTION("binary_reader BJData lookup tables")
+    {
+        // both lookups are static member functions
+        std::vector<std::uint8_t> const data;
+        using reader_t = nlohmann::detail::binary_reader<json, decltype(nlohmann::detail::input_adapter(data))>;
+
+        // the excluded optimized-type markers must match binary_writer's
+        // is_bjdata_excluded_type_marker(), which encodes the same 8 markers
+        for (const char marker :
+                {'[', '{', 'S', 'H', 'T', 'F', 'N', 'Z'
+                })
+        {
+            CHECK(reader_t::is_bjd_excluded_optimized_type(static_cast<unsigned char>(marker)));
+        }
+        for (const char marker :
+                {'U', 'i', 'u', 'I', 'm', 'l', 'M', 'L', 'd', 'D', 'C', 'B', 'x'
+                })
+        {
+            CHECK(!reader_t::is_bjd_excluded_optimized_type(static_cast<unsigned char>(marker)));
+        }
+
+        // every dtype marker must round-trip to its ND-array type name
+        const std::vector<std::pair<char, std::string>> types
+        {
+            {'B', "byte"}, {'C', "char"}, {'D', "double"}, {'I', "int16"},
+            {'L', "int64"}, {'M', "uint64"}, {'U', "uint8"}, {'d', "single"},
+            {'i', "int8"}, {'l', "int32"}, {'m', "uint32"}, {'u', "uint16"}
+        };
+        for (const auto& type : types)
+        {
+            const char* name = reader_t::bjd_type_name(static_cast<unsigned char>(type.first));
+            REQUIRE(name != nullptr);
+            CHECK(std::string(name) == type.second);
+        }
+        CHECK(reader_t::bjd_type_name(static_cast<unsigned char>('x')) == nullptr);
+    }
+
+# Programs to repair
+
+## gen_19.cpp (compile)
+Intent: Probes parsing via span_input_adapter directly with nested indefinite-length CBOR strings.
+COMPILE ERROR. The program fails to compile, the same way against the old and the new library. Fix the error (wrong or missing include, typo, misuse of the public API) and keep the intent: the call under test must stay. Include only headers that exist; if you are unsure a header exists, use the library's main header.
+Compiler errors:
+```
+json.hpp:6082:54: error: no matching function for call to ‘input_adapter(nlohmann::json_abi_v3_12_0::detail::iterator_input_adapter<const unsigned char*, const unsigned char*>&)’
+6082 |         return from_binary_impl(detail::input_adapter(std::forward<InputType>(i)), input_format_t::cbor, strict, allow_exceptions, error_handler, tag_handler);
+6082 |         return from_binary_impl(detail::input_adapter(std::forward<InputType>(i)), input_format_t::cbor, strict, allow_exceptions, error_handler, tag_handler);
+input_adapters.hpp:765:109: error: no type named ‘adapter_type’ in ‘struct nlohmann::json_abi_v3_12_0::detail::container_input_adapter_factory_impl::container_input_adapter_factory<nlohmann::json_abi_v3_12_0::detail::iterator_input_adapter<const unsigned char*, const
+input_adapters.hpp:780:86: error: no type named ‘type’ in ‘struct std::enable_if<false, int>’
+input_adapters.hpp:825:30: error: no type named ‘type’ in ‘struct std::enable_if<false, int>’
+```
+Source:
+```cpp
+#include <nlohmann/json.hpp>
+#include <vector>
+#include <iostream>
+
+int main() {
+    std::vector<std::uint8_t> const cbor_data = {0x7F, 0x7F, 0x61, 'b', 0xFF, 0xFF};
+    try {
+        auto adapter = nlohmann::detail::input_adapter(cbor_data.data(), cbor_data.data() + cbor_data.size());
+        auto j = nlohmann::json::from_cbor(adapter);
+        std::cout << "Parsed successfully" << std::endl;
+    } catch (const nlohmann::json::parse_error& e) {
+        std::cout << "Caught parse_error: id=" << e.id << std::endl;
+    } catch (const std::exception& e) {
+        std::cout << "Caught std::exception: " << e.what() << std::endl;
+    }
+    return 0;
+}
+```
+
+# Task
+Return JSON with a "fixes" array: one item per program above, with "file" (exactly as given) and "code" (the complete repaired program, standalone, with its own int main). Do not return programs you cannot repair.

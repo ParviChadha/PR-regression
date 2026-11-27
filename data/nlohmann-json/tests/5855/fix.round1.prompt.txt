@@ -1,0 +1,383 @@
+[system]
+You write test programs that probe a C++ library for behavioral changes made by one pull request.
+Each program is compiled and run twice, once against the library before the change and once after, and the two
+outputs are compared. Your job is to produce programs whose output reveals whether the change altered behavior,
+including side effects the author did not intend.
+
+Rules for every program:
+- It is standalone: one file with its own int main(), compiled as C++17, printing results to stdout.
+- Use only the library's documented public API. Never include internal headers or use detail/impl namespaces,
+  private members or undocumented macros.
+- Do not judge results (no assert, no expected-value comparisons): just print what the library returns. Print
+  enough to make differences visible, one fact per line.
+- Output must be deterministic. Never print pointers or addresses, uninitialized data, the order of
+  hash-based containers, timings, thread ids, random values, file paths or environment data. Print floating point
+  values with an explicit precision. No input, files, network, threads, clocks or randomness.
+- Wrap calls that may throw in try/catch and print the exception's type and message, so an exception is an
+  observable result. Do not crash on purpose.
+- Aim at the code the diff changes. Prefer calls that compile against both the old and the new library; one or two
+  programs may use an API the PR adds. Cover ordinary inputs and edge cases (empty, minimum and maximum values,
+  boundaries, special values, nesting, unusual types) and also neighbouring behavior the change could disturb.
+- When the diff changes which types or inputs an API accepts or rejects (constraints, overloads, traits,
+  conversions), test it with the detection idiom (std::void_t or requires) and `if constexpr`, so the program
+  compiles against both versions, prints whether the expression is well-formed, and exercises it when it is.
+  Accepting an input is not enough: also use it through every entry point that should follow (const and
+  non-const, read, write, insert, erase, lookup, nested use), because a change that admits new inputs can leave
+  later code unable to handle them.
+- If the changed code is internal (a detail, impl or internal namespace, a trait, a helper), do not name it in the
+  program. Reach it through the public API that depends on it, using detection (as above) where needed.
+- Use the exact types and values the diff is about (the new trait's argument types, the new overload's
+  parameters), not stand-ins.
+- Spread the programs over distinct public entry points and overloads, one main idea per program. Do not write
+  several programs that only rename a type or change a literal.
+- Make the programs differ from each other: different inputs, different entry points, different features.
+
+Rules specific to this library:
+- Include the library with #include <nlohmann/json.hpp>. The public API is nlohmann::json (nlohmann::basic_json), nlohmann::ordered_json, json_pointer, json patch/merge_patch and the documented SAX and conversion interfaces. Never use the detail namespace.
+- It is a header-only library: nothing to link. Programs are compiled as C++17.
+- Print JSON values with dump() (compact) or dump(2). Keys of nlohmann::json objects print in sorted order, so output is deterministic; do not depend on insertion order except with ordered_json.
+
+[user]
+# Pull request #5855: Move object keys into the value when parsing
+
+## Description
+## Summary
+
+`json_sax_dom_parser::key()` copied the key from the lexer's buffer into the object. The lexer starts every token with an empty buffer (`reset()`), so the key can be moved instead. That saves an allocation and a copy for every key that does not fit into the string's inline buffer. `json_sax_dom_parser::string()` already moves string values the same way.
+
+`ordered_map` has no rvalue `operator[]`, so `ordered_json` still copies keys. Adding one would extend a public class, so it is left out. The callback parser's `key()` is left alone too, because #5831 changes it.
+
+This is the last of five stacked PRs from an assembly review of the number and string parsing.
+
+## Performance
+
+Change of the best-of-runs time against the previous PR (the first: against #5828), negative is faster. *accept* is `json::accept()` (no allocations), *parse* is `json::parse()`. Apple M1 Max: Apple Clang 21 and Homebrew GCC 16; x86-64 (Haswell VM): GCC 13, and Clang 18 with `-falign-loops=64 -falign-functions=64` on both sides (without it, code placement alone moves Clang's numbers by up to ±5 % between builds). Improvements of 3 % or more are bold.
+
+| file | M1 Clang accept | M1 Clang parse | M1 GCC 16 accept | M1 GCC 16 parse | x86 GCC accept | x86 Clang accept |
+|---|--:|--:|--:|--:|--:|--:|
+| `canada.json` | −1.4 % | +0.4 % | −1.5 % | −0.9 % | +4.0 % | −0.4 % |
+| `citm_catalog.json` | +0.1 % | +0.9 % | −1.2 % | +0.0 % | −2.6 % | +0.4 % |
+| `twitter.json` | +0.1 % | **−3.3 %** | +0.6 % | **−5.0 %** | +0.1 % | +0.0 % |
+| `numbers.json` | +0.0 % | +0.1 % | −1.0 % | **−3.4 %** | −0.3 % | −0.1 % |
+| `long_strings.json` | −1.8 % | −0.9 % | +0.0 % | +0.6 % | +0.5 % | −0.1 % |
+| `twitterescaped.json` | −0.7 % | **−3.7 %** | +0.0 % | −2.5 % | −2.0 % | +0.1 % |
+| `mesh.json` | −0.6 % | −2.4 % | −2.9 % | **−3.4 %** | +0.6 % | −0.3 % |
+
+`json::accept()` builds no object, so it only shows placement noise; the gain is in `json::parse()`.
+
+
+### The whole stack
+
+All five PRs against #5828, same setup as above:
+
+| file | M1 Clang accept | M1 Clang parse | M1 GCC 16 accept | M1 GCC 16 parse | x86 GCC accept | x86 Clang accept |
+|---|--:|--:|--:|--:|--:|--:|
+| `canada.json` | **−35.1 %** | **−18.9 %** | **−32.7 %** | **−19.2 %** | **−29.0 %** | **−34.7 %** |
+| `citm_catalog.json` | **−8.2 %** | −2.8 % | **−11.9 %** | **−3.6 %** | **−17.9 %** | **−5.2 %** |
+| `twitter.json` | **−12.6 %** | **−9.5 %** | **−25.5 %** | **−13.6 %** | **−29.6 %** | **−14.5 %** |
+| `numbers.json` | **−41.8 %** | **−37.7 %** | **−39.8 %** | **−37.5 %** | **−38.8 %** | **−39.5 %** |
+| `long_strings.json` | **−27.2 %** | **−17.2 %** | **−36.4 %** | **−22.9 %** | **−46.1 %** | **−28.4 %** |
+| `twitterescaped.json` | +1.3 % | **−4.1 %** | **−10.7 %** | **−8.0 %** | **−13.7 %** | +3.0 % |
+| `mesh.json` | **−32.4 %** | **−14.9 %** | **−29.3 %** | **−25.1 %** | **−23.0 %** | **−32.0 %** |
+
+Every file is faster on every build except twitterescaped.json with Clang in `accept()` (+1.3 % on M1, +3.0 % on x86-64, where the machine was under load during this run; an earlier run with aligned code on M1 measured −4.1 %). In `json::parse()`, twitterescaped.json is 4–8 % faster.
+
+## Tests
+
+- **New test case "object keys are moved into the value"** in `unit-class_parser.cpp`: short keys, a 100-byte key, a 16-byte key, keys with escapes, the empty key and duplicate keys. The result is compared with the byte path and with `ordered_json`, with and without `JSON_DIAGNOSTICS` / `JSON_DIAGNOSTIC_POSITIONS`.
+- **Differential check against #5828's head** (string, `std::istream`, `FILE*`; M1 and x86-64): identical.
+- **Full test suite:** passes under ASan/UBSan on macOS and Linux x86-64.
+- **Fuzzing:** libFuzzer ran `fuzzer-parse_json` with ASan and UBSan for 10 minutes on the top of the stack, with four workers: about 11.5 million inputs, no findings.
+
+## Breaking changes
+
+None. The behavior of `json_sax_dom_parser` is the same; it only moves an argument its caller no longer uses.
+
+🤖 Generated with [Claude Co
+[... truncated, 35 more characters]
+
+## Commit message
+json_sax_dom_parser::key() copied the key from the lexer's buffer into the
+object. The lexer starts every token with an empty buffer (reset()), so the
+key can be moved instead, which saves an allocation and a copy for every key
+that does not fit into the string's inline buffer. json_sax_dom_parser
+already moved string values the same way. ordered_map has no rvalue
+operator[], so ordered_json still copies keys.
+
+Signed-off-by: Niels Lohmann <mail@nlohmann.me>
+
+## Changed functions (from changes.py)
+- nlohmann::detail::json_sax_dom_parser::key(string_t &) (private); reached from the public API through: nlohmann::basic_json::sax_parse(detail::span_input_adapter &&, SAX *, input_format_t, const bool, const bool, const bool, const cbor_tag_handler_t), nlohmann::basic_json::sax_parse(InputType &&, SAX *, input_format_t, const bool, const bool, const bool, const cbor_tag_handler_t), nlohmann::basic_json::sax_parse(IteratorType, SentinelType, SAX *, input_format_t, const bool, const bool, const bool, const cbor_tag_handler_t), nlohmann::basic_json::from_bson(detail::span_input_adapter &&, const bool, const bool), nlohmann::basic_json::from_cbor(detail::span_input_adapter &&, const bool, const bool, const cbor_tag_handler_t), nlohmann::basic_json::from_msgpack(detail::span_input_adapter &&, const bool, const bool), nlohmann::basic_json::from_ubjson(detail::span_input_adapter &&, const bool, const bool), nlohmann::basic_json::from_bjdata(InputType &&, const bool, const bool, const error_handler_t), nlohmann::basic_json::from_bon8(InputType &&, const bool, const bool), nlohmann::basic_json::from_bson(InputType &&, const bool, const bool, const error_handler_t)
+
+## Diff of the library source (before -> after)
+```diff
+diff --git a/include/nlohmann/detail/input/json_sax.hpp b/include/nlohmann/detail/input/json_sax.hpp
+index 912888324..966610e4a 100644
+--- a/include/nlohmann/detail/input/json_sax.hpp
++++ b/include/nlohmann/detail/input/json_sax.hpp
+@@ -418,8 +418,9 @@ class json_sax_dom_parser
+         JSON_ASSERT(!ref_stack.empty());
+         JSON_ASSERT(ref_stack.back()->is_object());
+ 
+-        // add null at the given key and store the reference for later
+-        object_element = &(ref_stack.back()->m_data.m_value.object->operator[](val));
++        // add null at the given key and store the reference for later; the
++        // key is moved, as the lexer starts the next token with reset()
++        object_element = &(ref_stack.back()->m_data.m_value.object->operator[](std::move(val)));
+         return true;
+     }
+```
+
+## Existing upstream tests that call the changed code (for style and API usage)
+// Upstream tests at the PR's parent commit fa37b952d that use the changed code.
+// Names searched (test lines using each): sax_parse (0), from_bson (0), from_cbor (0), from_msgpack (0), from_ubjson (0), from_bjdata (0), from_bon8 (0), key (195)
+
+// ---- tests/src/unit-alt-string.cpp:269-296  (uses: key)
+    SECTION("items")
+    {
+        auto doc = alt_json::parse(R"({"foo": "bar"})");
+
+        for (const auto& item : doc.items())
+        {
+            CHECK(item.key() == "foo");
+            CHECK(item.value() == "bar");
+        }
+
+        auto doc_array = alt_json::parse(R"(["foo", "bar"])");
+
+        for (const auto& item : doc_array.items())
+        {
+            if (item.key() == "0" )
+            {
+                CHECK( item.value() == "foo" );
+            }
+            else if (item.key() == "1" )
+            {
+                CHECK(item.value() == "bar");
+            }
+            else
+            {
+                CHECK(false);
+            }
+        }
+    }
+
+// ---- tests/src/unit-binary_utf8_error_handler.cpp:165-201  (uses: key)
+    SECTION("writers: object key")
+    {
+        for (const auto& c : ill_formed_cases())
+        {
+            CAPTURE(c.name)
+            json jobj;
+            jobj[c.bytes] = 1;
+
+            CHECK_THROWS_AS(json::to_cbor(jobj, eh::strict), json::type_error&);
+            CHECK_THROWS_AS(json::to_msgpack(jobj, eh::strict), json::type_error&);
+            CHECK_THROWS_AS(json::to_ubjson(jobj, false, false, eh::strict), json::type_error&);
+            CHECK_THROWS_AS(json::to_bjdata(jobj, false, false, json::bjdata_version_t::draft2, eh::strict), json::type_error&);
+            CHECK_THROWS_AS(json::to_bson(jobj, eh::strict), json::type_error&);
+
+            for (const auto h :
+                    {
+                        eh::replace, eh::ignore
+                    })
+            {
+                CAPTURE(static_cast<int>(h))
+                const std::string expected = dump_and_parse(c.bytes, h);
+
+                CHECK(json::from_cbor(json::to_cbor(jobj, h)).begin().key() == expected);
+                CHECK(json::from_msgpack(json::to_msgpack(jobj, h)).begin().key() == expected);
+                CHECK(json::from_ubjson(json::to_ubjson(jobj, false, false, h)).begin().key() == expected);
+                CHECK(json::from_bjdata(json::to_bjdata(jobj, false, false, json::bjdata_version_t::draft2, h)).begin().key() == expected);
+                CHECK(json::from_bson(json::to_bson(jobj, h)).begin().key() == expected);
+            }
+
+            // keep: object keys round-trip unchanged too
+            CHECK(json::from_cbor(json::to_cbor(jobj, eh::keep)).begin().key() == c.bytes);
+            CHECK(json::from_msgpack(json::to_msgpack(jobj, eh::keep)).begin().key() == c.bytes);
+            CHECK(json::from_ubjson(json::to_ubjson(jobj, false, false, eh::keep)).begin().key() == c.bytes);
+            CHECK(json::from_bjdata(json::to_bjdata(jobj, false, false, json::bjdata_version_t::draft2, eh::keep)).begin().key() == c.bytes);
+            CHECK(json::from_bson(json::to_bson(jobj, eh::keep)).begin().key() == c.bytes);
+        }
+    }
+
+// ---- tests/src/unit-binary_utf8_error_handler.cpp:259-300  (uses: key)
+    SECTION("readers: object key")
+    {
+        for (const auto& c : ill_formed_cases())
+        {
+            CAPTURE(c.name)
+
+            json jobj;
+            jobj[c.bytes] = 1;
+            const auto cbor_bytes = json::to_cbor(jobj, eh::keep);
+            const auto msgpack_bytes = json::to_msgpack(jobj);
+            const auto ubjson_bytes = json::to_ubjson(jobj, false, false, eh::keep);
+            const auto bjdata_bytes = json::to_bjdata(jobj, false, false, json::bjdata_version_t::draft2, eh::keep);
+            const auto bson_bytes = json::to_bson(jobj, eh::keep);
+
+            CHECK(json::from_cbor(cbor_bytes).begin().key() == c.bytes);
+            CHECK(json::from_msgpack(msgpack_bytes).begin().key() == c.bytes);
+            CHECK(json::from_ubjson(ubjson_bytes).begin().key() == c.bytes);
+            CHECK(json::from_bjdata(bjdata_bytes).begin().key() == c.bytes);
+            CHECK(json::from_bson(bson_bytes).begin().key() == c.bytes);
+
+            CHECK_THROWS_AS(utils::ignore_return_value(json::from_cbor(cbor_bytes, true, true, json::cbor_tag_handler_t::error, eh::strict)), json::parse_error&);
+            CHECK_THROWS_AS(utils::ignore_return_value(json::from_msgpack(msgpack_bytes, true, true, eh::strict)), json::parse_error&);
+            CHECK_THROWS_AS(utils::ignore_return_value(json::from_ubjson(ubjson_bytes, true, true, eh::strict)), json::parse_error&);
+            CHECK_THROWS_AS(utils::ignore_return_value(json::from_bjdata(bjdata_bytes, true, true, eh::strict)), json::parse_error&);
+            CHECK_THROWS_AS(utils::ignore_return_value(json::from_bson(bson_bytes, true, true, eh::strict)), json::parse_error&);
+
+            for (const auto h :
+                    {
+                        eh::replace, eh::ignore
+                    })
+            {
+                CAPTURE(static_cast<int>(h))
+                const std::string expected = dump_and_parse(c.bytes, h);
+
+                CHECK(json::from_cbor(cbor_bytes, true, true, json::cbor_tag_handler_t::error, h).begin().key() == expected);
+                CHECK(json::from_msgpack(msgpack_bytes, true, true, h).begin().key() == expected);
+                CHECK(json::from_ubjson(ubjson_bytes, true, true, h).begin().key() == expected);
+                CHECK(json::from_bjdata(bjdata_bytes, true, true, h).begin().key() == expected);
+                CHECK(json::from_bson(bson_bytes, true, true, h).begin().key() == expected);
+            }
+        }
+    }
+
+// ---- tests/src/unit-custom-base-class.cpp:264-288  (uses: key)
+}
+
+template <class Ptr, class Fnc>
+void visitor_adaptor::do_visit(const Ptr& ptr, const Fnc& fnc) const
+{
+    using value_t = nlohmann::detail::value_t;
+    const json_with_visitor_t& json = *static_cast<const json_with_visitor_t*>(this); // NOLINT(cppcoreguidelines-pro-type-static-cast-downcast)
+    switch (json.type())
+    {
+        case value_t::object:
+            for (const auto& entry : json.items())
+            {
+                entry.value().do_visit(ptr / entry.key(), fnc);
+            }
+            break;
+        case value_t::array:
+            for (std::size_t i = 0; i < json.size(); ++i)
+            {
+                json.at(i).do_visit(ptr / std::to_string(i), fnc);
+            }
+            break;
+        case value_t::discarded:
+            break;
+        case value_t::null:
+        case value_t::string:
+
+// ---- tests/src/unit-items.cpp:1346-1359  (uses: key)
+        SECTION("const reference")
+        {
+            json j = 1;
+            int counter = 1;
+
+            for (const auto& i : j.items())
+            {
+                ++counter;
+                CHECK(i.key() == "");
+                CHECK(i.value() == json(1));
+            }
+
+            CHECK(counter == 2);
+        }
+
+# Programs to repair
+
+## gen_04.cpp (compile)
+Intent: Verify parsing of object keys containing escape sequences.
+COMPILE ERROR. The program fails to compile, the same way against the old and the new library. Fix the error (wrong or missing include, typo, misuse of the public API) and keep the intent: the call under test must stay. Include only headers that exist; if you are unsure a header exists, use the library's main header.
+Compiler errors:
+```
+gen_04.cpp:8:70: error: stray ‘’ in program
+gen_04.cpp:8:71: error: stray ‘’ in program
+gen_04.cpp:8:72: error: stray ‘’ in program
+gen_04.cpp:8:73: error: unable to find string literal operator ‘operator""quotes’ with ‘const char [36]’, ‘long unsigned int’ arguments
+```
+Source:
+```cpp
+#include <nlohmann/json.hpp>
+#include <iostream>
+
+int main() {
+    try {
+        std::string s = "{\"key\\nwith\\nescapes\":10, \"key\\"quotes\\\":20}";
+        auto j = nlohmann::json::parse(s);
+        for (auto it = j.begin(); it != j.end(); ++it) {
+            std::cout << it.key() << ":" << it.value() << "\n";
+        }
+    } catch (const std::exception& e) {
+        std::cout << "EXCEPTION:" << e.what() << "\n";
+    }
+    return 0;
+}
+```
+
+## gen_08.cpp (compile)
+Intent: Verify parsing of multibyte UTF-8 characters within object keys.
+COMPILE ERROR. The program fails to compile, the same way against the old and the new library. Fix the error (wrong or missing include, typo, misuse of the public API) and keep the intent: the call under test must stay. Include only headers that exist; if you are unsure a header exists, use the library's main header.
+Compiler errors:
+```
+gen_08.cpp:8:25: error: incomplete universal character name u3
+```
+Source:
+```cpp
+#include <nlohmann/json.hpp>
+#include <iostream>
+
+int main() {
+    try {
+        std::string s = "{\"\u3053\u3093\u306b\u3061\u3 অনুম\": 1, \"éàç\": 2}";
+        auto j = nlohmann::json::parse(s);
+        for (auto it = j.begin(); it != j.end(); ++it) {
+            std::cout << it.key() << ":" << it.value() << "\n";
+        }
+    } catch (const std::exception& e) {
+        std::cout << "EXCEPTION:" << e.what() << "\n";
+    }
+    return 0;
+}
+```
+
+## gen_09.cpp (compile)
+Intent: Verify direct invocation of json_sax_dom_parser via sax_parse with custom input.
+COMPILE ERROR. The program fails to compile, the same way against the old and the new library. Fix the error (wrong or missing include, typo, misuse of the public API) and keep the intent: the call under test must stay. Include only headers that exist; if you are unsure a header exists, use the library's main header.
+Compiler errors:
+```
+gen_09.cpp:10:61: error: wrong number of template arguments (1, should be 2)
+gen_09.cpp:10:74: error: expression list treated as compound expression in initializer [-fpermissive]
+is_sax.hpp:88:66: error: static assertion failed: invalid function: bool null()
+is_sax.hpp:90:69: error: static assertion failed: invalid function: bool boolean(bool)
+is_sax.hpp:94:28: error: static assertion failed: invalid function: bool number_integer(number_integer_t)
+is_sax.hpp:98:29: error: static assertion failed: invalid function: bool number_unsigned(number_unsigned_t)
+```
+Source:
+```cpp
+#include <nlohmann/json.hpp>
+#include <iostream>
+
+int main() {
+    try {
+        std::string s = "{\"sax_key\": 99}";
+        nlohmann::json j;
+        nlohmann::detail::json_sax_dom_parser<nlohmann::json> sax(j, true);
+        bool res = nlohmann::json::sax_parse(s, &sax);
+        std::cout << std::boolalpha << res << "\n";
+        for (auto it = j.begin(); it != j.end(); ++it) {
+            std::cout << it.key() << ":" << it.value() << "\n";
+        }
+    } catch (const std::exception& e) {
+        std::cout << "EXCEPTION:" << e.what() << "\n";
+    }
+    return 0;
+}
+```
+
+# Task
+Return JSON with a "fixes" array: one item per program above, with "file" (exactly as given) and "code" (the complete repaired program, standalone, with its own int main). Do not return programs you cannot repair.
