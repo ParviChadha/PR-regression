@@ -33,7 +33,7 @@ HERE = Path(__file__).resolve().parent
 ROOT = HERE.parent
 sys.path.insert(0, str(HERE))
 sys.path.insert(0, str(ROOT))
-from pipeline.common import Target, pr_std, write_text  # noqa: E402
+from pipeline.common import VARIANTS, Target, pr_std, tests_dir as variant_dir, write_text  # noqa: E402
 import generate  # noqa: E402
 import llm  # noqa: E402
 import run  # noqa: E402
@@ -107,8 +107,8 @@ def pick(manifest, results, limit, per_signature=4):
     return out[:limit]
 
 
-def build_prompt(t, rec, gh, tests_dir, items):
-    section, _ = generate.pr_section(t, rec, gh)
+def build_prompt(t, rec, gh, tests_dir, items, variant="main"):
+    section, _ = generate.pr_section(t, rec, gh, variant)   # the repair sees what the generator saw
     parts = [section, "", "# Programs to repair", ""]
     for it in items:
         src = (Path(tests_dir) / it["file"]).read_text(encoding="utf-8")
@@ -143,7 +143,8 @@ def evaluate(env, tests_dir, names, args):
     out = {}
     for n in names:
         status, failed_on = run.classify(old[n], new[n])
-        out[n] = {"status": status, "compile_failed_on": failed_on, "old": old[n], "new": new[n]}
+        out[n] = {"status": status, "compile_failed_on": failed_on,
+                  "source_sha256": run.source_sha256(Path(tests_dir) / n), "old": old[n], "new": new[n]}
     return out
 
 
@@ -166,7 +167,7 @@ def fix_round(t, rec, gh, env, tests_dir, manifest, results, args, round_no):
         return None
     by_kind = {k: sum(1 for i in items if i["kind"] == k) for k in KIND_TEXT}
     print(f"round {round_no}: {len(items)} candidates ({by_kind['compile']} compile, {by_kind['detect']} detect)")
-    system, prompt = build_prompt(t, rec, gh, tests_dir, items)
+    system, prompt = build_prompt(t, rec, gh, tests_dir, items, getattr(args, "variant", "main"))
     write_text(Path(tests_dir) / f"fix.round{round_no}.prompt.txt", f"[system]\n{system}\n\n[user]\n{prompt}\n")
     if args.dry_run:
         for i in items:
@@ -201,7 +202,7 @@ def fix_round(t, rec, gh, env, tests_dir, manifest, results, args, round_no):
 
 
 def fix(t, pr, args, tests_dir=None, env=None):
-    tests_dir = Path(tests_dir or t.data / "tests" / str(pr))
+    tests_dir = Path(tests_dir or variant_dir(t, pr, getattr(args, "variant", "main")))
     for need in ("generated.json", "results.json"):
         if not (tests_dir / need).is_file():
             die(f"{tests_dir / need} is missing; run generate.py and run.py first")
@@ -239,6 +240,7 @@ def main():
     ap.add_argument("--force", action="store_true", help="ignore the response cache (costs a request)")
     ap.add_argument("--docker", action="store_true")
     ap.add_argument("--std", help="C++ standard (default: chosen per PR, see common.pr_std)")
+    ap.add_argument("--variant", choices=sorted(VARIANTS), default="main", help="baseline: repair data/<t>/baseline/<pr>")
     ap.add_argument("--runs", type=int, default=3)
     ap.add_argument("--timeout", type=float, default=10)
     ap.add_argument("--compile-timeout", type=float, default=180)

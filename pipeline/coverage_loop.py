@@ -1,10 +1,14 @@
 #!/usr/bin/env python3
 """Changed-line coverage and the refine loop (pipeline stage "Coverage loop", the DiffTestGen idea).
 
-1. changed lines  = lines added or modified by the PR in the new version, in the target's include_dirs
-                    (git diff parent..merge, whitespace-only and blank-line changes ignored).
+1. changed lines  = lines added or modified by the PR in the new version, in the target's `coverage_paths` (default
+                    include_dirs) (git diff parent..merge, whitespace-only and blank-line changes ignored).
 2. measure        = compile every generated test against the NEW environment with --coverage, run it, read gcov JSON,
-                    keep only the changed lines.
+                    keep only the changed lines. cmake targets (QuantLib, with `coverage_cmake_args`): the test links the
+                    merge commit's coverage-instrumented library (env.py, <export>/lib-cov) and runs with GCOV_PREFIX
+                    set to its own temp dir, so parallel runs do not share .gcda files; gcov then reads the library
+                    objects compiled from a file with a changed file's name (serbia.cpp.gcda for serbia.cpp/.hpp), with
+                    their .gcno notes from the build volume, plus the test's own object (header code it instantiated).
 3. union          = a changed line is covered if any test ran it. Remaining changed lines are
                       uncovered  executable code that no test ran,
                       macro      line of a #define body: gcov attributes that code to the expansion site, so it cannot be measured here,
@@ -21,7 +25,7 @@ CLI:  python3 pipeline/coverage_loop.py <target> (--pr N | --merge SHA) [--paren
           [--timeout 10] [--compile-timeout 180] [--jobs 4] [--tests-dir DIR] [--context]
       --context also prints the refine prompt context. Runs in the same container as run.py with --docker (gcov from the image).
 """
-import argparse, json, os, re, subprocess, sys, tempfile, time
+import argparse, json, os, re, shutil, subprocess, sys, tempfile, time
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 
@@ -82,18 +86,40 @@ def worker(a):
     from run import _compile, _run_once  # run.py sits next to this file (mounted at /pipeline in the container)
     changed = {f: set(ls) for f, ls in json.loads(a.changed_json).items()}
 
+    stems = {Path(f).stem for f in changed}
+    prefixes = a.prefix if isinstance(a.prefix, list) else [a.prefix]
+
+    def gcda_files(td):
+        """.gcda files to read: next to the test (header-only) or, with GCOV_PREFIX, under <td>/gcda: the test's own and
+        the library objects compiled from a file named like a changed file. Each gets its .gcno copied next to it."""
+        if not a.gcov_prefix:
+            return list(Path(td).glob("*.gcda"))
+        root, out = Path(td) / "gcda", []
+        for g in root.rglob("*.gcda"):
+            orig = "/" + str(g.relative_to(root))
+            own = orig.startswith(str(td) + "/")
+            if not own and g.name.split(".")[0] not in stems:
+                continue
+            note = Path(orig[:-len(".gcda")] + ".gcno")
+            if note.is_file():
+                shutil.copyfile(note, g.with_suffix(".gcno"))
+                out.append(g)
+        return out
+
     def one(name):
         with tempfile.TemporaryDirectory() as td:
             exe = Path(td) / "t"
-            ok, err, _ = _compile(Path(a.tests) / name, exe, a.flag, a.std, a.compile_timeout, extra=["--coverage"])
+            ok, err, _ = _compile(Path(a.tests) / name, exe, a.flag, a.std, a.compile_timeout, extra=["--coverage"],
+                                  link=a.link_flag)
             res = {"compiled": ok, "exit": None, "timeout": False, "covered": {}, "uncovered": {}, "gcda": 0, "gcov_files": 0}
             if ok:
-                r = _run_once(exe, td, a.timeout)
+                run_env = {"GCOV_PREFIX": str(Path(td) / "gcda"), "GCOV_PREFIX_STRIP": "0"} if a.gcov_prefix else None
+                r = _run_once(exe, td, a.timeout, run_env)
                 res["exit"], res["timeout"] = r["exit"], r["timeout"]  # killed/aborted runs leave no .gcda: no coverage
                 cov, unc = {}, {}
-                for gcda in Path(td).glob("*.gcda"):
+                for gcda in gcda_files(td):
                     res["gcda"] += 1
-                    cp = subprocess.run(["gcov", "--json-format", "--stdout", str(gcda)], cwd=td,
+                    cp = subprocess.run(["gcov", "--json-format", "--stdout", str(gcda)], cwd=str(gcda.parent),
                                         capture_output=True, text=True)
                     for doc in filter(None, cp.stdout.split("\n")):
                         try:
@@ -103,7 +129,7 @@ def worker(a):
                         for f in data.get("files", []):
                             res["gcov_files"] += 1
                             path = os.path.normpath(os.path.join(data.get("current_working_directory", td), f["file"]))
-                            rel = path[len(a.prefix):] if path.startswith(a.prefix) else None
+                            rel = next((path[len(p):] for p in prefixes if path.startswith(p)), None)
                             if rel not in changed:
                                 continue
                             for ln in f["lines"]:
@@ -122,11 +148,18 @@ def worker(a):
 # ---------------------------------------------------------------- host: measure, aggregate, context, loop
 def measure(env, tests_dir, names, changed, a):
     from run import launch_worker
+    from env import COV_SRC
     wargs = ["--worker", "--tag", "new", *[f"--flag={f}" for f in env.flags("new")], "--tests", str(tests_dir),
              "--std", a.std, "--timeout", str(a.timeout), "--compile-timeout", str(a.compile_timeout),
              "--jobs", str(a.jobs), "--prefix", env.new_dir + "/", "--changed-json", json.dumps(changed),
              "--names", *names]
-    per_test = launch_worker(env, "new", tests_dir, "coverage_loop.py", wargs, a.docker)
+    volumes = ()
+    if getattr(env, "new_lib", None):    # cmake target: link the coverage library, read its notes from the build volume
+        if not getattr(env, "cov_lib", None):
+            die(f"{env.target}: no coverage library (prepare the environment with coverage=True)")
+        wargs[1:1] = [*[f"--link-flag={f}" for f in env.cov_link_flags()], "--prefix", COV_SRC + "/", "--gcov-prefix"]
+        volumes = (f"prh-{env.target}-build:/build:ro",)
+    per_test = launch_worker(env, "new", tests_dir, "coverage_loop.py", wargs, a.docker, volumes)
     ran = [r for r in per_test.values() if r["compiled"] and not r["timeout"] and r["exit"] == 0]
     if ran and not any(r["gcov_files"] for r in ran):
         sys.exit("coverage_loop.py: " + str(len(ran)) + " programs ran cleanly but none produced usable gcov data "
@@ -198,7 +231,7 @@ def loop(env, tests_dir, a, refine=None, rounds=1):
     """Measure all tests in tests_dir, then (if refine given) up to `rounds` refine rounds. -> coverage report dict."""
     from env import load_cfg
     repo = ROOT / "repos" / env.target
-    changed = changed_lines(repo, env.parent, env.merge, env.include_dirs)
+    changed = changed_lines(repo, env.parent, env.merge, load_cfg(env.target).get("coverage_paths") or env.include_dirs)
     names = sorted(p.name for p in Path(tests_dir).glob("*.cpp"))
     if not names:
         die(f"no *.cpp tests in {tests_dir}")
@@ -244,12 +277,16 @@ def main():
     ap.add_argument("--compile-timeout", type=float, default=180)
     ap.add_argument("--jobs", type=int, default=4)
     ap.add_argument("--tests-dir")
+    ap.add_argument("--variant", choices=["main", "baseline"], default="main",
+                    help="baseline: data/<t>/baseline/<pr> (the basic pipeline); ignored with --tests-dir")
     ap.add_argument("--context", action="store_true", help="print the refine prompt context")
     ap.add_argument("--worker", action="store_true", help=argparse.SUPPRESS)
     ap.add_argument("--tag", default="", help=argparse.SUPPRESS)
     ap.add_argument("--flag", action="append", default=[], help=argparse.SUPPRESS)
     ap.add_argument("--tests", help=argparse.SUPPRESS)
-    ap.add_argument("--prefix", help=argparse.SUPPRESS)
+    ap.add_argument("--prefix", action="append", default=[], help=argparse.SUPPRESS)
+    ap.add_argument("--link-flag", action="append", default=[], help=argparse.SUPPRESS)
+    ap.add_argument("--gcov-prefix", action="store_true", help=argparse.SUPPRESS)
     ap.add_argument("--changed-json", help=argparse.SUPPRESS)
     ap.add_argument("--names", nargs="+", help=argparse.SUPPRESS)
     a = ap.parse_args()
@@ -259,11 +296,9 @@ def main():
         ap.error("need <target> and --pr or --merge")
     a.std = a.std or default_std(a.target, a.pr)
     from env import prepare
-    env = prepare(a.target, a.pr, a.merge, a.parent, a.docker)
-    if env.new_lib:
-        die(f"{a.target}: coverage for cmake targets needs a --coverage library build, not implemented yet")
+    env = prepare(a.target, a.pr, a.merge, a.parent, a.docker, coverage=True)
     key = str(env.pr) if env.pr else env.merge[:12]
-    tests_dir = Path(a.tests_dir or ROOT / "data" / a.target / "tests" / key).resolve()
+    tests_dir = Path(a.tests_dir or ROOT / "data" / a.target / ("tests" if a.variant == "main" else a.variant) / key).resolve()
     rep = loop(env, tests_dir, a)
     (tests_dir / "coverage.json").write_text(json.dumps(rep, indent=2) + "\n")
     s = rep["summary"]

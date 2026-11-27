@@ -38,7 +38,7 @@ HERE = Path(__file__).resolve().parent
 ROOT = HERE.parent
 sys.path.insert(0, str(HERE))
 sys.path.insert(0, str(ROOT))
-from pipeline.common import Target, git, pr_std, read_jsonl, write_text  # noqa: E402
+from pipeline.common import VARIANTS, Target, git, pr_std, read_jsonl, tests_dir as variant_dir, write_text  # noqa: E402
 import llm  # noqa: E402
 
 CAP = {"body": 4000, "comment": 1200, "comments": 6, "issue": 2000, "issues": 3, "diff": 24000, "context": 8000}
@@ -147,9 +147,11 @@ def changed_functions(t, rec):
     return seen, "git hunk headers (rough hint)"
 
 
-def pr_section(t, rec, gh):
+def pr_section(t, rec, gh, variant="main"):
+    """The PR as the prompts show it. variant "baseline" (the basic pipeline of the comparison) leaves out the two
+    sections the improved pipeline adds: the changed functions from changes.py and the upstream tests from context.py."""
     kept, dropped = merge_time_comments(gh)
-    funcs, src = changed_functions(t, rec)
+    funcs, src = changed_functions(t, rec) if variant == "main" else ([], None)
     out = [f"# Pull request #{rec['pr']}: {(gh or {}).get('title') or rec.get('title') or rec['subject']}"]
     if gh and gh.get("body"):
         out += ["", "## Description", clip(gh["body"], CAP["body"])]
@@ -163,7 +165,7 @@ def pr_section(t, rec, gh):
     out += ["", f"## Changed functions (from {src})"] + [f"- {f}" for f in funcs] if funcs else []
     out += ["", "## Diff of the library source (before -> after)", "```diff", source_diff(t, rec), "```"]
     ctx = t.data / "context" / f"{rec['pr']}.txt"
-    if ctx.is_file():
+    if variant == "main" and ctx.is_file():
         out += ["", "## Existing upstream tests that call the changed code (for style and API usage)",
                 clip(ctx.read_text(encoding="utf-8"), CAP["context"])]
     return "\n".join(out), {"comments_kept": len(kept), "comments_dropped_after_merge": dropped}
@@ -193,8 +195,8 @@ def system_prompt(t, std="c++17"):
     return system + (f"\n\nRules specific to this library:\n{notes}" if notes else "")
 
 
-def build_generate_prompt(t, rec, gh, n):
-    section, stats = pr_section(t, rec, gh)
+def build_generate_prompt(t, rec, gh, n, variant="main"):
+    section, stats = pr_section(t, rec, gh, variant)
     return system_prompt(t, pr_std(t, rec["pr"])), (
         f"{section}\n\n# Task\nWrite {n} test programs for this pull request. Return JSON with a \"tests\" array; each "
         f"item has \"name\" (short snake_case), \"intent\" (one sentence: what behavior it probes) and \"code\" "
@@ -292,9 +294,10 @@ def remove_stale(tests_dir, keep):
 # ---------------------------------------------------------------- steps
 def generate(t, pr, args, tests_dir=None):
     rec, gh = load_pr(t, pr)
-    tests_dir = Path(tests_dir or t.data / "tests" / str(pr))
+    variant = getattr(args, "variant", "main")
+    tests_dir = Path(tests_dir or variant_dir(t, pr, variant))
     tests_dir.mkdir(parents=True, exist_ok=True)
-    system, prompt, stats = build_generate_prompt(t, rec, gh, args.n)
+    system, prompt, stats = build_generate_prompt(t, rec, gh, args.n, variant)
     write_text(tests_dir / "generate.prompt.txt", f"[system]\n{system}\n\n[user]\n{prompt}\n")
     print(f"PR #{pr}: prompt {len(system) + len(prompt)} chars (~{(len(system) + len(prompt)) // 4} tokens); "
           f"comments kept {stats['comments_kept']}, dropped as post-merge {stats['comments_dropped_after_merge']}")
@@ -309,6 +312,7 @@ def generate(t, pr, args, tests_dir=None):
     remove_stale(tests_dir, {e["file"] for e in entries})
     manifest = {"target": t.name, "pr": pr, "model": r["model"], "prompt_sha256": hashlib.sha256(
         (system + prompt).encode()).hexdigest(), "n_requested": args.n, "std": pr_std(t, pr), "dropped": dropped,
+        **({"variant": variant} if variant != "main" else {}),
         "usage": r.get("usage"), "tests": entries}
     save_manifest(tests_dir, manifest)
     print(f"wrote {len(entries)} programs to {tests_dir} ({'cache' if r['cached'] else 'API'}; {dropped} unusable dropped; "
@@ -335,7 +339,7 @@ def refine_round(t, args, tests_dir, manifest, rec, gh):
     """Measure changed-line coverage of everything in tests_dir and make ONE refine request aimed at the uncovered lines."""
     from env import prepare
     import coverage_loop
-    env = prepare(t.name, args.pr, docker=args.docker)
+    env = prepare(t.name, args.pr, docker=args.docker, coverage=True)
     rep = coverage_loop.loop(env, tests_dir, args, refine=make_refine(t, rec, gh, args, tests_dir, manifest), rounds=1)
     write_text(tests_dir / "coverage.json", json.dumps(rep, indent=2) + "\n")
     for h in rep["history"]:
@@ -358,6 +362,8 @@ def main():
     ap.add_argument("--refine-n", type=int, default=5)
     ap.add_argument("--docker", action="store_true", help="with --refine/--refine-only: build/measure in the container")
     ap.add_argument("--std", help="C++ standard for the coverage build (default: chosen per PR, see common.pr_std)")
+    ap.add_argument("--variant", choices=sorted(VARIANTS), default="main",
+                    help="baseline: the basic pipeline (no changed functions, no upstream tests) in data/<t>/baseline/")
     ap.add_argument("--timeout", type=float, default=10)
     ap.add_argument("--compile-timeout", type=float, default=180)
     ap.add_argument("--jobs", type=int, default=4)
@@ -365,8 +371,10 @@ def main():
     t = Target(args.target)
     args.std = args.std or pr_std(t, args.pr)
     try:
+        if args.variant != "main" and (args.refine or args.refine_only):
+            die("the baseline has no refine round (its coverage is measured by coverage_loop.py --variant baseline)")
         if args.refine_only:
-            tests_dir = t.data / "tests" / str(args.pr)
+            tests_dir = variant_dir(t, args.pr)
             if not (tests_dir / "generated.json").is_file():
                 die(f"{tests_dir / 'generated.json'} is missing; generate first")
             manifest = json.loads((tests_dir / "generated.json").read_text())

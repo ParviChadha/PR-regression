@@ -1,7 +1,12 @@
 #!/usr/bin/env python3
 """Report (pipeline stage "Report"): Testora-style tables from what the earlier stages left on disk. No LLM calls.
 
-Usage:  python3 pipeline/report.py <target> [--prs 4958 5459] [--out-dir results/<target>]
+Usage:  python3 pipeline/report.py <target> [--prs 4958 5459] [--out-dir results/<target>] [--variant baseline] [--compare]
+
+--variant baseline reports data/<t>/baseline/ (the basic pipeline, see common.VARIANTS) into results/<t>/baseline/.
+--compare writes results/<t>/comparison.md: the basic and the improved pipeline on the PRs both have run, with
+changed-line coverage split into basic / improved before the coverage loop / improved after it, so the contribution of
+change analysis + test context and of the coverage loop can be told apart (proposal, section D.c).
 
 Reads, per PR in data/<t>/tests/<pr>/: generated.json, results.json, and when present classification.json and
 coverage.json. Optional data/<t>/seeded.json lists PRs with a known answer (used ONLY here, never in any prompt):
@@ -33,7 +38,7 @@ HERE = Path(__file__).resolve().parent
 ROOT = HERE.parent
 sys.path.insert(0, str(HERE))
 sys.path.insert(0, str(ROOT))
-from pipeline.common import Target, write_text  # noqa: E402
+from pipeline.common import VARIANTS, Target, write_text  # noqa: E402
 
 
 def load(path):
@@ -188,8 +193,8 @@ def labels_section(ev):
             f"| Inter-labeler Cohen's kappa ({ev['labeler_pairs']} items) | {f(ev['labeler_kappa'])} |", ""]
 
 
-def render(target, prs, s, ev=None):
-    L = [f"# Report: {target}", "",
+def render(target, prs, s, ev=None, folder="tests", title=None):
+    L = [f"# Report: {title or target}", "",
          f"{s['prs_checked']} PR(s) checked, {s['generated']} programs generated, {s['in_use']} in use "
          f"({s['repairs']} repaired by fix.py). Numbers come only from the files on disk; see the module docstring of "
          f"pipeline/report.py for each definition.", "", "## Summary", "", "| Measure | Value |", "|---|---|",
@@ -249,22 +254,101 @@ def render(target, prs, s, ev=None):
         for c in cls["clusters"]:
             if c["verdict"] == "unintended":
                 L += ["", f"### Finding: PR #{p['pr']} {c['id']} ({c['verdict']}, {c['confidence']})", "", c["reason"], "",
-                      f"- Example program: `data/{target}/tests/{p['pr']}/{c['programs'][0]}` ({len(c['programs'])} in cluster)",
+                      f"- Example program: `data/{target}/{folder}/{p['pr']}/{c['programs'][0]}` ({len(c['programs'])} in cluster)",
                       f"- Old version: {c.get('old', 'n/a')}", f"- New version: {c.get('new', 'n/a')}"]
     return "\n".join(L) + "\n"
 
 
-def build(target_name, data_dir, out_dir, prs=None):
+def build(target_name, data_dir, out_dir, prs=None, variant="main"):
     data_dir = Path(data_dir)
-    names = [str(p) for p in prs] if prs else sorted((d.name for d in (data_dir / "tests").iterdir() if d.is_dir()), key=lambda n: (len(n), n))
-    recs = [r for r in (collect_pr(data_dir / "tests" / n) for n in names) if r]
+    folder = VARIANTS[variant]
+    root = data_dir / folder
+    names = [str(p) for p in prs] if prs else sorted((d.name for d in root.iterdir() if d.is_dir()) if root.is_dir() else [],
+                                                     key=lambda n: (len(n), n))
+    recs = [r for r in (collect_pr(root / n) for n in names) if r]
     seeded_doc = load(data_dir / "seeded.json")
     s = summarize(recs, (seeded_doc or {}).get("seeded", []))
     out_dir = Path(out_dir)
     out_dir.mkdir(parents=True, exist_ok=True)
-    write_text(out_dir / "report.md", render(target_name, recs, s, load(data_dir / "labels" / "eval.json")))
+    title = target_name + (f" ({variant} pipeline)" if variant != "main" else "")
+    labels = load(data_dir / "labels" / "eval.json") if variant == "main" else None   # hand labels are of the main run
+    write_text(out_dir / "report.md", render(target_name, recs, s, labels, folder, title))
     write_text(out_dir / "report.json", json.dumps({"target": target_name, "summary": s, "prs": recs}, indent=2) + "\n")
     return recs, s
+
+
+def mean(xs):
+    xs = [x for x in xs if x is not None]
+    return None if not xs else round(100 * sum(xs) / len(xs), 1)
+
+
+def compare(target_name, data_dir, out_dir):
+    """results/<t>/comparison.md and comparison.json: basic (baseline) vs improved (main) pipeline on the PRs that both
+    have generate + run results for. None when no PR has both."""
+    data_dir, out_dir = Path(data_dir), Path(out_dir)
+    base_root, main_root = data_dir / VARIANTS["baseline"], data_dir / VARIANTS["main"]
+    if not base_root.is_dir() or not main_root.is_dir():
+        return None
+    pairs = []
+    for d in sorted(base_root.iterdir(), key=lambda d: (len(d.name), d.name)):
+        if d.is_dir() and (main_root / d.name).is_dir():
+            b, m = collect_pr(d), collect_pr(main_root / d.name)
+            if b and m:
+                pairs.append((b, m))
+    if not pairs:
+        return None
+    prs = {b["pr"] for b, _ in pairs}
+    seeded = [x for x in ((load(data_dir / "seeded.json") or {}).get("seeded", [])) if x["pr"] in prs]
+    sb, sm = summarize([b for b, _ in pairs], seeded), summarize([m for _, m in pairs], seeded)
+    cov = [(b, m) for b, m in pairs if b["coverage"] and m["coverage"] and b["coverage"]["first"] is not None
+           and m["coverage"]["first"] is not None]
+    c_base = mean([b["coverage"]["first"] for b, _ in cov])
+    c_first = mean([m["coverage"]["first"] for _, m in cov])
+    c_last = mean([m["coverage"]["last"] for _, m in cov])
+    reach = lambda key, side: sum(1 for b, m in cov if (b if side == "b" else m)["coverage"][key] >= COVERAGE_OK)  # noqa: E731
+    cs = lambda s: f"{fmt_pct(s['compile_success']['raw_new'])} / {fmt_pct(s['compile_success']['raw_both'])}"  # noqa: E731
+    cf = lambda s: f"{fmt_pct(s['compile_success']['final_new'])} / {fmt_pct(s['compile_success']['final_both'])}"  # noqa: E731
+    vd = lambda s: ", ".join(f"{k} {s['verdicts']['clusters'].get(k, 0)}" for k in ("intended", "unintended", "unclear"))  # noqa: E731
+    rc = lambda s: f"{len(s['regression_candidates'])}: " + (", ".join(f"#{p}" for p in s["regression_candidates"]) or "none")  # noqa: E731
+    n = len(pairs)
+    L = [f"# Basic vs improved pipeline: {target_name}", "",
+         f"{n} PR(s) run by both pipelines. Basic: the generation prompt has the PR text and diff only, and no coverage "
+         f"loop. Improved: the prompt also names the changed functions (change analysis) and shows upstream tests that "
+         f"use them (test context), and the coverage loop adds programs aimed at changed lines nobody reached. Fixing "
+         f"and classification are the same in both. Definitions as in report.md.", "",
+         "| Measure | Basic | Improved |", "|---|---|---|",
+         f"| Programs generated (mean per PR) | {sb['generated'] / n:.1f} | {sm['generated'] / n:.1f} |",
+         f"| Compile success, as generated (new / both) | {cs(sb)} | {cs(sm)} |",
+         f"| Compile success, after fix.py (new / both) | {cf(sb)} | {cf(sm)} |",
+         f"| PRs with at least one behavioral difference | {sb['prs_with_difference']['count']} of {n} | {sm['prs_with_difference']['count']} of {n} |",
+         f"| Differences by verdict (clusters) | {vd(sb)} | {vd(sm)} |",
+         f"| Regression candidates | {rc(sb)} | {rc(sm)} |",
+         f"| Clean results that are INCONCLUSIVE (coverage missing or low) | {len(sb['inconclusive_prs'])} | {len(sm['inconclusive_prs'])} |",
+         f"| Seeded regressions found | {sb['seeded']['recall'] or 'n/a'} | {sm['seeded']['recall'] or 'n/a'} |",
+         f"| LLM calls per PR (estimated) | {sb['llm_calls']['per_pr_mean']} | {sm['llm_calls']['per_pr_mean']} |", ""]
+    if cov:
+        L += [f"## Changed-line coverage ({len(cov)} PRs measured by both)", "",
+              "| | Basic | Improved, before the coverage loop | Improved, after the coverage loop |", "|---|---|---|---|",
+              f"| Mean changed-line coverage | {fmt_pct(c_base)} | {fmt_pct(c_first)} | {fmt_pct(c_last)} |",
+              f"| PRs with at least {int(100 * COVERAGE_OK)}% reached | {reach('first', 'b')} | {reach('first', 'm')} | {reach('last', 'm')} |",
+              "", "Basic -> improved before the loop is the effect of change analysis and test context in the prompt; "
+              "before -> after the loop is the effect of the coverage loop.", ""]
+    else:
+        L += ["Changed-line coverage is not available for both pipelines on any of these PRs: either coverage was not "
+              "measured (targets without a coverage build) or the changed lines have no executable code (e.g. "
+              "uninstantiated templates).", ""]
+    fc = lambda c, k: "n/a" if not c or c[k] is None else f"{100 * c[k]:.0f}%"  # noqa: E731
+    L += ["## Per PR", "", "| PR | Coverage basic | Coverage improved (before -> after loop) | Differing basic | Differing improved | Verdict basic | Verdict improved |",
+          "|---|---|---|---|---|---|---|"]
+    for b, m in pairs:
+        L.append(f"| #{b['pr']} | {fc(b['coverage'], 'first')} | {fc(m['coverage'], 'first')} -> {fc(m['coverage'], 'last')} | "
+                 f"{b['differing']} | {m['differing']} | {verdict_text(b)} | {verdict_text(m)} |")
+    out_dir.mkdir(parents=True, exist_ok=True)
+    write_text(out_dir / "comparison.md", "\n".join(L) + "\n")
+    doc = {"target": target_name, "prs": n, "basic": sb, "improved": sm,
+           "coverage": {"prs": len(cov), "basic": c_base, "improved_before_loop": c_first, "improved_after_loop": c_last}}
+    write_text(out_dir / "comparison.json", json.dumps(doc, indent=2) + "\n")
+    return doc
 
 
 def main():
@@ -272,10 +356,18 @@ def main():
     ap.add_argument("target")
     ap.add_argument("--prs", type=int, nargs="+")
     ap.add_argument("--out-dir")
+    ap.add_argument("--variant", choices=sorted(VARIANTS), default="main")
+    ap.add_argument("--compare", action="store_true", help="write results/<t>/comparison.md (basic vs improved)")
     a = ap.parse_args()
     t = Target(a.target)
-    out = a.out_dir or ROOT / "results" / a.target
-    recs, s = build(a.target, t.data, out, a.prs)
+    if a.compare:
+        doc = compare(a.target, t.data, a.out_dir or ROOT / "results" / a.target)
+        if not doc:
+            sys.exit("report.py: no PR has results in both data/<t>/tests and data/<t>/baseline")
+        print(f"{doc['prs']} PR(s) compared; wrote comparison.md and comparison.json")
+        return
+    out = a.out_dir or ROOT / "results" / a.target / ("" if a.variant == "main" else a.variant)
+    recs, s = build(a.target, t.data, out, a.prs, a.variant)
     if not recs:
         sys.exit("report.py: no PR in data/<t>/tests has both generated.json and results.json")
     print(f"{s['prs_checked']} PR(s); regression candidates: {s['regression_candidates'] or 'none'}; "

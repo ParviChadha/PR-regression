@@ -30,6 +30,20 @@ class Target:
         return self.cfg.get(key, default)
 
 
+# Pipeline variants, each with its own folder under data/<t>/ (the proposal's comparison of a basic pipeline with the
+# improved one, section D.c):
+#   main      the full pipeline: prompts name the changed functions (changes.py) and show upstream tests that use
+#             them (context.py), and the coverage loop adds programs aimed at changed lines nobody reached.
+#   baseline  the basic pipeline: the same prompts without those two sections and without the refine round (coverage
+#             is still measured, so both variants report it). Fixing and classification are the same in both.
+VARIANTS = {"main": "tests", "baseline": "baseline"}
+
+
+def tests_dir(t, pr, variant="main"):
+    """data/<t>/tests/<pr> (main) or data/<t>/baseline/<pr>."""
+    return t.data / VARIANTS[variant] / str(pr)
+
+
 def pr_std(t, pr):
     """The C++ standard to compile PR `pr`'s generated programs with (e.g. "c++17", "c++20").
 

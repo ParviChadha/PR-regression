@@ -119,9 +119,61 @@ def setUpModule():
     p = mock.patch.object(llm, "ENV_FILE", Path(tempfile.gettempdir()) / "prh-test-absent.env")
     p.start()
     unittest.addModuleCleanup(p.stop)
+    r = mock.patch.dict(os.environ)          # a real Agent Platform setup in the shell must not reach these tests
+    r.start()
+    for name in llm.ROUTE_NAMES:
+        os.environ.pop(name, None)
+    unittest.addModuleCleanup(r.stop)
     q = mock.patch.object(llm.urllib.request, "urlopen", side_effect=AssertionError("tests must not use the network"))
     q.start()
     unittest.addModuleCleanup(q.stop)
+
+
+class AgentPlatformRouteTests(unittest.TestCase):
+    """GOOGLE_GENAI_USE_ENTERPRISE + GOOGLE_CLOUD_PROJECT: calls go to Agent Platform with a sign-in token, not the key."""
+    ENV = {"GOOGLE_GENAI_USE_ENTERPRISE": "true", "GOOGLE_CLOUD_PROJECT": "proj-1", "GEMINI_API_KEY": "SECRET-KEY-123"}
+
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(self.tmp.cleanup)
+        for p in (mock.patch.object(llm, "CACHE", Path(self.tmp.name)), mock.patch.dict(os.environ, self.ENV),
+                  mock.patch.object(llm, "access_token", side_effect=lambda refresh=False: "TOK2" if refresh else "TOK1")):
+            p.start()
+            self.addCleanup(p.stop)
+
+    def test_route_endpoint_and_headers(self):
+        self.assertEqual(llm.route(), ("agent_platform", "proj-1", "global"))
+        self.assertEqual(llm.endpoint("gemini-3.5-flash-lite"), "https://aiplatform.googleapis.com/v1/projects/proj-1/"
+                         "locations/global/publishers/google/models/gemini-3.5-flash-lite:generateContent")
+        self.assertEqual(llm.auth_headers(), {"Authorization": "Bearer TOK1"})       # the key is not used
+        with mock.patch.dict(os.environ, {"GOOGLE_CLOUD_LOCATION": "us-central1"}):
+            self.assertTrue(llm.endpoint("m").startswith("https://us-central1-aiplatform.googleapis.com/v1/projects/proj-1/locations/us-central1/"))
+        with mock.patch.dict(os.environ, {"GOOGLE_GENAI_USE_ENTERPRISE": "false"}):
+            self.assertEqual(llm.route()[0], "api_key")
+            self.assertEqual(llm.auth_headers(), {"x-goog-api-key": "SECRET-KEY-123"})
+
+    def test_route_settings_can_come_from_dotenv(self):
+        f = Path(self.tmp.name) / ".env"
+        f.write_text("GOOGLE_GENAI_USE_ENTERPRISE=true\nGOOGLE_CLOUD_PROJECT=from-file\n")
+        with mock.patch.object(llm, "ENV_FILE", f), mock.patch.dict(os.environ, {}, clear=True):
+            self.assertEqual(llm.route(), ("agent_platform", "from-file", "global"))
+
+    def test_call_uses_the_token_refreshes_on_401_and_records_tokens(self):
+        body = json.dumps({"candidates": [{"content": {"parts": [{"text": "{}"}]}}],
+                           "usageMetadata": {"promptTokenCount": 1000, "candidatesTokenCount": 200, "thoughtsTokenCount": 50}})
+        with mock.patch.object(llm, "_post", side_effect=[(401, "expired"), (200, body)]) as post:
+            llm.call("p", model="gemini-3.5-flash-lite")
+        self.assertEqual(post.call_args_list[0].args[2], {"Authorization": "Bearer TOK1"})
+        self.assertEqual(post.call_args_list[1].args[2], {"Authorization": "Bearer TOK2"})
+        self.assertEqual(llm.tokens_today("gemini-3.5-flash-lite"), (1000, 250))
+        stored = "".join(f.read_text() for f in Path(self.tmp.name).rglob("*.json"))
+        self.assertNotIn("TOK", stored)
+        self.assertNotIn("SECRET-KEY-123", stored)
+
+    def test_limits_on_the_paid_route(self):
+        self.assertEqual(llm.limits("gemini-3.5-flash-lite"), (60, 2000))
+        with mock.patch.dict(os.environ, {"PRH_LLM_RPD": "300"}):
+            self.assertEqual(llm.limits("gemini-3.5-flash-lite"), (60, 300))
 
 
 class EnvFileTests(unittest.TestCase):

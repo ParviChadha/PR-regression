@@ -34,7 +34,7 @@ HERE = Path(__file__).resolve().parent
 ROOT = HERE.parent
 sys.path.insert(0, str(HERE))
 sys.path.insert(0, str(ROOT))
-from pipeline.common import Target, write_text  # noqa: E402
+from pipeline.common import VARIANTS, Target, tests_dir as variant_dir, write_text  # noqa: E402
 import fix  # noqa: E402
 import generate  # noqa: E402
 import llm  # noqa: E402
@@ -216,7 +216,9 @@ def parse_verdicts(text, shown):
 
 # ---------------------------------------------------------------- run
 def classify(t, pr, args, tests_dir=None):
-    tests_dir = Path(tests_dir or t.data / "tests" / str(pr))
+    # Both variants are classified from the same, full PR section (generate.pr_section's default): the comparison
+    # of the basic and the improved pipeline varies how tests are generated, not how differences are judged.
+    tests_dir = Path(tests_dir or variant_dir(t, pr, getattr(args, "variant", "main")))
     for need in ("generated.json", "results.json"):
         if not (tests_dir / need).is_file():
             die(f"{tests_dir / need} is missing; run generate.py and run.py first")
@@ -265,6 +267,7 @@ def main():
     ap.add_argument("--model", default=llm.DEFAULT_MODEL)
     ap.add_argument("--dry-run", action="store_true", help="show the clusters and save the prompt, make no request")
     ap.add_argument("--force", action="store_true", help="ignore the response cache (costs a request)")
+    ap.add_argument("--variant", choices=sorted(VARIANTS), default="main", help="baseline: classify data/<t>/baseline/<pr>")
     args = ap.parse_args()
     try:
         classify(Target(args.target), args.pr, args)

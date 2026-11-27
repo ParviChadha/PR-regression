@@ -9,6 +9,11 @@ build_mode in targets/<t>/target.toml:
   cmake        the export of export_paths is built inside the prh-<t> container: the library at the parent commit,
                then incrementally at the merge commit, in one persistent build volume (prh-<t>-build) with ccache
                (prh-<t>-ccache). Each commit's shared library is copied to <export>/lib/. Needs docker. (duckdb)
+               With coverage=True (coverage_loop.py) and `coverage_cmake_args` in target.toml, the merge commit is also
+               built with coverage instrumentation in a tree of its own (/build/cov-src -> /build/cov) and its library
+               copied to <export>/lib-cov/. The .gcno notes stay in /build/cov, which holds the last commit built
+               there (/build/cov/.prh-commit), so the coverage build is redone whenever another commit was built in
+               between; it is incremental and shares ccache. (QuantLib; not set up for duckdb, whose build is too slow.)
 
 Commits are exported with `git archive`, so the upstream clone in repos/<t> is only read, never written.
 Exports are idempotent: an export with a .prh-ok marker is reused; a partial one is redone. A built library has a
@@ -65,6 +70,7 @@ class Env:
     old_lib: str | None = None  # directory holding the built shared library (cmake mode), else None
     new_lib: str | None = None
     lib_name: str | None = None  # e.g. "duckdb" for -lduckdb
+    cov_lib: str | None = None  # cmake + coverage: directory holding the merge commit's coverage-instrumented library
 
     def flags(self, which):
         """-I flags to compile a test against 'old' (parent) or 'new' (merge)."""
@@ -75,6 +81,10 @@ class Env:
         """Flags that go AFTER the source file when linking (empty for header-only targets)."""
         lib = {"old": self.old_lib, "new": self.new_lib}[which]
         return [f"-L{lib}", f"-l{self.lib_name}", f"-Wl,-rpath,{lib}"] if lib else []
+
+    def cov_link_flags(self):
+        """Link flags for the coverage-instrumented library of the merge commit (empty unless prepared with coverage)."""
+        return [f"-L{self.cov_lib}", f"-l{self.lib_name}", f"-Wl,-rpath,{self.cov_lib}"] if self.cov_lib else []
 
 
 def _from_prs_jsonl(target, pr):
@@ -164,7 +174,42 @@ def build_libraries(target, cfg, parent_dir, merge_dir):
         die("library build failed (see output above)")
 
 
-def prepare(target, pr=None, merge=None, parent=None, docker=False):
+COV_SRC, COV_OBJ = "/build/cov-src", "/build/cov"   # coverage build tree in the prh-<target>-build volume
+
+
+def build_coverage_library(target, cfg, merge_dir):
+    """cmake mode: the merge commit's library with coverage instrumentation, for coverage_loop.py. Built in its own
+    tree so the normal build tree (/build/src, /build/obj) is untouched; cmake_args then coverage_cmake_args (later
+    -D values win, e.g. CMAKE_BUILD_TYPE=Debug). A no-op when /build/cov already holds this commit. -> lib-cov dir."""
+    d = Path(merge_dir)
+    sha = d.name
+    lib = cfg["library"]
+    args = " ".join(shlex.quote(a) for a in [*cfg["cmake_args"], *cfg["coverage_cmake_args"]])
+    out = shlex.quote(str(d / "lib-cov"))
+    script = "\n".join([
+        "set -e",
+        "exec 9>/build/.prh-lock; flock 9",
+        f"if [ \"$(cat {COV_OBJ}/.prh-commit 2>/dev/null)\" = {sha} ] && [ -f {out}/{shlex.quote(Path(lib).name)} ]; then exit 0; fi",
+        f"echo '== coverage build {sha[:9]}'",
+        f"mkdir -p {COV_SRC} {COV_OBJ}",
+        f"rsync -rlpgoD --checksum --delete --exclude=/lib --exclude=/lib-cov --exclude=/.prh-ok --exclude=/.prh-built "
+        f"{shlex.quote(str(d))}/ {COV_SRC}/",
+        f"cmake -S {COV_SRC} -B {COV_OBJ} {args}",
+        f"cmake --build {COV_OBJ} --target {shlex.quote(cfg['build_target'])} --parallel \"${{JOBS:-4}}\"",
+        f"mkdir -p {out} && cp {COV_OBJ}/{shlex.quote(lib)} {out}/",
+        f"echo {sha} > {COV_OBJ}/.prh-commit",
+    ])
+    base = d.parent
+    cmd = ["docker", "run", "--rm", "--name", f"prh-{target}-cov-{os.getpid()}",
+           "-v", f"{base}:{base}", "-v", f"prh-{target}-build:/build", "-v", f"prh-{target}-ccache:/ccache",
+           "-e", "CCACHE_DIR=/ccache", "-e", "CCACHE_MAXSIZE=5G", "-e", f"JOBS={os.environ.get('JOBS', '4')}",
+           f"prh-{target}", "bash", "-c", script]
+    if subprocess.run(cmd).returncode:
+        die("coverage library build failed (see output above)")
+    return str(d / "lib-cov")
+
+
+def prepare(target, pr=None, merge=None, parent=None, docker=False, coverage=False):
     cfg = load_cfg(target)
     mode = cfg.get("build_mode")
     if mode not in ("header-only", "cmake"):
@@ -183,6 +228,10 @@ def prepare(target, pr=None, merge=None, parent=None, docker=False):
         build_libraries(target, cfg, old_dir, new_dir)
         env.old_lib, env.new_lib = str(old_dir / "lib"), str(new_dir / "lib")
         env.lib_name = Path(cfg["library"]).name.removeprefix("lib").split(".")[0]
+        if coverage:
+            if not cfg.get("coverage_cmake_args"):
+                die(f"{target}: changed-line coverage needs coverage_cmake_args in target.toml (no coverage build set up)")
+            env.cov_lib = build_coverage_library(target, cfg, new_dir)
     return env
 
 

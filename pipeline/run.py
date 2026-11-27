@@ -47,13 +47,14 @@ def _read_capped(path):
     return h.hexdigest(), n, head.decode("utf-8", "replace")
 
 
-def _run_once(exe, cwd, timeout):
+def _run_once(exe, cwd, timeout, extra_env=None):
     out, err = Path(cwd) / ".stdout", Path(cwd) / ".stderr"
     t0, timed_out = time.time(), False
     with open(out, "wb") as fo, open(err, "wb") as fe:
         # ulimit caps file output so a runaway print loop cannot fill the disk; new session so a timeout kills children too
         p = subprocess.Popen(["sh", "-c", 'ulimit -f 131072; exec "$0"', str(exe)], stdin=subprocess.DEVNULL,
-                             stdout=fo, stderr=fe, cwd=cwd, start_new_session=True)
+                             stdout=fo, stderr=fe, cwd=cwd, start_new_session=True,
+                             env={**os.environ, **extra_env} if extra_env else None)
         try:
             rc = p.wait(timeout=timeout)
         except subprocess.TimeoutExpired:
@@ -139,7 +140,7 @@ def classify(old, new):
     return ("same" if same else "output_diff"), None
 
 
-def launch_worker(env, which, tests_dir, script, wargs, docker):
+def launch_worker(env, which, tests_dir, script, wargs, docker, volumes=()):
     """Run `pipeline/<script> --worker <wargs>` on the host or in the prh-<target> container (no network, memory-limited;
     exports, tests and pipeline/ mounted read-only at the same absolute paths); -> parsed JSON from its stdout."""
     if docker:
@@ -147,6 +148,7 @@ def launch_worker(env, which, tests_dir, script, wargs, docker):
         cmd = ["docker", "run", "--rm", "--name", f"prh-{env.target}-{Path(script).stem}-{which}-{os.getpid()}",
                "--network", "none", "--memory", "3g", "--pids-limit", "1024",
                "-v", f"{base}:{base}:ro", "-v", f"{tests_dir}:{tests_dir}:ro", "-v", f"{HERE}:/pipeline:ro",
+               *[x for v in volumes for x in ("-v", v)],
                f"prh-{env.target}", "python3", f"/pipeline/{script}", *wargs]
     else:
         cmd = [sys.executable, str(HERE / script), *wargs]
@@ -164,12 +166,19 @@ def run_batch(env, which, tests_dir, names, a):
     return launch_worker(env, which, tests_dir, "run.py", wargs, a.docker)
 
 
+def source_sha256(path):
+    """Hash of a program's source as it was compiled. batch.py compares it with the file on disk: a program rewritten
+    after it ran (regenerated with generate.py outside batch.py) makes the run stage stale instead of keeping results
+    that belong to the old text. CRLF counts as LF, so a Windows checkout (core.autocrlf) matches a Mac/Linux one."""
+    return hashlib.sha256(Path(path).read_bytes().replace(b"\r\n", b"\n")).hexdigest()
+
+
 def run_pr(a):
     sys.path.insert(0, str(HERE))
     from env import prepare
     env = prepare(a.target, a.pr, a.merge, a.parent, a.docker)
     key = str(env.pr) if env.pr else env.merge[:12]
-    tests_dir = Path(a.tests_dir or ROOT / "data" / a.target / "tests" / key).resolve()
+    tests_dir = Path(a.tests_dir or ROOT / "data" / a.target / ("tests" if a.variant == "main" else a.variant) / key).resolve()
     names = sorted(p.name for p in tests_dir.glob("*.cpp"))
     if not names:
         die(f"no *.cpp tests in {tests_dir}")
@@ -180,7 +189,8 @@ def run_pr(a):
     tests, counts = {}, {}
     for n in names:
         status, failed_on = classify(old[n], new[n])
-        tests[n] = {"status": status, "compile_failed_on": failed_on, "old": old[n], "new": new[n]}
+        tests[n] = {"status": status, "compile_failed_on": failed_on, "source_sha256": source_sha256(tests_dir / n),
+                    "old": old[n], "new": new[n]}
         counts[status] = counts.get(status, 0) + 1
     out = {"target": a.target, "pr": env.pr, "parent": env.parent, "merge": env.merge, "std": a.std,
            "runs": a.runs, "timeout": a.timeout, "docker": a.docker, "wall_seconds": round(time.time() - t0, 1),
@@ -215,6 +225,8 @@ def main():
     ap.add_argument("--compile-timeout", type=float, default=180)
     ap.add_argument("--jobs", type=int, default=4)
     ap.add_argument("--tests-dir")
+    ap.add_argument("--variant", choices=["main", "baseline"], default="main",
+                    help="baseline: data/<t>/baseline/<pr> (the basic pipeline); ignored with --tests-dir")
     ap.add_argument("--worker", action="store_true", help=argparse.SUPPRESS)
     ap.add_argument("--tag", default="", help=argparse.SUPPRESS)
     ap.add_argument("--flag", action="append", default=[], help=argparse.SUPPRESS)

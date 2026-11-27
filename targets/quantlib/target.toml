@@ -23,6 +23,12 @@ cmake_args = [
   "-DCMAKE_PLATFORM_NO_VERSIONED_SONAME=ON",
 ]
 build_target = "ql_library"
+# Changed-line coverage (pipeline/coverage_loop.py): env.py builds the merge commit's library a second time with these
+# appended to cmake_args (later -D values win), in its own tree /build/cov of the build volume; tests link it and
+# gcov reads the notes there. -O0 so each source line keeps its own code. Only the library under ql/ is measured.
+coverage_cmake_args = ["-DCMAKE_BUILD_TYPE=Debug", "-DCMAKE_CXX_FLAGS=--coverage -O0",
+                       "-DCMAKE_SHARED_LINKER_FLAGS=--coverage"]
+coverage_paths = ["ql"]
 library = "ql/libQuantLib.so"           # relative to the build dir; copied to cache/worktrees/quantlib/<sha>/lib/
 # What CMake needs to configure and build the library (no Docs/, Examples/, test-suite/).
 export_paths = ["CMakeLists.txt", "cmake", "ql", "quantlib-config.in", "quantlib.pc.in"]
