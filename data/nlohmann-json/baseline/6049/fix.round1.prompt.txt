@@ -1,0 +1,510 @@
+[system]
+You write test programs that probe a C++ library for behavioral changes made by one pull request.
+Each program is compiled and run twice, once against the library before the change and once after, and the two
+outputs are compared. Your job is to produce programs whose output reveals whether the change altered behavior,
+including side effects the author did not intend.
+
+Rules for every program:
+- It is standalone: one file with its own int main(), compiled as C++17, printing results to stdout.
+- Use only the library's documented public API. Never include internal headers or use detail/impl namespaces,
+  private members or undocumented macros.
+- Do not judge results (no assert, no expected-value comparisons): just print what the library returns. Print
+  enough to make differences visible, one fact per line.
+- Output must be deterministic. Never print pointers or addresses, uninitialized data, the order of
+  hash-based containers, timings, thread ids, random values, file paths or environment data. Print floating point
+  values with an explicit precision. No input, files, network, threads, clocks or randomness.
+- Wrap calls that may throw in try/catch and print the exception's type and message, so an exception is an
+  observable result. Do not crash on purpose.
+- Aim at the code the diff changes. Prefer calls that compile against both the old and the new library; one or two
+  programs may use an API the PR adds. Cover ordinary inputs and edge cases (empty, minimum and maximum values,
+  boundaries, special values, nesting, unusual types) and also neighbouring behavior the change could disturb.
+- When the diff changes which types or inputs an API accepts or rejects (constraints, overloads, traits,
+  conversions), test it with the detection idiom (std::void_t or requires) and `if constexpr`, so the program
+  compiles against both versions, prints whether the expression is well-formed, and exercises it when it is.
+  Accepting an input is not enough: also use it through every entry point that should follow (const and
+  non-const, read, write, insert, erase, lookup, nested use), because a change that admits new inputs can leave
+  later code unable to handle them.
+- If the changed code is internal (a detail, impl or internal namespace, a trait, a helper), do not name it in the
+  program. Reach it through the public API that depends on it, using detection (as above) where needed.
+- Use the exact types and values the diff is about (the new trait's argument types, the new overload's
+  parameters), not stand-ins.
+- Spread the programs over distinct public entry points and overloads, one main idea per program. Do not write
+  several programs that only rename a type or change a literal.
+- Make the programs differ from each other: different inputs, different entry points, different features.
+
+Rules specific to this library:
+- Include the library with #include <nlohmann/json.hpp>. The public API is nlohmann::json (nlohmann::basic_json), nlohmann::ordered_json, json_pointer, json patch/merge_patch and the documented SAX and conversion interfaces. Never use the detail namespace.
+- It is a header-only library: nothing to link. Programs are compiled as C++17.
+- Print JSON values with dump() (compact) or dump(2). Keys of nlohmann::json objects print in sorted order, so output is deterministic; do not depend on insertion order except with ordered_json.
+
+[user]
+# Pull request #6049: json_view: keep tokens without an integer digit out of the float batch
+
+## Description
+## Problem
+
+OSS-Fuzz issue 583898810 (`json_view_image_fuzzer`, regressed with #5908): an image loaded with `image_check::bounds` makes `dump()` fail the assertion `digits != 0 && digits < 100000000000000000u` in `write_decimal()`.
+
+The image's float node records no digit before the point and 17 after it, which no JSON number has. `convert_ahead()` only required at least 8 fraction digits, so it batched the token with q = -17. `locate_token()` then read `fives[17]` past the 17 entries of its table. What it read depends on the binary's memory layout: in the fuzzer's x86-64 build, the digits came out as 10^17 + 64 (18 digits), and `write_shortest()` passed 18 digits on to `write_decimal()`.
+
+## Change
+
+- The batch takes tokens with 8 to 16 fraction digits (`frac_digits - 8u <= 8u` instead of `frac_digits >= 8`). Every valid token of 16 or 17 digits has at least one digit before the point, so the batch handles the same tokens of valid documents as before; the comparison costs the same.
+- `locate_token()`'s documentation states its range as -16 <= q <= -1, matching its table.
+- A section in `unit-json_view_image.cpp` with a crafted token of this layout and the OSS-Fuzz input itself. Without the fix, it fails on arm64 with a bounds-checked libc++ (`_LIBCPP_HARDENING_MODE_DEBUG`) and on x86-64 with the `write_decimal()` assertion. No CI job checks container bounds, so the crafted case alone would not fail there.
+
+Random damage to the testcase and to near-10^17 tokens (about 58M images, x86-64) found no other crash with the fix.
+
+## Tests run locally
+
+- the OSS-Fuzz testcase through `fuzzer-json_view_image.cpp` on x86-64: assertion before, passes after
+- all 22 json_view test targets (CMake Debug, arm64): pass
+- not run: the rest of the test suite and a benchmark (no measurable change expected)
+
+## Breaking changes
+
+No breaking changes: the public API is untouched.
+
+🤖 Generated with [Claude Code](https://claude.com/claude-code)
+
+## Commit message
+dump() batches float tokens of 16 or 17 digits with at least 8 fraction
+digits. A damaged image loaded with image_check::bounds can record a
+token with no digit before the point and 17 after it, which no JSON
+number has. Its q = -17 is outside the range of locate_token(), which
+then read fives[17] past its 17 entries; on x86-64 the resulting digits
+had 18 digits and failed the assertion of write_decimal() (OSS-Fuzz
+issue 583898810, json_view_image_fuzzer).
+
+The batch now takes 8 to 16 fraction digits, which every valid token of
+16 or 17 digits has, so it batches the same tokens of valid documents.
+
+Signed-off-by: Niels Lohmann <mail@nlohmann.me>
+
+## Discussion before merge
+- github-advanced-security[bot]: ## Flawfinder / Does not check for buffer overflows when copying to destination (CWE-120).
+
+buffer/memcpy:Does not check for buffer overflows when copying to destination (CWE-120).
+
+[Show more details](https://github.com/nlohmann/json/security/code-scanning/1166)
+
+## Headers the programs must include
+- Also write #include <nlohmann/json_view.hpp>. The json_view feature (json_document, json_view and their image loading and editing API) is declared only in this header; nlohmann/json.hpp does not include it, so without this line those names do not exist. Use only names you can see in the diff or the context below.
+
+## Diff of the library source (before -> after)
+```diff
+diff --git a/include/nlohmann/detail/view/serializer.hpp b/include/nlohmann/detail/view/serializer.hpp
+index deccec8e4..1c965f78f 100644
+--- a/include/nlohmann/detail/view/serializer.hpp
++++ b/include/nlohmann/detail/view/serializer.hpp
+@@ -393,7 +393,7 @@ struct depth_counter<false>
+ 
+ /*!
+ @brief where the double x nearest to a token w * 10^q lies, for 10^15 <= w <
+-10^17 and -17 <= q <= -1 (Eisel-Lemire, then a fixed-point position)
++10^17 and -16 <= q <= -1 (Eisel-Lemire, then a fixed-point position)
+ 
+ dump() writes the shortest decimal in the rounding interval of x (the closest
+ one if there are several, see zmij::to_shortest()). Its digits are those of a
+@@ -1258,13 +1258,15 @@ class view_serializer
+         }
+         for (; p != stop && batch.count != float_batch::capacity(); ++p)
+         {
+-            // a token of the source: 16 or 17 digits, at least 8 after the
+-            // point, no exponent, 32 bytes to read
++            // a token of the source: 16 or 17 digits, 8 to 16 after the
++            // point, no exponent, 32 bytes to read (17 after the point, with
++            // no digit before it, only in a damaged image loaded with
++            // image_check::bounds: beyond the range of locate_token())
+             const unsigned frac_digits = p->extra >> 8u;
+             const unsigned int_digits = p->extra & 0xFFu;
+             const unsigned count = int_digits + frac_digits;
+             if (p->kind == node_kind::number_float && (p->flags & node_flags::storage) == 0
+-                    && count - 16u <= 1u && frac_digits >= 8 && src_end - (src + p->off) >= 33)
++                    && count - 16u <= 1u && frac_digits - 8u <= 8u && src_end - (src + p->off) >= 33)
+             {
+                 const auto* const token = reinterpret_cast<const unsigned char*>(src + p->off); // NOLINT(cppcoreguidelines-pro-type-reinterpret-cast)
+                 const unsigned sign = token[0] == '-' ? 1 : 0;
+```
+
+# Programs to repair
+
+## gen_01.cpp (compile)
+Intent: Probes dumping float tokens with exact 8 fraction digits and 16 total digits.
+COMPILE ERROR. The program fails to compile, the same way against the old and the new library. Fix the error (wrong or missing include, typo, misuse of the public API) and keep the intent: the call under test must stay. Include only headers that exist; if you are unsure a header exists, use the library's main header.
+Compiler errors:
+```
+gen_01.cpp:10:37: error: no matching function for call to ‘nlohmann::json_abi_v3_12_0::basic_json_view<nlohmann::json_abi_v3_12_0::basic_json<>, nlohmann::json_abi_v3_12_0::view_mode::read_only>::basic_json_view(nlohmann::json_abi_v3_12_0::json_document&)’
+```
+Source:
+```cpp
+#include <nlohmann/json.hpp>
+#include <nlohmann/json_view.hpp>
+#include <iostream>
+int main() {
+    try {
+        std::string raw = "[12345678.12345678]";
+        nlohmann::json_document doc = nlohmann::json_document::parse(raw);
+        nlohmann::json_view view(doc);
+        std::string s = view.dump();
+        std::cout << s << std::endl;
+    } catch (const std::exception& e) {
+        std::cout << "EXC: " << e.what() << std::endl;
+    }
+}
+```
+
+## gen_02.cpp (compile)
+Intent: Probes dumping float tokens with 16 fraction digits and 17 total digits.
+COMPILE ERROR. The program fails to compile, the same way against the old and the new library. Fix the error (wrong or missing include, typo, misuse of the public API) and keep the intent: the call under test must stay. Include only headers that exist; if you are unsure a header exists, use the library's main header.
+Compiler errors:
+```
+gen_02.cpp:10:37: error: no matching function for call to ‘nlohmann::json_abi_v3_12_0::basic_json_view<nlohmann::json_abi_v3_12_0::basic_json<>, nlohmann::json_abi_v3_12_0::view_mode::read_only>::basic_json_view(nlohmann::json_abi_v3_12_0::json_document&)’
+```
+Source:
+```cpp
+#include <nlohmann/json.hpp>
+#include <nlohmann/json_view.hpp>
+#include <iostream>
+int main() {
+    try {
+        std::string raw = "[1.1234567890123456]";
+        nlohmann::json_document doc = nlohmann::json_document::parse(raw);
+        nlohmann::json_view view(doc);
+        std::string s = view.dump();
+        std::cout << s << std::endl;
+    } catch (const std::exception& e) {
+        std::cout << "EXC: " << e.what() << std::endl;
+    }
+}
+```
+
+## gen_03.cpp (compile)
+Intent: Probes dumping float tokens with 17 fraction digits which exceeds the new batch upper bound.
+COMPILE ERROR. The program fails to compile, the same way against the old and the new library. Fix the error (wrong or missing include, typo, misuse of the public API) and keep the intent: the call under test must stay. Include only headers that exist; if you are unsure a header exists, use the library's main header.
+Compiler errors:
+```
+gen_03.cpp:10:37: error: no matching function for call to ‘nlohmann::json_abi_v3_12_0::basic_json_view<nlohmann::json_abi_v3_12_0::basic_json<>, nlohmann::json_abi_v3_12_0::view_mode::read_only>::basic_json_view(nlohmann::json_abi_v3_12_0::json_document&)’
+```
+Source:
+```cpp
+#include <nlohmann/json.hpp>
+#include <nlohmann/json_view.hpp>
+#include <iostream>
+int main() {
+    try {
+        std::string raw = "[0.12345678901234567]";
+        nlohmann::json_document doc = nlohmann::json_document::parse(raw);
+        nlohmann::json_view view(doc);
+        std::string s = view.dump();
+        std::cout << s << std::endl;
+    } catch (const std::exception& e) {
+        std::cout << "EXC: " << e.what() << std::endl;
+    }
+}
+```
+
+## gen_04.cpp (compile)
+Intent: Probes dumping float tokens with fewer than 8 fraction digits.
+COMPILE ERROR. The program fails to compile, the same way against the old and the new library. Fix the error (wrong or missing include, typo, misuse of the public API) and keep the intent: the call under test must stay. Include only headers that exist; if you are unsure a header exists, use the library's main header.
+Compiler errors:
+```
+gen_04.cpp:10:37: error: no matching function for call to ‘nlohmann::json_abi_v3_12_0::basic_json_view<nlohmann::json_abi_v3_12_0::basic_json<>, nlohmann::json_abi_v3_12_0::view_mode::read_only>::basic_json_view(nlohmann::json_abi_v3_12_0::json_document&)’
+```
+Source:
+```cpp
+#include <nlohmann/json.hpp>
+#include <nlohmann/json_view.hpp>
+#include <iostream>
+int main() {
+    try {
+        std::string raw = "[123456789012345.6]";
+        nlohmann::json_document doc = nlohmann::json_document::parse(raw);
+        nlohmann::json_view view(doc);
+        std::string s = view.dump();
+        std::cout << s << std::endl;
+    } catch (const std::exception& e) {
+        std::cout << "EXC: " << e.what() << std::endl;
+    }
+}
+```
+
+## gen_05.cpp (compile)
+Intent: Probes basic round-trip parsing and dumping using json_document and json_view.
+COMPILE ERROR. The program fails to compile, the same way against the old and the new library. Fix the error (wrong or missing include, typo, misuse of the public API) and keep the intent: the call under test must stay. Include only headers that exist; if you are unsure a header exists, use the library's main header.
+Compiler errors:
+```
+gen_05.cpp:10:37: error: no matching function for call to ‘nlohmann::json_abi_v3_12_0::basic_json_view<nlohmann::json_abi_v3_12_0::basic_json<>, nlohmann::json_abi_v3_12_0::view_mode::read_only>::basic_json_view(nlohmann::json_abi_v3_12_0::json_document&)’
+```
+Source:
+```cpp
+#include <nlohmann/json.hpp>
+#include <nlohmann/json_view.hpp>
+#include <iostream>
+int main() {
+    try {
+        std::string raw = "{\"a\":123,\"b\":[true,false,null],\"c\":\"hello\"}";
+        nlohmann::json_document doc = nlohmann::json_document::parse(raw);
+        nlohmann::json_view view(doc);
+        std::cout << view.dump() << std::endl;
+    } catch (const std::exception& e) {
+        std::cout << "EXC: " << e.what() << std::endl;
+    }
+}
+```
+
+## gen_06.cpp (compile)
+Intent: Probes viewing and dumping integer numbers at standard bit limits.
+COMPILE ERROR. The program fails to compile, the same way against the old and the new library. Fix the error (wrong or missing include, typo, misuse of the public API) and keep the intent: the call under test must stay. Include only headers that exist; if you are unsure a header exists, use the library's main header.
+Compiler errors:
+```
+gen_06.cpp:10:37: error: no matching function for call to ‘nlohmann::json_abi_v3_12_0::basic_json_view<nlohmann::json_abi_v3_12_0::basic_json<>, nlohmann::json_abi_v3_12_0::view_mode::read_only>::basic_json_view(nlohmann::json_abi_v3_12_0::json_document&)’
+```
+Source:
+```cpp
+#include <nlohmann/json.hpp>
+#include <nlohmann/json_view.hpp>
+#include <iostream>
+int main() {
+    try {
+        std::string raw = "[9223372036854775807, -9223372036854775808]";
+        nlohmann::json_document doc = nlohmann::json_document::parse(raw);
+        nlohmann::json_view view(doc);
+        std::cout << view.dump() << std::endl;
+    } catch (const std::exception& e) {
+        std::cout << "EXC: " << e.what() << std::endl;
+    }
+}
+```
+
+## gen_07.cpp (compile)
+Intent: Probes json_view handling of empty array and object structures.
+COMPILE ERROR. The program fails to compile, the same way against the old and the new library. Fix the error (wrong or missing include, typo, misuse of the public API) and keep the intent: the call under test must stay. Include only headers that exist; if you are unsure a header exists, use the library's main header.
+Compiler errors:
+```
+gen_07.cpp:10:37: error: no matching function for call to ‘nlohmann::json_abi_v3_12_0::basic_json_view<nlohmann::json_abi_v3_12_0::basic_json<>, nlohmann::json_abi_v3_12_0::view_mode::read_only>::basic_json_view(nlohmann::json_abi_v3_12_0::json_document&)’
+```
+Source:
+```cpp
+#include <nlohmann/json.hpp>
+#include <nlohmann/json_view.hpp>
+#include <iostream>
+int main() {
+    try {
+        std::string raw = "{\"empty_obj\":{},\"empty_arr\":[]}";
+        nlohmann::json_document doc = nlohmann::json_document::parse(raw);
+        nlohmann::json_view view(doc);
+        std::cout << view.dump(2) << std::endl;
+    } catch (const std::exception& e) {
+        std::cout << "EXC: " << e.what() << std::endl;
+    }
+}
+```
+
+## gen_08.cpp (compile)
+Intent: Probes deeply nested objects and arrays within json_view.
+COMPILE ERROR. The program fails to compile, the same way against the old and the new library. Fix the error (wrong or missing include, typo, misuse of the public API) and keep the intent: the call under test must stay. Include only headers that exist; if you are unsure a header exists, use the library's main header.
+Compiler errors:
+```
+gen_08.cpp:10:37: error: no matching function for call to ‘nlohmann::json_abi_v3_12_0::basic_json_view<nlohmann::json_abi_v3_12_0::basic_json<>, nlohmann::json_abi_v3_12_0::view_mode::read_only>::basic_json_view(nlohmann::json_abi_v3_12_0::json_document&)’
+```
+Source:
+```cpp
+#include <nlohmann/json.hpp>
+#include <nlohmann/json_view.hpp>
+#include <iostream>
+int main() {
+    try {
+        std::string raw = "[[[[[[1]]]]]]";
+        nlohmann::json_document doc = nlohmann::json_document::parse(raw);
+        nlohmann::json_view view(doc);
+        std::cout << view.dump() << std::endl;
+    } catch (const std::exception& e) {
+        std::cout << "EXC: " << e.what() << std::endl;
+    }
+}
+```
+
+## gen_09.cpp (compile)
+Intent: Probes string serialization containing special characters and escapes.
+COMPILE ERROR. The program fails to compile, the same way against the old and the new library. Fix the error (wrong or missing include, typo, misuse of the public API) and keep the intent: the call under test must stay. Include only headers that exist; if you are unsure a header exists, use the library's main header.
+Compiler errors:
+```
+gen_09.cpp:10:37: error: no matching function for call to ‘nlohmann::json_abi_v3_12_0::basic_json_view<nlohmann::json_abi_v3_12_0::basic_json<>, nlohmann::json_abi_v3_12_0::view_mode::read_only>::basic_json_view(nlohmann::json_abi_v3_12_0::json_document&)’
+```
+Source:
+```cpp
+#include <nlohmann/json.hpp>
+#include <nlohmann/json_view.hpp>
+#include <iostream>
+int main() {
+    try {
+        std::string raw = "[\"line1\\nline2\", \"quote\\\" \\u0020\"]";
+        nlohmann::json_document doc = nlohmann::json_document::parse(raw);
+        nlohmann::json_view view(doc);
+        std::cout << view.dump() << std::endl;
+    } catch (const std::exception& e) {
+        std::cout << "EXC: " << e.what() << std::endl;
+    }
+}
+```
+
+## gen_10.cpp (compile)
+Intent: Probes floats with scientific exponent notation which are excluded from the float batch.
+COMPILE ERROR. The program fails to compile, the same way against the old and the new library. Fix the error (wrong or missing include, typo, misuse of the public API) and keep the intent: the call under test must stay. Include only headers that exist; if you are unsure a header exists, use the library's main header.
+Compiler errors:
+```
+gen_10.cpp:10:37: error: no matching function for call to ‘nlohmann::json_abi_v3_12_0::basic_json_view<nlohmann::json_abi_v3_12_0::basic_json<>, nlohmann::json_abi_v3_12_0::view_mode::read_only>::basic_json_view(nlohmann::json_abi_v3_12_0::json_document&)’
+```
+Source:
+```cpp
+#include <nlohmann/json.hpp>
+#include <nlohmann/json_view.hpp>
+#include <iostream>
+int main() {
+    try {
+        std::string raw = "[1.23456789e10, 9.87654321E-5]";
+        nlohmann::json_document doc = nlohmann::json_document::parse(raw);
+        nlohmann::json_view view(doc);
+        std::cout << view.dump() << std::endl;
+    } catch (const std::exception& e) {
+        std::cout << "EXC: " << e.what() << std::endl;
+    }
+}
+```
+
+## gen_11.cpp (compile)
+Intent: Probes literal types boolean and null values via json_view.
+COMPILE ERROR. The program fails to compile, the same way against the old and the new library. Fix the error (wrong or missing include, typo, misuse of the public API) and keep the intent: the call under test must stay. Include only headers that exist; if you are unsure a header exists, use the library's main header.
+Compiler errors:
+```
+gen_11.cpp:10:37: error: no matching function for call to ‘nlohmann::json_abi_v3_12_0::basic_json_view<nlohmann::json_abi_v3_12_0::basic_json<>, nlohmann::json_abi_v3_12_0::view_mode::read_only>::basic_json_view(nlohmann::json_abi_v3_12_0::json_document&)’
+```
+Source:
+```cpp
+#include <nlohmann/json.hpp>
+#include <nlohmann/json_view.hpp>
+#include <iostream>
+int main() {
+    try {
+        std::string raw = "[true, false, null, true]";
+        nlohmann::json_document doc = nlohmann::json_document::parse(raw);
+        nlohmann::json_view view(doc);
+        std::cout << view.dump() << std::endl;
+    } catch (const std::exception& e) {
+        std::cout << "EXC: " << e.what() << std::endl;
+    }
+}
+```
+
+## gen_12.cpp (compile)
+Intent: Probes element iteration and direct access via array views.
+COMPILE ERROR. The program fails to compile, the same way against the old and the new library. Fix the error (wrong or missing include, typo, misuse of the public API) and keep the intent: the call under test must stay. Include only headers that exist; if you are unsure a header exists, use the library's main header.
+Compiler errors:
+```
+gen_12.cpp:10:37: error: no matching function for call to ‘nlohmann::json_abi_v3_12_0::basic_json_view<nlohmann::json_abi_v3_12_0::basic_json<>, nlohmann::json_abi_v3_12_0::view_mode::read_only>::basic_json_view(nlohmann::json_abi_v3_12_0::json_document&)’
+```
+Source:
+```cpp
+#include <nlohmann/json.hpp>
+#include <nlohmann/json_view.hpp>
+#include <iostream>
+int main() {
+    try {
+        std::string raw = "[10, 20, 30, 40]";
+        nlohmann::json_document doc = nlohmann::json_document::parse(raw);
+        nlohmann::json_view view(doc);
+        if (view.is_array()) {
+            for (auto it = view.begin(); it != view.end(); ++it) {
+                std::cout << it->dump() << " ";
+            }
+            std::cout << std::endl;
+        }
+    } catch (const std::exception& e) {
+        std::cout << "EXC: " << e.what() << std::endl;
+    }
+}
+```
+
+## gen_13.cpp (compile)
+Intent: Probes object key-value iteration using view interfaces.
+COMPILE ERROR. The program fails to compile, the same way against the old and the new library. Fix the error (wrong or missing include, typo, misuse of the public API) and keep the intent: the call under test must stay. Include only headers that exist; if you are unsure a header exists, use the library's main header.
+Compiler errors:
+```
+gen_13.cpp:10:37: error: no matching function for call to ‘nlohmann::json_abi_v3_12_0::basic_json_view<nlohmann::json_abi_v3_12_0::basic_json<>, nlohmann::json_abi_v3_12_0::view_mode::read_only>::basic_json_view(nlohmann::json_abi_v3_12_0::json_document&)’
+```
+Source:
+```cpp
+#include <nlohmann/json.hpp>
+#include <nlohmann/json_view.hpp>
+#include <iostream>
+int main() {
+    try {
+        std::string raw = "{\"x\": 1, \"y\": 2}";
+        nlohmann::json_document doc = nlohmann::json_document::parse(raw);
+        nlohmann::json_view view(doc);
+        if (view.is_object()) {
+            for (auto it = view.begin(); it != view.end(); ++it) {
+                std::cout << it.key() << ":" << it->dump() << " ";
+            }
+            std::cout << std::endl;
+        }
+    } catch (const std::exception& e) {
+        std::cout << "EXC: " << e.what() << std::endl;
+    }
+}
+```
+
+## gen_14.cpp (compile)
+Intent: Probes type query functions (is_number, is_string, is_boolean, etc.) on json_view nodes.
+COMPILE ERROR. The program fails to compile, the same way against the old and the new library. Fix the error (wrong or missing include, typo, misuse of the public API) and keep the intent: the call under test must stay. Include only headers that exist; if you are unsure a header exists, use the library's main header.
+Compiler errors:
+```
+gen_14.cpp:10:37: error: no matching function for call to ‘nlohmann::json_abi_v3_12_0::basic_json_view<nlohmann::json_abi_v3_12_0::basic_json<>, nlohmann::json_abi_v3_12_0::view_mode::read_only>::basic_json_view(nlohmann::json_abi_v3_12_0::json_document&)’
+```
+Source:
+```cpp
+#include <nlohmann/json.hpp>
+#include <nlohmann/json_view.hpp>
+#include <iostream>
+int main() {
+    try {
+        std::string raw = "[1, 1.5, \"str\", true, null, {}, []]";
+        nlohmann::json_document doc = nlohmann::json_document::parse(raw);
+        nlohmann::json_view view(doc);
+        for (auto it = view.begin(); it != view.end(); ++it) {
+            std::cout << it->is_number() << it->is_string() << it->is_boolean() << it->is_null() << it->is_object() << it->is_array() << " ";
+        }
+        std::cout << std::endl;
+    } catch (const std::exception& e) {
+        std::cout << "EXC: " << e.what() << std::endl;
+    }
+}
+```
+
+## gen_15.cpp (compile)
+Intent: Probes size() and empty() queries on document and view structures.
+COMPILE ERROR. The program fails to compile, the same way against the old and the new library. Fix the error (wrong or missing include, typo, misuse of the public API) and keep the intent: the call under test must stay. Include only headers that exist; if you are unsure a header exists, use the library's main header.
+Compiler errors:
+```
+gen_15.cpp:10:37: error: no matching function for call to ‘nlohmann::json_abi_v3_12_0::basic_json_view<nlohmann::json_abi_v3_12_0::basic_json<>, nlohmann::json_abi_v3_12_0::view_mode::read_only>::basic_json_view(nlohmann::json_abi_v3_12_0::json_document&)’
+```
+Source:
+```cpp
+#include <nlohmann/json.hpp>
+#include <nlohmann/json_view.hpp>
+#include <iostream>
+int main() {
+    try {
+        std::string raw = "[1, 2, 3]";
+        nlohmann::json_document doc = nlohmann::json_document::parse(raw);
+        nlohmann::json_view view(doc);
+        std::cout << view.size() << " " << view.empty() << std::endl;
+    } catch (const std::exception& e) {
+        std::cout << "EXC: " << e.what() << std::endl;
+    }
+}
+```
+
+# Task
+Return JSON with a "fixes" array: one item per program above, with "file" (exactly as given) and "code" (the complete repaired program, standalone, with its own int main). Do not return programs you cannot repair.

@@ -1,0 +1,163 @@
+{
+  "target": "nlohmann-json",
+  "pr": 6117,
+  "model": "gemini-3.5-flash-lite",
+  "prompt_sha256": "097b4220f5e9aa9b10cd17d25ad30a0a28775de4c92f4d73dc205e211dcfa17d",
+  "n_requested": 20,
+  "std": "c++17",
+  "dropped": 0,
+  "variant": "baseline",
+  "usage": {
+    "promptTokenCount": 4774,
+    "candidatesTokenCount": 3318,
+    "totalTokenCount": 8092,
+    "trafficType": "ON_DEMAND",
+    "promptTokensDetails": [
+      {
+        "modality": "TEXT",
+        "tokenCount": 4774
+      }
+    ],
+    "candidatesTokensDetails": [
+      {
+        "modality": "TEXT",
+        "tokenCount": 3318
+      }
+    ]
+  },
+  "tests": [
+    {
+      "file": "gen_01.cpp",
+      "name": "serializer_inline_macro_defined",
+      "intent": "Verify that JSON_INTERNAL_SERIALIZER_INLINE macro is defined after including json.hpp and properly undefined by macro_unscope.hpp.",
+      "round": 0
+    },
+    {
+      "file": "gen_02.cpp",
+      "name": "deep_nesting_dump_basic",
+      "intent": "Exercise dump() on a deeply nested json array to trigger the serializer container recursion and helper inlining paths.",
+      "round": 0,
+      "superseded_by": "gen_21.cpp"
+    },
+    {
+      "file": "gen_03.cpp",
+      "name": "deep_nesting_pretty_dump",
+      "intent": "Exercise pretty-printing dump(2) on a deeply nested object to invoke put_indent and literal helpers inside the serializer.",
+      "round": 0
+    },
+    {
+      "file": "gen_04.cpp",
+      "name": "serializer_string_buffer_reserve",
+      "intent": "Dump strings with various unicode code points to trigger reserve_string_buffer and emit_pending serializer helpers.",
+      "round": 0
+    },
+    {
+      "file": "gen_05.cpp",
+      "name": "recursion_depth_limit_custom",
+      "intent": "Test serialization behavior when configuring a custom small recursion depth limit via json_pointer or deep structures.",
+      "round": 0
+    },
+    {
+      "file": "gen_06.cpp",
+      "name": "serializer_escaped_characters",
+      "intent": "Serialize objects containing various keys and string values needing heavy escaping to exercise dump_element.",
+      "round": 0
+    },
+    {
+      "file": "gen_07.cpp",
+      "name": "ordered_json_deep_serialization",
+      "intent": "Ensure ordered_json works correctly with the modified serializer helpers during deep nesting dumps.",
+      "round": 0
+    },
+    {
+      "file": "gen_08.cpp",
+      "name": "serializer_empty_containers",
+      "intent": "Dump empty arrays and objects at various depths to test boundary condition handling in serializer helpers.",
+      "round": 0
+    },
+    {
+      "file": "gen_09.cpp",
+      "name": "serializer_floats_and_numbers",
+      "intent": "Serialize extreme numerical values (inf, nan, large ints, small floats) using the serializer.",
+      "round": 0
+    },
+    {
+      "file": "gen_10.cpp",
+      "name": "serializer_binary_values",
+      "intent": "Serialize binary subtype values to check interaction with serializer helpers.",
+      "round": 0
+    },
+    {
+      "file": "gen_11.cpp",
+      "name": "serializer_binary_with_subtype",
+      "intent": "Serialize binary values with explicit user subtype using the standard serializer.",
+      "round": 0
+    },
+    {
+      "file": "gen_12.cpp",
+      "name": "serializer_wide_array",
+      "intent": "Serialize a wide array with many elements to test buffer management and loop efficiency in the serializer.",
+      "round": 0
+    },
+    {
+      "file": "gen_13.cpp",
+      "name": "serializer_wide_object",
+      "intent": "Serialize a wide object with many keys to verify key sorting and formatting helpers.",
+      "round": 0
+    },
+    {
+      "file": "gen_14.cpp",
+      "name": "serializer_mixed_nesting",
+      "intent": "Serialize complex alternating arrays and objects to test deep recursive frame unwinding.",
+      "round": 0
+    },
+    {
+      "file": "gen_15.cpp",
+      "name": "serializer_custom_indent_char",
+      "intent": "Test pretty-printing with different indentation character counts and check serializer helper behavior.",
+      "round": 0
+    },
+    {
+      "file": "gen_16.cpp",
+      "name": "serializer_indent_char_tabs",
+      "intent": "Test serialization using tab indentation characters instead of spaces.",
+      "round": 0
+    },
+    {
+      "file": "gen_17.cpp",
+      "name": "serializer_error_handler",
+      "intent": "Test serialization with a custom error handler function for unrepresentable characters.",
+      "round": 0
+    },
+    {
+      "file": "gen_18.cpp",
+      "name": "serializer_dump_to_output_adapter",
+      "intent": "Test dumping JSON directly to a standard output stream via serializer output adapters.",
+      "round": 0
+    },
+    {
+      "file": "gen_19.cpp",
+      "name": "macro_scope_header_sanity",
+      "intent": "Check that including macro_scope.hpp and macro_unscope.hpp directly works without issues.",
+      "round": 0
+    },
+    {
+      "file": "gen_20.cpp",
+      "name": "serializer_heavy_stress_dump",
+      "intent": "Perform repeated serialization of moderately deep structures to ensure stability and correctness of serializer helpers.",
+      "round": 0
+    },
+    {
+      "file": "gen_21.cpp",
+      "name": "deep_nesting_dump_basic_fixed",
+      "intent": "Exercise dump() on a deeply nested json array to trigger the serializer container recursion and helper inlining paths.",
+      "round": 1,
+      "fixes": "gen_02.cpp",
+      "kind": "compile"
+    }
+  ],
+  "fix": {
+    "rounds_max": 2,
+    "model": "gemini-3.5-flash-lite"
+  }
+}

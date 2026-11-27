@@ -1,0 +1,181 @@
+{
+  "target": "nlohmann-json",
+  "pr": 6076,
+  "model": "gemini-3.5-flash-lite",
+  "prompt_sha256": "649c1759aa96415c18e92450c1feae9d577e62a1609a50bc7932812a71e78ca2",
+  "n_requested": 20,
+  "std": "c++17",
+  "dropped": 0,
+  "variant": "baseline",
+  "usage": {
+    "promptTokenCount": 9065,
+    "candidatesTokenCount": 3766,
+    "totalTokenCount": 12831,
+    "trafficType": "ON_DEMAND",
+    "promptTokensDetails": [
+      {
+        "modality": "TEXT",
+        "tokenCount": 9065
+      }
+    ],
+    "candidatesTokensDetails": [
+      {
+        "modality": "TEXT",
+        "tokenCount": 3766
+      }
+    ]
+  },
+  "tests": [
+    {
+      "file": "gen_01.cpp",
+      "name": "unflatten_long_key_linear",
+      "intent": "Probes unflatten behavior on a long key with many tokens to verify correctness and scalability.",
+      "round": 0
+    },
+    {
+      "file": "gen_02.cpp",
+      "name": "unflatten_ordered_json_prefix_conflict",
+      "intent": "Tests overlapping keys in ordered_json to ensure that conflicting values correctly trigger type_error.",
+      "round": 0
+    },
+    {
+      "file": "gen_03.cpp",
+      "name": "unflatten_short_limit_boundary",
+      "intent": "Probes unflatten prefix tree hand-over boundary around 64 bytes with varied token lengths.",
+      "round": 0
+    },
+    {
+      "file": "gen_04.cpp",
+      "name": "unflatten_reseeded_hash_collision",
+      "intent": "Probes hash collision safety with multiple keys having similar hash prefixes.",
+      "round": 0
+    },
+    {
+      "file": "gen_05.cpp",
+      "name": "unflatten_null_prefix_allowed",
+      "intent": "Checks that a null value shadowing an existing container during unflatten is tolerated.",
+      "round": 0
+    },
+    {
+      "file": "gen_06.cpp",
+      "name": "unflatten_array_and_object_mixed",
+      "intent": "Probes mixed array and object unflattening structures sharing common roots.",
+      "round": 0
+    },
+    {
+      "file": "gen_07.cpp",
+      "name": "unflatten_deep_escaped_tokens",
+      "intent": "Tests unflattening keys containing escaped characters like tilde and slash within deep structures.",
+      "round": 0
+    },
+    {
+      "file": "gen_08.cpp",
+      "name": "unflatten_empty_key",
+      "intent": "Exercises unflattening an empty key path representing the root value.",
+      "round": 0
+    },
+    {
+      "file": "gen_09.cpp",
+      "name": "unflatten_invalid_array_index",
+      "intent": "Probes error handling when an array index token is malformed during unflatten.",
+      "round": 0,
+      "superseded_by": "gen_21.cpp"
+    },
+    {
+      "file": "gen_10.cpp",
+      "name": "unflatten_leading_zero_array",
+      "intent": "Validates proper array creation when reference token '0' is encountered.",
+      "round": 0
+    },
+    {
+      "file": "gen_11.cpp",
+      "name": "unflatten_repeated_common_prefixes",
+      "intent": "Probes optimization paths where consecutive keys share long common prefixes.",
+      "round": 0
+    },
+    {
+      "file": "gen_12.cpp",
+      "name": "unflatten_unsupported_type_conflict",
+      "intent": "Tests overlapping primitive and object paths throwing appropriate exception types.",
+      "round": 0,
+      "superseded_by": "gen_22.cpp"
+    },
+    {
+      "file": "gen_13.cpp",
+      "name": "unflatten_ordered_json_shuffled",
+      "intent": "Verifies round-trip consistency of ordered_json flatten and unflatten operations.",
+      "round": 0
+    },
+    {
+      "file": "gen_14.cpp",
+      "name": "unflatten_numeric_object_keys",
+      "intent": "Probes unflattening keys that look like numbers but are treated as object property names rather than array indices.",
+      "round": 0
+    },
+    {
+      "file": "gen_15.cpp",
+      "name": "unflatten_large_index_array",
+      "intent": "Tests sparse or large array index allocations during unflattening.",
+      "round": 0,
+      "superseded_by": "gen_23.cpp"
+    },
+    {
+      "file": "gen_16.cpp",
+      "name": "unflatten_consecutive_slashes",
+      "intent": "Probes handling of empty tokens caused by consecutive slashes in JSON pointer keys.",
+      "round": 0
+    },
+    {
+      "file": "gen_17.cpp",
+      "name": "unflatten_trailing_slash",
+      "intent": "Probes behavior when a JSON pointer key ends with a slash character.",
+      "round": 0
+    },
+    {
+      "file": "gen_18.cpp",
+      "name": "unflatten_boolean_and_float_leaves",
+      "intent": "Validates unflattening with diverse leaf node types such as booleans and floating-point numbers.",
+      "round": 0
+    },
+    {
+      "file": "gen_19.cpp",
+      "name": "unflatten_deep_nesting_limit",
+      "intent": "Probes performance and correctness with deep nesting levels approaching stack constraints.",
+      "round": 0
+    },
+    {
+      "file": "gen_20.cpp",
+      "name": "unflatten_multiple_distinct_trees",
+      "intent": "Exercises unflattening an object containing multiple completely disjoint top-level branches.",
+      "round": 0
+    },
+    {
+      "file": "gen_21.cpp",
+      "name": "unflatten_invalid_array_index_fixed",
+      "intent": "Probes error handling when an array index token is malformed during unflatten.",
+      "round": 1,
+      "fixes": "gen_09.cpp",
+      "kind": "compile"
+    },
+    {
+      "file": "gen_22.cpp",
+      "name": "unflatten_unsupported_type_conflict_fixed",
+      "intent": "Tests overlapping primitive and object paths throwing appropriate exception types.",
+      "round": 1,
+      "fixes": "gen_12.cpp",
+      "kind": "compile"
+    },
+    {
+      "file": "gen_23.cpp",
+      "name": "unflatten_large_index_array_fixed",
+      "intent": "Tests sparse or large array index allocations during unflattening.",
+      "round": 1,
+      "fixes": "gen_15.cpp",
+      "kind": "compile"
+    }
+  ],
+  "fix": {
+    "rounds_max": 2,
+    "model": "gemini-3.5-flash-lite"
+  }
+}

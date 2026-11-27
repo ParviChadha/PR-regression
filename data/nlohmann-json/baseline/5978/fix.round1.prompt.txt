@@ -1,0 +1,384 @@
+[system]
+You write test programs that probe a C++ library for behavioral changes made by one pull request.
+Each program is compiled and run twice, once against the library before the change and once after, and the two
+outputs are compared. Your job is to produce programs whose output reveals whether the change altered behavior,
+including side effects the author did not intend.
+
+Rules for every program:
+- It is standalone: one file with its own int main(), compiled as C++17, printing results to stdout.
+- Use only the library's documented public API. Never include internal headers or use detail/impl namespaces,
+  private members or undocumented macros.
+- Do not judge results (no assert, no expected-value comparisons): just print what the library returns. Print
+  enough to make differences visible, one fact per line.
+- Output must be deterministic. Never print pointers or addresses, uninitialized data, the order of
+  hash-based containers, timings, thread ids, random values, file paths or environment data. Print floating point
+  values with an explicit precision. No input, files, network, threads, clocks or randomness.
+- Wrap calls that may throw in try/catch and print the exception's type and message, so an exception is an
+  observable result. Do not crash on purpose.
+- Aim at the code the diff changes. Prefer calls that compile against both the old and the new library; one or two
+  programs may use an API the PR adds. Cover ordinary inputs and edge cases (empty, minimum and maximum values,
+  boundaries, special values, nesting, unusual types) and also neighbouring behavior the change could disturb.
+- When the diff changes which types or inputs an API accepts or rejects (constraints, overloads, traits,
+  conversions), test it with the detection idiom (std::void_t or requires) and `if constexpr`, so the program
+  compiles against both versions, prints whether the expression is well-formed, and exercises it when it is.
+  Accepting an input is not enough: also use it through every entry point that should follow (const and
+  non-const, read, write, insert, erase, lookup, nested use), because a change that admits new inputs can leave
+  later code unable to handle them.
+- If the changed code is internal (a detail, impl or internal namespace, a trait, a helper), do not name it in the
+  program. Reach it through the public API that depends on it, using detection (as above) where needed.
+- Use the exact types and values the diff is about (the new trait's argument types, the new overload's
+  parameters), not stand-ins.
+- Spread the programs over distinct public entry points and overloads, one main idea per program. Do not write
+  several programs that only rename a type or change a literal.
+- Make the programs differ from each other: different inputs, different entry points, different features.
+
+Rules specific to this library:
+- Include the library with #include <nlohmann/json.hpp>. The public API is nlohmann::json (nlohmann::basic_json), nlohmann::ordered_json, json_pointer, json patch/merge_patch and the documented SAX and conversion interfaces. Never use the detail namespace.
+- It is a header-only library: nothing to link. Programs are compiled as C++17.
+- Print JSON values with dump() (compact) or dump(2). Keys of nlohmann::json objects print in sorted order, so output is deterministic; do not depend on insertion order except with ordered_json.
+
+[user]
+# Pull request #5978: accept() checks strings without copying them
+
+## Description
+`json::accept()` parses with `json_sax_acceptor`, which ignores string values and object keys. The lexer still copied every string token into its token buffer. On twitter.json that copy was 18 % of the instructions of `json::accept()` (x86, GCC 16, callgrind).
+
+## Change
+
+- The lexer flag that `accept()` sets is renamed from `discard_number_values` to `discard_values`, because it now covers strings too.
+- With the flag set, `scan()` calls a second instantiation of `scan_string()` (tag dispatch on `std::integral_constant<bool, Keep>`). It runs the same checks with the same error messages but never writes to the token buffer. The checks cover escapes, surrogates, UTF-8 and control characters.
+- `scan()` picks the instantiation once per string. A run-time check inside the string loop made number-heavy files up to 3 % slower on Apple M1.
+- New test in `unit-class_parser.cpp`: `accept()` must agree with `parse(..., allow_exceptions=false)` on 127,800 cases. Each case is an escape, a surrogate, broken UTF-8 or a control character, placed at every position from 0 to 70 in five document shapes. The test covers all comment/trailing-comma options and string, stream and `std::list` iterator input. The test fails on a deliberately broken lexer.
+
+## Performance
+
+`json::accept()` over 19 files. Each number is time after / before: the median of per-pair ratios from one binary that alternates both versions, geometric mean over several code layouts.
+
+| file | x86 GCC 16.2 | x86 Clang 23 | Apple M1 (loops aligned to 32 bytes) |
+|---|---:|---:|---:|
+| twitter | 0.869 | 0.892 | 0.983 |
+| citm_catalog | 0.955 | 0.908 | 0.919 |
+| canada | 1.002 | 1.003 | 1.001 |
+| instruments | 0.899 | 0.892 | 0.990 |
+| tree-pretty | 0.886 | 0.916 | 1.006 |
+| mesh | 0.972 | 0.998 | 0.999 |
+| numbers | 0.962 | 0.996 | 1.000 |
+| gsoc-2018 | 0.784 | 0.778 | 0.834 * |
+| update-center | 0.781 | 0.796 | 0.827 * |
+| twitterescaped | 0.789 | 0.737 | 0.788 |
+| geomean of 19 files | **0.876** | **0.884** | 0.932 * |
+
+\* From the earlier Mac run without loop alignment.
+
+Environment:
+- x86: Haswell VPS, `-O3 -march=haswell`.
+- Mac: Apple clang 21.
+
+On Apple M1 the change cuts instructions by 18–20 % on string-heavy files, but time drops much less: the core hides most of the copy. tree-pretty is the only file that is slower anywhere, by 0.6–0.9 % on M1. Without loop alignment, twitter and tree-pretty measured up to 1.4 % slower on M1, which turned out to be loop placement.
+
+## Testing
+
+- A differential fuzz compared old and new `accept()` over all option combinations, with and without `JSON_DIAGNOSTICS`, on about 19 M inputs: no mismatches. Deliberately broken variants were caught.
+- Full ctest with ASan and UBSan: 184/184 passed.
+- GCC 16 and Clang 22 with the CI warning flags, C++11 and C++20: no diagnostics.
+
+## Breaking API changes
+
+None. The renamed flag is a parameter of `detail::lexer`/`detail::parser` and of `basic_json::parser()`, which is private outside the tests. `accept()` returns the same results as before.
+
+🤖 Generated with [Claude Code](https://claude.com/claude-code)
+
+## Commit message
+Signed-off-by: Niels Lohmann <mail@nlohmann.me>
+
+## Diff of the library source (before -> after)
+```diff
+diff --git a/include/nlohmann/detail/input/lexer.hpp b/include/nlohmann/detail/input/lexer.hpp
+index 14d14f42a..66cb14b4f 100644
+--- a/include/nlohmann/detail/input/lexer.hpp
++++ b/include/nlohmann/detail/input/lexer.hpp
+@@ -209,8 +209,13 @@ constexpr bool input_adapter_bulk_window(std::false_type /*detected*/)
+ @brief lexical analysis
+ 
+ This class organizes the lexical analysis during JSON deserialization.
++
++DiscardValues: the caller only needs the token types and never looks at the values of number and string tokens (only
++accept(), which parses through json_sax_acceptor). A template parameter rather than a member, so that the lexer of
++parse() is compiled without the paths of accept(): with both string scans in one scan(), parse() was up to 2 % slower
++on Apple M1.
+ */
+-template<typename BasicJsonType, typename InputAdapterType>
++template<typename BasicJsonType, typename InputAdapterType, bool DiscardValues = false>
+ class lexer : public lexer_base<BasicJsonType>
+ {
+     using number_integer_t = typename BasicJsonType::number_integer_t;
+@@ -268,10 +273,9 @@ class lexer : public lexer_base<BasicJsonType>
+   public:
+     using token_type = typename lexer_base<BasicJsonType>::token_type;
+ 
+-    explicit lexer(InputAdapterType&& adapter, bool ignore_comments_ = false, bool discard_number_values_ = false) noexcept
++    explicit lexer(InputAdapterType&& adapter, bool ignore_comments_ = false) noexcept
+         : ia(std::move(adapter))
+         , ignore_comments(ignore_comments_)
+-        , discard_number_values(discard_number_values_)
+     {
+         // the token string of an error before the first token is everything
+         // read so far
+@@ -388,6 +392,8 @@ class lexer : public lexer_base<BasicJsonType>
+     checks if it is inside the range. If a violation was detected, set up an
+     error message and return false. Otherwise, return true.
+ 
++    @param[in] keep    whether the bytes are added to token_buffer (false for
++                       accept(), see scan())
+     @param[in] ranges  list of integers; interpreted as list of pairs of
+                        inclusive lower and upper bound, respectively
+ 
+@@ -396,17 +402,18 @@ class lexer : public lexer_base<BasicJsonType>
+ 
+     @return true if and only if no range violation was detected
+     */
+-    bool next_byte_in_range(std::initializer_list<char_int_type> ranges)
++    template<bool Keep>
++    bool next_byte_in_range(std::integral_constant<bool, Keep> keep, std::initializer_list<char_int_type> ranges)
+     {
+         JSON_ASSERT(ranges.size() == 2 || ranges.size() == 4 || ranges.size() == 6);
+-        add(current);
++        add_string_char(keep, current);
+ 
+         for (auto range = ranges.begin(); range != ranges.end(); ++range)
+         {
+             get();
+             if (JSON_HEDLEY_LIKELY(*range <= current && current <= *(++range))) // NOLINT(bugprone-inc-dec-in-conditions)
+             {
+-                add(current);
++                add_string_char(keep, current);
+             }
+             else
+             {
+@@ -419,14 +426,16 @@ class lexer : public lexer_base<BasicJsonType>
+     }
+ 
+     /// contiguous input: bulk-append the run of ordinary characters and complete
+-    /// well-formed UTF-8 sequences starting at the current read position, then
++    /// well-formed UTF-8 sequences starting at the current read position (only
++    /// skip it if @a keep is false), then
+     /// read the first byte that needs individual handling (the closing quote, an
+     /// escape, a control character, or an ill-formed UTF-8 byte) like get().
+     /// That byte is taken from the buffer that was just scanned. Through get(),
+     /// Apple Clang merged this read with the other get() calls of the scan
+     /// function, which load the read position again right after it was stored
+     /// (3% of json::accept() on jeopardy.json on Apple M1).
+-    char_int_type get_after_string_run(std::true_type /*bulk*/)
++    template<bool Keep>
++    char_int_type get_after_string_run(std::true_type /*bulk*/, std::integral_constant<bool, Keep> keep)
+     {
+         // a pending unget must be consumed through the normal path first
+         if (next_unget)
+@@ -444,7 +453,7 @@ class lexer : public lexer_base<BasicJsonType>
+         const std::size_t pos = lexer_string_bulk_run(data, remaining);
+         if (pos != 0)
+         {
+-            token_buffer.append(reinterpret_cast<const typename string_t::value_type*>(data), pos);
++            append_string_run(keep, data, pos);
+             bulk_consume(reinterpret_cast<const char*>(data), pos);
+         }
+         if (pos == remaining)
+@@ -488,7 +497,8 @@ class lexer : public lexer_base<BasicJsonType>
+     }
+ 
+     /// streaming input: no bulk fast path
+-    char_int_type get_after_string_run(std::false_type /*bulk*/)
++    template<bool Keep>
++    char_int_type get_after_string_run(std::false_type /*bulk*/, std::integral_constant<bool, Keep> /*keep*/)
+     {
+         return get();
+     }
+@@ -502,13 +512,18 @@ class lexer : public lexer_base<BasicJsonType>
+     may contain \0 bytes), and token_buffer.size() is the number of bytes in the
+     string.
+ 
++    @param[in] keep  whether the string is copied into token_buffer; if false
++                     (accept(), see scan()), it is only checked, with the same
++                     errors, and token_buffer stays empty
++
+     @return token_type::value_string if string could be successfully scanned,
+             token_type::parse_error otherwise
+ 
+     @note In case of errors, variable error_message contains a textual
+           description.
+     */
+-    token_type scan_string()
++    template<bool Keep>
++    token_type scan_string(std::integral_constant<bool, Keep> keep)
+     {
+         // reset token_buffer (ignore opening quote)
+         reset();
+@@ -520,7 +535,7 @@ class lexer : public lexer_base<BasicJsonType>
+         {
+             // bulk-consume ordinary characters from contiguous input, then
+             // get the next character, the one that ends the run
+-            switch (get_after_string_run(std::integral_constant<bool, bulk_scan>()))
++            switch (get_after_string_run(std::integral_constant<bool, bulk_scan>(), keep))
+             {
+                 // end of file while parsing the string
+                 case char_traits<char_type>::eof():
+@@ -542,35 +557,35 @@ class lexer : public lexer_base<BasicJsonType>
+                     {
+                         // quotation mark
+                         case '\"':
+-                            add('\"');
++                            add_string_char(keep, '\"');
+                             break;
+                         // reverse solidus
+                         case '\\':
+-                            add('\\');
++                            add_string_char(keep, '\\');
+                             break;
+                         // solidus
+                         case '/':
+-                            add('/');
++                            add_string_char(keep, '/');
+                             break;
+                         // backspace
+                         case 'b':
+-                            add('\b');
++                            add_string_char(keep, '\b');
+                             break;
+                         // form feed
+                         case 'f':
+-                            add('\f');
++                            add_string_char(keep, '\f');
+                             break;
+                         // line feed
+                         case 'n':
+-                            add('\n');
++                            add_string_char(keep, '\n');
+                             break;
+                         // carriage return
+                         case 'r':
+-                            add('\r');
++                            add_string_char(keep, '\r');
+                             break;
+                         // tab
+                         case 't':
+-                            add('\t');
++                           
+[... truncated, 9463 more characters]
+diff --git a/include/nlohmann/detail/input/parser.hpp b/include/nlohmann/detail/input/parser.hpp
+index 5bf8f1b6b..023327166 100644
+--- a/include/nlohmann/detail/input/parser.hpp
++++ b/include/nlohmann/detail/input/parser.hpp
+@@ -72,14 +72,14 @@ This class implements a parser for JSON text. Nested arrays and objects are trac
+ stack instead of recursion, so deeply nested input does not exhaust the call stack, and what is read
+ is reported as SAX events.
+ */
+-template<typename BasicJsonType, typename InputAdapterType>
++template<typename BasicJsonType, typename InputAdapterType, bool DiscardValues = false>
+ class parser
+ {
+     using number_integer_t = typename BasicJsonType::number_integer_t;
+     using number_unsigned_t = typename BasicJsonType::number_unsigned_t;
+     using number_float_t = typename BasicJsonType::number_float_t;
+     using string_t = typename BasicJsonType::string_t;
+-    using lexer_t = lexer<BasicJsonType, InputAdapterType>;
++    using lexer_t = lexer<BasicJsonType, InputAdapterType, DiscardValues>;
+     using token_type = typename lexer_t::token_type;
+ 
+   public:
+@@ -88,10 +88,9 @@ class parser
+                     parser_callback_t<BasicJsonType> cb = nullptr,
+                     const bool allow_exceptions_ = true,
+                     const bool ignore_comments = false,
+-                    const bool ignore_trailing_commas_ = false,
+-                    const bool discard_number_values_ = false)
++                    const bool ignore_trailing_commas_ = false)
+         : callback(std::move(cb))
+-        , m_lexer(std::move(adapter), ignore_comments, discard_number_values_)
++        , m_lexer(std::move(adapter), ignore_comments)
+         , allow_exceptions(allow_exceptions_)
+         , ignore_trailing_commas(ignore_trailing_commas_)
+     {
+diff --git a/include/nlohmann/json.hpp b/include/nlohmann/json.hpp
+index 4d4f0a1cd..7bed813df 100644
+--- a/include/nlohmann/json.hpp
++++ b/include/nlohmann/json.hpp
+@@ -150,7 +150,7 @@ class basic_json // NOLINT(cppcoreguidelines-special-member-functions,hicpp-spec
+     // can be restored when json_pointer backwards compatibility is removed
+     // friend ::nlohmann::json_pointer<StringType>;
+ 
+-    template<typename BasicJsonType, typename InputType>
++    template<typename BasicJsonType, typename InputType, bool DiscardValues>
+     friend class ::nlohmann::detail::parser;
+     friend ::nlohmann::detail::serializer<basic_json>;
+     template<typename BasicJsonType>
+@@ -183,12 +183,11 @@ class basic_json // NOLINT(cppcoreguidelines-special-member-functions,hicpp-spec
+         detail::parser_callback_t<basic_json>cb = nullptr,
+         const bool allow_exceptions = true,
+         const bool ignore_comments = false,
+-        const bool ignore_trailing_commas = false,
+-        const bool discard_number_values = false
++        const bool ignore_trailing_commas = false
+     )
+     {
+         return ::nlohmann::detail::parser<basic_json, InputAdapterType>(std::move(adapter),
+-               std::move(cb), allow_exceptions, ignore_comments, ignore_trailing_commas, discard_number_values);
++               std::move(cb), allow_exceptions, ignore_comments, ignore_trailing_commas);
+     }
+ 
+   private:
+@@ -3117,7 +3116,9 @@ public:
+                             const bool ignore_comments,
+                             const bool ignore_trailing_commas)
+     {
+-        return parser(std::forward<InputAdapterType>(adapter), nullptr, false, ignore_comments, ignore_trailing_commas, true).accept(true);
++        // the parser and lexer that discard the values of tokens (see lexer)
++        return ::nlohmann::detail::parser<basic_json, typename std::decay<InputAdapterType>::type, true>(std::forward<InputAdapterType>(adapter),
++                nullptr, false, ignore_comments, ignore_trailing_commas).accept(true);
+     }
+ 
+     /// generate SAX events from the input behind an already created adapter
+```
+
+# Programs to repair
+
+## gen_03.cpp (compile)
+Intent: Verify that json::accept checks unicode surrogate pairs properly in strings.
+COMPILE ERROR. The program fails to compile, the same way against the old and the new library. Fix the error (wrong or missing include, typo, misuse of the public API) and keep the intent: the call under test must stay. Include only headers that exist; if you are unsure a header exists, use the library's main header.
+Compiler errors:
+```
+gen_03.cpp:6:21: error: uD834 is not a valid universal character
+gen_03.cpp:6:21: error: uDD1E is not a valid universal character
+```
+Source:
+```cpp
+#include <nlohmann/json.hpp>
+#include <iostream>
+int main() {
+    std::string s = "\"\uD834\uDD1E\"";
+    bool res = nlohmann::json::accept(s);
+    std::cout << std::boolalpha << res << std::endl;
+    return 0;
+}
+```
+
+## gen_19.cpp (compile)
+Intent: Verify that json::accept catches lone high surrogates not followed by a low surrogate.
+COMPILE ERROR. The program fails to compile, the same way against the old and the new library. Fix the error (wrong or missing include, typo, misuse of the public API) and keep the intent: the call under test must stay. Include only headers that exist; if you are unsure a header exists, use the library's main header.
+Compiler errors:
+```
+gen_19.cpp:6:21: error: uD834 is not a valid universal character
+```
+Source:
+```cpp
+#include <nlohmann/json.hpp>
+#include <iostream>
+int main() {
+    std::string s = "\"\uD834abc\"";
+    bool res = nlohmann::json::accept(s);
+    std::cout << std::boolalpha << res << std::endl;
+    return 0;
+}
+```
+
+# Task
+Return JSON with a "fixes" array: one item per program above, with "file" (exactly as given) and "code" (the complete repaired program, standalone, with its own int main). Do not return programs you cannot repair.

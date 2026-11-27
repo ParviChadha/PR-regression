@@ -1,0 +1,71 @@
+{
+  "target": "nlohmann-json",
+  "pr": 6073,
+  "model": "gemini-3.5-flash-lite",
+  "prompt_sha256": "cecb0c07bf3f44af9e042f76785c480d01ae2b4c639aa0e69eda46f4a5446291",
+  "results_sha256": "31e9d3942453fc1f0138254091ed563632dba3656372762edaf8c101dff58e22",
+  "clusters": [
+    {
+      "id": "C1",
+      "status": "compile_diff",
+      "failed_on": "old",
+      "programs": [
+        "gen_17.cpp",
+        "gen_18.cpp",
+        "gen_19.cpp",
+        "gen_26.cpp",
+        "gen_27.cpp",
+        "gen_28.cpp",
+        "gen_29.cpp",
+        "gen_30.cpp",
+        "gen_31.cpp",
+        "gen_32.cpp",
+        "gen_33.cpp"
+      ],
+      "verdict": "intended",
+      "confidence": "high",
+      "reason": "The PR explicitly fixes `json::parse` and `accept` with a plain function or function pointer as callback for containers, which failed to compile previously as shown in `can_compare_ne`."
+    },
+    {
+      "id": "C2",
+      "status": "compile_diff",
+      "failed_on": "both",
+      "programs": [
+        "gen_20.cpp"
+      ],
+      "verdict": "intended",
+      "confidence": "high",
+      "reason": "The program passes a function (not a function pointer) `my_cb` directly as a callback to `ordered_json::parse`, but the library's `parse` overload expects a callback type like `parser_callback_t`, making this a type mismatch in the user code rather than a library error."
+    }
+  ],
+  "clusters_not_shown": 0,
+  "counts": {
+    "same": 8,
+    "invalid": 0,
+    "flaky": 0,
+    "superseded": 14,
+    "missing": 0
+  },
+  "pr_verdict": {
+    "regression_candidate": false,
+    "unintended_clusters": []
+  },
+  "usage": {
+    "promptTokenCount": 5120,
+    "candidatesTokenCount": 193,
+    "totalTokenCount": 5313,
+    "trafficType": "ON_DEMAND",
+    "promptTokensDetails": [
+      {
+        "modality": "TEXT",
+        "tokenCount": 5120
+      }
+    ],
+    "candidatesTokensDetails": [
+      {
+        "modality": "TEXT",
+        "tokenCount": 193
+      }
+    ]
+  }
+}

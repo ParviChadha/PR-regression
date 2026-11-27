@@ -1,0 +1,190 @@
+{
+  "target": "nlohmann-json",
+  "pr": 5968,
+  "model": "gemini-3.5-flash-lite",
+  "prompt_sha256": "dd385c40b0a6f160d465581cfcda08b1e8049df56ef34089b91441406abf0375",
+  "n_requested": 20,
+  "std": "c++17",
+  "dropped": 0,
+  "variant": "baseline",
+  "usage": {
+    "promptTokenCount": 4159,
+    "candidatesTokenCount": 5898,
+    "totalTokenCount": 10057,
+    "trafficType": "ON_DEMAND",
+    "promptTokensDetails": [
+      {
+        "modality": "TEXT",
+        "tokenCount": 4159
+      }
+    ],
+    "candidatesTokensDetails": [
+      {
+        "modality": "TEXT",
+        "tokenCount": 5898
+      }
+    ]
+  },
+  "tests": [
+    {
+      "file": "gen_01.cpp",
+      "name": "bson_array_skip_keys",
+      "intent": "Verify that parsing a BSON array successfully skips copying and validating element keys under default error handlers.",
+      "round": 0
+    },
+    {
+      "file": "gen_02.cpp",
+      "name": "bson_array_strict_utf8",
+      "intent": "Verify that strict error handler still inspects and validates array element names for UTF-8 correctness.",
+      "round": 0
+    },
+    {
+      "file": "gen_03.cpp",
+      "name": "bson_bulk_scan_various_lengths",
+      "intent": "Probe BSON cstr bulk scanning with keys of 1 to 17 bytes to test 8-byte word boundaries.",
+      "round": 0
+    },
+    {
+      "file": "gen_04.cpp",
+      "name": "bson_stream_input_array",
+      "intent": "Verify stream-based BSON parsing of arrays uses the non-contiguous fallback path correctly.",
+      "round": 0
+    },
+    {
+      "file": "gen_05.cpp",
+      "name": "bson_sax_parse_array",
+      "intent": "Probe BSON sax_parse on an array document to ensure keys are skipped without calling sax->key.",
+      "round": 0,
+      "superseded_by": "gen_21.cpp"
+    },
+    {
+      "file": "gen_06.cpp",
+      "name": "bson_empty_string_key",
+      "intent": "Test BSON parsing with empty key strings.",
+      "round": 0
+    },
+    {
+      "file": "gen_07.cpp",
+      "name": "bson_nested_arrays_objects",
+      "intent": "Test deeply nested combinations of objects and arrays to verify stack handling and skipping.",
+      "round": 0
+    },
+    {
+      "file": "gen_08.cpp",
+      "name": "bson_long_key_bulk",
+      "intent": "Test BSON parsing with keys longer than 8 bytes using the bulk zero scanner.",
+      "round": 0
+    },
+    {
+      "file": "gen_09.cpp",
+      "name": "bson_ignore_error_handler",
+      "intent": "Verify that error_handler_t::ignore handles malformed strings without throwing during parsing.",
+      "round": 0
+    },
+    {
+      "file": "gen_10.cpp",
+      "name": "bson_replace_error_handler",
+      "intent": "Verify that error_handler_t::replace processes elements without crashing.",
+      "round": 0
+    },
+    {
+      "file": "gen_11.cpp",
+      "name": "bson_array_multiple_elements",
+      "intent": "Test BSON array with multiple elements ensuring sequence of indices like \"0\", \"1\", \"2\" are correctly skipped.",
+      "round": 0,
+      "superseded_by": "gen_22.cpp"
+    },
+    {
+      "file": "gen_12.cpp",
+      "name": "bson_large_array_indices",
+      "intent": "Test BSON array with index names exceeding single-digit numbers to check multi-character numeric array keys.",
+      "round": 0
+    },
+    {
+      "file": "gen_13.cpp",
+      "name": "bson_strict_valid_array",
+      "intent": "Verify that strict error handler successfully parses valid array names without raising errors.",
+      "round": 0
+    },
+    {
+      "file": "gen_14.cpp",
+      "name": "bson_unterminated_string_bulk",
+      "intent": "Verify handling of bulk input without a C-string null terminator.",
+      "round": 0
+    },
+    {
+      "file": "gen_15.cpp",
+      "name": "bson_object_with_empty_key",
+      "intent": "Test object containing an element with an explicitly empty key string.",
+      "round": 0
+    },
+    {
+      "file": "gen_16.cpp",
+      "name": "bson_roundtrip_array",
+      "intent": "Perform a serialization and deserialization roundtrip on an array to ensure internal representations align.",
+      "round": 0,
+      "superseded_by": "gen_23.cpp"
+    },
+    {
+      "file": "gen_17.cpp",
+      "name": "bson_array_with_various_types",
+      "intent": "Check BSON array containing elements of varied data types to verify correct index skipping.",
+      "round": 0
+    },
+    {
+      "file": "gen_18.cpp",
+      "name": "bson_empty_array",
+      "intent": "Parse an empty BSON array and verify output.",
+      "round": 0
+    },
+    {
+      "file": "gen_19.cpp",
+      "name": "bson_stream_strict_error",
+      "intent": "Verify stream input with strict error handling on malformed array indices throws correctly.",
+      "round": 0
+    },
+    {
+      "file": "gen_20.cpp",
+      "name": "bson_bulk_exact_eight_bytes",
+      "intent": "Test BSON key scanning with a key of exactly 8 bytes length to test block boundary conditions.",
+      "round": 0
+    },
+    {
+      "file": "gen_21.cpp",
+      "name": "bson_sax_parse_array_fixed",
+      "intent": "Probe BSON sax_parse on an array document to ensure keys are skipped without calling sax->key.",
+      "round": 1,
+      "fixes": "gen_05.cpp",
+      "kind": "compile",
+      "superseded_by": "gen_24.cpp"
+    },
+    {
+      "file": "gen_22.cpp",
+      "name": "bson_array_multiple_elements_fixed",
+      "intent": "Test BSON array with multiple elements ensuring sequence of indices like \"0\", \"1\", \"2\" are correctly skipped.",
+      "round": 1,
+      "fixes": "gen_11.cpp",
+      "kind": "compile"
+    },
+    {
+      "file": "gen_23.cpp",
+      "name": "bson_roundtrip_array_fixed",
+      "intent": "Perform a serialization and deserialization roundtrip on an array to ensure internal representations align.",
+      "round": 1,
+      "fixes": "gen_16.cpp",
+      "kind": "compile"
+    },
+    {
+      "file": "gen_24.cpp",
+      "name": "bson_sax_parse_array_fixed_fixed",
+      "intent": "Probe BSON sax_parse on an array document to ensure keys are skipped without calling sax->key.",
+      "round": 2,
+      "fixes": "gen_21.cpp",
+      "kind": "compile"
+    }
+  ],
+  "fix": {
+    "rounds_max": 2,
+    "model": "gemini-3.5-flash-lite"
+  }
+}

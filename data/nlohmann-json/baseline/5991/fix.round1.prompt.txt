@@ -1,0 +1,243 @@
+[system]
+You write test programs that probe a C++ library for behavioral changes made by one pull request.
+Each program is compiled and run twice, once against the library before the change and once after, and the two
+outputs are compared. Your job is to produce programs whose output reveals whether the change altered behavior,
+including side effects the author did not intend.
+
+Rules for every program:
+- It is standalone: one file with its own int main(), compiled as C++17, printing results to stdout.
+- Use only the library's documented public API. Never include internal headers or use detail/impl namespaces,
+  private members or undocumented macros.
+- Do not judge results (no assert, no expected-value comparisons): just print what the library returns. Print
+  enough to make differences visible, one fact per line.
+- Output must be deterministic. Never print pointers or addresses, uninitialized data, the order of
+  hash-based containers, timings, thread ids, random values, file paths or environment data. Print floating point
+  values with an explicit precision. No input, files, network, threads, clocks or randomness.
+- Wrap calls that may throw in try/catch and print the exception's type and message, so an exception is an
+  observable result. Do not crash on purpose.
+- Aim at the code the diff changes. Prefer calls that compile against both the old and the new library; one or two
+  programs may use an API the PR adds. Cover ordinary inputs and edge cases (empty, minimum and maximum values,
+  boundaries, special values, nesting, unusual types) and also neighbouring behavior the change could disturb.
+- When the diff changes which types or inputs an API accepts or rejects (constraints, overloads, traits,
+  conversions), test it with the detection idiom (std::void_t or requires) and `if constexpr`, so the program
+  compiles against both versions, prints whether the expression is well-formed, and exercises it when it is.
+  Accepting an input is not enough: also use it through every entry point that should follow (const and
+  non-const, read, write, insert, erase, lookup, nested use), because a change that admits new inputs can leave
+  later code unable to handle them.
+- If the changed code is internal (a detail, impl or internal namespace, a trait, a helper), do not name it in the
+  program. Reach it through the public API that depends on it, using detection (as above) where needed.
+- Use the exact types and values the diff is about (the new trait's argument types, the new overload's
+  parameters), not stand-ins.
+- Spread the programs over distinct public entry points and overloads, one main idea per program. Do not write
+  several programs that only rename a type or change a literal.
+- Make the programs differ from each other: different inputs, different entry points, different features.
+
+Rules specific to this library:
+- Include the library with #include <nlohmann/json.hpp>. The public API is nlohmann::json (nlohmann::basic_json), nlohmann::ordered_json, json_pointer, json patch/merge_patch and the documented SAX and conversion interfaces. Never use the detail namespace.
+- It is a header-only library: nothing to link. Programs are compiled as C++17.
+- Print JSON values with dump() (compact) or dump(2). Keys of nlohmann::json objects print in sorted order, so output is deterministic; do not depend on insertion order except with ordered_json.
+
+[user]
+# Pull request #5991: parse(): propagate std::bad_alloc instead of crashing on a half-constructed member
+
+## Description
+Fixes #5985.
+
+When an allocation failed while `json::parse()` built an object or array member, the result was destroyed with a member whose type said *object*/*array* but whose pointer was null, so the destructor dereferenced it instead of the `std::bad_alloc` reaching the caller. Introduced by #5882 (not in any release).
+
+### Cause and fix
+
+`json_sax_dom_parser::set_member()` placement-news the new value over the null member it inserted for the key. `basic_json(value_t)` writes `m_type` before the allocation of `m_value`, so a throwing allocation left the member half-overwritten. Now a value whose construction can throw (a string, a binary value or a container) is created in a local first and placement-new'd into the member by move (the move constructor is `noexcept`), so a failed allocation never touches the member. A value that is nothrow-constructible (null, boolean, numbers) is still constructed in place, as before, so it pays no extra move; the choice is made at compile time with `std::is_nothrow_constructible`. This also covers `ordered_json`, `JSON_DIAGNOSTICS` and `sax_parse()` with `detail::json_sax_dom_parser` into an existing value (same code). The callback parser and the binary parsers assign a temporary and were not affected.
+
+### Tests
+
+`tests/src/unit-allocator.cpp`: "parse() survives a failing allocation at every point (#5985)" fails allocation k = 1, 2, … with a counting allocator (checks for a clean `std::bad_alloc` and no leak) for `json`, `ordered_json`, the callback parser (keep-all and filtering) and `sax_parse()` into an existing value. On develop it crashes under UBSan (`json.hpp:912: reference binding to null pointer`); with the fix it passes, also with `JSON_DIAGNOSTICS=1`. The issue's reproducer now runs to `no throw at k=14: done`. Full `ctest` with ASan+UBSan: 188/188.
+
+### Performance
+
+The alternative (setting `m_type` after the allocation in `data(value_t)`) was prototyped too; both were measured against develop with an A/B harness (Mac instruction counts, DOM parse, `json` and `ordered_json`). The chosen fix is at or below develop on all large inputs (twitter 0.996, citm 0.999, canada 0.999, update-center 0.993–0.999, random 0.994–0.996); the alternative was up to +0.8 %. Small inputs (< 1e8 instructions) stay within their ±2 % noise.
+
+These numbers were measured before scalars went back to in-place construction (review follow-up, 4809610d60). That change only removes work from the scalar path, and it has not been re-measured.
+
+### Public API
+
+No breaking changes.
+
+🤖 Generated with [Claude Code](https://claude.com/claude-code)
+
+## Commit message
+* Create the DOM parser's member value before placing it (#5985)
+
+json_sax_dom_parser::set_member() constructed the new value in place over
+the null member. basic_json(value_t) sets the type before the json_value
+allocates, so a std::bad_alloc left a member typed object/array with a
+null pointer, and the destructor crashed instead of propagating the
+exception. Construct the value first and move it over the member (the
+move constructor is noexcept).
+
+Signed-off-by: Niels Lohmann <mail@nlohmann.me>
+
+* Fix CI for the parse() bad_alloc sweep test (#5985)
+
+- sweep_allocator: provide max_size(), construct() and destroy(), which
+  GCC 4.8's std::map calls on the allocator directly.
+- Declare the non-throwing test lambdas noexcept (-Werror=noexcept on
+  recent GCC).
+- Give the sax_parse lambda an explicit return type; Clang 3.4 crashes on
+  the deduced one in C++11 mode.
+- Skip the parser callback sweep with iterator debugging (MSVC debug
+  builds, clang-cl), where containers allocate debug proxies inside
+  noexcept move constructors and terminate instead of throwing, as in the
+  other allocator tests.
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+Claude-Session: https://claude.ai/code/session_01N5NasAgbDGG28MqXjQvLqp
+Signed-off-by: Claude <noreply@anthropic.com>
+
+* Construct a scalar member in place; only a throwing value goes through a temporary
+
+Creating the value first and moving it over the member is needed only when
+creating it can throw (a string, a binary value or a container). A scalar
+or null is again constructed in place, without the extra move and destroy
+per member (and, with JSON_DIAGNOSTICS, without the extra set_parents()).
+
+Signed-off-by: Niels Lohmann <mail@nlohmann.me>
+
+* Spell the nothrow trait without && and fix the construct_member comments
+
+The dispatch in set_member tests std::is_nothrow_constructible, not
+whether the value is a scalar. Say so in the comments, and drop the &&
+from the trait argument (equivalent for a forwarding reference) 
+[... truncated, 515 more characters]
+
+## Linked issue #5985: parse() crashes in the destructor instead of propagating std::bad_alloc (the DOM parser leaves a half-constructed member)
+### Description
+
+When an allocation fails while `json::parse()` builds an object or array member, the result is destroyed with a member whose type says *object*, *array* or *string* but whose pointer is null. The destructor then dereferences that null pointer: UBSan reports `reference binding to null pointer`, a debug build fails `assert_invariant()`, a release build segfaults. The `std::bad_alloc` never reaches the caller, although [`parse()` documents the strong guarantee](https://json.nlohmann.me/api/basic_json/parse/#exception-safety).
+
+**Root cause.** The DOM SAX parser constructs a new member *in place* over the existing null member it inserted for the key ([json_sax.hpp#L1300-L1313](https://github.com/nlohmann/json/blob/ddc34f546a652cd098dd78225d80f1909b921871/include/nlohmann/detail/input/json_sax.hpp#L1300-L1313), the same code in `json_sax_dom_callback_parser`):
+
+```cpp
+if (JSON_HEDLEY_LIKELY(member.is_null()))
+{
+    // a new member is null and holds nothing: construct the value
+    // over it instead of destroying and swapping
+    ::new (static_cast<void*>(&member)) BasicJsonType(std::forward<Value>(v));
+}
+```
+
+`basic_json(value_t)` initialises `data::m_type` before `data::m_value` ([json.hpp#L6216-L6219](https://github.com/nlohmann/json/blob/ddc34f546a652cd098dd78225d80f1909b921871/include/nlohmann/json.hpp#L6216-L6219)), and `json_value(value_t)` / `json_value(string_t&&)` allocate. When that allocation throws, the constructor never completes, so no destructor runs for it, but the placement new has already written `m_type = object` (or array/string) into the member's storage, while the union still holds the null member's zero pointer. The member is a fully constructed element of its parent's container, so the parent's destructor destroys it: `destroy_bounded()` dereferences the null pointer at [json.hpp#L912](https://github.com/nlohmann/json/blob/ddc34f546a652cd098dd78225d80f1909b921871/include/nlohmann/json.hpp#L912) (object) or [#L902](https://github.
+[... truncated, 5381 more characters]
+
+## Discussion before merge
+- nlohmann: ### Performance check
+
+**No measurable impact.** This touches the hottest part of DOM parsing (creating every new object member), so I checked it closely.
+
+- **Generated code** (clang, arm64): `json_sax_dom_parser::store<...>()` changes for every value type. For scalar members, the move adds one store instruction: the zeroing of the slot is split into separate stores. For strings and containers (`store<value_t>`, `store<string_t>`), the functions are actually **one 16-byte block shorter**. The temporary's destructor apparently folds away, since the moved-from value is known to be null. Nothing else changes.
+- **Instruction counts**:
+
+| case | clang/arm64 PR/base | GCC/x86-64 (callgrind, exact) PR/base |
+|---|---:|---:|
+| parse twitter | 0.9976 | 1.00081 |
+| parse citm_catalog | 0.9986 | 1.00004 |
+| parse canada | 0.9973 | 1.00000 |
+| parse twitter from `std::istream` | 0.9975 | 1.00066 |
+| parse twitter with callback | 0.9990 | 1.00000 |
+
+  The worst case is GCC on twitter at +0.08 % (19k instructions out of 23.2M per parse). That is well under the 1 % threshold. On clang every row is within noise. The other 33 rows are also within noise.
+
+<details><summary>Method</summary>
+
+- PR h
+[... truncated, 934 more characters]
+- gregmarr: astyle (probably the &&, not sure that can be fixed)
+- gregmarr: You don't know it's a scalar, just that it's `nothrow_constructible`.
+- nlohmann: Fixed in f00fe043f0: it was the `&&`. Since `Value` is a forwarding-reference parameter, `std::is_nothrow_constructible<BasicJsonType, Value>` asks the same question as `Value &&` (`Value` is `T` for an rvalue and `T&` for an lvalue), and astyle leaves that spelling alone.
+
+*(Written by Claude Code on behalf of @nlohmann.)*
+- nlohmann: Right, the overload is selected by `std::is_nothrow_constructible`, not by the value being a scalar. Fixed in f00fe043f0: the comments now say "constructing the value cannot throw (a number, a boolean)" and "constructing the value can throw (a container, a string)". No behaviour change.
+
+*(Written by Claude Code on behalf of @nlohmann.)*
+- gregmarr: I was assuming the possibility that there are custom containers or strings that are nothrow constructible, but I'm not sure how likely that is.  I suppose they could use a custom arena that is guaranteed to never throw.
+
+## Diff of the library source (before -> after)
+```diff
+diff --git a/include/nlohmann/detail/input/json_sax.hpp b/include/nlohmann/detail/input/json_sax.hpp
+index 43af2616a..80850ab92 100644
+--- a/include/nlohmann/detail/input/json_sax.hpp
++++ b/include/nlohmann/detail/input/json_sax.hpp
+@@ -1303,7 +1303,7 @@ class json_sax_dom_parser : public json_sax_dom_error_state
+         {
+             // a new member is null and holds nothing: construct the value
+             // over it instead of destroying and swapping
+-            ::new (static_cast<void*>(&member)) BasicJsonType(std::forward<Value>(v));
++            construct_member(member, std::forward<Value>(v), std::is_nothrow_constructible<BasicJsonType, Value> {});
+         }
+         else
+         {
+@@ -1312,6 +1312,26 @@ class json_sax_dom_parser : public json_sax_dom_error_state
+         }
+     }
+ 
++    /// constructing the value cannot throw (for example a number or a boolean): construct it in place
++    template<typename Value>
++    JSON_HEDLEY_ALWAYS_INLINE
++    static void construct_member(BasicJsonType& member, Value&& v, std::true_type /*nothrow*/)
++    {
++        ::new (static_cast<void*>(&member)) BasicJsonType(std::forward<Value>(v));
++    }
++
++    /// constructing the value can throw (for example a container or a string), and a
++    /// constructor that was interrupted must not have touched the member (#5985):
++    /// create the value first, then move it over the member (the move constructor is
++    /// noexcept)
++    template<typename Value>
++    JSON_HEDLEY_ALWAYS_INLINE
++    static void construct_member(BasicJsonType& member, Value&& v, std::false_type /*may throw*/)
++    {
++        BasicJsonType value(std::forward<Value>(v));
++        ::new (static_cast<void*>(&member)) BasicJsonType(std::move(value));
++    }
++
+     /// a custom base class may care about the lifetime of the value
+     template<typename Value>
+     static void set_member(BasicJsonType& member, Value&& v, std::false_type /*custom base*/)
+```
+
+# Programs to repair
+
+## gen_06.cpp (compile)
+Intent: Probe using sax_parse directly with json_sax_dom_parser to test member placement callbacks.
+COMPILE ERROR. The program fails to compile, the same way against the old and the new library. Fix the error (wrong or missing include, typo, misuse of the public API) and keep the intent: the call under test must stay. Include only headers that exist; if you are unsure a header exists, use the library's main header.
+Compiler errors:
+```
+gen_06.cpp:9:61: error: wrong number of template arguments (1, should be at least 2)
+497 | class json_sax_dom_parser : public json_sax_dom_error_state
+is_sax.hpp:88:66: error: static assertion failed: invalid function: bool null()
+is_sax.hpp:90:69: error: static assertion failed: invalid function: bool boolean(bool)
+is_sax.hpp:94:28: error: static assertion failed: invalid function: bool number_integer(number_integer_t)
+is_sax.hpp:98:29: error: static assertion failed: invalid function: bool number_unsigned(number_unsigned_t)
+```
+Source:
+```cpp
+#include <nlohmann/json.hpp>
+#include <iostream>
+
+int main() {
+    try {
+        nlohmann::json j;
+        nlohmann::detail::json_sax_dom_parser<nlohmann::json> sax(j);
+        std::string input = "{\"sax_key\": \"sax_value\"}";
+        bool res = nlohmann::json::sax_parse(input, &sax);
+        std::cout << "Parsed successfully: " << (res ? "true" : "false") << std::endl;
+        std::cout << j.dump() << std::endl;
+    } catch (const std::exception& e) {
+        std::cout << "Exception: " << e.what() << std::endl;
+    }
+    return 0;
+}
+```
+
+# Task
+Return JSON with a "fixes" array: one item per program above, with "file" (exactly as given) and "code" (the complete repaired program, standalone, with its own int main). Do not return programs you cannot repair.

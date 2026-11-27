@@ -1,0 +1,226 @@
+{
+  "target": "nlohmann-json",
+  "pr": 6029,
+  "model": "gemini-3.5-flash-lite",
+  "prompt_sha256": "b3b75b18b90ef5615ef2f113bfee15d5b0c8f247c2a346115ee11eb83c224933",
+  "n_requested": 20,
+  "std": "c++17",
+  "dropped": 0,
+  "variant": "baseline",
+  "usage": {
+    "promptTokenCount": 3680,
+    "candidatesTokenCount": 4153,
+    "totalTokenCount": 7833,
+    "trafficType": "ON_DEMAND",
+    "promptTokensDetails": [
+      {
+        "modality": "TEXT",
+        "tokenCount": 3680
+      }
+    ],
+    "candidatesTokensDetails": [
+      {
+        "modality": "TEXT",
+        "tokenCount": 4153
+      }
+    ]
+  },
+  "tests": [
+    {
+      "file": "gen_01.cpp",
+      "name": "parse_string_iterators",
+      "intent": "Probes json::parse using string iterator pairs to verify correct parsing via pointer range optimization.",
+      "round": 0
+    },
+    {
+      "file": "gen_02.cpp",
+      "name": "parse_vector_char_iterators",
+      "intent": "Probes json::parse using vector of char iterator pairs.",
+      "round": 0
+    },
+    {
+      "file": "gen_03.cpp",
+      "name": "parse_vector_const_char_iterators",
+      "intent": "Probes json::parse using vector const_iterator pairs.",
+      "round": 0,
+      "superseded_by": "gen_21.cpp"
+    },
+    {
+      "file": "gen_04.cpp",
+      "name": "parse_vector_unsigned_char_iterators",
+      "intent": "Probes json::parse using std::vector<unsigned char> iterators.",
+      "round": 0
+    },
+    {
+      "file": "gen_05.cpp",
+      "name": "parse_vector_signed_char_iterators",
+      "intent": "Probes json::parse using std::vector<signed char> iterators.",
+      "round": 0
+    },
+    {
+      "file": "gen_06.cpp",
+      "name": "accept_string_iterators",
+      "intent": "Probes json::accept using string iterator pairs.",
+      "round": 0
+    },
+    {
+      "file": "gen_07.cpp",
+      "name": "accept_empty_range",
+      "intent": "Probes json::accept on an empty string iterator range, verifying that empty ranges are not dereferenced.",
+      "round": 0
+    },
+    {
+      "file": "gen_08.cpp",
+      "name": "parse_empty_range_exception",
+      "intent": "Probes json::parse on an empty string iterator range to ensure proper exception handling without dereference.",
+      "round": 0
+    },
+    {
+      "file": "gen_09.cpp",
+      "name": "sax_parse_string_iterators",
+      "intent": "Probes sax_parse using string iterator pairs with a custom SAX consumer.",
+      "round": 0
+    },
+    {
+      "file": "gen_10.cpp",
+      "name": "from_cbor_vector_iterators",
+      "intent": "Probes binary reader from_cbor using vector<uint8_t> iterator pairs.",
+      "round": 0,
+      "superseded_by": "gen_22.cpp"
+    },
+    {
+      "file": "gen_11.cpp",
+      "name": "from_msgpack_vector_iterators",
+      "intent": "Probes binary reader from_msgpack using vector<char> iterator pairs.",
+      "round": 0,
+      "superseded_by": "gen_23.cpp"
+    },
+    {
+      "file": "gen_12.cpp",
+      "name": "from_ubjson_vector_iterators",
+      "intent": "Probes binary reader from_ubjson using vector iterator pairs.",
+      "round": 0,
+      "superseded_by": "gen_24.cpp"
+    },
+    {
+      "file": "gen_13.cpp",
+      "name": "from_bson_vector_iterators",
+      "intent": "Probes binary reader from_bson using vector iterator pairs.",
+      "round": 0,
+      "superseded_by": "gen_25.cpp"
+    },
+    {
+      "file": "gen_14.cpp",
+      "name": "non_byte_vector_fallback",
+      "intent": "Probes json::parse with a vector of integers (non-byte, e.g. int) to ensure it falls back correctly to general iterators.",
+      "round": 0,
+      "superseded_by": "gen_26.cpp"
+    },
+    {
+      "file": "gen_15.cpp",
+      "name": "list_iterator_fallback",
+      "intent": "Probes json::parse with std::list<char> iterators to verify non-contiguous container fallback path.",
+      "round": 0,
+      "superseded_by": "gen_27.cpp"
+    },
+    {
+      "file": "gen_16.cpp",
+      "name": "string_subrange_iterators",
+      "intent": "Probes json::parse using a sub-range (iterators not starting at begin()) of a std::string.",
+      "round": 0
+    },
+    {
+      "file": "gen_17.cpp",
+      "name": "vector_subrange_iterators",
+      "intent": "Probes json::parse using a sub-range of a std::vector<char>.",
+      "round": 0
+    },
+    {
+      "file": "gen_18.cpp",
+      "name": "string_iterator_error_position",
+      "intent": "Probes error reporting position accuracy when parsing invalid JSON via string iterators.",
+      "round": 0
+    },
+    {
+      "file": "gen_19.cpp",
+      "name": "vector_const_iterator_error_position",
+      "intent": "Probes error reporting position accuracy when parsing invalid JSON via vector const_iterators.",
+      "round": 0
+    },
+    {
+      "file": "gen_20.cpp",
+      "name": "vector_bool_iterators_fallback",
+      "intent": "Probes std::vector<bool> iterators to confirm they do not match the 1-byte byte container optimization (since vector<bool> packs bits).",
+      "round": 0
+    },
+    {
+      "file": "gen_21.cpp",
+      "name": "parse_vector_const_char_iterators_fixed",
+      "intent": "Probes json::parse using vector const_iterator pairs.",
+      "round": 1,
+      "fixes": "gen_03.cpp",
+      "kind": "compile"
+    },
+    {
+      "file": "gen_22.cpp",
+      "name": "from_cbor_vector_iterators_fixed",
+      "intent": "Probes binary reader from_cbor using vector<uint8_t> iterator pairs.",
+      "round": 1,
+      "fixes": "gen_10.cpp",
+      "kind": "compile"
+    },
+    {
+      "file": "gen_23.cpp",
+      "name": "from_msgpack_vector_iterators_fixed",
+      "intent": "Probes binary reader from_msgpack using vector<char> iterator pairs.",
+      "round": 1,
+      "fixes": "gen_11.cpp",
+      "kind": "compile",
+      "superseded_by": "gen_28.cpp"
+    },
+    {
+      "file": "gen_24.cpp",
+      "name": "from_ubjson_vector_iterators_fixed",
+      "intent": "Probes binary reader from_ubjson using vector iterator pairs.",
+      "round": 1,
+      "fixes": "gen_12.cpp",
+      "kind": "compile"
+    },
+    {
+      "file": "gen_25.cpp",
+      "name": "from_bson_vector_iterators_fixed",
+      "intent": "Probes binary reader from_bson using vector iterator pairs.",
+      "round": 1,
+      "fixes": "gen_13.cpp",
+      "kind": "compile"
+    },
+    {
+      "file": "gen_26.cpp",
+      "name": "non_byte_vector_fallback_fixed",
+      "intent": "Probes json::parse with a vector of integers (non-byte, e.g. int) to ensure it falls back correctly to general iterators.",
+      "round": 1,
+      "fixes": "gen_14.cpp",
+      "kind": "compile"
+    },
+    {
+      "file": "gen_27.cpp",
+      "name": "list_iterator_fallback_fixed",
+      "intent": "Probes json::parse with std::list<char> iterators to verify non-contiguous container fallback path.",
+      "round": 1,
+      "fixes": "gen_15.cpp",
+      "kind": "compile"
+    },
+    {
+      "file": "gen_28.cpp",
+      "name": "from_msgpack_vector_iterators_fixed_fixed",
+      "intent": "Probes binary reader from_msgpack using vector<char> iterator pairs.",
+      "round": 2,
+      "fixes": "gen_23.cpp",
+      "kind": "compile"
+    }
+  ],
+  "fix": {
+    "rounds_max": 2,
+    "model": "gemini-3.5-flash-lite"
+  }
+}

@@ -1,23 +1,24 @@
 # Report: nlohmann-json
 
-122 PR(s) checked, 2790 programs generated, 2790 in use (648 repaired by fix.py). Numbers come only from the files on disk; see the module docstring of pipeline/report.py for each definition.
+122 PR(s) checked, 2790 programs generated, 2790 in use (745 repaired by fix.py). Numbers come only from the files on disk; see the module docstring of pipeline/report.py for each definition.
 
 ## Summary
 
 | Measure | Value |
 |---|---|
 | PRs checked | 122 |
-| Compile success, as generated (new / both versions) | 81.5% / 77.5% |
-| Compile success, after fix.py (new / both versions) | 91.6% / 88.8% |
-| Deterministic on both versions | 2473 of 2478 compiled-on-both programs (99.8%) |
-| PRs with at least one behavioral difference | 41 of 122 (33.6%) |
-| Differences by verdict (clusters / programs) | intended 132 / 268, unintended 8 / 58, unclear 13 / 20 |
+| Compile success, as generated (new / both versions) | 81.4% / 77.3% |
+| Compile success, after fix.py (new / both versions) | 91.8% / 89.0% |
+| Deterministic on both versions | 2477 of 2482 compiled-on-both programs (99.8%) |
+| PRs with at least one behavioral difference | 42 of 122 (34.4%) |
+| Differences by verdict (clusters / programs) | intended 141 / 277, unintended 8 / 58, unclear 13 / 20 |
 | Regression candidates | 3 of 122 classified: #4958, #5890, #6005 |
-| Changed-line coverage measured | 122 of 122 PRs; at least 80% reached for 80 |
+| Changed-line coverage measured | 122 of 122 PRs; at least 80% reached for 81 |
 | Clean results that are INCONCLUSIVE (coverage missing or low) | 17: #5707, #5795, #5839, #5842, #5885, #5889, #5908, #5927, #5931, #5940, #5978, #5981, #5984, #5998, #6001, #6012, #6077 |
 | Changed-line coverage before / after the loop (mean over 93 PRs) | 84.1% / 90.3% |
-| LLM calls (estimated) | 412 total, 3.4 per PR |
-| Wall time of the run.py stage | 1490.4 s |
+| C++ standard the programs were compiled with | c++17: 121 PR(s), c++20: 1 PR(s) |
+| LLM calls (estimated) | 420 total, 3.4 per PR |
+| Wall time of the run.py stage | 1858.3 s |
 
 ## Seeded PRs with a known answer
 
@@ -144,15 +145,15 @@ Recall on seeded regressions: 1/1
 | #6029 | 25 (25) | 21/25 / 20/25 | compile_diff 5, same 20 | 5 | no regression flagged | 100% of 5 lines | 5 |
 | #6030 | 25 (25) | 24/25 / 24/25 | invalid 1, output_diff 1, same 23 | 1 | no regression flagged | 93% of 60 lines | 5 |
 | #6039 | 20 (20) | 20/20 / 20/20 | same 20 | 0 | no regression flagged | 100% of 18 lines | 2 |
-| #6049 | 20 (20) | 13/20 / 13/20 | invalid 7, same 13 | 0 | no regression flagged (no measurable changed lines) | n/a | 3 |
+| #6049 | 20 (20) | 20/20 / 20/20 | same 20 | 0 | no regression flagged (no measurable changed lines) | n/a | 4 |
 | #6073 | 25 (25) | 25/25 / 17/25 | compile_diff 8, same 17 | 8 | no regression flagged (no measurable changed lines) | n/a | 5 |
-| #6075 | 25 (25) | 25/25 / 25/25 | same 25 | 0 | no regression flagged (no measurable changed lines) | n/a | 2 |
+| #6075 (c++20) | 25 (25) | 22/25 / 22/25 | invalid 3, output_diff 9, same 13 | 9 | no regression flagged | 100% of 15 lines | 5 |
 | #6076 | 25 (25) | 25/25 / 25/25 | output_diff 5, same 20 | 5 | no regression flagged | 99% of 119 lines | 3 |
 | #6077 | 25 (25) | 25/25 / 25/25 | same 25 | 0 | no regression flagged, INCONCLUSIVE: only 10% of changed lines reached | 10% of 10 lines | 3 |
 | #6078 | 25 (25) | 25/25 / 25/25 | output_diff 1, same 24 | 1 | no regression flagged | 86% of 22 lines | 3 |
 | #6081 | 6 (6) | 6/6 / 6/6 | same 6 | 0 | no regression flagged | 100% of 4 lines | 3 |
-| #6084 | 20 (20) | 0/20 / 0/20 | invalid 20 | 0 | no regression flagged (no measurable changed lines) | n/a | 3 |
-| #6085 | 20 (20) | 2/20 / 2/20 | invalid 18, same 2 | 0 | no regression flagged (no measurable changed lines) | n/a | 3 |
+| #6084 | 20 (20) | 0/20 / 0/20 | invalid 20 | 0 | no regression flagged (no measurable changed lines) | n/a | 5 |
+| #6085 | 20 (20) | 2/20 / 2/20 | invalid 18, same 2 | 0 | no regression flagged (no measurable changed lines) | n/a | 5 |
 | #6117 | 25 (25) | 25/25 / 25/25 | invalid 1, same 24 | 0 | no regression flagged | 86% of 7 lines | 3 |
 | #6119 | 20 (20) | 20/20 / 20/20 | output_diff 5, same 15 | 5 | no regression flagged | 100% of 3 lines | 3 |
 | #6121 | 25 (25) | 22/25 / 22/25 | compile_diff 3, output_diff 1, same 21 | 4 | no regression flagged | 99% of 70 lines | 6 |
@@ -927,6 +928,15 @@ Like C1, these programs fail inside the library headers due to the missing `null
 
 | Cluster | Programs | Verdict | Reason |
 |---|---|---|---|
+| C1 output_diff | 1 | intended (high) | The PR adds a from_json overload for std::u8string that reads a JSON string, allowing it to be correctly deserialized instead of throwing type_error. |
+| C2 output_diff | 1 | intended (high) | The error message was updated to include 'string' alongside 'array' when rejecting invalid types during std::u8string deserialization. |
+| C3 output_diff | 1 | intended (high) | The PR enables std::u8string to round-trip via get_to() successfully by storing and reading it as a JSON string. |
+| C4 output_diff | 1 | intended (high) | Storing a std::u8string containing embedded NUL bytes now correctly produces a JSON string that preserves size and content on recovery. |
+| C5 output_diff | 1 | intended (high) | Deserializing large std::u8string instances from JSON strings now succeeds correctly. |
+| C6 output_diff | 1 | intended (high) | JSON pointers accessing a std::u8string correctly return a string value that can be read back as std::u8string. |
+| C7 output_diff | 1 | intended (high) | The new direct from_json overload successfully reads a std::u8string from the JSON string created by the updated to_json function. |
+| C8 output_diff | 1 | intended (high) | Round-tripping a std::u8string through json now succeeds as intended by the PR description. |
+| C9 output_diff | 1 | intended (high) | Using adl_serializer to convert a std::u8string to and from JSON now works properly in both directions. |
 
 ## PR #6076: clusters
 

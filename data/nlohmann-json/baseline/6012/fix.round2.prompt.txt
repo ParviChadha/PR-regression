@@ -1,0 +1,345 @@
+[system]
+You write test programs that probe a C++ library for behavioral changes made by one pull request.
+Each program is compiled and run twice, once against the library before the change and once after, and the two
+outputs are compared. Your job is to produce programs whose output reveals whether the change altered behavior,
+including side effects the author did not intend.
+
+Rules for every program:
+- It is standalone: one file with its own int main(), compiled as C++17, printing results to stdout.
+- Use only the library's documented public API. Never include internal headers or use detail/impl namespaces,
+  private members or undocumented macros.
+- Do not judge results (no assert, no expected-value comparisons): just print what the library returns. Print
+  enough to make differences visible, one fact per line.
+- Output must be deterministic. Never print pointers or addresses, uninitialized data, the order of
+  hash-based containers, timings, thread ids, random values, file paths or environment data. Print floating point
+  values with an explicit precision. No input, files, network, threads, clocks or randomness.
+- Wrap calls that may throw in try/catch and print the exception's type and message, so an exception is an
+  observable result. Do not crash on purpose.
+- Aim at the code the diff changes. Prefer calls that compile against both the old and the new library; one or two
+  programs may use an API the PR adds. Cover ordinary inputs and edge cases (empty, minimum and maximum values,
+  boundaries, special values, nesting, unusual types) and also neighbouring behavior the change could disturb.
+- When the diff changes which types or inputs an API accepts or rejects (constraints, overloads, traits,
+  conversions), test it with the detection idiom (std::void_t or requires) and `if constexpr`, so the program
+  compiles against both versions, prints whether the expression is well-formed, and exercises it when it is.
+  Accepting an input is not enough: also use it through every entry point that should follow (const and
+  non-const, read, write, insert, erase, lookup, nested use), because a change that admits new inputs can leave
+  later code unable to handle them.
+- If the changed code is internal (a detail, impl or internal namespace, a trait, a helper), do not name it in the
+  program. Reach it through the public API that depends on it, using detection (as above) where needed.
+- Use the exact types and values the diff is about (the new trait's argument types, the new overload's
+  parameters), not stand-ins.
+- Spread the programs over distinct public entry points and overloads, one main idea per program. Do not write
+  several programs that only rename a type or change a literal.
+- Make the programs differ from each other: different inputs, different entry points, different features.
+
+Rules specific to this library:
+- Include the library with #include <nlohmann/json.hpp>. The public API is nlohmann::json (nlohmann::basic_json), nlohmann::ordered_json, json_pointer, json patch/merge_patch and the documented SAX and conversion interfaces. Never use the detail namespace.
+- It is a header-only library: nothing to link. Programs are compiled as C++17.
+- Print JSON values with dump() (compact) or dump(2). Keys of nlohmann::json objects print in sorted order, so output is deterministic; do not depend on insertion order except with ordered_json.
+
+[user]
+# Pull request #6012: Restore the two commits of #6005 that the stack merge dropped (fixes the build of develop)
+
+## Description
+Fixes the compile error on `develop` (3354436, #6006 and later):
+
+```
+include/nlohmann/json.hpp:5550: error: use of undeclared identifier 'null_result'
+```
+
+## Cause
+
+#6005 consisted of three commits. When the stack #5997 ← #6004 ← #6005 ← #6006 was restacked for the atomic stack merge, only the last commit of #6005 ("Drop the null_result parameter JSON_IMPLEMENT_OPERATOR no longer uses") was replayed. The two commits it depends on were lost, so `develop` has the parameter removal without the change that made it unused:
+
+- `2ac0851` basic_json, iterators, serializer: remove checks that invariants make dead
+- `7196bc5` iter_impl: keep the type-dependent initialization in the constructor
+
+## Change
+
+This PR cherry-picks exactly these two commits (unchanged) onto `develop`. They apply without conflicts.
+
+Checked locally: `make amalgamate` leaves no diff; `unit-comparison`, `unit-allocator`, `unit-iterators1`, `unit-serialization`, `unit-ordered_json` and `unit-json_view` build with clang++ -std=c++11 and pass.
+
+## Breaking changes
+
+No breaking changes: the commits remove internal checks and an unused internal macro parameter.
+
+🤖 Generated with [Claude Code](https://claude.com/claude-code)
+
+## Commit message
+* basic_json, iterators, serializer: remove checks that invariants make dead
+
+Branch coverage of the test suite and of 24k mutated inputs showed
+these conditions as never taken; each is implied by the code around it:
+
+- copy_object_level(): `src_it != src_object.cend()`; dst was built from
+  exactly src_object.size() unique keys and src_it advances at most once
+  per member
+- the general comparison operators (equal_general, less_general,
+  three_way_general): the five same-type scalar cases, which the inline
+  fast path of every operator handles before calling them (now an
+  assert); and the NaN half of compares_unordered() in the mixed-type
+  branch, reached only after all six number pairs returned, where only
+  a discarded operand is unordered
+- serializer, ensure_ascii: the reset of `bytes` under error_handler_t::keep
+  and the surrogate-pair escape in the UTF8_ACCEPT case; every
+  well-formed multi-byte character is escaped by write_u_escapes() before
+  decode() sees it, so decode() only ever accepts DEL here, a single byte
+  of which nothing was buffered (now asserts)
+- iter_impl(pointer): the if/else chain assigned value-initialized
+  iterators to the value-initialized m_it
+
+No change in behaviour: a build that aborts on each removed side passes
+the test suite, the fuzz corpora and 23.2M dumps of all 1-, 2- and
+boundary 4-byte strings in both ensure_ascii modes.
+
+Signed-off-by: Niels Lohmann <mail@nlohmann.me>
+
+* iter_impl: keep the type-dependent initialization in the constructor
+
+The check is not needed for correctness (m_it is value-initialized), but
+without it GCC 13 generates slower iteration loops: a recursive walk over
+a parsed document takes 0.5-2.7 % longer (callgrind: +1.9 % instructions
+on twitter.json, +0.95 % on canada.json). Clang generates identical code
+either way. See the measurements in #6005.
+
+Signed-off-by: Niels Lohmann <mail@nlohmann.me>
+
+---------
+
+Signed-off-by: Niels Lohmann <mail@nlohmann.me>
+
+## Diff of the library source (before -> after)
+```diff
+diff --git a/include/nlohmann/detail/iterators/iter_impl.hpp b/include/nlohmann/detail/iterators/iter_impl.hpp
+index 84a850356..6e6cc0ef6 100644
+--- a/include/nlohmann/detail/iterators/iter_impl.hpp
++++ b/include/nlohmann/detail/iterators/iter_impl.hpp
+@@ -108,6 +108,9 @@ class iter_impl // NOLINT(cppcoreguidelines-special-member-functions,hicpp-speci
+     {
+         JSON_ASSERT(m_object != nullptr);
+ 
++        // m_it is already value-initialized, so this is not needed for
++        // correctness; it is kept because GCC generates faster loops with it
++        // (iterating a parsed document is 0.5-2.7 % slower without it, #6005)
+         if (m_object->is_object())
+         {
+             m_it.object_iterator = typename object_t::iterator();
+diff --git a/include/nlohmann/detail/output/serializer.hpp b/include/nlohmann/detail/output/serializer.hpp
+index fc8e2b384..0c004c491 100644
+--- a/include/nlohmann/detail/output/serializer.hpp
++++ b/include/nlohmann/detail/output/serializer.hpp
+@@ -1113,21 +1113,14 @@ class serializer
+                 {
+                     // the code point is at least 0x60 (smaller ones are handled
+                     // above) and is not printable ASCII (which the scanner
+-                    // copies): it is DEL (0x7F) under EnsureAscii or a non-ASCII
+-                    // character
++                    // copies). Under EnsureAscii it is DEL (0x7F): every
++                    // well-formed multi-byte character is escaped by
++                    // write_u_escapes() above, so decode() only ever accepts a
++                    // single byte here, and nothing of it was buffered
+                     if (EnsureAscii)
+                     {
+                         JSON_ASSERT(codepoint == 0x7F);
+-                        if (error_handler == error_handler_t::keep)
+-                        {
+-                            // this character was buffered as raw bytes below
+-                            // in case it turned out to be part of an
+-                            // ill-formed sequence (which is kept as is); now
+-                            // that it decoded to a well-formed code point,
+-                            // undo that and \u-escape it like any other
+-                            // character instead
+-                            bytes = bytes_after_last_accept;
+-                        }
++                        JSON_ASSERT(bytes == bytes_after_last_accept);
+                         write_u_escape(bytes, static_cast<std::uint16_t>(codepoint));
+                     }
+                     else
+diff --git a/include/nlohmann/json.hpp b/include/nlohmann/json.hpp
+index 33ea53a08..9be8a8c6c 100644
+--- a/include/nlohmann/json.hpp
++++ b/include/nlohmann/json.hpp
+@@ -1579,7 +1579,7 @@ public:
+         auto src_it = src_object.cbegin();
+         for (auto& element : *dst.m_data.m_value.object)
+         {
+-            if (JSON_HEDLEY_LIKELY(src_it != src_object.cend() && copy_keys_equal(src_it->first, element.first)))
++            if (JSON_HEDLEY_LIKELY(copy_keys_equal(src_it->first, element.first)))
+             {
+                 copy_shallow(src_it->second, element.second, worklist);
+                 ++src_it;
+@@ -5438,8 +5438,15 @@ public:
+                 return (*lhs.m_data.m_value.object) op (*rhs.m_data.m_value.object);                                   \
+             }                                                                                            \
+             \
+-            JSON_IMPLEMENT_SCALAR_CASES(op, null_result)                                                 \
+-            \
++                /* same-type scalars never get here: the inline fast path of the operator handles them */ \
++            case value_t::null:                                                                          \
++            case value_t::boolean:                                                                       \
++            case value_t::number_integer:                                                                \
++            case value_t::number_unsigned:                                                               \
++            case value_t::number_float:                                                                  \
++                JSON_ASSERT(false); /* NOLINT(cert-dcl03-c,hicpp-static-assert,misc-static-assert) */ \
++                return (unordered_result);                                                               \
++                \
+             case value_t::string:                                                                        \
+                 return (*lhs.m_data.m_value.string) op (*rhs.m_data.m_value.string);                                   \
+                 \
+@@ -5479,7 +5486,7 @@ public:
+                ? (number_integer_t(-1) op number_integer_t(1))                                           \
+                : (static_cast<number_unsigned_t>(lhs.m_data.m_value.number_integer) op rhs.m_data.m_value.number_unsigned); \
+     }                                                                                             \
+-    else if(compares_unordered(lhs, rhs))\
++    else if(lhs_type == value_t::discarded || rhs_type == value_t::discarded)\
+     {\
+         return (unordered_result);\
+     }\
+```
+
+# Programs to repair
+
+## gen_05.cpp (detect)
+Intent: Verify comparison behavior when one of the operands is a discarded JSON value.
+DETECTION REWRITE. The program fails to compile against the OLD library because the API or type it uses is not accepted there; it compiles against the NEW one. Rewrite it so it compiles against both. Check whether the expression is well-formed with the detection idiom (std::void_t or requires), print that result, and use the expression ONLY inside a function template that depends on the types involved, guarded by `if constexpr`. This matters: `if constexpr` in a plain function such as main() does NOT discard the other branch, so the old library would still fail to compile. Call that function template from main. When the expression is supported, exercise it fully (print every result, wrap throwing calls in try/catch). Keep the same types and inputs. Skeleton:
+```cpp
+template <class J, class K, class = void> struct can_use : std::false_type {};
+template <class J, class K>
+struct can_use<J, K, std::void_t<decltype(std::declval<J&>()[std::declval<K>()])>> : std::true_type {};
+template <class J, class K> void probe(J& j, K&& k) {
+    std::cout << "supported: " << can_use<J, K>::value << "\n";
+    if constexpr (can_use<J, K>::value) { /* use j[k] here, print results */ }
+}
+```
+(Replace the decltype expression with the one under test.)
+Compiler errors:
+```
+json.hpp:5441:45: error: ‘null_result’ was not declared in this scope
+json.hpp:5441:45: error: ‘null_result’ was not declared in this scope
+```
+Source:
+```cpp
+#include <nlohmann/json.hpp>
+#include <iostream>
+int main() {
+    try {
+        nlohmann::json j1 = 5;
+        nlohmann::json j2 = nlohmann::json::value_t::discarded;
+        bool res = (j1 < j2);
+        std::cout << std::boolalpha << "Result: " << res << "\n";
+    } catch (const std::exception& e) {
+        std::cout << "Exception: " << e.what() << "\n";
+    }
+    return 0;
+}
+```
+
+## gen_06.cpp (detect)
+Intent: Verify object copy and deep cloning operations with exact matching key sets.
+DETECTION REWRITE. The program fails to compile against the OLD library because the API or type it uses is not accepted there; it compiles against the NEW one. Rewrite it so it compiles against both. Check whether the expression is well-formed with the detection idiom (std::void_t or requires), print that result, and use the expression ONLY inside a function template that depends on the types involved, guarded by `if constexpr`. This matters: `if constexpr` in a plain function such as main() does NOT discard the other branch, so the old library would still fail to compile. Call that function template from main. When the expression is supported, exercise it fully (print every result, wrap throwing calls in try/catch). Keep the same types and inputs. Skeleton:
+```cpp
+template <class J, class K, class = void> struct can_use : std::false_type {};
+template <class J, class K>
+struct can_use<J, K, std::void_t<decltype(std::declval<J&>()[std::declval<K>()])>> : std::true_type {};
+template <class J, class K> void probe(J& j, K&& k) {
+    std::cout << "supported: " << can_use<J, K>::value << "\n";
+    if constexpr (can_use<J, K>::value) { /* use j[k] here, print results */ }
+}
+```
+(Replace the decltype expression with the one under test.)
+Compiler errors:
+```
+json.hpp:5441:45: error: ‘null_result’ was not declared in this scope
+json.hpp:5441:45: error: ‘null_result’ was not declared in this scope
+```
+Source:
+```cpp
+#include <nlohmann/json.hpp>
+#include <iostream>
+int main() {
+    try {
+        nlohmann::json j = {{"x", 1}, {"y", 2}};
+        nlohmann::json j2 = j;
+        std::cout << j2.dump() << "\n";
+    } catch (const std::exception& e) {
+        std::cout << "Exception: " << e.what() << "\n";
+    }
+    return 0;
+}
+```
+
+## gen_07.cpp (detect)
+Intent: Test iterator initialization robustness across different container and scalar types.
+DETECTION REWRITE. The program fails to compile against the OLD library because the API or type it uses is not accepted there; it compiles against the NEW one. Rewrite it so it compiles against both. Check whether the expression is well-formed with the detection idiom (std::void_t or requires), print that result, and use the expression ONLY inside a function template that depends on the types involved, guarded by `if constexpr`. This matters: `if constexpr` in a plain function such as main() does NOT discard the other branch, so the old library would still fail to compile. Call that function template from main. When the expression is supported, exercise it fully (print every result, wrap throwing calls in try/catch). Keep the same types and inputs. Skeleton:
+```cpp
+template <class J, class K, class = void> struct can_use : std::false_type {};
+template <class J, class K>
+struct can_use<J, K, std::void_t<decltype(std::declval<J&>()[std::declval<K>()])>> : std::true_type {};
+template <class J, class K> void probe(J& j, K&& k) {
+    std::cout << "supported: " << can_use<J, K>::value << "\n";
+    if constexpr (can_use<J, K>::value) { /* use j[k] here, print results */ }
+}
+```
+(Replace the decltype expression with the one under test.)
+Compiler errors:
+```
+json.hpp:5441:45: error: ‘null_result’ was not declared in this scope
+json.hpp:5441:45: error: ‘null_result’ was not declared in this scope
+```
+Source:
+```cpp
+#include <nlohmann/json.hpp>
+#include <iostream>
+int main() {
+    try {
+        nlohmann::json j_array = {1, 2, 3};
+        nlohmann::json j_obj = {{"k", 1}};
+        nlohmann::json j_scalar = 42;
+        std::cout << "Array size: " << j_array.end() - j_array.begin() << "\n";
+        std::cout << "Object size: " << j_obj.end() - j_obj.begin() << "\n";
+        std::cout << "Scalar type: " << j_scalar.is_number() << "\n";
+    } catch (const std::exception& e) {
+        std::cout << "Exception: " << e.what() << "\n";
+    }
+    return 0;
+}
+```
+
+## gen_08.cpp (detect)
+Intent: Verify serializer behavior when handling multi-byte UTF-8 sequences with ensure_ascii.
+DETECTION REWRITE. The program fails to compile against the OLD library because the API or type it uses is not accepted there; it compiles against the NEW one. Rewrite it so it compiles against both. Check whether the expression is well-formed with the detection idiom (std::void_t or requires), print that result, and use the expression ONLY inside a function template that depends on the types involved, guarded by `if constexpr`. This matters: `if constexpr` in a plain function such as main() does NOT discard the other branch, so the old library would still fail to compile. Call that function template from main. When the expression is supported, exercise it fully (print every result, wrap throwing calls in try/catch). Keep the same types and inputs. Skeleton:
+```cpp
+template <class J, class K, class = void> struct can_use : std::false_type {};
+template <class J, class K>
+struct can_use<J, K, std::void_t<decltype(std::declval<J&>()[std::declval<K>()])>> : std::true_type {};
+template <class J, class K> void probe(J& j, K&& k) {
+    std::cout << "supported: " << can_use<J, K>::value << "\n";
+    if constexpr (can_use<J, K>::value) { /* use j[k] here, print results */ }
+}
+```
+(Replace the decltype expression with the one under test.)
+Compiler errors:
+```
+json.hpp:5441:45: error: ‘null_result’ was not declared in this scope
+json.hpp:5441:45: error: ‘null_result’ was not declared in this scope
+```
+Source:
+```cpp
+#include <nlohmann/json.hpp>
+#include <iostream>
+int main() {
+    try {
+        std::string utf8_str = "\xC3\xBC";
+        nlohmann::json j = utf8_str;
+        std::string res = j.dump(-1, ' ', true);
+        std::cout << "Dumped: " << res << "\n";
+    } catch (const std::exception& e) {
+        std::cout << "Exception: " << e.what() << "\n";
+    }
+    return 0;
+}
+```
+
+# Task
+Return JSON with a "fixes" array: one item per program above, with "file" (exactly as given) and "code" (the complete repaired program, standalone, with its own int main). Do not return programs you cannot repair.

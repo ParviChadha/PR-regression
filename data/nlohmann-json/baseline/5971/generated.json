@@ -1,0 +1,150 @@
+{
+  "target": "nlohmann-json",
+  "pr": 5971,
+  "model": "gemini-3.5-flash-lite",
+  "prompt_sha256": "ce283f5a6271198b4a27108e52102a60915ccf83931e7326409bab74063bdf4d",
+  "n_requested": 20,
+  "std": "c++17",
+  "dropped": 0,
+  "variant": "baseline",
+  "usage": {
+    "promptTokenCount": 3711,
+    "candidatesTokenCount": 3983,
+    "totalTokenCount": 7694,
+    "trafficType": "ON_DEMAND",
+    "promptTokensDetails": [
+      {
+        "modality": "TEXT",
+        "tokenCount": 3711
+      }
+    ],
+    "candidatesTokensDetails": [
+      {
+        "modality": "TEXT",
+        "tokenCount": 3983
+      }
+    ]
+  },
+  "tests": [
+    {
+      "file": "gen_01.cpp",
+      "name": "fraction_digits_empty_fraction",
+      "intent": "Probes parsing a floating-point number with an empty fraction immediately after the decimal point.",
+      "round": 0
+    },
+    {
+      "file": "gen_02.cpp",
+      "name": "fraction_digits_single_digit",
+      "intent": "Probes parsing a floating-point number with exactly one digit in the fraction part.",
+      "round": 0
+    },
+    {
+      "file": "gen_03.cpp",
+      "name": "fraction_digits_short_run",
+      "intent": "Probes parsing a floating-point number whose fraction is shorter than the 16-byte SSE2 chunk width.",
+      "round": 0
+    },
+    {
+      "file": "gen_04.cpp",
+      "name": "fraction_digits_exact_sixteen",
+      "intent": "Probes parsing a floating-point number with exactly 16 fraction digits matching the vector chunk size.",
+      "round": 0
+    },
+    {
+      "file": "gen_05.cpp",
+      "name": "fraction_digits_spanning_blocks",
+      "intent": "Probes parsing a floating-point number with a fraction span exceeding 16 bytes to exercise multiple vector iterations.",
+      "round": 0
+    },
+    {
+      "file": "gen_06.cpp",
+      "name": "fraction_digits_terminated_by_comma",
+      "intent": "Probes fraction digit skipping when terminated immediately by a comma inside an array.",
+      "round": 0
+    },
+    {
+      "file": "gen_07.cpp",
+      "name": "fraction_digits_terminated_by_bracket",
+      "intent": "Probes fraction digit skipping when terminated immediately by a closing square bracket.",
+      "round": 0
+    },
+    {
+      "file": "gen_08.cpp",
+      "name": "fraction_digits_terminated_by_brace",
+      "intent": "Probes fraction digit skipping when terminated immediately by a closing curly brace in an object context.",
+      "round": 0
+    },
+    {
+      "file": "gen_09.cpp",
+      "name": "fraction_digits_followed_by_exponent",
+      "intent": "Probes fraction digit skipping when followed by an exponent marker 'e'.",
+      "round": 0
+    },
+    {
+      "file": "gen_10.cpp",
+      "name": "fraction_digits_followed_by_uppercase_exponent",
+      "intent": "Probes fraction digit skipping when followed by an uppercase exponent marker 'E'.",
+      "round": 0
+    },
+    {
+      "file": "gen_11.cpp",
+      "name": "fraction_digits_with_whitespace",
+      "intent": "Probes fraction digit skipping when followed by whitespace characters.",
+      "round": 0
+    },
+    {
+      "file": "gen_12.cpp",
+      "name": "fraction_digits_boundary_buffer_end",
+      "intent": "Probes fraction digit skipping when the number ends right at the end of the input buffer without explicit terminator.",
+      "round": 0
+    },
+    {
+      "file": "gen_13.cpp",
+      "name": "fraction_digits_multiple_numbers",
+      "intent": "Probes multiple consecutive floating-point numbers containing fractions within an array.",
+      "round": 0
+    },
+    {
+      "file": "gen_14.cpp",
+      "name": "fraction_digits_mixed_integer_and_fraction",
+      "intent": "Probes numbers with large integer parts combined with large fractional parts.",
+      "round": 0
+    },
+    {
+      "file": "gen_15.cpp",
+      "name": "fraction_digits_negative_sign",
+      "intent": "Probes negative floating-point numbers with long fraction digits.",
+      "round": 0
+    },
+    {
+      "file": "gen_16.cpp",
+      "name": "fraction_digits_zero_fraction",
+      "intent": "Probes floating-point numbers with explicit zero fraction digits.",
+      "round": 0
+    },
+    {
+      "file": "gen_17.cpp",
+      "name": "fraction_digits_almost_sixteen",
+      "intent": "Probes fraction digit length just under the 16-byte vector alignment/chunk boundary (15 digits).",
+      "round": 0
+    },
+    {
+      "file": "gen_18.cpp",
+      "name": "fraction_digits_seventeen_bytes",
+      "intent": "Probes fraction digit length just over the 16-byte vector chunk boundary (17 digits).",
+      "round": 0
+    },
+    {
+      "file": "gen_19.cpp",
+      "name": "fraction_digits_malformed_chars",
+      "intent": "Probes invalid characters embedded within the fraction digits to check error path triggering.",
+      "round": 0
+    },
+    {
+      "file": "gen_20.cpp",
+      "name": "fraction_digits_double_dot",
+      "intent": "Probes malformed number containing multiple decimal points.",
+      "round": 0
+    }
+  ]
+}

@@ -1,0 +1,185 @@
+[system]
+You write test programs that probe a C++ library for behavioral changes made by one pull request.
+Each program is compiled and run twice, once against the library before the change and once after, and the two
+outputs are compared. Your job is to produce programs whose output reveals whether the change altered behavior,
+including side effects the author did not intend.
+
+Rules for every program:
+- It is standalone: one file with its own int main(), compiled as C++17, printing results to stdout.
+- Use only the library's documented public API. Never include internal headers or use detail/impl namespaces,
+  private members or undocumented macros.
+- Do not judge results (no assert, no expected-value comparisons): just print what the library returns. Print
+  enough to make differences visible, one fact per line.
+- Output must be deterministic. Never print pointers or addresses, uninitialized data, the order of
+  hash-based containers, timings, thread ids, random values, file paths or environment data. Print floating point
+  values with an explicit precision. No input, files, network, threads, clocks or randomness.
+- Wrap calls that may throw in try/catch and print the exception's type and message, so an exception is an
+  observable result. Do not crash on purpose.
+- Aim at the code the diff changes. Prefer calls that compile against both the old and the new library; one or two
+  programs may use an API the PR adds. Cover ordinary inputs and edge cases (empty, minimum and maximum values,
+  boundaries, special values, nesting, unusual types) and also neighbouring behavior the change could disturb.
+- When the diff changes which types or inputs an API accepts or rejects (constraints, overloads, traits,
+  conversions), test it with the detection idiom (std::void_t or requires) and `if constexpr`, so the program
+  compiles against both versions, prints whether the expression is well-formed, and exercises it when it is.
+  Accepting an input is not enough: also use it through every entry point that should follow (const and
+  non-const, read, write, insert, erase, lookup, nested use), because a change that admits new inputs can leave
+  later code unable to handle them.
+- If the changed code is internal (a detail, impl or internal namespace, a trait, a helper), do not name it in the
+  program. Reach it through the public API that depends on it, using detection (as above) where needed.
+- Use the exact types and values the diff is about (the new trait's argument types, the new overload's
+  parameters), not stand-ins.
+- Spread the programs over distinct public entry points and overloads, one main idea per program. Do not write
+  several programs that only rename a type or change a literal.
+- Make the programs differ from each other: different inputs, different entry points, different features.
+
+Rules specific to this library:
+- Include the library with #include <nlohmann/json.hpp>. The public API is nlohmann::json (nlohmann::basic_json), nlohmann::ordered_json, json_pointer, json patch/merge_patch and the documented SAX and conversion interfaces. Never use the detail namespace.
+- It is a header-only library: nothing to link. Programs are compiled as C++17.
+- Print JSON values with dump() (compact) or dump(2). Keys of nlohmann::json objects print in sorted order, so output is deterministic; do not depend on insertion order except with ordered_json.
+
+[user]
+# Pull request #6028: Binary readers: append strings straight from contiguous input
+
+## Description
+## Summary
+
+`binary_reader::get_bytes()` read every string into a zero-filled `resize()` and then copied the bytes over it, so each byte was written twice. The profile of `from_cbor()` showed `std::string::_M_replace_aux`, the zero fill, at 5% of the instructions.
+
+A string that the input holds in one block is now appended from it directly. "In one block" means that `bulk_remaining()` is at least the string's length, which covers contiguous input and the get area of a stream. The claimed length is checked against the input first, so a huge claimed length still allocates nothing it cannot fill. Other inputs and binary values keep the chunked loop.
+
+## Measurements
+
+`from_cbor()` and `from_msgpack()` of `twitter.json` and `citm_catalog.json` from a buffer:
+
+- Apple M1 Max: −5.5 to −9.1%,
+- x86-64, GCC 15: −6.8 to −8.6%,
+- x86-64, Clang 21: −2.7 to −3.5%.
+
+`canada.json`, which has few strings, is unchanged (same instruction counts). In the Google Benchmark suite on the M1 Max, `FromBinaryBuffer/cbor` and `/msgpack` of `twitter`, `citm_catalog` and `jeopardy` are 9–16% faster.
+
+## Tests
+
+All binary-format tests (CBOR, MessagePack, BSON, UBJSON, BJData, BON8, the UTF-8 error handlers, custom binary types) pass with ASan and UBSan. `fuzzer-parse_cbor` ran 1.2 M executions and `fuzzer-parse_msgpack` 3 M, without a finding.
+
+## Breaking changes
+
+No breaking changes. The public API and all results are unchanged.
+
+🤖 Generated with [Claude Code](https://claude.com/claude-code)
+
+## Commit message
+* Binary readers: append strings straight from contiguous input
+
+get_bytes() read every string into a zero-filled resize() and copied the
+bytes over it, so each byte was written twice. A string that the input holds
+in one block (bulk_remaining() at least its length) is now appended from it
+directly. The claimed length is checked against the input first, so a huge
+claimed length still allocates nothing it cannot fill; other inputs and
+binary values keep the chunked loop.
+
+from_cbor() and from_msgpack() of twitter.json and citm_catalog.json get
+5.5-9.1% faster on an Apple M1 Max and 2.7-8.6% on x86-64 (GCC 15, Clang 21);
+canada.json, which has few strings, is unchanged.
+
+Signed-off-by: Niels Lohmann <mail@nlohmann.me>
+
+* Binary readers: keep the tag argument of append_from_block() astyle-proof
+
+Signed-off-by: Niels Lohmann <mail@nlohmann.me>
+
+* Fix CI: bugprone-signed-char-misuse in append_from_block
+
+Convert the (positive) length to its unsigned type before widening it
+to std::size_t, as clang-tidy flags the int8_t to std::size_t cast.
+
+Signed-off-by: Niels Lohmann <mail@nlohmann.me>
+
+* Tests: sweep_allocator::construct() accepts pointers to const
+
+Recent libc++ (emsdk latest) probes construct(const T*, const T&) in an
+unevaluated context while checking for trivial copies; the static_cast to
+void* in the noexcept specification then fails to compile.
+
+Co-Authored-By: Claude Sonnet 5.5 <noreply@anthropic.com>
+Claude-Session: https://claude.ai/code/session_01N5NasEsrzHhSNouxSoEwqz
+(cherry picked from commit 794bf70823c12a2a1cb2a8a95f34dfb6357746a8)
+Signed-off-by: Niels Lohmann <mail@nlohmann.me>
+
+* Tests: guard sweep_allocator::construct() against const types instead of const_cast
+
+The const_cast added in the previous commit is rejected by
+cppcoreguidelines-pro-type-const-cast (clang-tidy). Make construct() not
+viable for const U instead, which is what libc++ probes for.
+
+Co-Authored-By: Claude Sonnet 5.5 <noreply@anthropic.com>
+Claude-Session: https://claude.ai/code/se
+[... truncated, 754 more characters]
+
+## Discussion before merge
+- gregmarr: Astyle
+- nlohmann: Right: astyle reads the `&&` inside the template argument list as a comparison and spaces out the angle brackets. Fixed in `a33af0a51b`: the condition is now a local `constexpr bool from_block`, and the call passes `std::integral_constant<bool, from_block> {}`, which astyle leaves alone.
+
+*(Written by Claude Code on behalf of @nlohmann.)*
+
+## Diff of the library source (before -> after)
+```diff
+diff --git a/include/nlohmann/detail/input/binary_reader.hpp b/include/nlohmann/detail/input/binary_reader.hpp
+index 93f707097..81a3ebd42 100644
+--- a/include/nlohmann/detail/input/binary_reader.hpp
++++ b/include/nlohmann/detail/input/binary_reader.hpp
+@@ -4887,6 +4887,14 @@ class binary_reader
+                    const char* context,
+                    ContainerType& result)
+     {
++        // a string that is in the block of input as a whole is appended from
++        // it, without the zero-filling resize() below
++        constexpr bool from_block = bulk_scan && std::is_same<ContainerType, string_t>::value;
++        if (append_from_block(len, result, std::integral_constant<bool, from_block> {}))
++        {
++            return true;
++        }
++
+         // upper bound on the number of bytes read (and allocated) per chunk
+         constexpr std::size_t chunk_size = 4096;
+ 
+@@ -4923,6 +4931,36 @@ class binary_reader
+         return true;
+     }
+ 
++    /// append the @a len bytes at the current position to @a result, if the
++    /// input holds them in one block; false (with nothing read) otherwise
++    template<typename NumberType>
++    bool append_from_block(const NumberType len, string_t& result, std::true_type /*block*/)
++    {
++        if (len <= 0)
++        {
++            return false;
++        }
++        // (len > 0, so the unsigned type holds it; casting a signed char
++        // straight to std::size_t would trip bugprone-signed-char-misuse)
++        const auto ulen = static_cast<typename std::make_unsigned<NumberType>::type>(len);
++        const std::size_t remaining = ia.bulk_remaining();
++        if (static_cast<std::uintmax_t>(ulen) > static_cast<std::uintmax_t>(remaining))
++        {
++            return false; // (the loop reports the premature end)
++        }
++        const auto n = static_cast<std::size_t>(ulen);
++        result.append(reinterpret_cast<const typename string_t::value_type*>(ia.bulk_data()), n);
++        ia.bulk_skip(n);
++        chars_read += n;
++        return true;
++    }
++
++    template<typename NumberType, typename ContainerType>
++    static bool append_from_block(const NumberType /*len*/, ContainerType& /*result*/, std::false_type /*block*/) noexcept
++    {
++        return false;
++    }
++
+     /*!
+     @param[in] context  further context information (for diagnostics)
+     @return whether the last read character is not EOF
+```
+
+# Task
+Write 20 test programs for this pull request. Return JSON with a "tests" array; each item has "name" (short snake_case), "intent" (one sentence: what behavior it probes) and "code" (the complete C++ program).

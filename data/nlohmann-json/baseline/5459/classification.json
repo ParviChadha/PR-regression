@@ -1,0 +1,72 @@
+{
+  "target": "nlohmann-json",
+  "pr": 5459,
+  "model": "gemini-3.5-flash-lite",
+  "prompt_sha256": "0890a4da7972720e1521fbfed0e397ce2df6351e45ee88e31dbf0d57d090031b",
+  "results_sha256": "aaf0dec3c7c6a285288a63db4d8fb4028280a0a1fa88bafbf79793df92cdb57a",
+  "clusters": [
+    {
+      "id": "C1",
+      "status": "output_diff",
+      "failed_on": null,
+      "programs": [
+        "gen_01.cpp"
+      ],
+      "verdict": "intended",
+      "confidence": "high",
+      "reason": "The PR explicitly fixes the issue where 2^63-2 and 2^63-1 incorrectly compare equal to 2^63 due to floating point precision loss during widening, making x==y false instead of true as described in the PR description and issue #5401."
+    },
+    {
+      "id": "C2",
+      "status": "output_diff",
+      "failed_on": null,
+      "programs": [
+        "gen_02.cpp"
+      ],
+      "verdict": "intended",
+      "confidence": "high",
+      "reason": "The PR changes mixed number comparisons to be exact instead of widening to float, ensuring that 2^63-1 (represented as uint64_t) is correctly evaluated as less than 2^63.0 rather than rounding up and comparing equal."
+    },
+    {
+      "id": "C3",
+      "status": "output_diff",
+      "failed_on": null,
+      "programs": [
+        "gen_11.cpp"
+      ],
+      "verdict": "intended",
+      "confidence": "high",
+      "reason": "The PR replaces lossy float widening with exact comparisons for large unsigned integers near 2^64, correcting the previous behavior where max_uint erroneously compared equal to 2^64.0."
+    }
+  ],
+  "clusters_not_shown": 0,
+  "counts": {
+    "same": 17,
+    "invalid": 0,
+    "flaky": 0,
+    "superseded": 0,
+    "missing": 0
+  },
+  "pr_verdict": {
+    "regression_candidate": false,
+    "unintended_clusters": []
+  },
+  "usage": {
+    "promptTokenCount": 8082,
+    "candidatesTokenCount": 283,
+    "totalTokenCount": 8365,
+    "trafficType": "ON_DEMAND",
+    "promptTokensDetails": [
+      {
+        "modality": "TEXT",
+        "tokenCount": 8082
+      }
+    ],
+    "candidatesTokensDetails": [
+      {
+        "modality": "TEXT",
+        "tokenCount": 283
+      }
+    ]
+  }
+}

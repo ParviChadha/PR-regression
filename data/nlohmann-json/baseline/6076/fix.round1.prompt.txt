@@ -1,0 +1,680 @@
+[system]
+You write test programs that probe a C++ library for behavioral changes made by one pull request.
+Each program is compiled and run twice, once against the library before the change and once after, and the two
+outputs are compared. Your job is to produce programs whose output reveals whether the change altered behavior,
+including side effects the author did not intend.
+
+Rules for every program:
+- It is standalone: one file with its own int main(), compiled as C++17, printing results to stdout.
+- Use only the library's documented public API. Never include internal headers or use detail/impl namespaces,
+  private members or undocumented macros.
+- Do not judge results (no assert, no expected-value comparisons): just print what the library returns. Print
+  enough to make differences visible, one fact per line.
+- Output must be deterministic. Never print pointers or addresses, uninitialized data, the order of
+  hash-based containers, timings, thread ids, random values, file paths or environment data. Print floating point
+  values with an explicit precision. No input, files, network, threads, clocks or randomness.
+- Wrap calls that may throw in try/catch and print the exception's type and message, so an exception is an
+  observable result. Do not crash on purpose.
+- Aim at the code the diff changes. Prefer calls that compile against both the old and the new library; one or two
+  programs may use an API the PR adds. Cover ordinary inputs and edge cases (empty, minimum and maximum values,
+  boundaries, special values, nesting, unusual types) and also neighbouring behavior the change could disturb.
+- When the diff changes which types or inputs an API accepts or rejects (constraints, overloads, traits,
+  conversions), test it with the detection idiom (std::void_t or requires) and `if constexpr`, so the program
+  compiles against both versions, prints whether the expression is well-formed, and exercises it when it is.
+  Accepting an input is not enough: also use it through every entry point that should follow (const and
+  non-const, read, write, insert, erase, lookup, nested use), because a change that admits new inputs can leave
+  later code unable to handle them.
+- If the changed code is internal (a detail, impl or internal namespace, a trait, a helper), do not name it in the
+  program. Reach it through the public API that depends on it, using detection (as above) where needed.
+- Use the exact types and values the diff is about (the new trait's argument types, the new overload's
+  parameters), not stand-ins.
+- Spread the programs over distinct public entry points and overloads, one main idea per program. Do not write
+  several programs that only rename a type or change a literal.
+- Make the programs differ from each other: different inputs, different entry points, different features.
+
+Rules specific to this library:
+- Include the library with #include <nlohmann/json.hpp>. The public API is nlohmann::json (nlohmann::basic_json), nlohmann::ordered_json, json_pointer, json patch/merge_patch and the documented SAX and conversion interfaces. Never use the detail namespace.
+- It is a header-only library: nothing to link. Programs are compiled as C++17.
+- Print JSON values with dump() (compact) or dump(2). Keys of nlohmann::json objects print in sorted order, so output is deterministic; do not depend on insertion order except with ordered_json.
+
+[user]
+# Pull request #6076: Make unflatten() linear in the length of the keys
+
+## Description
+`unflatten()` takes quadratic time in the number of reference tokens of one key on current `develop` (3.13.0 work in progress; 3.12.0 is linear). An object with one key of 100,000 `/0` tokens (200 KB) takes 2.4 s; 3.12.0 needs 5 ms. The time quadruples with each doubling of the key. An attacker who controls one key of an object passed to `unflatten()` can make the process busy for minutes with a few megabytes of input. `unflatten.md` promises "Linear in the size of the JSON value".
+
+## Cause
+
+3.13.0 decides in a first pass which prefixes of the keys denote arrays (those that have a reference token `0` among their children), so that the result no longer depends on the order of the keys, and looks the prefixes up again in the second pass. A prefix was identified by hashing it and by comparing it byte by byte with the set entry, from its beginning, so a key with n tokens cost n²/2 bytes. For `ordered_json` (and any unsorted object type) the shortcut for keys that share a beginning with the previous key does not help: four keys were enough to be quadratic.
+
+## Change
+
+- Prefixes shorter than 64 bytes stay in the hash table and are compared as before (a bounded number of bytes).
+- Longer prefixes are kept in a tree whose nodes are looked up by their parent and the text of one token. The node of a prefix is found by walking the tokens of the key from the root, so all prefixes of a key together cost one pass over the key and no prefix is compared as a whole. The nodes along the key walked last are kept, so keys with a common beginning do not walk it again. No recursion.
+- The hash function is seeded with a value derived from the address of a local variable (ASLR changes it between processes). With the previous fixed constants, crafted keys could be made to collide: 20,000 keys of 18 bytes with equal hash took 0.5 s instead of 7 ms. Where addresses are not randomized, or if the seed is known, k short prefixes (< 64 bytes) can still collide and cost k²/2 comparisons of fewer than 64 bytes. Results never depend on the seed.
+- The array/object decision and the independence from the key order are unchanged. Only private helpers of `detail::json_pointer` changed.
+
+## Measurements (Apple clang -O2, arm64)
+
+`unflatten()` of one key with n tokens `/0`:
+
+| | n=25k | n=50k | n=100k | n=200k |
+|---|---|---|---|---|
+| before | 175 ms | 617 ms | 2437 ms | 9729 ms |
+| after | 4 ms | 6 ms | 12 ms | 27 ms |
+| 3.12.0 | 1 ms | 3 ms | 5 ms | 10 ms |
+
+`ordered_json`, 4 keys (`/0`×m `/a0`, `/10`, `/0`×m `/a1`, `/11`): before 397 / 1402 / 5191 / 20723 ms for m = 25k / 50k / 100k / 200k, after 4 / 7 / 15 / 33 ms, 3.12.0 2 / 3 / 8 / 17 ms.
+
+Ordinary documents (`flatten()` then `unflatten()`, instructions retired): within 0.3 % of before for canada, citm_catalog, twitter, jeopardy, mesh, update-center and random. A realistic deep document (100 levels, 100k leaves): +1.5 % instructions, +5-12 % wall time vs `develop`, and about 9× faster than 3.12.0.
+
+**Known trade-off:** two thousand different long keys (2000 keys × 2000 unique tokens, 12 MB of keys) take 1.4 s instead of 3.1 s on `develop`, but still about 6× longer than 3.12.0 (0.2 s) and use about 300 MiB more memory for the tree (about 78 bytes per token). 3.13.0 needs a set entry per prefix for the order independence anyway; path compression of unique tails would reduce this further and is left for a follow-up.
+
+## Tests
+
+`unit-json_pointer.cpp`: semantics of the array/object decision (prefixes around the 64-byte hand-over, different token splits of one prefix, escapes, tokens longer than a word), a random round trip in shuffled key order with `ordered_json`, and a time-ratio check (best of 3 CPU-time runs, the same keys with an array-hitting token vs. token `a`; seven shapes including the 4-key `ordered_json` shape; ratio about 3 now, 25 to 300 on the previous code, bound 6 or 10). The test fails on `develop` and on the intermediate version that still had the `ordered_json` problem. It was run 50× 8 in 
+[... truncated, 2232 more characters]
+
+## Commit message
+* Make unflatten() linear in the length of the keys
+
+unflatten() decides in a first pass which prefixes of the keys denote arrays
+(those that have a reference token 0 among their children), and looks up
+prefixes again in the second pass. A prefix was identified by hashing it, and
+by comparing it byte by byte with the entry in the set, from its beginning.
+A key with n tokens therefore cost n^2/2 bytes: 100,000 tokens "/0" took
+2.4 s (3.12.0: 5 ms), and so did "/0" followed by "/1" tokens, because every
+new level looks its prefix up. Keys in the order of an unsorted object type
+(ordered_json) defeated the shortcut for keys that share a beginning with the
+previous one: four keys were enough to be quadratic.
+
+Prefixes of less than 64 bytes are kept in a hash table and compared as
+before, which costs a bounded number of bytes. Longer prefixes are kept in a
+tree whose nodes are looked up by their parent and the text of one token. The
+node of a prefix is found by walking the tokens of the key from the root, so
+all prefixes of a key together cost one pass over the key, and no prefix is
+compared as a whole. The nodes along the key walked last are kept, so keys
+that share a beginning do not walk it again. The array/object decision and
+the independence from the order of the keys are unchanged.
+
+The hash function is seeded with a value derived from the address of a local
+variable, which address space layout randomization changes between
+processes, so keys cannot be crafted to collide in advance: with the fixed
+constants, 20,000 keys of 16 + 2 bytes with the same hash took 0.5 s (random
+keys, and 3.12.0: 7 ms). Where addresses are not randomized, or when the seed
+is known, k short prefixes can still collide and cost k^2 / 2 comparisons of
+fewer than 64 bytes. Results do not depend on the seed.
+
+Measurements (Apple clang -O2, arm64), unflatten() of one key with n tokens:
+
+  tokens "/0"          n=25k  n=50k  n=100k  n=200k
+  before              175 ms 617 ms 2437 ms 9729 ms
+  aft
+[... truncated, 1758 more characters]
+
+## Linked issue #6105: ordered_json::unflatten() silently overwrites a nested value when a key is a prefix of an earlier key
+### Description
+
+`unflatten()` must reject keys whose JSON pointers overlap. The [`unflatten()` documentation](https://json.nlohmann.me/api/basic_json/unflatten/#exceptions) says:
+
+> Throws `type_error.313` if a key (JSON pointer) leads to a conflicting nesting
+
+and [`type_error.313`](https://json.nlohmann.me/home/exceptions/#jsonexceptiontype_error313) says "The JSON Pointers must not overlap, because then the resulting value would not be well-defined."
+
+`json` keeps this promise, `ordered_json` does not. For `{"/a/b":2,"/a":1}`, `json` throws `type_error.313`, but `ordered_json` returns `{"a":1}`: the member `b` is dropped without an error. The same happens for an array element (`{"/a/0/b":1,"/a/0":2}` gives `{"a":[2]}`) and for the root (`{"/x":1,"":2}` gives `2`).
+
+Cause: the conflict check only happens while walking the reference tokens of a key: a primitive value in the middle of a path throws (the `default:` branch of the `switch` in `unflatten()`). The final assignment has no check:
+
+[`include/nlohmann/detail/json_pointer.hpp#L2241`](https://github.com/nlohmann/json/blob/5bad6c518bf6663b69f505511a19c98c91f77c3a/include/nlohmann/detail/json_pointer.hpp#L2241)
+
+```cpp
+                values.push_back(current);
+                ends.push_back(end);
+                pos = end;
+            }
+
+            *current = element.second;
+```
+
+`std::map` visits `"/a"` before `"/a/b"`, so for `json` the shorter key always comes first, it stores the primitive, and the longer key then hits the primitive and throws. An insertion-ordered object can present the longer key first. The walk for `"/a/b"` creates the object `a`, and the assignment for `"/a"` then replaces that object with `1`.
+
+The 3.13.0 notes for `unflatten()` say that the array/object decision "does not depend on the order in which the flattened object is iterated". This bug is the remaining order dependence.
+
+Open PR #6076 (branch `fix/unflatten-linear`, head `fa992d9b6f`) rewrites the prefix handling of `unflatt
+[... truncated, 8705 more characters]
+
+## Diff of the library source (before -> after)
+```diff
+diff --git a/include/nlohmann/detail/json_pointer.hpp b/include/nlohmann/detail/json_pointer.hpp
+index 2ab3f7ddb..36f81482e 100644
+--- a/include/nlohmann/detail/json_pointer.hpp
++++ b/include/nlohmann/detail/json_pointer.hpp
+@@ -852,6 +852,224 @@ class json_pointer
+     }
+ 
+   private:
++    /// @brief the length of the longest common prefix of the first @a limit bytes of @a a and @a b
++    static std::size_t common_prefix_length(const char* a, const char* b, const std::size_t limit) noexcept
++    {
++        std::size_t i = 0;
++        for (; i + 8 <= limit; i += 8)
++        {
++            std::uint64_t x = 0;
++            std::uint64_t y = 0;
++            std::memcpy(&x, a + i, 8);
++            std::memcpy(&y, b + i, 8);
++            if (x != y)
++            {
++                break;
++            }
++        }
++        while (i < limit && a[i] == b[i])
++        {
++            ++i;
++        }
++        return i;
++    }
++
++    /*!
++    @brief the prefixes of a flattened object that are marked as arrays, for
++           prefixes that are not short
++
++    A prefix is identified by the tokens it consists of: a node of a tree
++    stands for the prefix of its parent followed by a token, and is looked up
++    by its parent and the text of the token. The node of a prefix is found by
++    walking the tokens of the key from the root, so identifying all prefixes
++    of a key together costs one pass over the key, however long the prefixes
++    are, and no prefix is ever compared byte by byte as a whole. The nodes
++    along the key that was walked last are kept, and the walk of the next key
++    starts below the beginning it has in common with that key. The tree refers
++    to the keys, which must outlive it.
++    */
++    class prefix_tree
++    {
++      public:
++        /// @brief set the seed of the hash function, before anything is added
++        void reseed(const std::uint64_t seed_value) noexcept
++        {
++            seed = seed_value;
++        }
++
++        /// @brief mark the first @a prefix_size bytes of the key of @a key_size bytes at @a data
++        void mark(const char* data, std::size_t key_size, std::size_t prefix_size)
++        {
++            nodes[walk(data, key_size, prefix_size)].marked = true;
++            any_marked = true;
++        }
++
++        bool is_marked(const char* data, std::size_t key_size, std::size_t prefix_size)
++        {
++            return any_marked && nodes[walk(data, key_size, prefix_size)].marked;
++        }
++
++        bool empty() const noexcept
++        {
++            return !any_marked;
++        }
++
++        /// @brief the hash of the first @a size bytes at @a data, for the seed @a seed_value
++        static std::size_t hash_bytes(const char* data, std::size_t size, const std::uint64_t seed_value) noexcept
++        {
++            std::uint64_t h = seed_value ^ size;
++            std::size_t i = 0;
++            for (; i + 8 <= size; i += 8)
++            {
++                std::uint64_t w = 0;
++                std::memcpy(&w, data + i, 8);
++                h = (h ^ w) * 0x100000001B3ULL;
++                h ^= h >> 32u;
++            }
++            std::uint64_t w = 0;
++            if (i < size)
++            {
++                std::memcpy(&w, data + i, size - i);
++            }
++            h = (h ^ w) * 0x9E3779B97F4A7C15ULL;
++            return detail::conditional_static_cast<std::size_t>(h ^ (h >> 29u));
++        }
++
++      private:
++        struct node
++        {
++            std::size_t parent = 0;
++            std::size_t hash = 0;
++            const char* token = nullptr;
++            std::size_t token_size = 0;
++            bool marked = false;
++        };
++
++        /// @brief a slot of the hash table; the index of a node, 0 if the slot is empty
++        struct bucket
++        {
++            std::size_t index = 0;
++        };
++
++        /// @brief the node after a token of the key that was walked last, and where the token ends
++        struct step
++        {
++            std::size_t node = 0;
++            std::size_t end = 0;
++        };
++
++        /// @brief the index of the node of the prefix that ends at the slash (or the end) at @a prefix_size
++        std::size_t walk(const char* data, std::size_t key_size, std::size_t prefix_size)
++        {
++            if (nodes.empty())
++            {
++                nodes.emplace_back();
++                table.resize(16);
++                chain.emplace_back();
++            }
++
++            if (data != last_key)
++            {
++                // keep the nodes within the beginning that this key has in common
++                // with the key they were found for; a prefix that ends inside a
++                // token of this key is not one of its prefixes
++                const std::size_t same = common_prefix_length(data, last_key, (std::min)(key_size, last_key_size));
++                std::size_t keep = chain.size();
++                while (keep > 1 && (chain[keep - 1].end > same || (chain[keep - 1].end == same && same < key_size && data[same] != '/')))
++                {
++                    --keep;
++                }
++                chain.resize(keep);
++                last_key = data;
++                last_key_size = key_size;
++            }
++
++            // walk the tokens that are not walked yet
++            while (chain.back().end < prefix_size && chain.back().end < key_size)
++            {
++                const std::size_t start = chain.back().end + 1;
++                const void* const slash = std::memchr(data + start, '/', key_size - start);
++                const std::size_t end = slash == nullptr ? key_size : static_cast<std::size_t>(static_cast<const char*>(slash) - data);
++                step next;
++                next.node = child(chain.back().node, data + start, end - start);
++                next.end = end;
++                chain.push_back(next);
++            }
++
++            if (chain.back().end == prefix_size)
++            {
++                return chain.back().node;
++            }
++            // an earlier call walked further
++            const auto it = std::lower_bound(chain.begin(), chain.end(), prefix_size, [](const step & s, std::size_t size)
++            {
++                return s.end < size;
++            });
++            return it->node;
++        }
++
++        std::size_t slot_of(std::size_t parent, std::size_t hash) const noexcept
++        {
++            std::uint64_t x = static_cast<std::uint64_t>(hash) ^ (static_cast<std::uint64_t>(parent) * 0x9E3779B97F4A7C15ULL);
++            x ^= x >> 32u;
++            x *= 0xD6E8FEB86659FD93ULL;
++            x ^= x >> 32u;
++            return static_cast<std::size_t>(x) & (table.size() - 1);
++        }
++
++        /// @brief the node of the prefix of the node @a parent followed by the token, which is added if it is not there
++        std::size_t child(std::size_t parent, const char* token, std::size_t token_size)
++        {
++            const std::size_t hash = hash_bytes(token, token_size, seed);
++            std::size_t i = slot_of(parent, hash);
++            while (table[i].index != 0)
++            {
++                const node& n = nodes[table[i].index];
++                if (n.parent == parent && n.hash == hash && n.token_size == token_size && std::memcmp(n.token, token, token_size) == 0)
++                {
++                    return table[i].index;
++                }
++                i = (i + 1) & (table.size() - 1);
++            }
++
++            node created;
++            created.parent = parent;
++            created.hash = hash;
++            created.token = token;
++            created.token_size = token_size;
++            nodes.push_back(created);
++            table[i].index = nodes.size() - 1;
++
++            // keep the load factor below 1/2
++            if (nodes.size() * 2 > table.size())
++            {
++                std::vector<bucket> old(table.size() * 2);
++                old.swap(table);
++                for (std::size_t k = 1; k < nodes.size(); ++k)
++                {
++                    std::size_t j = slot_of(nodes[k].parent, nodes[k].hash);
++                    while (table[j].index != 0)
++                    {
++                        j = (j + 1) & (table.size() - 1);
++                    }
++                    table[j].index = k;
++                }
++            }
++            return nodes.size() - 1;
++        }
++
++        std::uint64_t seed = 0;
++        /// @brief the nodes; the first is the root, the empty prefix
++        std::vector<node> nodes{};
++        /// @brief the nodes (not the root) in a hash table
++        std::vector<bucket> table{};
++        /// @brief the root, and the node after each token of the key that was walked last
++        std::vector<step> chain{};
++        const char* last_key = nullptr;
++        std::size_t last_key_size = 0;
++        bool any_marked = false;
++    };
++
+     /*!
+     @brief the pointer prefixes of a flattened object that denote arrays
+ 
+@@ -863,38 +1081,68 @@ class json_pointer
+ 
+     A prefix is identified by the text of the key it is the beginning of:
+     escaping is unambiguous, so equal prefixes of valid keys are equal texts.
+-    The set refers to the keys, which must outlive it.
++    The set refers to the keys, which must outlive it. Short prefixes are
++    kept in a hash table and compared as texts, which costs at most the length
++    of the bound. Longer prefixes are kept in a @ref prefix_tree, because
++    hashing and comparing every one of the prefixes of a key with many tokens
++    from its beginning would take quadratic time.
++
++    The hash function depends on a seed that is derived from the address of a
++    local variable, which address space layout randomization changes between
++    processes, so keys cannot be crafted to collide in advance; the result
++    does not depend on the seed. Where the addresses are not randomized, or
++    when the seed is known, keys can collide: k short prefixes then cost
++    k^2 / 2 comparisons of fewer than 64 bytes each. The long prefixes are not
++    hashed as a whole.
+     */
+     class array_prefix_set
+     {
+       public:
+-        void insert(const char* data, std::size_t size)
++        /// @brief choose the seed of the hash function, before anything is added: it is derived from the address that is passed
++        void reseed(const void* address) noexcept
++        {
++            // NOLINTNEXTLINE(cppcoreguidelines-pro-type-reinterpret-cast,hicpp-use-auto,modernize-use-auto): the address is only a source of entropy
++            std::uint64_t x = reinterpret_cast<std::uintptr_t>(address);
++            x ^= 0x9E3779B97F4A7C15ULL;
++            x *= 0xBF58476D1CE4E5B9ULL;
++            seed = x ^ (x >> 31u);
++            tree.reseed(seed);
++        }
++
++        /// @brief add the first @a prefix_size bytes of the key of @a key_size bytes at @a data
++        void insert(const char* data, std::size_t key_size, std::size_t prefix_size)
+         {
++            if (prefix_size >= short_limit)
++            {
++                tree.mark(data, key_size, prefix_size);
++                return;
++            }
++
+             // flattened objects are usually sorted, so most keys that have a
+             // 0 yield the prefix of the previous one
+-            if (last_data != nullptr && last_size == size && std::memcmp(last_data, data, size) == 0)
++            if (last_data != nullptr && last_size == prefix_size && std::memcmp(last_data, data, prefix_size) == 0)
+             {
+                 return;
+             }
+             last_data = data;
+-            last_size = size;
++            last_size = prefix_size;
+ 
++            const std::size_t hash = prefix_tree::hash_bytes(data, prefix_size, seed);
+             if (table.empty())
+             {
+                 table.resize(16);
+             }
+-            const std::size_t hash = hash_of(data, size);
+             const std::size_t mask = table.size() - 1;
+             std::size_t i = hash & mask;
+             while (table[i].data != nullptr)
+             {
+-                if (table[i].hash == hash && table[i].size == size && std::memcmp(table[i].data, data, size) == 0)
++                if (table[i].hash == hash && table[i].size == prefix_size && std::memcmp(table[i].data, data, prefix_size) == 0)
+                 {
+                     return;
+                 }
+                 i = (i + 1) & mask;
+             }
+-            table[i] = slot(hash, data, size);
++            table[i] = slot(hash, data, prefix_size);
+ 
+             // keep the load factor below 1/2
+             if (++used * 2 > table.size())
+@@ -905,20 +1153,25 @@ class json_pointer
+ 
+         bool empty() const noexcept
+         {
+-            return used == 0;
++            return used == 0 && tree.empty();
+         }
+ 
+-        bool contains(const char* data, std::size_t size) const noexcept
++        /// @brief whether the first @a prefix_size bytes of the key of @a key_size bytes at @a data were added
++        bool contains(const char* data, std::size_t key_size, std::size_t prefix_size)
+         {
++            if (prefix_size >= short_limit)
++            {
++                return tree.is_marked(data, key_size, prefix_size);
++            }
+             if (used == 0)
+             {
+                 return false;
+             }
+-            const std::size_t hash = hash_of(data, size);
++            const std::size_t hash = prefix_tree::hash_bytes(data, prefix_size, seed);
+             const std::size_t mask = table.size() - 1;
+             for (std::size_t i = hash & mask; table[i].data != nullptr; i = (i + 1) & mask)
+             {
+-                if (table[i].hash == hash && table[i].size == size && std::memcmp(table[i].data, data, size) == 0)
++                if (table[i].hash == hash && table[i].size == prefix_size && std::memcmp(table[i].data, data, prefix_size) == 0)
+                 {
+                     return true;
+                 }
+@@ -927,6 +1180,9 @@ class json_pointer
+         }
+ 
+       private:
++        /// @brief prefixes of fewer bytes are kept in the hash table
++        static constexpr std::size_t short_limit = 64;
++
+         struct slot
+         {
+             slot() noexcept = default;
+@@ -940,26 +1196,6 @@ class json_pointer
+             std::size_t size = 0;
+         };
+ 
+-        static std::size_t hash_of(const char* data, std::size_t size) noexcept
+-        {
+-            std::uint64_t h = 0x9E3779B97F4A7C15ULL ^ size;
+-            std::size_t i = 0;
+-            for (; i + 8 <= size; i += 8)
+-            {
+-                std::uint64_t w = 0;
+-                std::memcpy(&w, data + i, 8);
+-                h = (h ^ w) * 0x100000001B3ULL;
+-                h ^= h >> 32u;
+-            }
+-            std::uint64_t w = 0;
+-            if (i < size)
+-            {
+-                std::memcpy(&w, data + i, size - i);
+-            }
+-            h = (h ^ w) * 0x9E3779B97F4A7C15ULL;
+-            return detail::conditional_static_cast<std::size_t>(h ^ (h >> 29u));
+-        }
+-
+         void grow()
+         {
+             std::vector<slot> old(table.size() * 2);
+@@ -979,34 +1215,14 @@ class json_pointer
+             }
+         }
+ 
++        std::uint64_t seed = 0;
++        prefix_tree tree{};
+         std::vector<slot> table{};
+         std::size_t used = 0;
+         const char* last_data = nullptr;
+         std::size_t last_size = 0;
+     };
+ 
+-    /// @brief the length of the longest common prefix of the first @a limit bytes of @a a and @a b
+-    static std::size_t common_prefix_length(const char* a, const char* b, const std::size_t limit) noexcept
+-    {
+-        std::size_t i = 0;
+-        for (; i + 8 <= limit; i += 8)
+-        {
+-            std::uint64_t x = 0;
+-            std::uint64_t y = 0;
+-            std::memcpy(&x, a + i, 8);
+-            std::memcpy(&y, b + i, 8);
+-            if (x != y)
+-            {
+-                break;
+-            }
+-        }
+-        while (i < limit && a[i] == b[i])
+-        {
+-            ++i;
+-        }
+-        return i;
+-    }
+-
+     /*!
+     @brief check that @a key is a valid JSON pointer, and add the prefixes of
+            it that denote arrays to @a arrays
+@@ -1052,7 +1268,7 @@ class json_pointer
+                 // a token 0 makes the pointer before it an array
+                 if (i - begin == 1 && data[begin] == '0')
+                 {
+-                    arrays.insert(data, begin - 1);
++                    arrays.insert(data, size, begin - 1);
+                 }
+                 begin = i + 1;
+             }
+@@ -2095,6 +2311,7 @@ class json_pointer
+         // token 0 among their children; the values below them are arrays,
+         // all others are objects (see array_prefix_set)
+         array_prefix_set arrays;
++        arrays.reseed(&arrays);
+         const string_t* previous_key = nullptr;
+         for (const auto& element : *value.m_data.m_value.object)
+         {
+@@ -2186,7 +2403,7 @@ class json_pointer
+                     case detail::value_t::null:
+                     {
+                         // a first child 0 makes the value an array without a look-up
+-                        if ((token_size == 1 && data[pos + 1] == '0') || arrays.contains(data, pos))
++                        if ((token_size == 1 && data[pos + 1] == '0') || arrays.contains(data, key.size(), pos))
+                         {
+                             // some reference token below this position is 0, so the
+                             // value is an array
+@@ -2238,6 +2455,19 @@ class json_pointer
+                 pos = end;
+             }
+ 
++            if (JSON_HEDLEY_UNLIKELY(!current->is_null()))
++            {
++                // the key is a prefix of an earlier key (only possible if the
++                // object type does not sort its keys), so the value is the
++                // array or object built for that key: a null leaves it as it
++                // is (as when the shorter key comes first), any other value
++                // conflicts with it
++                if (element.second.is_null())
++                {
++                    continue;
++                }
++                JSON_THROW(detail::type_error::create(detail::exception_id::unflatten_invalid_value, "invalid value to unflatten", &result));
++            }
+             *current = element.second;
+         }
+```
+
+# Programs to repair
+
+## gen_09.cpp (compile)
+Intent: Probes error handling when an array index token is malformed during unflatten.
+COMPILE ERROR. The program fails to compile, the same way against the old and the new library. Fix the error (wrong or missing include, typo, misuse of the public API) and keep the intent: the call under test must stay. Include only headers that exist; if you are unsure a header exists, use the library's main header.
+Compiler errors:
+```
+gen_09.cpp:13:24: error: ‘const class std::exception’ has no member named ‘type’
+```
+Source:
+```cpp
+#include <nlohmann/json.hpp>
+#include <iostream>
+
+int main() {
+    try {
+        nlohmann::json j;
+        j["/arr/not_a_number"] = 1;
+        auto res = j.unflatten();
+        std::cout << res.dump() << "\n";
+    } catch (const std::exception& e) {
+        std::cout << e.type() << ": " << e.what() << "\n";
+    }
+}
+```
+
+## gen_12.cpp (compile)
+Intent: Tests overlapping primitive and object paths throwing appropriate exception types.
+COMPILE ERROR. The program fails to compile, the same way against the old and the new library. Fix the error (wrong or missing include, typo, misuse of the public API) and keep the intent: the call under test must stay. Include only headers that exist; if you are unsure a header exists, use the library's main header.
+Compiler errors:
+```
+gen_12.cpp:14:24: error: ‘const class std::exception’ has no member named ‘type’
+```
+Source:
+```cpp
+#include <nlohmann/json.hpp>
+#include <iostream>
+
+int main() {
+    try {
+        nlohmann::json j;
+        j["/x/y"] = 1;
+        j["/x"] = 2;
+        auto res = j.unflatten();
+        std::cout << res.dump() << "\n";
+    } catch (const std::exception& e) {
+        std::cout << e.type() << ": " << e.what() << "\n";
+    }
+}
+```
+
+## gen_15.cpp (compile)
+Intent: Tests sparse or large array index allocations during unflattening.
+COMPILE ERROR. The program fails to compile, the same way against the old and the new library. Fix the error (wrong or missing include, typo, misuse of the public API) and keep the intent: the call under test must stay. Include only headers that exist; if you are unsure a header exists, use the library's main header.
+Compiler errors:
+```
+gen_15.cpp:13:24: error: ‘const class std::exception’ has no member named ‘type’
+```
+Source:
+```cpp
+#include <nlohmann/json.hpp>
+#include <iostream>
+
+int main() {
+    try {
+        nlohmann::json j;
+        j["/arr/5"] = "sparse";
+        auto res = j.unflatten();
+        std::cout << res["arr"].size() << "\n";
+    } catch (const std::exception& e) {
+        std::cout << e.type() << ": " << e.what() << "\n";
+    }
+}
+```
+
+# Task
+Return JSON with a "fixes" array: one item per program above, with "file" (exactly as given) and "code" (the complete repaired program, standalone, with its own int main). Do not return programs you cannot repair.

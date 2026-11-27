@@ -2,171 +2,452 @@
   "target": "nlohmann-json",
   "pr": 6075,
   "model": "gemini-3.5-flash-lite",
-  "prompt_sha256": "e889e1f8938d8711647440f27461d29e0f85c43d37183f200b18c4f7d6e527b3",
+  "prompt_sha256": "f3c30d1207ee5704640c80bf6011167fd6f134b660236386c57cca02a46f786b",
   "n_requested": 20,
+  "std": "c++20",
   "dropped": 0,
   "usage": {
-    "promptTokenCount": 6724,
-    "candidatesTokenCount": 5289,
-    "totalTokenCount": 12013,
+    "promptTokenCount": 6859,
+    "candidatesTokenCount": 5222,
+    "totalTokenCount": 12081,
+    "trafficType": "ON_DEMAND",
     "promptTokensDetails": [
       {
         "modality": "TEXT",
-        "tokenCount": 6724
+        "tokenCount": 6859
       }
     ],
-    "serviceTier": "standard"
+    "candidatesTokensDetails": [
+      {
+        "modality": "TEXT",
+        "tokenCount": 5222
+      }
+    ]
   },
   "tests": [
     {
       "file": "gen_01.cpp",
-      "name": "u8string_basic_conversion",
-      "intent": "Verify that std::u8string converts to a JSON string type and can be read back via get<std::u8string>.",
-      "round": 0
+      "name": "u8string_json_type_cxx20",
+      "intent": "Verify that constructing a JSON value from a std::u8string results in a JSON string type under C++20.",
+      "round": 0,
+      "superseded_by": "gen_26.cpp"
     },
     {
       "file": "gen_02.cpp",
-      "name": "u8string_embedded_null",
-      "intent": "Verify that std::u8string containing embedded NUL characters round-trips correctly through a JSON string.",
-      "round": 0
+      "name": "u8string_roundtrip_get",
+      "intent": "Verify that a std::u8string stored as a JSON string can be successfully read back via get<std::u8string>().",
+      "round": 0,
+      "superseded_by": "gen_27.cpp"
     },
     {
       "file": "gen_03.cpp",
       "name": "u8string_get_to",
-      "intent": "Verify that get_to works correctly with std::u8string target variables.",
-      "round": 0
+      "intent": "Verify that get_to correctly populates an existing std::u8string variable from a JSON string.",
+      "round": 0,
+      "superseded_by": "gen_28.cpp"
     },
     {
       "file": "gen_04.cpp",
-      "name": "u8string_accept_legacy_array",
-      "intent": "Verify that from_json still accepts the legacy JSON array representation of code units for std::u8string.",
-      "round": 0
+      "name": "u8string_backward_compat_array",
+      "intent": "Verify that from_json still correctly reads old-style arrays of code units into a std::u8string.",
+      "round": 0,
+      "superseded_by": "gen_29.cpp"
     },
     {
       "file": "gen_05.cpp",
-      "name": "u8string_wrong_type_throws",
-      "intent": "Verify that calling get<std::u8string>() on a non-string and non-array JSON value throws type_error.302.",
-      "round": 0
+      "name": "u8string_invalid_type_throw",
+      "intent": "Verify that calling get<std::u8string>() on a non-string/non-array JSON type throws a type_error exception.",
+      "round": 0,
+      "superseded_by": "gen_30.cpp"
     },
     {
       "file": "gen_06.cpp",
-      "name": "ordered_json_u8string",
-      "intent": "Verify that std::u8string behaves identically with ordered_json containers.",
-      "round": 0
+      "name": "u8string_embedded_nul",
+      "intent": "Verify that a std::u8string containing embedded NUL characters round-trips correctly as a JSON string.",
+      "round": 0,
+      "superseded_by": "gen_31.cpp"
     },
     {
       "file": "gen_07.cpp",
-      "name": "u8string_in_containers",
-      "intent": "Verify that std::u8string inside containers like std::vector and std::map serializes as JSON strings.",
-      "round": 0
+      "name": "u8string_in_vector_container",
+      "intent": "Verify that containers of std::u8string (like std::vector) convert to JSON arrays of strings rather than arrays of number arrays.",
+      "round": 0,
+      "superseded_by": "gen_32.cpp"
     },
     {
       "file": "gen_08.cpp",
-      "name": "u8string_view_unchanged",
-      "intent": "Verify that std::u8string_view continues to produce an array of code units as before.",
-      "round": 0
+      "name": "u8string_ordered_json_behavior",
+      "intent": "Verify that ordered_json preserves std::u8string values as strings properly.",
+      "round": 0,
+      "superseded_by": "gen_33.cpp"
     },
     {
       "file": "gen_09.cpp",
-      "name": "char8_t_array_unchanged",
-      "intent": "Verify that raw char8_t arrays still produce JSON arrays of code units.",
-      "round": 0
+      "name": "u8string_view_unchanged_behavior",
+      "intent": "Verify that std::u8string_view still serializes as an array of code units as maintained from 3.12.0 behaviour.",
+      "round": 0,
+      "superseded_by": "gen_34.cpp"
     },
     {
       "file": "gen_10.cpp",
-      "name": "u8string_alt_string",
-      "intent": "Verify that custom string types mimicking alt_string work with u8string conversions if compatible.",
-      "round": 0
+      "name": "char8_t_array_unchanged_behavior",
+      "intent": "Verify that raw char8_t arrays still serialize as arrays of code units.",
+      "round": 0,
+      "superseded_by": "gen_35.cpp"
     },
     {
       "file": "gen_11.cpp",
-      "name": "u8string_empty",
-      "intent": "Verify round-trip behavior for an empty std::u8string.",
-      "round": 0
+      "name": "u8string_resize_direct_access_perf",
+      "intent": "Verify that loading a JSON string into std::u8string via the new from_json implementation handles large contents correctly.",
+      "round": 0,
+      "superseded_by": "gen_36.cpp"
     },
     {
       "file": "gen_12.cpp",
-      "name": "u8string_unicode_utf8",
-      "intent": "Verify that non-ASCII UTF-8 characters in std::u8string correctly serialize and deserialize.",
-      "round": 0
+      "name": "u8string_adl_serializer_direct",
+      "intent": "Verify direct invocation of adl_serializer for std::u8string to and from json types.",
+      "round": 0,
+      "superseded_by": "gen_37.cpp"
     },
     {
       "file": "gen_13.cpp",
-      "name": "u8string_optional",
-      "intent": "Verify std::optional<std::u8string> interaction with JSON serialization.",
-      "round": 0
+      "name": "u8string_map_key_usage",
+      "intent": "Verify usage of std::u8string as keys or values in maps when converted to JSON structures.",
+      "round": 0,
+      "superseded_by": "gen_38.cpp"
     },
     {
       "file": "gen_14.cpp",
-      "name": "u8string_pair_tuple",
-      "intent": "Verify std::pair and std::tuple containing std::u8string serialize as expected.",
-      "round": 0
+      "name": "u8string_empty_string_roundtrip",
+      "intent": "Verify that an empty std::u8string correctly serializes to an empty JSON string and deserializes back.",
+      "round": 0,
+      "superseded_by": "gen_39.cpp"
     },
     {
       "file": "gen_15.cpp",
-      "name": "u8string_large_content",
-      "intent": "Verify performance and correctness of large std::u8string conversions using resize and indexing.",
-      "round": 0
+      "name": "u8string_optional_support",
+      "intent": "Verify optional wrapping of std::u8string converts to json string correctly.",
+      "round": 0,
+      "superseded_by": "gen_40.cpp"
     },
     {
       "file": "gen_16.cpp",
-      "name": "u8string_pointer_conversion",
-      "intent": "Verify const char8_t* behavior versus std::u8string assignment.",
-      "round": 0
+      "name": "u8string_patch_and_merge",
+      "intent": "Verify that JSON patch or merge operations interacting with string values handle std::u8string types seamlessly.",
+      "round": 0,
+      "superseded_by": "gen_41.cpp"
     },
     {
       "file": "gen_17.cpp",
-      "name": "u8string_to_vector_uint8",
-      "intent": "Verify that a JSON string produced by std::u8string can be read into std::vector<uint8_t> or similar.",
-      "round": 0
+      "name": "u8string_pointer_access",
+      "intent": "Verify json_pointer lookup on objects containing std::u8string values converted to json strings.",
+      "round": 0,
+      "superseded_by": "gen_42.cpp"
     },
     {
       "file": "gen_18.cpp",
-      "name": "u8string_ref_access",
-      "intent": "Verify get_ref access on JSON values created from std::u8string.",
-      "round": 0
+      "name": "u8string_explicit_vector_workaround",
+      "intent": "Verify that the suggested migration workaround of explicitly wrapping into std::vector<char8_t> produces an array of code units.",
+      "round": 0,
+      "superseded_by": "gen_43.cpp"
     },
     {
       "file": "gen_19.cpp",
-      "name": "u8string_type_checking",
-      "intent": "Verify type checking methods like type_name() on JSON values holding std::u8string data.",
-      "round": 0
+      "name": "u8string_type_error_message",
+      "intent": "Verify that type_error exception thrown on invalid extraction from a boolean or object contains expected error information.",
+      "round": 0,
+      "superseded_by": "gen_44.cpp"
     },
     {
       "file": "gen_20.cpp",
-      "name": "u8string_patch_merge",
-      "intent": "Verify JSON merge patch and patch operations with std::u8string-derived values.",
-      "round": 0
+      "name": "u8string_initializer_list_assignment",
+      "intent": "Verify handling of std::u8string in nested initializer list constructions.",
+      "round": 0,
+      "superseded_by": "gen_45.cpp"
     },
     {
       "file": "gen_21.cpp",
       "name": "gen_21",
-      "intent": "Verify that get<std::u8string>() successfully reads from a JSON string under C++20 and executes the from_json template path for std::basic_string<char8_t>.",
-      "round": 1
+      "intent": "Verify that to_json correctly converts a custom allocator std::u8string via adl_serializer to a JSON string using string_t conversion.",
+      "round": 1,
+      "superseded_by": "gen_46.cpp"
     },
     {
       "file": "gen_22.cpp",
       "name": "gen_22",
-      "intent": "Verify that serializing a std::u8string invokes the updated to_json overload constructing a BasicJsonType::string_t via reinterpret_cast.",
+      "intent": "Verify that from_json via adl_serializer correctly parses a JSON string into a std::u8string using resize and element assignment.",
       "round": 1
     },
     {
       "file": "gen_23.cpp",
       "name": "gen_23",
-      "intent": "Verify that from_json throws type_error.302 with message including 'string or array' when attempting to load an incompatible JSON type into a std::u8string.",
+      "intent": "Verify that from_json handles an old-style array fallback inside adl_serializer for std::u8string correctly.",
       "round": 1
     },
     {
       "file": "gen_24.cpp",
       "name": "gen_24",
-      "intent": "Verify that from_json handles a legacy JSON array of integers by converting them into code units inside a std::u8string.",
+      "intent": "Verify that from_json throws type_error when given a non-string and non-array JSON type for std::u8string extraction.",
       "round": 1
     },
     {
       "file": "gen_25.cpp",
       "name": "gen_25",
-      "intent": "Verify that basic_json::string_t interaction and resize/indexing code path correctly handles custom allocator/traits or standard string_t mappings for std::u8string destinations.",
-      "round": 1
+      "intent": "Verify explicit to_json overload template invocation with basic_json and alt_string / basic_string<char8_t> types.",
+      "round": 1,
+      "superseded_by": "gen_47.cpp"
+    },
+    {
+      "file": "gen_26.cpp",
+      "name": "u8string_json_type_cxx20_fixed",
+      "intent": "Verify that constructing a JSON value from a std::u8string results in a JSON string type under C++20.",
+      "round": 2,
+      "fixes": "gen_01.cpp",
+      "kind": "compile",
+      "superseded_by": "gen_48.cpp"
+    },
+    {
+      "file": "gen_27.cpp",
+      "name": "u8string_roundtrip_get_fixed",
+      "intent": "Verify that a std::u8string stored as a JSON string can be successfully read back via get<std::u8string>().",
+      "round": 2,
+      "fixes": "gen_02.cpp",
+      "kind": "compile",
+      "superseded_by": "gen_49.cpp"
+    },
+    {
+      "file": "gen_28.cpp",
+      "name": "u8string_get_to_fixed",
+      "intent": "Verify that get_to correctly populates an existing std::u8string variable from a JSON string.",
+      "round": 2,
+      "fixes": "gen_03.cpp",
+      "kind": "compile"
+    },
+    {
+      "file": "gen_29.cpp",
+      "name": "u8string_backward_compat_array_fixed",
+      "intent": "Verify that from_json still correctly reads old-style arrays of code units into a std::u8string.",
+      "round": 2,
+      "fixes": "gen_04.cpp",
+      "kind": "compile",
+      "superseded_by": "gen_50.cpp"
+    },
+    {
+      "file": "gen_30.cpp",
+      "name": "u8string_invalid_type_throw_fixed",
+      "intent": "Verify that calling get<std::u8string>() on a non-string/non-array JSON type throws a type_error exception.",
+      "round": 2,
+      "fixes": "gen_05.cpp",
+      "kind": "compile"
+    },
+    {
+      "file": "gen_31.cpp",
+      "name": "u8string_embedded_nul_fixed",
+      "intent": "Verify that a std::u8string containing embedded NUL characters round-trips correctly as a JSON string.",
+      "round": 2,
+      "fixes": "gen_06.cpp",
+      "kind": "compile"
+    },
+    {
+      "file": "gen_32.cpp",
+      "name": "u8string_in_vector_container_fixed",
+      "intent": "Verify that containers of std::u8string (like std::vector) convert to JSON arrays of strings rather than arrays of number arrays.",
+      "round": 2,
+      "fixes": "gen_07.cpp",
+      "kind": "compile",
+      "superseded_by": "gen_51.cpp"
+    },
+    {
+      "file": "gen_33.cpp",
+      "name": "u8string_ordered_json_behavior_fixed",
+      "intent": "Verify that ordered_json preserves std::u8string values as strings properly.",
+      "round": 2,
+      "fixes": "gen_08.cpp",
+      "kind": "compile",
+      "superseded_by": "gen_52.cpp"
+    },
+    {
+      "file": "gen_34.cpp",
+      "name": "u8string_view_unchanged_behavior_fixed",
+      "intent": "Verify that std::u8string_view still serializes as an array of code units as maintained from 3.12.0 behaviour.",
+      "round": 2,
+      "fixes": "gen_09.cpp",
+      "kind": "compile",
+      "superseded_by": "gen_53.cpp"
+    },
+    {
+      "file": "gen_35.cpp",
+      "name": "char8_t_array_unchanged_behavior_fixed",
+      "intent": "Verify that raw char8_t arrays still serialize as arrays of code units.",
+      "round": 2,
+      "fixes": "gen_10.cpp",
+      "kind": "compile",
+      "superseded_by": "gen_54.cpp"
+    },
+    {
+      "file": "gen_36.cpp",
+      "name": "u8string_resize_direct_access_perf_fixed",
+      "intent": "Verify that loading a JSON string into std::u8string via the new from_json implementation handles large contents correctly.",
+      "round": 2,
+      "fixes": "gen_11.cpp",
+      "kind": "compile"
+    },
+    {
+      "file": "gen_37.cpp",
+      "name": "u8string_adl_serializer_direct_fixed",
+      "intent": "Verify direct invocation of adl_serializer for std::u8string to and from json types.",
+      "round": 2,
+      "fixes": "gen_12.cpp",
+      "kind": "compile",
+      "superseded_by": "gen_55.cpp"
+    },
+    {
+      "file": "gen_38.cpp",
+      "name": "u8string_map_key_usage_fixed",
+      "intent": "Verify usage of std::u8string as keys or values in maps when converted to JSON structures.",
+      "round": 2,
+      "fixes": "gen_13.cpp",
+      "kind": "compile"
+    },
+    {
+      "file": "gen_39.cpp",
+      "name": "u8string_empty_string_roundtrip_fixed",
+      "intent": "Verify that an empty std::u8string correctly serializes to an empty JSON string and deserializes back.",
+      "round": 2,
+      "fixes": "gen_14.cpp",
+      "kind": "compile"
+    },
+    {
+      "file": "gen_40.cpp",
+      "name": "u8string_optional_support_fixed",
+      "intent": "Verify optional wrapping of std::u8string converts to json string correctly.",
+      "round": 2,
+      "fixes": "gen_15.cpp",
+      "kind": "compile"
+    },
+    {
+      "file": "gen_41.cpp",
+      "name": "u8string_patch_and_merge_fixed",
+      "intent": "Verify that JSON patch or merge operations interacting with string values handle std::u8string types seamlessly.",
+      "round": 3,
+      "fixes": "gen_16.cpp",
+      "kind": "compile"
+    },
+    {
+      "file": "gen_42.cpp",
+      "name": "u8string_pointer_access_fixed",
+      "intent": "Verify json_pointer lookup on objects containing std::u8string values converted to json strings.",
+      "round": 3,
+      "fixes": "gen_17.cpp",
+      "kind": "compile"
+    },
+    {
+      "file": "gen_43.cpp",
+      "name": "u8string_explicit_vector_workaround_fixed",
+      "intent": "Verify that the suggested migration workaround of explicitly wrapping into std::vector<char8_t> produces an array of code units.",
+      "round": 3,
+      "fixes": "gen_18.cpp",
+      "kind": "compile"
+    },
+    {
+      "file": "gen_44.cpp",
+      "name": "u8string_type_error_message_fixed",
+      "intent": "Verify that type_error exception thrown on invalid extraction from a boolean or object contains expected error information.",
+      "round": 3,
+      "fixes": "gen_19.cpp",
+      "kind": "compile"
+    },
+    {
+      "file": "gen_45.cpp",
+      "name": "u8string_initializer_list_assignment_fixed",
+      "intent": "Verify handling of std::u8string in nested initializer list constructions.",
+      "round": 3,
+      "fixes": "gen_20.cpp",
+      "kind": "compile"
+    },
+    {
+      "file": "gen_46.cpp",
+      "name": "gen_21_fixed",
+      "intent": "Verify that to_json correctly converts a custom allocator std::u8string via adl_serializer to a JSON string using string_t conversion.",
+      "round": 3,
+      "fixes": "gen_21.cpp",
+      "kind": "compile"
+    },
+    {
+      "file": "gen_47.cpp",
+      "name": "gen_25_fixed",
+      "intent": "Verify explicit to_json overload template invocation with basic_json and alt_string / basic_string<char8_t> types.",
+      "round": 3,
+      "fixes": "gen_25.cpp",
+      "kind": "compile"
+    },
+    {
+      "file": "gen_48.cpp",
+      "name": "u8string_json_type_cxx20_fixed_fixed",
+      "intent": "Verify that constructing a JSON value from a std::u8string results in a JSON string type under C++20.",
+      "round": 3,
+      "fixes": "gen_26.cpp",
+      "kind": "compile"
+    },
+    {
+      "file": "gen_49.cpp",
+      "name": "u8string_roundtrip_get_fixed_fixed",
+      "intent": "Verify that a std::u8string stored as a JSON string can be successfully read back via get<std::u8string>().",
+      "round": 3,
+      "fixes": "gen_27.cpp",
+      "kind": "compile"
+    },
+    {
+      "file": "gen_50.cpp",
+      "name": "u8string_backward_compat_array_fixed_fixed",
+      "intent": "Verify that from_json still correctly reads old-style arrays of code units into a std::u8string.",
+      "round": 3,
+      "fixes": "gen_29.cpp",
+      "kind": "compile"
+    },
+    {
+      "file": "gen_51.cpp",
+      "name": "u8string_in_vector_container_fixed_fixed",
+      "intent": "Verify that containers of std::u8string (like std::vector) convert to JSON arrays of strings rather than arrays of number arrays.",
+      "round": 3,
+      "fixes": "gen_32.cpp",
+      "kind": "compile"
+    },
+    {
+      "file": "gen_52.cpp",
+      "name": "u8string_ordered_json_behavior_fixed_fixed",
+      "intent": "Verify that ordered_json preserves std::u8string values as strings properly.",
+      "round": 3,
+      "fixes": "gen_33.cpp",
+      "kind": "compile"
+    },
+    {
+      "file": "gen_53.cpp",
+      "name": "u8string_view_unchanged_behavior_fixed_fixed",
+      "intent": "Verify that std::u8string_view still serializes as an array of code units as maintained from 3.12.0 behaviour.",
+      "round": 3,
+      "fixes": "gen_34.cpp",
+      "kind": "compile"
+    },
+    {
+      "file": "gen_54.cpp",
+      "name": "char8_t_array_unchanged_behavior_fixed_fixed",
+      "intent": "Verify that raw char8_t arrays still serialize as arrays of code units.",
+      "round": 3,
+      "fixes": "gen_35.cpp",
+      "kind": "compile"
+    },
+    {
+      "file": "gen_55.cpp",
+      "name": "u8string_adl_serializer_direct_fixed_fixed",
+      "intent": "Verify direct invocation of adl_serializer for std::u8string to and from json types.",
+      "round": 3,
+      "fixes": "gen_37.cpp",
+      "kind": "compile"
     }
-  ]
+  ],
+  "fix": {
+    "rounds_max": 2,
+    "model": "gemini-3.5-flash-lite"
+  }
 }

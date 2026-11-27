@@ -1,0 +1,154 @@
+[system]
+You write test programs that probe a C++ library for behavioral changes made by one pull request.
+Each program is compiled and run twice, once against the library before the change and once after, and the two
+outputs are compared. Your job is to produce programs whose output reveals whether the change altered behavior,
+including side effects the author did not intend.
+
+Rules for every program:
+- It is standalone: one file with its own int main(), compiled as C++17, printing results to stdout.
+- Use only the library's documented public API. Never include internal headers or use detail/impl namespaces,
+  private members or undocumented macros.
+- Do not judge results (no assert, no expected-value comparisons): just print what the library returns. Print
+  enough to make differences visible, one fact per line.
+- Output must be deterministic. Never print pointers or addresses, uninitialized data, the order of
+  hash-based containers, timings, thread ids, random values, file paths or environment data. Print floating point
+  values with an explicit precision. No input, files, network, threads, clocks or randomness.
+- Wrap calls that may throw in try/catch and print the exception's type and message, so an exception is an
+  observable result. Do not crash on purpose.
+- Aim at the code the diff changes. Prefer calls that compile against both the old and the new library; one or two
+  programs may use an API the PR adds. Cover ordinary inputs and edge cases (empty, minimum and maximum values,
+  boundaries, special values, nesting, unusual types) and also neighbouring behavior the change could disturb.
+- When the diff changes which types or inputs an API accepts or rejects (constraints, overloads, traits,
+  conversions), test it with the detection idiom (std::void_t or requires) and `if constexpr`, so the program
+  compiles against both versions, prints whether the expression is well-formed, and exercises it when it is.
+  Accepting an input is not enough: also use it through every entry point that should follow (const and
+  non-const, read, write, insert, erase, lookup, nested use), because a change that admits new inputs can leave
+  later code unable to handle them.
+- If the changed code is internal (a detail, impl or internal namespace, a trait, a helper), do not name it in the
+  program. Reach it through the public API that depends on it, using detection (as above) where needed.
+- Use the exact types and values the diff is about (the new trait's argument types, the new overload's
+  parameters), not stand-ins.
+- Spread the programs over distinct public entry points and overloads, one main idea per program. Do not write
+  several programs that only rename a type or change a literal.
+- Make the programs differ from each other: different inputs, different entry points, different features.
+
+Rules specific to this library:
+- Include the library with #include <nlohmann/json.hpp>. The public API is nlohmann::json (nlohmann::basic_json), nlohmann::ordered_json, json_pointer, json patch/merge_patch and the documented SAX and conversion interfaces. Never use the detail namespace.
+- It is a header-only library: nothing to link. Programs are compiled as C++17.
+- Print JSON values with dump() (compact) or dump(2). Keys of nlohmann::json objects print in sorted order, so output is deterministic; do not depend on insertion order except with ordered_json.
+
+[user]
+# Pull request #6023: Fix leak and crash when an allocation throws during parsing
+
+## Description
+I asked Claude code to find memory leaks. This is what I got.
+
+- json_sax_dom_parser::insert_key_with_index: own the new object_key_index in a unique_ptr before key_indexes may reallocate; a throwing reallocation leaked it.
+- basic_json::data(value_t): set m_type only after m_value is constructed. set_member() constructs a value in place over a null member; if allocating the object threw, the member was left as an object with a null pointer, which the enclosing object's destructor dereferenced.
+
+- [x] The changes are described in detail, both the what and why.
+- [ ] If applicable, an [existing issue](https://github.com/nlohmann/json/issues) is referenced.
+- [ ] If applicable, a fixed [OSS-Fuzz](https://issues.oss-fuzz.com) issue is referenced as `OSS-Fuzz: <id>` (see [fuzz testing](https://github.com/nlohmann/json/blob/develop/tests/fuzzing.md#handling-oss-fuzz-reports)).
+- [ ] The [Code coverage](https://coveralls.io/github/nlohmann/json) remained at 100%. A test case for every new line of code.
+- [ ] If applicable, the [documentation](https://json.nlohmann.me) is updated.
+- [x] The source code is amalgamated by running `make amalgamate`.
+
+## Commit message
+json_sax_dom_parser::insert_key_with_index: own the new object_key_index
+in a unique_ptr before key_indexes may reallocate; a throwing reallocation
+leaked it.
+
+Signed-off-by: Christoph Grüninger <foss@grueninger.de>
+
+## Discussion before merge
+- gruenich: Thanks for the feedback. Adjusted the commit.
+
+## Diff of the library source (before -> after)
+```diff
+diff --git a/include/nlohmann/detail/input/json_sax.hpp b/include/nlohmann/detail/input/json_sax.hpp
+index 80850ab92..fc9e9b774 100644
+--- a/include/nlohmann/detail/input/json_sax.hpp
++++ b/include/nlohmann/detail/input/json_sax.hpp
+@@ -904,7 +904,8 @@ class json_sax_dom_parser : public json_sax_dom_error_state
+             {
+                 hashes.push_back(hasher(element.first));
+             }
+-            ordered_data.key_indexes.emplace_back(new object_key_index(std::move(hashes)));
++            std::unique_ptr<object_key_index> index(new object_key_index(std::move(hashes))); // NOLINT(cppcoreguidelines-owning-memory,modernize-make-unique): std::make_unique is C++14
++            ordered_data.key_indexes.push_back(std::move(index));
+             f.ordered.index = ordered_data.key_indexes.back().get();
+         }
+```
+
+# Programs to repair
+
+## gen_12.cpp (compile)
+Intent: Probes the raw SAX parser interface directly with ordered_json underlying dom handler behavior.
+COMPILE ERROR. The program fails to compile, the same way against the old and the new library. Fix the error (wrong or missing include, typo, misuse of the public API) and keep the intent: the call under test must stay. Include only headers that exist; if you are unsure a header exists, use the library's main header.
+Compiler errors:
+```
+gen_12.cpp:8:69: error: wrong number of template arguments (1, should be at least 2)
+497 | class json_sax_dom_parser : public json_sax_dom_error_state
+gen_12.cpp:9:13: error: request for member ‘parse_object_start’ in ‘sax’, which is of non-class type ‘int’
+gen_12.cpp:10:13: error: request for member ‘key’ in ‘sax’, which is of non-class type ‘int’
+gen_12.cpp:11:13: error: request for member ‘number_integer’ in ‘sax’, which is of non-class type ‘int’
+gen_12.cpp:12:13: error: request for member ‘parse_object_end’ in ‘sax’, which is of non-class type ‘int’
+```
+Source:
+```cpp
+#include <nlohmann/json.hpp>
+#include <iostream>
+int main() {
+    try {
+        nlohmann::ordered_json j;
+        nlohmann::detail::json_sax_dom_parser<nlohmann::ordered_json> sax(j);
+        sax.parse_object_start();
+        sax.key("foo");
+        sax.number_integer(42);
+        sax.parse_object_end();
+        std::cout << j.dump() << std::endl;
+    } catch (const std::exception& e) {
+        std::cout << "Exception: " << e.what() << std::endl;
+    }
+    return 0;
+}
+```
+
+## gen_13.cpp (compile)
+Intent: Probes the SAX parser directly with multiple keys to exercise insert_key_with_index allocation flow.
+COMPILE ERROR. The program fails to compile, the same way against the old and the new library. Fix the error (wrong or missing include, typo, misuse of the public API) and keep the intent: the call under test must stay. Include only headers that exist; if you are unsure a header exists, use the library's main header.
+Compiler errors:
+```
+gen_13.cpp:8:69: error: wrong number of template arguments (1, should be at least 2)
+497 | class json_sax_dom_parser : public json_sax_dom_error_state
+gen_13.cpp:9:13: error: request for member ‘parse_object_start’ in ‘sax’, which is of non-class type ‘int’
+gen_13.cpp:10:13: error: request for member ‘key’ in ‘sax’, which is of non-class type ‘int’
+gen_13.cpp:11:13: error: request for member ‘number_integer’ in ‘sax’, which is of non-class type ‘int’
+gen_13.cpp:12:13: error: request for member ‘key’ in ‘sax’, which is of non-class type ‘int’
+```
+Source:
+```cpp
+#include <nlohmann/json.hpp>
+#include <iostream>
+int main() {
+    try {
+        nlohmann::ordered_json j;
+        nlohmann::detail::json_sax_dom_parser<nlohmann::ordered_json> sax(j);
+        sax.parse_object_start();
+        sax.key("alpha");
+        sax.number_integer(1);
+        sax.key("beta");
+        sax.number_integer(2);
+        sax.key("gamma");
+        sax.number_integer(3);
+        sax.parse_object_end();
+        std::cout << j.dump() << std::endl;
+    } catch (const std::exception& e) {
+        std::cout << "Exception: " << e.what() << std::endl;
+    }
+    return 0;
+}
+```
+
+# Task
+Return JSON with a "fixes" array: one item per program above, with "file" (exactly as given) and "code" (the complete repaired program, standalone, with its own int main). Do not return programs you cannot repair.

@@ -1,0 +1,163 @@
+{
+  "target": "nlohmann-json",
+  "pr": 6119,
+  "model": "gemini-3.5-flash-lite",
+  "prompt_sha256": "5ef3c201da144a62ac5d0f27318fb4fa965075eced06a24f090413cc87db9ff8",
+  "n_requested": 20,
+  "std": "c++17",
+  "dropped": 0,
+  "variant": "baseline",
+  "usage": {
+    "promptTokenCount": 3182,
+    "candidatesTokenCount": 4329,
+    "totalTokenCount": 7511,
+    "trafficType": "ON_DEMAND",
+    "promptTokensDetails": [
+      {
+        "modality": "TEXT",
+        "tokenCount": 3182
+      }
+    ],
+    "candidatesTokensDetails": [
+      {
+        "modality": "TEXT",
+        "tokenCount": 4329
+      }
+    ]
+  },
+  "tests": [
+    {
+      "file": "gen_01.cpp",
+      "name": "bon8_strict_false_unterminated_string_exception",
+      "intent": "Probes if from_bon8 with strict=false throws parse_error.110 when a BON8 string is missing the terminal 0xFF before another byte.",
+      "round": 0
+    },
+    {
+      "file": "gen_02.cpp",
+      "name": "bon8_strict_true_unterminated_string_exception",
+      "intent": "Probes if from_bon8 with strict=true throws parse_error.110 when a BON8 string is missing the terminal 0xFF.",
+      "round": 0
+    },
+    {
+      "file": "gen_03.cpp",
+      "name": "bon8_strict_false_terminated_string_success",
+      "intent": "Probes if from_bon8 with strict=false successfully parses a properly terminated BON8 string with 0xFF.",
+      "round": 0
+    },
+    {
+      "file": "gen_04.cpp",
+      "name": "bon8_strict_true_terminated_string_success",
+      "intent": "Probes if from_bon8 with strict=true successfully parses a properly terminated BON8 string with 0xFF.",
+      "round": 0
+    },
+    {
+      "file": "gen_05.cpp",
+      "name": "bon8_two_byte_unterminated_string",
+      "intent": "Probes if from_bon8 with strict=false throws when a string pushes back two bytes because of a multi-byte character boundary check.",
+      "round": 0
+    },
+    {
+      "file": "gen_06.cpp",
+      "name": "bon8_allow_exceptions_false_unterminated",
+      "intent": "Probes from_bon8 behavior when allow_exceptions is set to false for an unterminated BON8 string with strict=false.",
+      "round": 0,
+      "superseded_by": "gen_21.cpp"
+    },
+    {
+      "file": "gen_07.cpp",
+      "name": "bon8_stream_sequential_reads",
+      "intent": "Probes sequential parsing from a single stream where first value is terminated correctly and second is read afterwards.",
+      "round": 0
+    },
+    {
+      "file": "gen_08.cpp",
+      "name": "bon8_empty_input",
+      "intent": "Probes from_bon8 behavior with an empty input vector under strict=false.",
+      "round": 0
+    },
+    {
+      "file": "gen_09.cpp",
+      "name": "bon8_only_ff_input",
+      "intent": "Probes from_bon8 with input consisting only of a single 0xFF byte.",
+      "round": 0
+    },
+    {
+      "file": "gen_10.cpp",
+      "name": "bon8_round_trip_valid",
+      "intent": "Probes to_bon8 and from_bon8 round trip on a standard string to confirm canonical output remains unaffected.",
+      "round": 0
+    },
+    {
+      "file": "gen_11.cpp",
+      "name": "bon8_multiple_ff_terminators",
+      "intent": "Probes from_bon8 with extra redundant 0xFF terminators after a string.",
+      "round": 0
+    },
+    {
+      "file": "gen_12.cpp",
+      "name": "bon8_integer_not_string_unterminated",
+      "intent": "Probes from_bon8 behavior on an integer value followed by extra bytes with strict=false to verify non-string types aren't misreported as missing 0xFF.",
+      "round": 0
+    },
+    {
+      "file": "gen_13.cpp",
+      "name": "bon8_integer_strict_true_trailing",
+      "intent": "Probes from_bon8 behavior on an integer value followed by extra bytes with strict=true.",
+      "round": 0
+    },
+    {
+      "file": "gen_14.cpp",
+      "name": "bon8_boolean_value",
+      "intent": "Probes from_bon8 parsing of a simple boolean value.",
+      "round": 0
+    },
+    {
+      "file": "gen_15.cpp",
+      "name": "bon8_null_value",
+      "intent": "Probes from_bon8 parsing of a null value.",
+      "round": 0
+    },
+    {
+      "file": "gen_16.cpp",
+      "name": "bon8_array_value",
+      "intent": "Probes from_bon8 parsing of a basic BON8 array.",
+      "round": 0
+    },
+    {
+      "file": "gen_17.cpp",
+      "name": "bon8_object_value",
+      "intent": "Probes from_bon8 parsing of a basic BON8 object.",
+      "round": 0
+    },
+    {
+      "file": "gen_18.cpp",
+      "name": "bon8_sax_interface_unterminated",
+      "intent": "Probes SAX parsing interface with from_bon8 when an unterminated string triggers the new check.",
+      "round": 0
+    },
+    {
+      "file": "gen_19.cpp",
+      "name": "bon8_string_exact_boundary_bytes",
+      "intent": "Probes string termination behavior right at the boundary where bytes stop being valid string continuations.",
+      "round": 0
+    },
+    {
+      "file": "gen_20.cpp",
+      "name": "bon8_long_string_missing_ff",
+      "intent": "Probes a longer string missing its final 0xFF terminator followed by an arbitrary byte.",
+      "round": 0
+    },
+    {
+      "file": "gen_21.cpp",
+      "name": "bon8_allow_exceptions_false_unterminated_fixed",
+      "intent": "Probes from_bon8 behavior when allow_exceptions is set to false for an unterminated BON8 string with strict=false.",
+      "round": 1,
+      "fixes": "gen_06.cpp",
+      "kind": "compile"
+    }
+  ],
+  "fix": {
+    "rounds_max": 2,
+    "model": "gemini-3.5-flash-lite"
+  }
+}

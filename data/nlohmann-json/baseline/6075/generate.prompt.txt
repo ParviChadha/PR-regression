@@ -1,0 +1,200 @@
+[system]
+You write test programs that probe a C++ library for behavioral changes made by one pull request.
+Each program is compiled and run twice, once against the library before the change and once after, and the two
+outputs are compared. Your job is to produce programs whose output reveals whether the change altered behavior,
+including side effects the author did not intend.
+
+Rules for every program:
+- It is standalone: one file with its own int main(), compiled as C++20, printing results to stdout.
+- Use only the library's documented public API. Never include internal headers or use detail/impl namespaces,
+  private members or undocumented macros.
+- Do not judge results (no assert, no expected-value comparisons): just print what the library returns. Print
+  enough to make differences visible, one fact per line.
+- Output must be deterministic. Never print pointers or addresses, uninitialized data, the order of
+  hash-based containers, timings, thread ids, random values, file paths or environment data. Print floating point
+  values with an explicit precision. No input, files, network, threads, clocks or randomness.
+- Wrap calls that may throw in try/catch and print the exception's type and message, so an exception is an
+  observable result. Do not crash on purpose.
+- Aim at the code the diff changes. Prefer calls that compile against both the old and the new library; one or two
+  programs may use an API the PR adds. Cover ordinary inputs and edge cases (empty, minimum and maximum values,
+  boundaries, special values, nesting, unusual types) and also neighbouring behavior the change could disturb.
+- When the diff changes which types or inputs an API accepts or rejects (constraints, overloads, traits,
+  conversions), test it with the detection idiom (std::void_t or requires) and `if constexpr`, so the program
+  compiles against both versions, prints whether the expression is well-formed, and exercises it when it is.
+  Accepting an input is not enough: also use it through every entry point that should follow (const and
+  non-const, read, write, insert, erase, lookup, nested use), because a change that admits new inputs can leave
+  later code unable to handle them.
+- If the changed code is internal (a detail, impl or internal namespace, a trait, a helper), do not name it in the
+  program. Reach it through the public API that depends on it, using detection (as above) where needed.
+- Use the exact types and values the diff is about (the new trait's argument types, the new overload's
+  parameters), not stand-ins.
+- Spread the programs over distinct public entry points and overloads, one main idea per program. Do not write
+  several programs that only rename a type or change a literal.
+- Make the programs differ from each other: different inputs, different entry points, different features.
+
+Rules specific to this library:
+- Include the library with #include <nlohmann/json.hpp>. The public API is nlohmann::json (nlohmann::basic_json), nlohmann::ordered_json, json_pointer, json patch/merge_patch and the documented SAX and conversion interfaces. Never use the detail namespace.
+- It is a header-only library: nothing to link. Programs are compiled as C++17.
+- Print JSON values with dump() (compact) or dump(2). Keys of nlohmann::json objects print in sorted order, so output is deterministic; do not depend on insertion order except with ordered_json.
+
+[user]
+# Pull request #6075: Read a std::u8string from a JSON string and store it as one in every configuration
+
+## Description
+In C++20, `json(std::u8string)` was stored as a JSON string only when `std::filesystem::path` support was available (the `to_json` overload sat inside the `JSON_HAS_FILESYSTEM` guard), and there was no matching `from_json`, so `get<std::u8string>()` threw `type_error.302` ("type must be array, but is string"). Without `std::filesystem` the same expression still produced an array of code units, the 3.12.0 behaviour. So the same source gave different JSON types depending on the configuration, and the stored value could not be read back.
+
+## Change
+
+- Move the `to_json` overload out of the filesystem guard, so that a `std::u8string` is a JSON string in every configuration. The value is built directly from the code units, which also works for a custom `string_t` such as the tests' `alt_string`.
+- Add a `from_json` overload for `std::basic_string<char8_t>` that reads a JSON string. The array of numbers written by 3.12.0 is still accepted; other types throw `type_error.302` ("type must be string or array").
+- `std::u8string_view`, `char8_t` arrays and `const char8_t*` are unchanged (they still produce arrays of code units, as in 3.12.0). `std::filesystem::path` still round-trips.
+- Documented in `home/releases/unreleased.md`, `basic_json.md`, `get.md` and `template_parameters.md`.
+
+## Tests
+
+- `unit-conversions2.cpp`: the `std::u8string` case now covers ASCII and UTF-8 content, round trips (`get`, `get_to`, embedded NUL, `vector`, `map`), the old array form, wrong types, `ordered_json`, and the unchanged `u8string_view` and `char8_t` arrays. The file now also mentions `JSON_HAS_CPP_20`/`_23`, so it is built as `_cpp20` and `_cpp23` as well (the test previously never ran in C++20 under CMake).
+- A new target `test-conversions2_no_filesystem` runs it with `JSON_HAS_FILESYSTEM=0` and `JSON_HAS_EXPERIMENTAL_FILESYSTEM=0`.
+- `unit-alt-string.cpp` gets a test with a custom string type.
+- The new tests fail on `develop` (`get<std::u8string>` throws; without `std::filesystem` the value is an array) and pass with the change. Passes with clang 21 and g++ 16 in C++11/17/20/23, and with `JSON_DIAGNOSTICS=1`. The full unit suite passes under ASan and UBSan. Compile time and conversion benchmarks (`std::string`, `std::vector<int>`, `std::filesystem::path` to JSON) show no regression; the path conversion retires about 3 % fewer instructions.
+
+## Breaking changes
+
+This is a behaviour change relative to 3.12.0 for C++20 code with `__cpp_lib_char8_t`, although it is not a source break and no signature was removed.
+
+- **Who is affected:** code that converts a `std::u8string` to JSON and then looks at the JSON form: `is_array()` checks, reading it as `std::vector<char8_t>` or `std::vector<std::uint8_t>`, or comparing the serialised output with `[...]`. Such a value now serialises as a string. The change is transitive: a `std::u8string` inside a `std::vector`, `std::pair`, `std::tuple`, `std::optional` or as a `std::map` key also becomes a string.
+- **Not affected:** reading old data (`get<std::u8string>()` still accepts the 3.12.0 array), code that only round-trips a `std::u8string`, and anyone already on current `develop` with `std::filesystem` available, where it was already a string.
+- **Mitigation:** build the array form explicitly, e.g. `json(std::vector<char8_t>(s.begin(), s.end()))`.
+
+## Commit message
+* Read a std::u8string from a JSON string and store it as one in every configuration
+
+In C++20, json(std::u8string) was stored as a JSON string only when
+std::filesystem::path support was available (the to_json overload sat
+inside the JSON_HAS_FILESYSTEM guard), and there was no matching
+from_json, so get<std::u8string>() threw type_error.302 ("type must be
+array, but is string"). Without std::filesystem, the same expression
+still produced an array of code units (the 3.12.0 behavior).
+
+Move the to_json overload out of the filesystem guard so that a
+std::u8string is a string in every configuration, build the value
+directly from the code units (this also works for a custom string_t
+such as the tests' alt_string), and add a from_json overload that reads
+a JSON string. The array of numbers written by 3.12.0 is still accepted;
+other types throw type_error.302 ("type must be string or array").
+std::u8string_view and char8_t arrays are unchanged.
+
+The tests now run in C++20/23 (the file mentions JSON_HAS_CPP_20/23),
+also without std::filesystem (test-conversions2_no_filesystem), and with
+ordered_json and a custom string type. The new behavior is documented.
+
+Signed-off-by: Niels Lohmann <mail@nlohmann.me>
+
+* Fill the std::u8string with resize and indexing instead of push_back
+
+The push_back loop is not vectorized: reading a 1 kB string took about
+2.2 us against 0.39 us with resize and direct element access (clang -O2).
+
+Signed-off-by: Niels Lohmann <mail@nlohmann.me>
+
+* Write the std::u8string from_json template header in the compact form
+
+Signed-off-by: Niels Lohmann <mail@nlohmann.me>
+
+* Ignore libstdc++ char to char8_t sign change in the clang sanitizer job
+
+Signed-off-by: Niels Lohmann <mail@nlohmann.me>
+
+---------
+
+Signed-off-by: Niels Lohmann <mail@nlohmann.me>
+
+## Discussion before merge
+- gregmarr: astyle
+- gregmarr: Does `reserve` and `push_back` perform better than `resize` and direct access?
+- nlohmann: `astyle` 3.4.13 (the version pinned in `tools/astyle`) leaves this declaration unchanged, so the spacing in `template < … enable_if_t < … > = 0 >` is what it produces. Did you mean something else, e.g. a different layout for the `enable_if_t` default parameter?
+
+*(Written by Claude Code on behalf of @nlohmann.)*
+- nlohmann: No, `resize` plus direct access is faster. I measured `std::string` → `std::u8string` with clang `-std=c++20 -O2`: 16 bytes is equal (about 44 ns), 1000 bytes takes 2189 ns with `reserve` + `push_back` against 388 ns with `resize` + `[i]`, and 1 MB takes 2.14 ms against 0.36 ms. The `push_back` loop is not vectorized. Fixed in `95424664a`. I did not measure GCC.
+
+*(Written by Claude Code on behalf of @nlohmann.)*
+- gregmarr: I just noticed it was spread out, couldn't tell why.  I know that there are some that need to be fixed manually, and some that can't be fixed at all.  I can't keep track of them.
+- nlohmann: You were right to ask, and my earlier answer was misleading: astyle 3.4.13 also leaves the compact form `template<typename …, enable_if_t<…, int> = 0>` unchanged, so the spread form was not required by astyle, only written that way. Fixed in `9b686490f6`: the declaration now uses the compact form like the other `from_json` overloads in this file.
+
+*(Written by Claude Code on behalf of @nlohmann.)*
+
+## Diff of the library source (before -> after)
+```diff
+diff --git a/include/nlohmann/detail/conversions/from_json.hpp b/include/nlohmann/detail/conversions/from_json.hpp
+index 09f0713ea..18c0775ec 100644
+--- a/include/nlohmann/detail/conversions/from_json.hpp
++++ b/include/nlohmann/detail/conversions/from_json.hpp
+@@ -785,6 +785,37 @@ void from_json(const BasicJsonType& j, std::unordered_map<Key, Value, Hash, KeyE
+     from_json_pair_array_to_map(j, m);
+ }
+ 
++#if defined(__cpp_lib_char8_t)
++// a std::u8string is read from a JSON string; the array of code units written by
++// versions before 3.13.0 is still accepted
++template<typename BasicJsonType, typename Tr, typename Allocator,
++         enable_if_t<std::is_same<typename json_type_of_t<BasicJsonType>::string_t::value_type, char>::value, int> = 0>
++inline void from_json(const BasicJsonType& j, std::basic_string<char8_t, Tr, Allocator>& s)
++{
++    if (j.is_string())
++    {
++        const auto& str = string_value(j);
++        const char* const data = str.data();
++        const std::size_t size = str.size();
++        std::basic_string<char8_t, Tr, Allocator> ret(s.get_allocator());
++        ret.resize(size);
++        for (std::size_t i = 0; i < size; ++i)
++        {
++            ret[i] = static_cast<char8_t>(static_cast<unsigned char>(data[i]));
++        }
++        s = std::move(ret);
++    }
++    else if (j.is_array())
++    {
++        from_json_array_impl(j, s, priority_tag<3> {});
++    }
++    else
++    {
++        throw_type_must_be("string or array", j);
++    }
++}
++#endif
++
+ #if JSON_HAS_FILESYSTEM || JSON_HAS_EXPERIMENTAL_FILESYSTEM
+ 
+ // Workaround for MSVC 19.51 (and possibly later): in large cpp files, the compiler may fail to resolve with generic has_from_json (issue #4996)
+diff --git a/include/nlohmann/detail/conversions/to_json.hpp b/include/nlohmann/detail/conversions/to_json.hpp
+index 05ae82370..3d95370d6 100644
+--- a/include/nlohmann/detail/conversions/to_json.hpp
++++ b/include/nlohmann/detail/conversions/to_json.hpp
+@@ -625,16 +625,20 @@ inline void to_json(BasicJsonType& j, const T& t)
+     to_json_tuple_impl(j, t, make_index_sequence<std::tuple_size<T>::value> {});
+ }
+ 
+-#if JSON_HAS_FILESYSTEM || JSON_HAS_EXPERIMENTAL_FILESYSTEM
++// a std::u8string is a JSON string (it was an array of code units before 3.13.0);
++// defined outside the std::filesystem guard so that the result does not depend
++// on whether std::filesystem::path is supported
+ #if defined(__cpp_lib_char8_t)
+ template<typename BasicJsonType, typename Tr, typename Allocator>
+ inline void to_json(BasicJsonType& j, const std::basic_string<char8_t, Tr, Allocator>& s)
+ {
+-    using OtherAllocator = typename std::allocator_traits<Allocator>::template rebind_alloc<char>;
+-    j = std::basic_string<char, std::char_traits<char>, OtherAllocator>(s.begin(), s.end(), s.get_allocator());
++    using string_t = typename BasicJsonType::string_t;
++    // char may alias any object; the code units are copied unchanged
++    j = string_t(reinterpret_cast<const char*>(s.data()), s.size());
+ }
+ #endif
+ 
++#if JSON_HAS_FILESYSTEM || JSON_HAS_EXPERIMENTAL_FILESYSTEM
+ // Workaround for MSVC 19.51 (and possibly later): in large cpp files, the compiler may fail to resolve with generic has_to_json (issue #4996)
+ template<typename BasicJsonType>
+ struct has_to_json<BasicJsonType, std_fs::path, void> : std::true_type {};
+```
+
+# Task
+Write 20 test programs for this pull request. Return JSON with a "tests" array; each item has "name" (short snake_case), "intent" (one sentence: what behavior it probes) and "code" (the complete C++ program).

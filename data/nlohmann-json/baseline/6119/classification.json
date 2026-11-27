@@ -1,0 +1,74 @@
+{
+  "target": "nlohmann-json",
+  "pr": 6119,
+  "model": "gemini-3.5-flash-lite",
+  "prompt_sha256": "5285c1a9f010476c850da6e2ec4a4431bad6fc6d449ade5f55ef25be9be29a0e",
+  "results_sha256": "4d0af1526f65b1f5208f4e80619b168dcf4c48c1c09b74dfe46526dbfe4d2efb",
+  "clusters": [
+    {
+      "id": "C1",
+      "status": "output_diff",
+      "failed_on": null,
+      "programs": [
+        "gen_01.cpp",
+        "gen_05.cpp",
+        "gen_19.cpp"
+      ],
+      "verdict": "intended",
+      "confidence": "high",
+      "reason": "The PR specifically changes non-strict BON8 parsing to report a parse_error when an unterminated final string has a non-empty push-back buffer instead of silently dropping the trailing bytes."
+    },
+    {
+      "id": "C2",
+      "status": "output_diff",
+      "failed_on": null,
+      "programs": [
+        "gen_18.cpp"
+      ],
+      "verdict": "intended",
+      "confidence": "high",
+      "reason": "SAX parsing with `strict = false` now correctly triggers the parse error handler and returns false for unterminated BON8 final strings, matching the PR goal."
+    },
+    {
+      "id": "C3",
+      "status": "output_diff",
+      "failed_on": null,
+      "programs": [
+        "gen_21.cpp"
+      ],
+      "verdict": "intended",
+      "confidence": "high",
+      "reason": "With allow_exceptions set to false, an unterminated BON8 string now correctly results in a discarded value (`is_discarded() == true`) instead of returning a partial result."
+    }
+  ],
+  "clusters_not_shown": 0,
+  "counts": {
+    "same": 15,
+    "invalid": 0,
+    "flaky": 0,
+    "superseded": 1,
+    "missing": 0
+  },
+  "pr_verdict": {
+    "regression_candidate": false,
+    "unintended_clusters": []
+  },
+  "usage": {
+    "promptTokenCount": 4872,
+    "candidatesTokenCount": 238,
+    "totalTokenCount": 5110,
+    "trafficType": "ON_DEMAND",
+    "promptTokensDetails": [
+      {
+        "modality": "TEXT",
+        "tokenCount": 4872
+      }
+    ],
+    "candidatesTokensDetails": [
+      {
+        "modality": "TEXT",
+        "tokenCount": 238
+      }
+    ]
+  }
+}

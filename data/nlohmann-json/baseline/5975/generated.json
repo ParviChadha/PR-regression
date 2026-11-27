@@ -1,0 +1,144 @@
+{
+  "target": "nlohmann-json",
+  "pr": 5975,
+  "model": "gemini-3.5-flash-lite",
+  "prompt_sha256": "acd567bf9135d9a4435042ae51a425a5912cdc5602125eef06d9fa2c8160c2ab",
+  "n_requested": 20,
+  "std": "c++17",
+  "dropped": 1,
+  "variant": "baseline",
+  "usage": {
+    "promptTokenCount": 6459,
+    "candidatesTokenCount": 5096,
+    "totalTokenCount": 11555,
+    "trafficType": "ON_DEMAND",
+    "promptTokensDetails": [
+      {
+        "modality": "TEXT",
+        "tokenCount": 6459
+      }
+    ],
+    "candidatesTokensDetails": [
+      {
+        "modality": "TEXT",
+        "tokenCount": 5096
+      }
+    ]
+  },
+  "tests": [
+    {
+      "file": "gen_01.cpp",
+      "name": "cbor_scalar_run_integers",
+      "intent": "Verify that definite-length CBOR arrays containing various integer sizes are parsed correctly via the scalar run path.",
+      "round": 0
+    },
+    {
+      "file": "gen_02.cpp",
+      "name": "cbor_scalar_run_negative_integers",
+      "intent": "Verify that definite-length CBOR arrays containing negative integers are parsed correctly.",
+      "round": 0
+    },
+    {
+      "file": "gen_03.cpp",
+      "name": "cbor_scalar_run_floats_and_booleans",
+      "intent": "Verify that floats, doubles, booleans, and nulls inside definite-length arrays are parsed correctly.",
+      "round": 0
+    },
+    {
+      "file": "gen_04.cpp",
+      "name": "cbor_scalar_run_mixed_transition",
+      "intent": "Verify that the scalar run correctly transitions to regular parsing when encountering a non-scalar (like a string).",
+      "round": 0
+    },
+    {
+      "file": "gen_05.cpp",
+      "name": "cbor_scalar_run_boundary_bytes",
+      "intent": "Verify that the scalar run safely stops when fewer than 9 bytes remain in the input buffer.",
+      "round": 0
+    },
+    {
+      "file": "gen_06.cpp",
+      "name": "cbor_empty_array",
+      "intent": "Verify that empty definite-length arrays bypass the scalar run completely without issues.",
+      "round": 0
+    },
+    {
+      "file": "gen_07.cpp",
+      "name": "cbor_indefinite_array",
+      "intent": "Verify that indefinite-length arrays do not trigger the definite-length scalar run code.",
+      "round": 0
+    },
+    {
+      "file": "gen_08.cpp",
+      "name": "cbor_non_contiguous_stream",
+      "intent": "Verify that non-contiguous inputs (like std::istringstream) correctly fall back to the safe non-bulk parsing path.",
+      "round": 0
+    },
+    {
+      "file": "gen_09.cpp",
+      "name": "cbor_nested_arrays",
+      "intent": "Verify that nested arrays invoke the scalar run appropriately per array level without failing container bookkeeping.",
+      "round": 0
+    },
+    {
+      "file": "gen_10.cpp",
+      "name": "cbor_array_of_objects",
+      "intent": "Verify that an array starting with objects avoids the scalar run correctly and parses objects normally.",
+      "round": 0
+    },
+    {
+      "file": "gen_11.cpp",
+      "name": "cbor_sax_event_logging",
+      "intent": "Verify that SAX event sequence and parameters remain identical during scalar runs.",
+      "round": 0
+    },
+    {
+      "file": "gen_12.cpp",
+      "name": "cbor_large_uint64_scalar",
+      "intent": "Verify parsing of 64-bit unsigned integers via the scalar run path.",
+      "round": 0
+    },
+    {
+      "file": "gen_13.cpp",
+      "name": "cbor_large_int64_scalar",
+      "intent": "Verify parsing of 64-bit negative integers via the scalar run path.",
+      "round": 0
+    },
+    {
+      "file": "gen_14.cpp",
+      "name": "cbor_float_source_string_empty",
+      "intent": "Verify that number_float receives an empty string source parameter during float parsing.",
+      "round": 0
+    },
+    {
+      "file": "gen_15.cpp",
+      "name": "cbor_sax_short_circuit_abort",
+      "intent": "Verify that if the SAX parser aborts during a scalar run, parsing halts and returns false.",
+      "round": 0
+    },
+    {
+      "file": "gen_16.cpp",
+      "name": "cbor_mixed_array_various_types",
+      "intent": "Verify parsing of arrays with interleaved low and high scalar tag bytes.",
+      "round": 0
+    },
+    {
+      "file": "gen_17.cpp",
+      "name": "cbor_single_element_scalar_array",
+      "intent": "Verify a definite-length array containing exactly one scalar element.",
+      "round": 0
+    },
+    {
+      "file": "gen_18.cpp",
+      "name": "cbor_unsupported_scalar_head_fallback",
+      "intent": "Verify that unknown or unsupported head bytes gracefully fall back or terminate the scalar run correctly.",
+      "round": 0
+    },
+    {
+      "file": "gen_19.cpp",
+      "name": "cbor_array_exact_element_count",
+      "intent": "Verify that the scalar run correctly respects the exact remaining count of elements specified by the array header.",
+      "round": 0
+    }
+  ]
+}

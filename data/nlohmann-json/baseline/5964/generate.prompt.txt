@@ -1,0 +1,149 @@
+[system]
+You write test programs that probe a C++ library for behavioral changes made by one pull request.
+Each program is compiled and run twice, once against the library before the change and once after, and the two
+outputs are compared. Your job is to produce programs whose output reveals whether the change altered behavior,
+including side effects the author did not intend.
+
+Rules for every program:
+- It is standalone: one file with its own int main(), compiled as C++17, printing results to stdout.
+- Use only the library's documented public API. Never include internal headers or use detail/impl namespaces,
+  private members or undocumented macros.
+- Do not judge results (no assert, no expected-value comparisons): just print what the library returns. Print
+  enough to make differences visible, one fact per line.
+- Output must be deterministic. Never print pointers or addresses, uninitialized data, the order of
+  hash-based containers, timings, thread ids, random values, file paths or environment data. Print floating point
+  values with an explicit precision. No input, files, network, threads, clocks or randomness.
+- Wrap calls that may throw in try/catch and print the exception's type and message, so an exception is an
+  observable result. Do not crash on purpose.
+- Aim at the code the diff changes. Prefer calls that compile against both the old and the new library; one or two
+  programs may use an API the PR adds. Cover ordinary inputs and edge cases (empty, minimum and maximum values,
+  boundaries, special values, nesting, unusual types) and also neighbouring behavior the change could disturb.
+- When the diff changes which types or inputs an API accepts or rejects (constraints, overloads, traits,
+  conversions), test it with the detection idiom (std::void_t or requires) and `if constexpr`, so the program
+  compiles against both versions, prints whether the expression is well-formed, and exercises it when it is.
+  Accepting an input is not enough: also use it through every entry point that should follow (const and
+  non-const, read, write, insert, erase, lookup, nested use), because a change that admits new inputs can leave
+  later code unable to handle them.
+- If the changed code is internal (a detail, impl or internal namespace, a trait, a helper), do not name it in the
+  program. Reach it through the public API that depends on it, using detection (as above) where needed.
+- Use the exact types and values the diff is about (the new trait's argument types, the new overload's
+  parameters), not stand-ins.
+- Spread the programs over distinct public entry points and overloads, one main idea per program. Do not write
+  several programs that only rename a type or change a literal.
+- Make the programs differ from each other: different inputs, different entry points, different features.
+
+Rules specific to this library:
+- Include the library with #include <nlohmann/json.hpp>. The public API is nlohmann::json (nlohmann::basic_json), nlohmann::ordered_json, json_pointer, json patch/merge_patch and the documented SAX and conversion interfaces. Never use the detail namespace.
+- It is a header-only library: nothing to link. Programs are compiled as C++17.
+- Print JSON values with dump() (compact) or dump(2). Keys of nlohmann::json objects print in sorted order, so output is deterministic; do not depend on insertion order except with ordered_json.
+
+[user]
+# Pull request #5964: Write integers of 17 to 20 digits eight digits at a time in dump()
+
+## Description
+#5634 made `dump()` write integers below 10^16 eight digits at a time; larger ones still took the two-digits-per-division loop and `count_digits()`. Random 64-bit integers almost all have 17 to 20 digits (99.9 % of `signed_ints.json` and `unsigned_ints.json`), so `Dump/signed_ints` and `Dump/unsigned_ints` gained only 1.4× over 3.12.0, against 2.3× for small integers.
+
+## Change
+
+A 64-bit magnitude with 17 to 20 digits is now written as its first one to four digits and two groups of eight, with the same `eight_digit_bytes()`/`store_msb_first()` helpers as the 16-digit path.
+
+- Wider magnitudes (`__int128` and class types, #5805) keep the loop. Number types of at most 64 bits are selected by type, so no compiler reports the comparison as always true. Other types compare the value.
+- The sign handling of #1447/#5815 (`remove_sign()` into `number_magnitude_t`) is unchanged.
+- New test: every digit count from 1 to 20 (powers of ten, ±1, all 9s), the int64/uint64 limits, and 20,000 pseudo-random values of every bit length, signed and unsigned, compared with `std::to_string`.
+
+## Measurements
+
+A/B harness: both versions in one binary, alternating samples, six code layouts. Each value is `dump()` of the whole document, B/A, where < 1 is faster.
+
+| document | instructions, GCC 13 x86-64 (callgrind) | instructions, Apple clang (M1 Max) | time, Apple clang (M1 Max) | time, GCC 13 x86-64 (Haswell VPS) |
+|---|---|---|---|---|
+| `signed_ints.json` | 0.503 | 0.588 | 0.689 | 0.805 |
+| `unsigned_ints.json` | 0.484 | 0.576 | 0.481 | 0.577 |
+| `small_signed_ints.json` | 0.991 | 0.994 | 1.008 | 0.989 |
+| `twitter.json` | 0.992 | 0.988 | 0.998 | 0.990 |
+| `citm_catalog.json` | 0.993 | 1.008 | 1.000 | 0.994 |
+| `canada.json` | 1.000 | 0.999 | 1.004 | 1.000 |
+
+Timings are geometric means over six layouts. The A/A noise floor is about ±1.5 % on the Mac and ±1 % on the VPS.
+
+Tests: full suite with ASan/UBSan on macOS (182/182).
+
+## Breaks the public API?
+
+No. The output of `dump()` is unchanged; only how integers with 17 to 20 digits are written.
+
+🤖 Generated with [Claude Code](https://claude.com/claude-code)
+
+## Commit message
+#5634 made dump() write integers below 10^16 eight digits at a time; larger
+ones still took the two-digits-per-division loop and count_digits(). Random
+64-bit integers almost all have 17 to 20 digits (99.9 % of signed_ints.json
+and unsigned_ints.json), so Dump/signed_ints and Dump/unsigned_ints gained
+only 1.4x over 3.12.0, against 2.3x for small integers.
+
+A 64-bit magnitude is now written as its first one to four digits and two
+groups of eight. Wider magnitudes (__int128 and class types, #5805) keep the
+loop: number types of at most 64 bits are selected by type, so no comparison
+is reported as always true; for others the value is compared. The sign
+handling of #1447/#5815 (remove_sign() into number_magnitude_t) is unchanged.
+
+Signed-off-by: Niels Lohmann <mail@nlohmann.me>
+
+## Diff of the library source (before -> after)
+```diff
+diff --git a/include/nlohmann/detail/output/serializer.hpp b/include/nlohmann/detail/output/serializer.hpp
+index 598fda98a..4656dbdf1 100644
+--- a/include/nlohmann/detail/output/serializer.hpp
++++ b/include/nlohmann/detail/output/serializer.hpp
+@@ -1977,6 +1977,23 @@ class serializer
+             return;
+         }
+ 
++        // 17 to 20 digits: the first one to four, then twice eight
++        if (magnitude_fits_64_bits(abs_value, std::integral_constant<bool, magnitude_has_at_most_64_bits>()))
++        {
++            const auto value = static_cast<std::uint64_t>(abs_value);
++            const std::uint64_t top = value / 10000000000000000u; // 1 to 1844
++            const std::uint64_t low16 = value - (top * 10000000000000000u);
++            const std::uint64_t middle = low16 / 100000000u;
++            const std::uint64_t first = dtoa_impl::eight_digit_bytes(top);
++            const auto leading = static_cast<unsigned>(count_leading_zeros(first) / 8); // (first is not 0)
++            char* const p = buffer_ptr + n_chars;
++            dtoa_impl::store_msb_first(p, (first << (8 * leading)) + 0x3030303030303030u);
++            dtoa_impl::store_msb_first(p + 8 - leading, dtoa_impl::eight_digit_bytes(middle) + 0x3030303030303030u);
++            dtoa_impl::store_msb_first(p + 16 - leading, dtoa_impl::eight_digit_bytes(low16 - (middle * 100000000u)) + 0x3030303030303030u);
++            write_buffer_pos += n_chars + 24 - leading;
++            return;
++        }
++
+         n_chars += count_digits(abs_value);
+ 
+         // spare 1 byte for '\0'
+@@ -2122,6 +2139,23 @@ class serializer
+         }
+     }
+ 
++    /// whether every number_magnitude_t fits 64 bits
++    static constexpr bool magnitude_has_at_most_64_bits = std::numeric_limits<number_magnitude_t>::is_specialized
++        && std::numeric_limits<number_magnitude_t>::digits <= 64;
++
++    /// whether @a x fits 64 bits: always if number_magnitude_t has at most
++    /// 64 bits (selected by type, as the comparison would be reported as
++    /// always true), else compared
++    static bool magnitude_fits_64_bits(const number_magnitude_t& /*unused*/, std::true_type /*unused*/) noexcept
++    {
++        return true;
++    }
++
++    static bool magnitude_fits_64_bits(const number_magnitude_t& x, std::false_type /*unused*/) noexcept
++    {
++        return x <= 18446744073709551615u;
++    }
++
+     /*
+      * Helper function for dump_integer
+      *
+```
+
+# Task
+Write 20 test programs for this pull request. Return JSON with a "tests" array; each item has "name" (short snake_case), "intent" (one sentence: what behavior it probes) and "code" (the complete C++ program).

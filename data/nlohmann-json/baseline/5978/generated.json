@@ -1,0 +1,172 @@
+{
+  "target": "nlohmann-json",
+  "pr": 5978,
+  "model": "gemini-3.5-flash-lite",
+  "prompt_sha256": "b39b8c3300dd3513fca40f156ab9a1c2c004f36bd78a377e9d39cab61e4c8571",
+  "n_requested": 20,
+  "std": "c++17",
+  "dropped": 0,
+  "variant": "baseline",
+  "usage": {
+    "promptTokenCount": 5313,
+    "candidatesTokenCount": 2847,
+    "totalTokenCount": 8160,
+    "trafficType": "ON_DEMAND",
+    "promptTokensDetails": [
+      {
+        "modality": "TEXT",
+        "tokenCount": 5313
+      }
+    ],
+    "candidatesTokensDetails": [
+      {
+        "modality": "TEXT",
+        "tokenCount": 2847
+      }
+    ]
+  },
+  "tests": [
+    {
+      "file": "gen_01.cpp",
+      "name": "accept_valid_string",
+      "intent": "Verify that json::accept returns true for a valid JSON string payload.",
+      "round": 0
+    },
+    {
+      "file": "gen_02.cpp",
+      "name": "accept_escaped_string",
+      "intent": "Verify that json::accept correctly handles escape sequences inside strings without retaining buffer copies.",
+      "round": 0
+    },
+    {
+      "file": "gen_03.cpp",
+      "name": "accept_unicode_surrogate",
+      "intent": "Verify that json::accept checks unicode surrogate pairs properly in strings.",
+      "round": 0,
+      "superseded_by": "gen_21.cpp"
+    },
+    {
+      "file": "gen_04.cpp",
+      "name": "accept_invalid_control_char",
+      "intent": "Verify that json::accept rejects unescaped control characters inside strings.",
+      "round": 0
+    },
+    {
+      "file": "gen_05.cpp",
+      "name": "accept_with_comments",
+      "intent": "Verify that json::accept works correctly when allow_comments option is enabled.",
+      "round": 0
+    },
+    {
+      "file": "gen_06.cpp",
+      "name": "accept_with_trailing_commas",
+      "intent": "Verify that json::accept handles trailing commas when enabled via accept parameters.",
+      "round": 0
+    },
+    {
+      "file": "gen_07.cpp",
+      "name": "accept_empty_input",
+      "intent": "Verify that json::accept correctly handles empty or whitespace-only inputs.",
+      "round": 0
+    },
+    {
+      "file": "gen_08.cpp",
+      "name": "accept_stream_input",
+      "intent": "Verify that json::accept accepts std::stringstream inputs correctly.",
+      "round": 0
+    },
+    {
+      "file": "gen_09.cpp",
+      "name": "accept_iterator_list_input",
+      "intent": "Verify that json::accept works with container iterators like std::list.",
+      "round": 0
+    },
+    {
+      "file": "gen_10.cpp",
+      "name": "accept_deeply_nested",
+      "intent": "Verify that json::accept handles deeply nested structures without failing or buffer overflows.",
+      "round": 0
+    },
+    {
+      "file": "gen_11.cpp",
+      "name": "accept_large_numbers",
+      "intent": "Verify that json::accept correctly passes over large integers and floating-point values without storing string/number buffers.",
+      "round": 0
+    },
+    {
+      "file": "gen_12.cpp",
+      "name": "accept_malformed_utf8",
+      "intent": "Verify that json::accept catches malformed UTF-8 sequences within string literals.",
+      "round": 0
+    },
+    {
+      "file": "gen_13.cpp",
+      "name": "accept_unclosed_string",
+      "intent": "Verify that json::accept rejects unclosed string literals.",
+      "round": 0
+    },
+    {
+      "file": "gen_14.cpp",
+      "name": "accept_invalid_escape",
+      "intent": "Verify that json::accept detects invalid escape characters inside string tokens.",
+      "round": 0
+    },
+    {
+      "file": "gen_15.cpp",
+      "name": "accept_unicode_escape_short",
+      "intent": "Verify that json::accept rejects truncated unicode escapes in strings.",
+      "round": 0
+    },
+    {
+      "file": "gen_16.cpp",
+      "name": "accept_agreement_with_parse_no_exceptions",
+      "intent": "Verify that json::accept agrees with parse(..., allow_exceptions=false) on arbitrary inputs.",
+      "round": 0
+    },
+    {
+      "file": "gen_17.cpp",
+      "name": "accept_multiple_root_values",
+      "intent": "Verify that json::accept rejects multiple root values separated by whitespace.",
+      "round": 0
+    },
+    {
+      "file": "gen_18.cpp",
+      "name": "accept_hex_number_bad",
+      "intent": "Verify that json::accept correctly flags improperly formatted hexadecimal or number prefixes.",
+      "round": 0
+    },
+    {
+      "file": "gen_19.cpp",
+      "name": "accept_lone_surrogate",
+      "intent": "Verify that json::accept catches lone high surrogates not followed by a low surrogate.",
+      "round": 0,
+      "superseded_by": "gen_22.cpp"
+    },
+    {
+      "file": "gen_20.cpp",
+      "name": "accept_string_with_null_byte",
+      "intent": "Verify that json::accept handles embedded escaped null bytes correctly within strings.",
+      "round": 0
+    },
+    {
+      "file": "gen_21.cpp",
+      "name": "accept_unicode_surrogate_fixed",
+      "intent": "Verify that json::accept checks unicode surrogate pairs properly in strings.",
+      "round": 1,
+      "fixes": "gen_03.cpp",
+      "kind": "compile"
+    },
+    {
+      "file": "gen_22.cpp",
+      "name": "accept_lone_surrogate_fixed",
+      "intent": "Verify that json::accept catches lone high surrogates not followed by a low surrogate.",
+      "round": 1,
+      "fixes": "gen_19.cpp",
+      "kind": "compile"
+    }
+  ],
+  "fix": {
+    "rounds_max": 2,
+    "model": "gemini-3.5-flash-lite"
+  }
+}

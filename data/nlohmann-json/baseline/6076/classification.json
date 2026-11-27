@@ -1,0 +1,61 @@
+{
+  "target": "nlohmann-json",
+  "pr": 6076,
+  "model": "gemini-3.5-flash-lite",
+  "prompt_sha256": "b1a0819c515de08c196ac405d90d5f6e042af021536fae92369cb851cd33b8df",
+  "results_sha256": "8ed47f66644465f15340967a34ace8a3a75dad77bbe8d146d25a84ea67b67158",
+  "clusters": [
+    {
+      "id": "C1",
+      "status": "output_diff",
+      "failed_on": null,
+      "programs": [
+        "gen_02.cpp"
+      ],
+      "verdict": "intended",
+      "confidence": "high",
+      "reason": "The linked issue #6105 explicitly states that overlapping keys in ordered_json::unflatten() must throw type_error.313 instead of silently overwriting earlier values."
+    },
+    {
+      "id": "C2",
+      "status": "output_diff",
+      "failed_on": null,
+      "programs": [
+        "gen_05.cpp"
+      ],
+      "verdict": "intended",
+      "confidence": "high",
+      "reason": "Linked issue #6105 and the PR diff show that a null value for a prefix key leaves the existing nested structure intact rather than overwriting it, as handled by `if (element.second.is_null()) { continue; }`."
+    }
+  ],
+  "clusters_not_shown": 0,
+  "counts": {
+    "same": 18,
+    "invalid": 0,
+    "flaky": 0,
+    "superseded": 3,
+    "missing": 0
+  },
+  "pr_verdict": {
+    "regression_candidate": false,
+    "unintended_clusters": []
+  },
+  "usage": {
+    "promptTokenCount": 20977,
+    "candidatesTokenCount": 178,
+    "totalTokenCount": 21155,
+    "trafficType": "ON_DEMAND",
+    "promptTokensDetails": [
+      {
+        "modality": "TEXT",
+        "tokenCount": 20977
+      }
+    ],
+    "candidatesTokensDetails": [
+      {
+        "modality": "TEXT",
+        "tokenCount": 178
+      }
+    ]
+  }
+}

@@ -1,0 +1,334 @@
+{
+  "target": "nlohmann-json",
+  "pr": 5926,
+  "model": "gemini-3.5-flash-lite",
+  "prompt_sha256": "b46f4d5e08129aa9ffd6676c0258c68e3233bc8d1ea5c642a410754e5d44d9cf",
+  "n_requested": 20,
+  "std": "c++17",
+  "dropped": 0,
+  "variant": "baseline",
+  "usage": {
+    "promptTokenCount": 4249,
+    "candidatesTokenCount": 4378,
+    "totalTokenCount": 8627,
+    "trafficType": "ON_DEMAND",
+    "promptTokensDetails": [
+      {
+        "modality": "TEXT",
+        "tokenCount": 4249
+      }
+    ],
+    "candidatesTokensDetails": [
+      {
+        "modality": "TEXT",
+        "tokenCount": 4378
+      }
+    ]
+  },
+  "tests": [
+    {
+      "file": "gen_01.cpp",
+      "name": "short_ascii_string",
+      "intent": "Verify check_utf8 behaves correctly with short ASCII strings below the 32-byte threshold.",
+      "round": 0,
+      "superseded_by": "gen_21.cpp"
+    },
+    {
+      "file": "gen_02.cpp",
+      "name": "long_ascii_string",
+      "intent": "Verify check_utf8 handles long ASCII strings of 32 bytes or more using the optimized scan path.",
+      "round": 0,
+      "superseded_by": "gen_22.cpp"
+    },
+    {
+      "file": "gen_03.cpp",
+      "name": "long_utf8_valid",
+      "intent": "Verify check_utf8 correctly accepts long valid multi-byte UTF-8 sequences above 32 bytes.",
+      "round": 0,
+      "superseded_by": "gen_23.cpp"
+    },
+    {
+      "file": "gen_04.cpp",
+      "name": "long_utf8_invalid_early",
+      "intent": "Verify check_utf8 detects an invalid UTF-8 sequence early in a long string via the scan path.",
+      "round": 0,
+      "superseded_by": "gen_24.cpp"
+    },
+    {
+      "file": "gen_05.cpp",
+      "name": "long_utf8_invalid_late",
+      "intent": "Verify check_utf8 detects an invalid UTF-8 sequence late in a long string, ensuring fallback to bytewise scan from failure point.",
+      "round": 0,
+      "superseded_by": "gen_25.cpp"
+    },
+    {
+      "file": "gen_06.cpp",
+      "name": "string_with_quotes_and_backslashes",
+      "intent": "Verify that scan_string_run correctly skips quotes, backslashes, and control characters in long strings without failing.",
+      "round": 0,
+      "superseded_by": "gen_26.cpp"
+    },
+    {
+      "file": "gen_07.cpp",
+      "name": "exact_boundary_31_bytes",
+      "intent": "Verify check_utf8 behaves correctly on strings of length 31, right below the optimization threshold.",
+      "round": 0,
+      "superseded_by": "gen_27.cpp"
+    },
+    {
+      "file": "gen_08.cpp",
+      "name": "exact_boundary_32_bytes",
+      "intent": "Verify check_utf8 behaves correctly on strings of length 32, exactly at the optimization threshold.",
+      "round": 0,
+      "superseded_by": "gen_28.cpp"
+    },
+    {
+      "file": "gen_09.cpp",
+      "name": "exact_boundary_33_bytes",
+      "intent": "Verify check_utf8 behaves correctly on strings of length 33, right above the optimization threshold.",
+      "round": 0,
+      "superseded_by": "gen_29.cpp"
+    },
+    {
+      "file": "gen_10.cpp",
+      "name": "push_back_long_string",
+      "intent": "Verify push_back on json_document triggers check_utf8 for long strings correctly.",
+      "round": 0,
+      "superseded_by": "gen_30.cpp"
+    },
+    {
+      "file": "gen_11.cpp",
+      "name": "insert_long_string",
+      "intent": "Verify insert operation on json_document triggers check_utf8 for long strings correctly.",
+      "round": 0,
+      "superseded_by": "gen_31.cpp"
+    },
+    {
+      "file": "gen_12.cpp",
+      "name": "object_key_long",
+      "intent": "Verify check_utf8 works correctly on long object keys (which are also checked for UTF-8 validity).",
+      "round": 0,
+      "superseded_by": "gen_32.cpp"
+    },
+    {
+      "file": "gen_13.cpp",
+      "name": "object_key_invalid_long",
+      "intent": "Verify check_utf8 catches invalid UTF-8 in long object keys.",
+      "round": 0,
+      "superseded_by": "gen_33.cpp"
+    },
+    {
+      "file": "gen_14.cpp",
+      "name": "empty_string_check",
+      "intent": "Verify check_utf8 handles empty strings correctly without out-of-bounds reads.",
+      "round": 0,
+      "superseded_by": "gen_34.cpp"
+    },
+    {
+      "file": "gen_15.cpp",
+      "name": "long_string_all_control_chars",
+      "intent": "Verify scan_string_run handles long strings consisting entirely of control characters (which stop the run and increment q).",
+      "round": 0,
+      "superseded_by": "gen_35.cpp"
+    },
+    {
+      "file": "gen_16.cpp",
+      "name": "mixed_valid_multibyte_and_ascii_long",
+      "intent": "Verify long strings containing a mix of ASCII and multi-byte UTF-8 sequences are successfully validated.",
+      "round": 0,
+      "superseded_by": "gen_36.cpp"
+    },
+    {
+      "file": "gen_17.cpp",
+      "name": "overlong_sequence_long_string",
+      "intent": "Verify detection of overlong UTF-8 sequences in long strings.",
+      "round": 0,
+      "superseded_by": "gen_37.cpp"
+    },
+    {
+      "file": "gen_18.cpp",
+      "name": "surrogate_sequence_long_string",
+      "intent": "Verify detection of UTF-16 surrogate halves in long strings via check_utf8.",
+      "round": 0,
+      "superseded_by": "gen_38.cpp"
+    },
+    {
+      "file": "gen_19.cpp",
+      "name": "truncated_multibyte_long_string",
+      "intent": "Verify detection of truncated multi-byte sequences at the end of long strings.",
+      "round": 0,
+      "superseded_by": "gen_39.cpp"
+    },
+    {
+      "file": "gen_20.cpp",
+      "name": "out_of_range_unicode_long_string",
+      "intent": "Verify detection of Unicode codepoints above U+10FFFF in long strings.",
+      "round": 0,
+      "superseded_by": "gen_40.cpp"
+    },
+    {
+      "file": "gen_21.cpp",
+      "name": "short_ascii_string_fixed",
+      "intent": "Verify check_utf8 behaves correctly with short ASCII strings below the 32-byte threshold.",
+      "round": 1,
+      "fixes": "gen_01.cpp",
+      "kind": "compile"
+    },
+    {
+      "file": "gen_22.cpp",
+      "name": "long_ascii_string_fixed",
+      "intent": "Verify check_utf8 handles long ASCII strings of 32 bytes or more using the optimized scan path.",
+      "round": 1,
+      "fixes": "gen_02.cpp",
+      "kind": "compile"
+    },
+    {
+      "file": "gen_23.cpp",
+      "name": "long_utf8_valid_fixed",
+      "intent": "Verify check_utf8 correctly accepts long valid multi-byte UTF-8 sequences above 32 bytes.",
+      "round": 1,
+      "fixes": "gen_03.cpp",
+      "kind": "compile"
+    },
+    {
+      "file": "gen_24.cpp",
+      "name": "long_utf8_invalid_early_fixed",
+      "intent": "Verify check_utf8 detects an invalid UTF-8 sequence early in a long string via the scan path.",
+      "round": 1,
+      "fixes": "gen_04.cpp",
+      "kind": "compile"
+    },
+    {
+      "file": "gen_25.cpp",
+      "name": "long_utf8_invalid_late_fixed",
+      "intent": "Verify check_utf8 detects an invalid UTF-8 sequence late in a long string, ensuring fallback to bytewise scan from failure point.",
+      "round": 1,
+      "fixes": "gen_05.cpp",
+      "kind": "compile"
+    },
+    {
+      "file": "gen_26.cpp",
+      "name": "string_with_quotes_and_backslashes_fixed",
+      "intent": "Verify that scan_string_run correctly skips quotes, backslashes, and control characters in long strings without failing.",
+      "round": 1,
+      "fixes": "gen_06.cpp",
+      "kind": "compile"
+    },
+    {
+      "file": "gen_27.cpp",
+      "name": "exact_boundary_31_bytes_fixed",
+      "intent": "Verify check_utf8 behaves correctly on strings of length 31, right below the optimization threshold.",
+      "round": 1,
+      "fixes": "gen_07.cpp",
+      "kind": "compile"
+    },
+    {
+      "file": "gen_28.cpp",
+      "name": "exact_boundary_32_bytes_fixed",
+      "intent": "Verify check_utf8 behaves correctly on strings of length 32, exactly at the optimization threshold.",
+      "round": 1,
+      "fixes": "gen_08.cpp",
+      "kind": "compile"
+    },
+    {
+      "file": "gen_29.cpp",
+      "name": "exact_boundary_33_bytes_fixed",
+      "intent": "Verify check_utf8 behaves correctly on strings of length 33, right above the optimization threshold.",
+      "round": 1,
+      "fixes": "gen_09.cpp",
+      "kind": "compile"
+    },
+    {
+      "file": "gen_30.cpp",
+      "name": "push_back_long_string_fixed",
+      "intent": "Verify push_back on json_document triggers check_utf8 for long strings correctly.",
+      "round": 1,
+      "fixes": "gen_10.cpp",
+      "kind": "compile"
+    },
+    {
+      "file": "gen_31.cpp",
+      "name": "insert_long_string_fixed",
+      "intent": "Verify insert operation on json_document triggers check_utf8 for long strings correctly.",
+      "round": 1,
+      "fixes": "gen_11.cpp",
+      "kind": "compile"
+    },
+    {
+      "file": "gen_32.cpp",
+      "name": "object_key_long_fixed",
+      "intent": "Verify check_utf8 works correctly on long object keys (which are also checked for UTF-8 validity).",
+      "round": 1,
+      "fixes": "gen_12.cpp",
+      "kind": "compile"
+    },
+    {
+      "file": "gen_33.cpp",
+      "name": "object_key_invalid_long_fixed",
+      "intent": "Verify check_utf8 catches invalid UTF-8 in long object keys.",
+      "round": 1,
+      "fixes": "gen_13.cpp",
+      "kind": "compile"
+    },
+    {
+      "file": "gen_34.cpp",
+      "name": "empty_string_check_fixed",
+      "intent": "Verify check_utf8 handles empty strings correctly without out-of-bounds reads.",
+      "round": 1,
+      "fixes": "gen_14.cpp",
+      "kind": "compile"
+    },
+    {
+      "file": "gen_35.cpp",
+      "name": "long_string_all_control_chars_fixed",
+      "intent": "Verify scan_string_run handles long strings consisting entirely of control characters (which stop the run and increment q).",
+      "round": 1,
+      "fixes": "gen_15.cpp",
+      "kind": "compile"
+    },
+    {
+      "file": "gen_36.cpp",
+      "name": "mixed_valid_multibyte_and_ascii_long_fixed",
+      "intent": "Verify long strings containing a mix of ASCII and multi-byte UTF-8 sequences are successfully validated.",
+      "round": 2,
+      "fixes": "gen_16.cpp",
+      "kind": "compile"
+    },
+    {
+      "file": "gen_37.cpp",
+      "name": "overlong_sequence_long_string_fixed",
+      "intent": "Verify detection of overlong UTF-8 sequences in long strings.",
+      "round": 2,
+      "fixes": "gen_17.cpp",
+      "kind": "compile"
+    },
+    {
+      "file": "gen_38.cpp",
+      "name": "surrogate_sequence_long_string_fixed",
+      "intent": "Verify detection of UTF-16 surrogate halves in long strings via check_utf8.",
+      "round": 2,
+      "fixes": "gen_18.cpp",
+      "kind": "compile"
+    },
+    {
+      "file": "gen_39.cpp",
+      "name": "truncated_multibyte_long_string_fixed",
+      "intent": "Verify detection of truncated multi-byte sequences at the end of long strings.",
+      "round": 2,
+      "fixes": "gen_19.cpp",
+      "kind": "compile"
+    },
+    {
+      "file": "gen_40.cpp",
+      "name": "out_of_range_unicode_long_string_fixed",
+      "intent": "Verify detection of Unicode codepoints above U+10FFFF in long strings.",
+      "round": 2,
+      "fixes": "gen_20.cpp",
+      "kind": "compile"
+    }
+  ],
+  "fix": {
+    "rounds_max": 2,
+    "model": "gemini-3.5-flash-lite"
+  }
+}

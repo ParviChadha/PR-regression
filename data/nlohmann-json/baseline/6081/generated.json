@@ -1,0 +1,190 @@
+{
+  "target": "nlohmann-json",
+  "pr": 6081,
+  "model": "gemini-3.5-flash-lite",
+  "prompt_sha256": "8098d82446295b0e0ae063450e6a919eb595256c30fc598d29bfb7c205cecc9a",
+  "n_requested": 20,
+  "std": "c++17",
+  "dropped": 0,
+  "variant": "baseline",
+  "usage": {
+    "promptTokenCount": 5964,
+    "candidatesTokenCount": 3948,
+    "totalTokenCount": 9912,
+    "trafficType": "ON_DEMAND",
+    "promptTokensDetails": [
+      {
+        "modality": "TEXT",
+        "tokenCount": 5964
+      }
+    ],
+    "candidatesTokensDetails": [
+      {
+        "modality": "TEXT",
+        "tokenCount": 3948
+      }
+    ]
+  },
+  "tests": [
+    {
+      "file": "gen_01.cpp",
+      "name": "recursion_limit_api_check",
+      "intent": "Verify that detail::recursion_depth_limit() returns a valid size_t and compiles successfully.",
+      "round": 0
+    },
+    {
+      "file": "gen_02.cpp",
+      "name": "deep_nesting_copy_constructor",
+      "intent": "Test copying a deeply nested JSON object to verify the recursion depth limit and nesting depth guard behavior.",
+      "round": 0
+    },
+    {
+      "file": "gen_03.cpp",
+      "name": "deep_nesting_comparison",
+      "intent": "Test equality comparison on deeply nested structures where nesting depth guards are active.",
+      "round": 0
+    },
+    {
+      "file": "gen_04.cpp",
+      "name": "deep_nesting_serialization_dump",
+      "intent": "Test serializing a deeply nested structure using dump() to check stack-safe recursion and explicit stack fallbacks.",
+      "round": 0,
+      "superseded_by": "gen_21.cpp"
+    },
+    {
+      "file": "gen_05.cpp",
+      "name": "update_without_merge_objects",
+      "intent": "Verify that update() without merge_objects works correctly even at depth 0 or when recursion limit conditions are hit.",
+      "round": 0
+    },
+    {
+      "file": "gen_06.cpp",
+      "name": "update_with_merge_objects",
+      "intent": "Verify that update() with merge_objects handles nested objects properly under the recursion limit mechanism.",
+      "round": 0
+    },
+    {
+      "file": "gen_07.cpp",
+      "name": "cbor_writer_deep_nesting",
+      "intent": "Test CBOR serialization writer on deeply nested values using the explicit stack recursion fallback.",
+      "round": 0
+    },
+    {
+      "file": "gen_08.cpp",
+      "name": "messagepack_writer_deep_nesting",
+      "intent": "Test MessagePack serialization writer on deeply nested structures.",
+      "round": 0
+    },
+    {
+      "file": "gen_09.cpp",
+      "name": "ubjson_writer_deep_nesting",
+      "intent": "Test UBJSON serialization writer on deeply nested structures.",
+      "round": 0
+    },
+    {
+      "file": "gen_10.cpp",
+      "name": "bjdata_writer_deep_nesting",
+      "intent": "Test BJData serialization writer on deeply nested structures.",
+      "round": 0
+    },
+    {
+      "file": "gen_11.cpp",
+      "name": "hash_deep_nesting",
+      "intent": "Test std::hash functionality on deeply nested JSON values to ensure recursion depth guards operate safely.",
+      "round": 0
+    },
+    {
+      "file": "gen_12.cpp",
+      "name": "merge_patch_deep_nesting",
+      "intent": "Test JSON merge patch operation on deeply nested documents.",
+      "round": 0
+    },
+    {
+      "file": "gen_13.cpp",
+      "name": "json_patch_operation",
+      "intent": "Test RFC 6902 JSON patch application on structured objects.",
+      "round": 0
+    },
+    {
+      "file": "gen_14.cpp",
+      "name": "json_diff_generation",
+      "intent": "Test diff generation between two JSON values exercising walk comparisons.",
+      "round": 0
+    },
+    {
+      "file": "gen_15.cpp",
+      "name": "ordered_json_deep_nesting",
+      "intent": "Test ordered_json with deep nesting to verify identical recursion behavior on insertion-order maps.",
+      "round": 0
+    },
+    {
+      "file": "gen_16.cpp",
+      "name": "json_pointer_lookup",
+      "intent": "Test JSON pointer evaluation on nested structures.",
+      "round": 0
+    },
+    {
+      "file": "gen_17.cpp",
+      "name": "destruction_deep_nesting",
+      "intent": "Test destruction of deeply nested values to check that the stack-safe recursion walk handles object teardown safely.",
+      "round": 0
+    },
+    {
+      "file": "gen_18.cpp",
+      "name": "conversion_deep_nesting",
+      "intent": "Test implicit/explicit type conversions over deep structures.",
+      "round": 0
+    },
+    {
+      "file": "gen_19.cpp",
+      "name": "nesting_depth_thread_local_access",
+      "intent": "Verify basic_json::nesting_depth() accessibility if thread_local is enabled.",
+      "round": 0,
+      "superseded_by": "gen_22.cpp"
+    },
+    {
+      "file": "gen_20.cpp",
+      "name": "json_sax_dom_parser",
+      "intent": "Test SAX interface parsing into basic_json DOM.",
+      "round": 0,
+      "superseded_by": "gen_23.cpp"
+    },
+    {
+      "file": "gen_21.cpp",
+      "name": "deep_nesting_serialization_dump_fixed",
+      "intent": "Test serializing a deeply nested structure using dump() to check stack-safe recursion and explicit stack fallbacks.",
+      "round": 1,
+      "fixes": "gen_04.cpp",
+      "kind": "compile"
+    },
+    {
+      "file": "gen_22.cpp",
+      "name": "nesting_depth_thread_local_access_fixed",
+      "intent": "Verify basic_json::nesting_depth() accessibility if thread_local is enabled.",
+      "round": 1,
+      "fixes": "gen_19.cpp",
+      "kind": "compile",
+      "superseded_by": "gen_24.cpp"
+    },
+    {
+      "file": "gen_23.cpp",
+      "name": "json_sax_dom_parser_fixed",
+      "intent": "Test SAX interface parsing into basic_json DOM.",
+      "round": 1,
+      "fixes": "gen_20.cpp",
+      "kind": "compile"
+    },
+    {
+      "file": "gen_24.cpp",
+      "name": "nesting_depth_thread_local_access_fixed_fixed",
+      "intent": "Verify basic_json::nesting_depth() accessibility if thread_local is enabled.",
+      "round": 2,
+      "fixes": "gen_22.cpp",
+      "kind": "compile"
+    }
+  ],
+  "fix": {
+    "rounds_max": 2,
+    "model": "gemini-3.5-flash-lite"
+  }
+}

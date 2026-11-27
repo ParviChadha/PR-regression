@@ -1,0 +1,402 @@
+[system]
+You write test programs that probe a C++ library for behavioral changes made by one pull request.
+Each program is compiled and run twice, once against the library before the change and once after, and the two
+outputs are compared. Your job is to produce programs whose output reveals whether the change altered behavior,
+including side effects the author did not intend.
+
+Rules for every program:
+- It is standalone: one file with its own int main(), compiled as C++17, printing results to stdout.
+- Use only the library's documented public API. Never include internal headers or use detail/impl namespaces,
+  private members or undocumented macros.
+- Do not judge results (no assert, no expected-value comparisons): just print what the library returns. Print
+  enough to make differences visible, one fact per line.
+- Output must be deterministic. Never print pointers or addresses, uninitialized data, the order of
+  hash-based containers, timings, thread ids, random values, file paths or environment data. Print floating point
+  values with an explicit precision. No input, files, network, threads, clocks or randomness.
+- Wrap calls that may throw in try/catch and print the exception's type and message, so an exception is an
+  observable result. Do not crash on purpose.
+- Aim at the code the diff changes. Prefer calls that compile against both the old and the new library; one or two
+  programs may use an API the PR adds. Cover ordinary inputs and edge cases (empty, minimum and maximum values,
+  boundaries, special values, nesting, unusual types) and also neighbouring behavior the change could disturb.
+- When the diff changes which types or inputs an API accepts or rejects (constraints, overloads, traits,
+  conversions), test it with the detection idiom (std::void_t or requires) and `if constexpr`, so the program
+  compiles against both versions, prints whether the expression is well-formed, and exercises it when it is.
+  Accepting an input is not enough: also use it through every entry point that should follow (const and
+  non-const, read, write, insert, erase, lookup, nested use), because a change that admits new inputs can leave
+  later code unable to handle them.
+- If the changed code is internal (a detail, impl or internal namespace, a trait, a helper), do not name it in the
+  program. Reach it through the public API that depends on it, using detection (as above) where needed.
+- Use the exact types and values the diff is about (the new trait's argument types, the new overload's
+  parameters), not stand-ins.
+- Spread the programs over distinct public entry points and overloads, one main idea per program. Do not write
+  several programs that only rename a type or change a literal.
+- Make the programs differ from each other: different inputs, different entry points, different features.
+
+Rules specific to this library:
+- Include the library with #include <nlohmann/json.hpp>. The public API is nlohmann::json (nlohmann::basic_json), nlohmann::ordered_json, json_pointer, json patch/merge_patch and the documented SAX and conversion interfaces. Never use the detail namespace.
+- It is a header-only library: nothing to link. Programs are compiled as C++17.
+- Print JSON values with dump() (compact) or dump(2). Keys of nlohmann::json objects print in sorted order, so output is deterministic; do not depend on insertion order except with ordered_json.
+
+[user]
+# Pull request #5920: json_view: no save() and load() on big-endian targets
+
+## Description
+Part of the #5869 cleanup before 3.13.0, stacked on #5919.
+
+## What changes
+
+On a big-endian target, `basic_json_document::save()` and `load()` no longer exist, instead of throwing `type_error.320` at runtime. The image format is little-endian only, so a call could never succeed there; now it fails at compile time, just like `set()` on a read-only document. Suggested by @gregmarr in #5632 ([comment](https://github.com/nlohmann/json/pull/5632#discussion_r4321789217), [clarification](https://github.com/nlohmann/json/pull/5632#discussion_r4331187395)).
+
+`save_image()`/`load_image()` and the members `save()`/`load()` are guarded by `#if NLOHMANN_VIEW_LITTLE_ENDIAN`. The members need the guard as well, since they call the functions with a non-dependent argument. `NLOHMANN_VIEW_LITTLE_ENDIAN` comes from the target's predefined macros, so it is the same in every translation unit of a build: no ODR risk.
+
+**Error 320 stays**, now only for "cannot save a discarded json_document". This corrects my reply on #5632, which said that `type_error.320` goes away: the discarded-document case still throws it.
+
+## Breaking changes
+
+None for released versions: `save()`/`load()` are new in 3.13.0. Code on `develop` that called them on a big-endian target, and therefore always threw, no longer compiles.
+
+## Tests
+
+- The big-endian test case checks with a detection trait that `save()`/`load()` don't exist; the little-endian tests check that they do.
+- `unit-json_view_image.cpp` compiled for s390x (big-endian) in Docker; all `unit-json_view*` tests with ASan/UBSan.
+- Docs: `save`, `load`, `type_error.320`, and the json_view feature page say "little-endian targets only".
+
+🤖 Generated with [Claude Code](https://claude.com/claude-code)
+
+## Commit message
+The image format is little-endian only. Instead of throwing
+type_error.320 at runtime, save_image(), load_image() and the members
+save() and load() do not exist on a big-endian target, so a call fails to
+compile, like set() on a read-only document. type_error.320 remains for
+saving a discarded document.
+
+Signed-off-by: Niels Lohmann <mail@nlohmann.me>
+
+## Headers the programs must include
+- Also write #include <nlohmann/json_view.hpp>. The json_view feature (json_document, json_view and their image loading and editing API) is declared only in this header; nlohmann/json.hpp does not include it, so without this line those names do not exist. Use only names you can see in the diff or the context below.
+
+## Diff of the library source (before -> after)
+```diff
+diff --git a/include/nlohmann/detail/exceptions.hpp b/include/nlohmann/detail/exceptions.hpp
+index cdef3019f..d47ed6f17 100644
+--- a/include/nlohmann/detail/exceptions.hpp
++++ b/include/nlohmann/detail/exceptions.hpp
+@@ -102,7 +102,7 @@ enum class exception_id : int
+     type_not_serializable = 317, ///< a value cannot be serialized to the requested binary format
+     enum_key_duplicate = 318, ///< an enum-keyed map has two keys that serialize to the same string
+     document_binary_value = 319, ///< a binary value is stored in a json_document
+-    document_image_unsupported = 320, ///< a json_document image cannot be saved or loaded (discarded document, big-endian target)
++    document_image_unsupported = 320, ///< a discarded json_document cannot be saved as an image
+     discarded_value_used = 321, ///< a discarded value is used
+     // out_of_range
+     array_index_out_of_range = 401, ///< an array index is out of range
+diff --git a/include/nlohmann/detail/view/image.hpp b/include/nlohmann/detail/view/image.hpp
+index c13d269e1..637350949 100644
+--- a/include/nlohmann/detail/view/image.hpp
++++ b/include/nlohmann/detail/view/image.hpp
+@@ -182,12 +182,10 @@ inline void compact_nodes(const document_data& d, std::size_t arena_size, std::v
+     }
+ }
+ 
++#if NLOHMANN_VIEW_LITTLE_ENDIAN // (the image format is little-endian: no save() elsewhere)
+ /// the document as an image
+ inline std::vector<std::uint8_t> save_image(const document_data& d)
+ {
+-#if !NLOHMANN_VIEW_LITTLE_ENDIAN
+-    throw_type_error(exception_id::document_image_unsupported, "json_document images need a little-endian target"); // LCOV_EXCL_LINE
+-#endif
+     const std::size_t arena_size = d.arena_size;
+     std::vector<node> compacted;
+     std::string text_tail;
+@@ -243,6 +241,7 @@ inline std::vector<std::uint8_t> save_image(const document_data& d)
+     *o = 0;
+     return image;
+ }
++#endif
+ 
+ /// the parts of a number token that the checks need
+ struct number_token
+@@ -663,13 +662,11 @@ inline bool check_image(const node* nodes, std::size_t count, const unsigned cha
+     throw_parse_error(exception_id::invalid_document_image, concat("invalid json_document image: ", what));
+ }
+ 
++#if NLOHMANN_VIEW_LITTLE_ENDIAN // (the image format is little-endian: no load() elsewhere)
+ /// Read an image into d. The text and the decoded strings stay in the image;
+ /// the nodes are copied (so that they are aligned, and edits can change them).
+ inline void load_image(document_data& d, const std::uint8_t* image, std::size_t size, image_check check)
+ {
+-#if !NLOHMANN_VIEW_LITTLE_ENDIAN
+-    throw_type_error(exception_id::document_image_unsupported, "json_document images need a little-endian target"); // LCOV_EXCL_LINE
+-#endif
+     if (image == nullptr || size < sizeof(image_header))
+     {
+         throw_invalid_image("too short");
+@@ -738,6 +735,7 @@ inline void load_image(document_data& d, const std::uint8_t* image, std::size_t
+     std::vector<std::uint32_t>().swap(d.large_objects); // (only needed while building)
+     d.discarded = false;
+ }
++#endif
+ 
+ }  // namespace view
+ }  // namespace detail
+diff --git a/include/nlohmann/json_view.hpp b/include/nlohmann/json_view.hpp
+index 42a8cb99e..79c9b8dde 100644
+--- a/include/nlohmann/json_view.hpp
++++ b/include/nlohmann/json_view.hpp
+@@ -1191,6 +1191,10 @@ class basic_json_document
+     /// how load() checks an image (full, bounds, or none)
+     using image_check = detail::view::image_check;
+ 
++#if NLOHMANN_VIEW_LITTLE_ENDIAN
++    // (the image format is little-endian: big-endian targets have no save()
++    // and load(), so that a call fails to compile instead of always throwing)
++
+     /// The document as an image that load() reads without parsing: the node
+     /// index, the text, and the decoded strings. An edited document is
+     /// written in its current state (floats that are not finite become null,
+@@ -1232,6 +1236,7 @@ class basic_json_document
+         detail::view::load_image(*d.m_data, d.m_data->owned_image.data(), d.m_data->owned_image.size(), check);
+         return d;
+     }
++#endif
+ 
+     ///////////
+     // edits //
+```
+
+# Programs to repair
+
+## gen_22.cpp (compile)
+Intent: Verify basic parsing and dumping of json_document on the target architecture.
+COMPILE ERROR. The program fails to compile, the same way against the old and the new library. Fix the error (wrong or missing include, typo, misuse of the public API) and keep the intent: the call under test must stay. Include only headers that exist; if you are unsure a header exists, use the library's main header.
+Compiler errors:
+```
+gen_22.cpp:10:28: error: conversion from ‘nlohmann::json_abi_v3_12_0::basic_json_document<nlohmann::json_abi_v3_12_0::basic_json<>, nlohmann::json_abi_v3_12_0::view_mode::read_only>’ to non-scalar type ‘nlohmann::json_abi_v3_12_0::json’ {aka ‘nlohmann::json_abi_v3_12_0::basic_json<>’} requested
+```
+Source:
+```cpp
+#include <nlohmann/json.hpp>
+#include <nlohmann/json_view.hpp>
+#include <iostream>
+
+int main() {
+    try {
+        auto doc = nlohmann::json_document::parse("{\"key\": 42}");
+        nlohmann::json j = doc;
+        std::cout << j.dump() << "\n";
+    } catch (const std::exception& e) {
+        std::cout << "Error: " << e.what() << "\n";
+    }
+}
+```
+
+## gen_23.cpp (compile)
+Intent: Check basic construction of a json_document and type querying.
+COMPILE ERROR. The program fails to compile, the same way against the old and the new library. Fix the error (wrong or missing include, typo, misuse of the public API) and keep the intent: the call under test must stay. Include only headers that exist; if you are unsure a header exists, use the library's main header.
+Compiler errors:
+```
+gen_23.cpp:9:24: error: conversion from ‘nlohmann::json_abi_v3_12_0::json_document’ {aka ‘nlohmann::json_abi_v3_12_0::basic_json_document<nlohmann::json_abi_v3_12_0::basic_json<>, nlohmann::json_abi_v3_12_0::view_mode::read_only>’} to non-scalar type ‘nlohmann::json_abi_v3_12_0::json’ {aka ‘nlohmann
+```
+Source:
+```cpp
+#include <nlohmann/json.hpp>
+#include <nlohmann/json_view.hpp>
+#include <iostream>
+
+int main() {
+    nlohmann::json_document doc = nlohmann::json_document::parse("null");
+    nlohmann::json j = doc;
+    std::cout << j.is_null() << "\n";
+}
+```
+
+## gen_26.cpp (compile)
+Intent: Check exception definition and enum values related to document image unsupported.
+COMPILE ERROR. The program fails to compile, the same way against the old and the new library. Fix the error (wrong or missing include, typo, misuse of the public API) and keep the intent: the call under test must stay. Include only headers that exist; if you are unsure a header exists, use the library's main header.
+Compiler errors:
+```
+gen_26.cpp:8:55: error: ‘nlohmann::json_abi_v3_12_0::detail::type_error::type_error(int, const char*)’ is private within this context
+8 |     nlohmann::json::type_error err(320, "test message");
+350 |     type_error(int id_, const char* what_arg) : exception(id_, what_arg) {}
+```
+Source:
+```cpp
+#include <nlohmann/json.hpp>
+#include <nlohmann/json_view.hpp>
+#include <iostream>
+
+int main() {
+    nlohmann::json::type_error err(320, "test message");
+    std::cout << err.id << " " << err.what() << "\n";
+}
+```
+
+## gen_27.cpp (compile)
+Intent: Observe behavior of set() or editing operations on json_document.
+COMPILE ERROR. The program fails to compile, the same way against the old and the new library. Fix the error (wrong or missing include, typo, misuse of the public API) and keep the intent: the call under test must stay. Include only headers that exist; if you are unsure a header exists, use the library's main header.
+Compiler errors:
+```
+gen_27.cpp:10:28: error: conversion from ‘nlohmann::json_abi_v3_12_0::basic_json_document<nlohmann::json_abi_v3_12_0::basic_json<>, nlohmann::json_abi_v3_12_0::view_mode::read_only>’ to non-scalar type ‘nlohmann::json_abi_v3_12_0::json’ {aka ‘nlohmann::json_abi_v3_12_0::basic_json<>’} requested
+```
+Source:
+```cpp
+#include <nlohmann/json.hpp>
+#include <nlohmann/json_view.hpp>
+#include <iostream>
+
+int main() {
+    try {
+        auto doc = nlohmann::json_document::parse("true");
+        nlohmann::json j = doc;
+        std::cout << j.dump() << "\n";
+    } catch (const std::exception& e) {
+        std::cout << "Exception: " << e.what() << "\n";
+    }
+}
+```
+
+## gen_29.cpp (compile)
+Intent: Check dumping of an empty default-constructed json_document.
+COMPILE ERROR. The program fails to compile, the same way against the old and the new library. Fix the error (wrong or missing include, typo, misuse of the public API) and keep the intent: the call under test must stay. Include only headers that exist; if you are unsure a header exists, use the library's main header.
+Compiler errors:
+```
+gen_29.cpp:9:24: error: conversion from ‘nlohmann::json_abi_v3_12_0::json_document’ {aka ‘nlohmann::json_abi_v3_12_0::basic_json_document<nlohmann::json_abi_v3_12_0::basic_json<>, nlohmann::json_abi_v3_12_0::view_mode::read_only>’} to non-scalar type ‘nlohmann::json_abi_v3_12_0::json’ {aka ‘nlohmann
+```
+Source:
+```cpp
+#include <nlohmann/json.hpp>
+#include <nlohmann/json_view.hpp>
+#include <iostream>
+
+int main() {
+    nlohmann::json_document doc = nlohmann::json_document::parse("null");
+    nlohmann::json j = doc;
+    std::cout << j.dump() << "\n";
+}
+```
+
+## gen_30.cpp (compile)
+Intent: Parse and dump complex nested JSON via json_document.
+COMPILE ERROR. The program fails to compile, the same way against the old and the new library. Fix the error (wrong or missing include, typo, misuse of the public API) and keep the intent: the call under test must stay. Include only headers that exist; if you are unsure a header exists, use the library's main header.
+Compiler errors:
+```
+gen_30.cpp:11:28: error: conversion from ‘nlohmann::json_abi_v3_12_0::basic_json_document<nlohmann::json_abi_v3_12_0::basic_json<>, nlohmann::json_abi_v3_12_0::view_mode::read_only>’ to non-scalar type ‘nlohmann::json_abi_v3_12_0::json’ {aka ‘nlohmann::json_abi_v3_12_0::basic_json<>’} requested
+```
+Source:
+```cpp
+#include <nlohmann/json.hpp>
+#include <nlohmann/json_view.hpp>
+#include <iostream>
+
+int main() {
+    try {
+        std::string json_str = "{\"a\": [1, 2, {\"b\": null}]}";
+        auto doc = nlohmann::json_document::parse(json_str);
+        nlohmann::json j = doc;
+        std::cout << j.dump() << "\n";
+    } catch (const std::exception& e) {
+        std::cout << "Error: " << e.what() << "\n";
+    }
+}
+```
+
+## gen_31.cpp (compile)
+Intent: Parse various numeric types with json_document and dump them.
+COMPILE ERROR. The program fails to compile, the same way against the old and the new library. Fix the error (wrong or missing include, typo, misuse of the public API) and keep the intent: the call under test must stay. Include only headers that exist; if you are unsure a header exists, use the library's main header.
+Compiler errors:
+```
+gen_31.cpp:10:28: error: conversion from ‘nlohmann::json_abi_v3_12_0::basic_json_document<nlohmann::json_abi_v3_12_0::basic_json<>, nlohmann::json_abi_v3_12_0::view_mode::read_only>’ to non-scalar type ‘nlohmann::json_abi_v3_12_0::json’ {aka ‘nlohmann::json_abi_v3_12_0::basic_json<>’} requested
+```
+Source:
+```cpp
+#include <nlohmann/json.hpp>
+#include <nlohmann/json_view.hpp>
+#include <iostream>
+
+int main() {
+    try {
+        auto doc = nlohmann::json_document::parse("[-42, 3.14159, 1e10]");
+        nlohmann::json j = doc;
+        std::cout << j.dump() << "\n";
+    } catch (const std::exception& e) {
+        std::cout << "Error: " << e.what() << "\n";
+    }
+}
+```
+
+## gen_32.cpp (compile)
+Intent: Verify parsing of booleans and strings using json_document.
+COMPILE ERROR. The program fails to compile, the same way against the old and the new library. Fix the error (wrong or missing include, typo, misuse of the public API) and keep the intent: the call under test must stay. Include only headers that exist; if you are unsure a header exists, use the library's main header.
+Compiler errors:
+```
+gen_32.cpp:10:28: error: conversion from ‘nlohmann::json_abi_v3_12_0::basic_json_document<nlohmann::json_abi_v3_12_0::basic_json<>, nlohmann::json_abi_v3_12_0::view_mode::read_only>’ to non-scalar type ‘nlohmann::json_abi_v3_12_0::json’ {aka ‘nlohmann::json_abi_v3_12_0::basic_json<>’} requested
+```
+Source:
+```cpp
+#include <nlohmann/json.hpp>
+#include <nlohmann/json_view.hpp>
+#include <iostream>
+
+int main() {
+    try {
+        auto doc = nlohmann::json_document::parse("{\"t\": true, \"f\": false, \"s\": \"hello\"}");
+        nlohmann::json j = doc;
+        std::cout << j.dump() << "\n";
+    } catch (const std::exception& e) {
+        std::cout << "Error: " << e.what() << "\n";
+    }
+}
+```
+
+## gen_33.cpp (compile)
+Intent: Ensure invalid JSON throws parse error when parsing into json_document.
+COMPILE ERROR. The program fails to compile, the same way against the old and the new library. Fix the error (wrong or missing include, typo, misuse of the public API) and keep the intent: the call under test must stay. Include only headers that exist; if you are unsure a header exists, use the library's main header.
+Compiler errors:
+```
+gen_33.cpp:10:28: error: conversion from ‘nlohmann::json_abi_v3_12_0::basic_json_document<nlohmann::json_abi_v3_12_0::basic_json<>, nlohmann::json_abi_v3_12_0::view_mode::read_only>’ to non-scalar type ‘nlohmann::json_abi_v3_12_0::json’ {aka ‘nlohmann::json_abi_v3_12_0::basic_json<>’} requested
+```
+Source:
+```cpp
+#include <nlohmann/json.hpp>
+#include <nlohmann/json_view.hpp>
+#include <iostream>
+
+int main() {
+    try {
+        auto doc = nlohmann::json_document::parse("{invalid json}");
+        nlohmann::json j = doc;
+        std::cout << j.dump() << "\n";
+    } catch (const nlohmann::json::parse_error& e) {
+        std::cout << "Caught parse_error id: " << e.id << "\n";
+    } catch (const std::exception& e) {
+        std::cout << "Caught exception: " << e.what() << "\n";
+    }
+}
+```
+
+## gen_34.cpp (compile)
+Intent: Check if json_document provides basic iterator types or methods.
+COMPILE ERROR. The program fails to compile, the same way against the old and the new library. Fix the error (wrong or missing include, typo, misuse of the public API) and keep the intent: the call under test must stay. Include only headers that exist; if you are unsure a header exists, use the library's main header.
+Compiler errors:
+```
+gen_34.cpp:10:28: error: conversion from ‘nlohmann::json_abi_v3_12_0::basic_json_document<nlohmann::json_abi_v3_12_0::basic_json<>, nlohmann::json_abi_v3_12_0::view_mode::read_only>’ to non-scalar type ‘nlohmann::json_abi_v3_12_0::json’ {aka ‘nlohmann::json_abi_v3_12_0::basic_json<>’} requested
+```
+Source:
+```cpp
+#include <nlohmann/json.hpp>
+#include <nlohmann/json_view.hpp>
+#include <iostream>
+
+int main() {
+    try {
+        auto doc = nlohmann::json_document::parse("[10, 20, 30]");
+        nlohmann::json j = doc;
+        std::cout << j.size() << "\n";
+    } catch (const std::exception& e) {
+        std::cout << "Error: " << e.what() << "\n";
+    }
+}
+```
+
+# Task
+Return JSON with a "fixes" array: one item per program above, with "file" (exactly as given) and "code" (the complete repaired program, standalone, with its own int main). Do not return programs you cannot repair.

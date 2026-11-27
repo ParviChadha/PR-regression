@@ -1,0 +1,236 @@
+[system]
+You write test programs that probe a C++ library for behavioral changes made by one pull request.
+Each program is compiled and run twice, once against the library before the change and once after, and the two
+outputs are compared. Your job is to produce programs whose output reveals whether the change altered behavior,
+including side effects the author did not intend.
+
+Rules for every program:
+- It is standalone: one file with its own int main(), compiled as C++17, printing results to stdout.
+- Use only the library's documented public API. Never include internal headers or use detail/impl namespaces,
+  private members or undocumented macros.
+- Do not judge results (no assert, no expected-value comparisons): just print what the library returns. Print
+  enough to make differences visible, one fact per line.
+- Output must be deterministic. Never print pointers or addresses, uninitialized data, the order of
+  hash-based containers, timings, thread ids, random values, file paths or environment data. Print floating point
+  values with an explicit precision. No input, files, network, threads, clocks or randomness.
+- Wrap calls that may throw in try/catch and print the exception's type and message, so an exception is an
+  observable result. Do not crash on purpose.
+- Aim at the code the diff changes. Prefer calls that compile against both the old and the new library; one or two
+  programs may use an API the PR adds. Cover ordinary inputs and edge cases (empty, minimum and maximum values,
+  boundaries, special values, nesting, unusual types) and also neighbouring behavior the change could disturb.
+- When the diff changes which types or inputs an API accepts or rejects (constraints, overloads, traits,
+  conversions), test it with the detection idiom (std::void_t or requires) and `if constexpr`, so the program
+  compiles against both versions, prints whether the expression is well-formed, and exercises it when it is.
+  Accepting an input is not enough: also use it through every entry point that should follow (const and
+  non-const, read, write, insert, erase, lookup, nested use), because a change that admits new inputs can leave
+  later code unable to handle them.
+- If the changed code is internal (a detail, impl or internal namespace, a trait, a helper), do not name it in the
+  program. Reach it through the public API that depends on it, using detection (as above) where needed.
+- Use the exact types and values the diff is about (the new trait's argument types, the new overload's
+  parameters), not stand-ins.
+- Spread the programs over distinct public entry points and overloads, one main idea per program. Do not write
+  several programs that only rename a type or change a literal.
+- Make the programs differ from each other: different inputs, different entry points, different features.
+
+Rules specific to this library:
+- Include the library with #include <nlohmann/json.hpp>. The public API is nlohmann::json (nlohmann::basic_json), nlohmann::ordered_json, json_pointer, json patch/merge_patch and the documented SAX and conversion interfaces. Never use the detail namespace.
+- It is a header-only library: nothing to link. Programs are compiled as C++17.
+- Print JSON values with dump() (compact) or dump(2). Keys of nlohmann::json objects print in sorted order, so output is deterministic; do not depend on insertion order except with ordered_json.
+
+[user]
+# Pull request #5931: Read BJData ND-arrays of float16, restrict ND-array char to 0..127, correct BJData docs
+
+## Description
+## Summary
+- Reading an ND-array with element type `h` (`[$h#[$U#U 2 2 …`) threw `parse_error.112` with a misleading byte; it is now read (`_ArrayType_: "half"`). The writer still does not pack `half` (a plain object that reads back equal). Verified against numpy float16 for all 65536 bit patterns and pybj.
+- BJData Draft 2 and 3 limit `C` to 0..127. ND-arrays with `_ArrayType_: "char"` wrote and accepted larger values. The writer now packs only 0..127 (other data falls back to a plain object that round-trips equal); the reader rejects `C` > 127 with `parse_error.113`, like the 1-D reader.
+- Docs: unused markers, ND example (3×2), ND packing conditions, `byte`/binary rules, `H`, supported drafts, Draft 4 and column-major as unsupported, duplicate keys, Draft-3 links, `$` requires `#`, new `bjdata_version_t` API page with example, `parse_error.115`, `out_of_range.408`, `other_error.502`, binary values pages.
+
+## Breaking changes
+No API or ABI change. Two edge-case behaviour changes: ND-arrays of `h` can now be read (they threw before); ND `char` data above 127 is no longer written as packed `C` (a plain object is written instead), and a packed ND `C` array containing a byte above 127 is now rejected with `parse_error.113` instead of being returned. Such streams are invalid under both drafts and rejected by pybj, but a stream written by an earlier version of this library could contain them.
+
+Not covered: column-major ND-arrays, packing `half`, Draft 4.
+
+## Stack
+This PR is part of a stack of six PRs from a review of the binary formats against their specifications and other implementations (CBOR → MessagePack → UBJSON → BSON → BJData → BON8). Please merge in that order.
+
+🤖 Generated with [Claude Code](https://claude.com/claude-code)
+
+## Commit message
+* Read ND-arrays of half floats and enforce the char limit in ND-arrays
+
+BJData N-dimensional arrays with element type 'h' (float16) failed to
+read with a misleading parse_error.112, because the reader's dtype name
+table lacked 'h'. It now maps to "half", the JData name. The writer still
+does not pack "half"; such an object is written as a plain object and
+reads back equal.
+
+BJData limits 'C' (char) to 0..127 in Draft 2 and Draft 3, and the 1-D
+reader enforces this, but ND-arrays with _ArrayType_ "char" wrote values
+up to 255 as 'C' elements and read them back without a check. The writer
+now only packs values in 0..127 (others fall back to a plain object that
+round-trips), and the reader rejects 'C' elements above 127 with
+parse_error.113 like the 1-D reader.
+
+Signed-off-by: Niels Lohmann <mail@nlohmann.me>
+
+* docs: correct and complete the BJData documentation
+
+Verify the BJData chapter against the library and the Draft 2/3/4
+specifications and fix what did not match:
+
+- bjdata.md: correct the list of unused markers (N, not Z), the ND-array
+  example (3x2, not 2x3), the conditions under which an object is packed
+  as an ND-array (exactly three keys, row vectors, float-only elements for
+  single/double, char 0..127, byte only in Draft 3), the binary table row
+  and notes (which flag/draft combinations write [$B), the "$" type
+  restriction (Draft 3, Z is excluded too), the H marker in the
+  deserialization table, and the claim of a complete deserialization
+  mapping. Document the supported drafts, that Draft 4 (SoA containers,
+  extension type E) and column-major ND-arrays are rejected, ND-arrays of
+  half floats, duplicate object keys, and link the Draft 3 specifications
+  instead of master.
+- Add an API page for basic_json::bjdata_version_t with an example, and
+  link it from the nav, the API index and to_bjdata.
+- Update binary_formats/index.md and binary_values.md, which still claimed
+  that BJData has no binary type, and fix a wrong byte comment there.
+- Docume
+[... truncated, 1138 more characters]
+
+## Diff of the library source (before -> after)
+```diff
+diff --git a/include/nlohmann/detail/input/binary_reader.hpp b/include/nlohmann/detail/input/binary_reader.hpp
+index b44fd868c..9ed0e4d1b 100644
+--- a/include/nlohmann/detail/input/binary_reader.hpp
++++ b/include/nlohmann/detail/input/binary_reader.hpp
+@@ -3277,6 +3277,8 @@ class binary_reader
+             // get_ubjson_size_value() (the type marker is known before the dimension vector
+             // that determines size_and_type.first is read, so it is emitted first there to
+             // match the documented _ArrayType_, _ArraySize_, _ArrayData_ key order)
++            // 'C' elements are read as unsigned bytes, but BJData limits a char to 0..127
++            const bool nd_is_char = size_and_type.second == 'C';
+             if (size_and_type.second == 'C' || size_and_type.second == 'B')
+             {
+                 size_and_type.second = 'U';
+@@ -3290,6 +3292,24 @@ class binary_reader
+ 
+             for (std::size_t i = 0; i < size_and_type.first; ++i)
+             {
++                if (nd_is_char)
++                {
++                    get();
++                    if (JSON_HEDLEY_UNLIKELY(!unexpect_eof("char")))
++                    {
++                        return false;
++                    }
++                    if (JSON_HEDLEY_UNLIKELY(current > 127))
++                    {
++                        return last_byte_error(exception_id::invalid_string_or_size, "byte after 'C' must be in range 0x00..0x7F", "char", "");
++                    }
++                    if (JSON_HEDLEY_UNLIKELY(!sax->number_unsigned(static_cast<number_unsigned_t>(current))))
++                    {
++                        return false;
++                    }
++                    continue;
++                }
++
+                 if (JSON_HEDLEY_UNLIKELY(!get_ubjson_value(size_and_type.second)))
+                 {
+                     return false;
+@@ -4655,6 +4675,8 @@ class binary_reader
+                 return "uint8";
+             case 'd':
+                 return "single";
++            case 'h':
++                return "half";
+             case 'i':
+                 return "int8";
+             case 'l':
+diff --git a/include/nlohmann/detail/output/binary_writer.hpp b/include/nlohmann/detail/output/binary_writer.hpp
+index d8b3e7162..8732e52b4 100644
+--- a/include/nlohmann/detail/output/binary_writer.hpp
++++ b/include/nlohmann/detail/output/binary_writer.hpp
+@@ -3848,7 +3848,7 @@ class binary_writer
+     A C++11 `constexpr` function cannot contain a `switch`, so this is a plain
+     comparison chain instead; it is only reached once per ND-array candidate
+     object. Keep in sync with binary_reader's `bjd_type_name()`, which maps
+-    the other way.
++    the other way (it also reads "half", which is never written).
+     */
+     static CharType bjdata_ndarray_type_marker(const string_t& name)
+     {
+@@ -4056,10 +4056,13 @@ class binary_writer
+             switch (dtype)
+             {
+                 case 'U':
+-                case 'C':
+                 case 'B':
+                     ok = write_bjdata_ndarray_element<std::uint8_t>(el, dry_run);
+                     break;
++                case 'C':
++                    // BJData limits a char to 0..127 (the intersection of the int8 and uint8 ranges)
++                    ok = bjdata_ndarray_value_in_range<std::int8_t>(el) && bjdata_ndarray_value_in_range<std::uint8_t>(el);
++                    break;
+                 case 'i':
+                     ok = write_bjdata_ndarray_element<std::int8_t>(el, dry_run);
+                     break;
+```
+
+# Programs to repair
+
+## gen_06.cpp (compile)
+Intent: Verify basic_json::bjdata_version_t usage and serialization compatibility.
+COMPILE ERROR. The program fails to compile, the same way against the old and the new library. Fix the error (wrong or missing include, typo, misuse of the public API) and keep the intent: the call under test must stay. Include only headers that exist; if you are unsure a header exists, use the library's main header.
+Compiler errors:
+```
+gen_06.cpp:8:82: error: ‘draft_3’ is not a member of ‘nlohmann::json_abi_v3_12_0::basic_json<>::bjdata_version_t’ {aka ‘nlohmann::json_abi_v3_12_0::detail::bjdata_version_t’}; did you mean ‘draft3’?
+```
+Source:
+```cpp
+#include <nlohmann/json.hpp>
+#include <iostream>
+
+int main() {
+    try {
+        nlohmann::json::bjdata_version_t ver = nlohmann::json::bjdata_version_t::draft_3;
+        nlohmann::json j = {{"version", static_cast<int>(ver)}};
+        auto v = nlohmann::json::to_bjdata(j);
+        auto rt = nlohmann::json::from_bjdata(v);
+        std::cout << rt.dump() << std::endl;
+    } catch (const std::exception& e) {
+        std::cout << e.what() << std::endl;
+    }
+}
+```
+
+## gen_20.cpp (compile)
+Intent: Verify general BJData roundtripping for basic boolean and numeric types.
+COMPILE ERROR. The program fails to compile, the same way against the old and the new library. Fix the error (wrong or missing include, typo, misuse of the public API) and keep the intent: the call under test must stay. Include only headers that exist; if you are unsure a header exists, use the library's main header.
+Compiler errors:
+```
+gen_20.cpp:16:22: error: ‘roundrip’ was not declared in this scope; did you mean ‘roundtrip’?
+```
+Source:
+```cpp
+#include <nlohmann/json.hpp>
+#include <iostream>
+
+int main() {
+    try {
+        nlohmann::json j = {
+            {"bool_val", true},
+            {"int_val", -42},
+            {"float_val", 3.14},
+            {"string_val", "bjdata"}
+        };
+        auto v = nlohmann::json::to_bjdata(j);
+        auto roundtrip = nlohmann::json::from_bjdata(v);
+        std::cout << roundrip.dump() << std::endl;
+    } catch (const std::exception& e) {
+        std::cout << e.what() << std::endl;
+    }
+}
+```
+
+# Task
+Return JSON with a "fixes" array: one item per program above, with "file" (exactly as given) and "code" (the complete repaired program, standalone, with its own int main). Do not return programs you cannot repair.

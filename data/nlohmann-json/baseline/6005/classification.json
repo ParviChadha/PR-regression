@@ -1,0 +1,93 @@
+{
+  "target": "nlohmann-json",
+  "pr": 6005,
+  "model": "gemini-3.5-flash-lite",
+  "prompt_sha256": "05572ca8dfada570977e6ad299984ec75115eccde9204a653d99bab7ac952b0e",
+  "results_sha256": "1aaba53351ed7ca3cc0290e1c29794d28450e87fbcfab8acffb319fcd63c4f85",
+  "clusters": [
+    {
+      "id": "C1",
+      "status": "compile_diff",
+      "failed_on": "new",
+      "programs": [
+        "gen_01.cpp",
+        "gen_02.cpp",
+        "gen_03.cpp",
+        "gen_04.cpp",
+        "gen_05.cpp",
+        "gen_10.cpp",
+        "gen_11.cpp",
+        "gen_12.cpp",
+        "gen_13.cpp",
+        "gen_14.cpp",
+        "gen_15.cpp",
+        "gen_17.cpp",
+        "gen_18.cpp",
+        "gen_19.cpp",
+        "gen_20.cpp"
+      ],
+      "verdict": "unintended",
+      "confidence": "high",
+      "reason": "The PR removed the `null_result` parameter from `JSON_IMPLEMENT_OPERATOR`, but the macro body still references it at line 5441 for same-type scalar comparisons, breaking ordinary comparisons like `a == b`."
+    },
+    {
+      "id": "C2",
+      "status": "compile_diff",
+      "failed_on": "both",
+      "programs": [
+        "gen_06.cpp",
+        "gen_07.cpp",
+        "gen_08.cpp",
+        "gen_09.cpp"
+      ],
+      "verdict": "unintended",
+      "confidence": "high",
+      "reason": "Same-type scalar comparisons fail to compile due to the missing `null_result` macro parameter referenced in the library headers."
+    },
+    {
+      "id": "C3",
+      "status": "compile_diff",
+      "failed_on": "both",
+      "programs": [
+        "gen_16.cpp"
+      ],
+      "verdict": "unintended",
+      "confidence": "high",
+      "reason": "Compilation fails inside the library headers due to the missing `null_result` macro parameter when compiling basic json operations."
+    }
+  ],
+  "clusters_not_shown": 0,
+  "counts": {
+    "same": 0,
+    "invalid": 0,
+    "flaky": 0,
+    "superseded": 0,
+    "missing": 0
+  },
+  "pr_verdict": {
+    "regression_candidate": true,
+    "unintended_clusters": [
+      "C1",
+      "C2",
+      "C3"
+    ]
+  },
+  "usage": {
+    "promptTokenCount": 6837,
+    "candidatesTokenCount": 227,
+    "totalTokenCount": 7064,
+    "trafficType": "ON_DEMAND",
+    "promptTokensDetails": [
+      {
+        "modality": "TEXT",
+        "tokenCount": 6837
+      }
+    ],
+    "candidatesTokensDetails": [
+      {
+        "modality": "TEXT",
+        "tokenCount": 227
+      }
+    ]
+  }
+}

@@ -1,18 +1,138 @@
 {
   "target": "nlohmann-json",
   "pr": 6075,
-  "model": null,
-  "clusters": [],
+  "model": "gemini-3.5-flash-lite",
+  "prompt_sha256": "4e9a48e8d38e99ded890d8cada7a1d70e54c8e43f125e917a29bc43d5c723494",
+  "results_sha256": "e8cb96bb1697b88c15c917f809c4454cccb86af4d3e2b088ad08652a49a82bbf",
+  "clusters": [
+    {
+      "id": "C1",
+      "status": "output_diff",
+      "failed_on": null,
+      "programs": [
+        "gen_22.cpp"
+      ],
+      "verdict": "intended",
+      "confidence": "high",
+      "reason": "The PR adds a from_json overload for std::u8string that reads a JSON string, allowing it to be correctly deserialized instead of throwing type_error."
+    },
+    {
+      "id": "C2",
+      "status": "output_diff",
+      "failed_on": null,
+      "programs": [
+        "gen_24.cpp"
+      ],
+      "verdict": "intended",
+      "confidence": "high",
+      "reason": "The error message was updated to include 'string' alongside 'array' when rejecting invalid types during std::u8string deserialization."
+    },
+    {
+      "id": "C3",
+      "status": "output_diff",
+      "failed_on": null,
+      "programs": [
+        "gen_28.cpp"
+      ],
+      "verdict": "intended",
+      "confidence": "high",
+      "reason": "The PR enables std::u8string to round-trip via get_to() successfully by storing and reading it as a JSON string."
+    },
+    {
+      "id": "C4",
+      "status": "output_diff",
+      "failed_on": null,
+      "programs": [
+        "gen_31.cpp"
+      ],
+      "verdict": "intended",
+      "confidence": "high",
+      "reason": "Storing a std::u8string containing embedded NUL bytes now correctly produces a JSON string that preserves size and content on recovery."
+    },
+    {
+      "id": "C5",
+      "status": "output_diff",
+      "failed_on": null,
+      "programs": [
+        "gen_36.cpp"
+      ],
+      "verdict": "intended",
+      "confidence": "high",
+      "reason": "Deserializing large std::u8string instances from JSON strings now succeeds correctly."
+    },
+    {
+      "id": "C6",
+      "status": "output_diff",
+      "failed_on": null,
+      "programs": [
+        "gen_42.cpp"
+      ],
+      "verdict": "intended",
+      "confidence": "high",
+      "reason": "JSON pointers accessing a std::u8string correctly return a string value that can be read back as std::u8string."
+    },
+    {
+      "id": "C7",
+      "status": "output_diff",
+      "failed_on": null,
+      "programs": [
+        "gen_47.cpp"
+      ],
+      "verdict": "intended",
+      "confidence": "high",
+      "reason": "The new direct from_json overload successfully reads a std::u8string from the JSON string created by the updated to_json function."
+    },
+    {
+      "id": "C8",
+      "status": "output_diff",
+      "failed_on": null,
+      "programs": [
+        "gen_49.cpp"
+      ],
+      "verdict": "intended",
+      "confidence": "high",
+      "reason": "Round-tripping a std::u8string through json now succeeds as intended by the PR description."
+    },
+    {
+      "id": "C9",
+      "status": "output_diff",
+      "failed_on": null,
+      "programs": [
+        "gen_55.cpp"
+      ],
+      "verdict": "intended",
+      "confidence": "high",
+      "reason": "Using adl_serializer to convert a std::u8string to and from JSON now works properly in both directions."
+    }
+  ],
+  "clusters_not_shown": 0,
   "counts": {
-    "same": 25,
-    "invalid": 0,
+    "same": 13,
+    "invalid": 3,
     "flaky": 0,
-    "superseded": 0,
+    "superseded": 30,
     "missing": 0
   },
-  "results_sha256": "538066d314fe7a50d66a637d8db068de1a3e7be68ec67dc2efbf154ba2111b2e",
   "pr_verdict": {
     "regression_candidate": false,
     "unintended_clusters": []
+  },
+  "usage": {
+    "promptTokenCount": 9729,
+    "candidatesTokenCount": 584,
+    "totalTokenCount": 10313,
+    "trafficType": "ON_DEMAND",
+    "promptTokensDetails": [
+      {
+        "modality": "TEXT",
+        "tokenCount": 9729
+      }
+    ],
+    "candidatesTokensDetails": [
+      {
+        "modality": "TEXT",
+        "tokenCount": 584
+      }
+    ]
   }
 }

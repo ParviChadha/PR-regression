@@ -1,0 +1,163 @@
+{
+  "target": "nlohmann-json",
+  "pr": 6075,
+  "model": "gemini-3.5-flash-lite",
+  "prompt_sha256": "481693dfc3cc40bb1ffbdbf568c219ab06a09b4c70d7a060a8635f3ffe9bd704",
+  "n_requested": 20,
+  "std": "c++20",
+  "dropped": 0,
+  "variant": "baseline",
+  "usage": {
+    "promptTokenCount": 4179,
+    "candidatesTokenCount": 4483,
+    "totalTokenCount": 8662,
+    "trafficType": "ON_DEMAND",
+    "promptTokensDetails": [
+      {
+        "modality": "TEXT",
+        "tokenCount": 4179
+      }
+    ],
+    "candidatesTokensDetails": [
+      {
+        "modality": "TEXT",
+        "tokenCount": 4483
+      }
+    ]
+  },
+  "tests": [
+    {
+      "file": "gen_01.cpp",
+      "name": "u8string_to_json_basic",
+      "intent": "Verify that std::u8string converts to a JSON string type.",
+      "round": 0
+    },
+    {
+      "file": "gen_02.cpp",
+      "name": "u8string_from_json_string",
+      "intent": "Verify that a JSON string can be read into a std::u8string.",
+      "round": 0
+    },
+    {
+      "file": "gen_03.cpp",
+      "name": "u8string_from_json_array_fallback",
+      "intent": "Verify that legacy JSON array of code units can still be read into std::u8string.",
+      "round": 0
+    },
+    {
+      "file": "gen_04.cpp",
+      "name": "u8string_from_json_invalid_type",
+      "intent": "Verify that reading a non-string/non-array JSON type into std::u8string throws type_error.",
+      "round": 0
+    },
+    {
+      "file": "gen_05.cpp",
+      "name": "u8string_embedded_nul",
+      "intent": "Verify that std::u8string containing embedded NUL characters round-trips correctly through JSON string.",
+      "round": 0
+    },
+    {
+      "file": "gen_06.cpp",
+      "name": "u8string_in_container",
+      "intent": "Verify that std::u8string nested inside a std::vector serializes as strings instead of arrays.",
+      "round": 0
+    },
+    {
+      "file": "gen_07.cpp",
+      "name": "u8string_in_map_key",
+      "intent": "Verify that std::u8string can be used as a map key via standard conversions.",
+      "round": 0
+    },
+    {
+      "file": "gen_08.cpp",
+      "name": "u8string_ordered_json",
+      "intent": "Verify std::u8string behavior with ordered_json containers.",
+      "round": 0
+    },
+    {
+      "file": "gen_09.cpp",
+      "name": "u8string_view_unchanged",
+      "intent": "Verify that std::u8string_view still produces an array of code units as before.",
+      "round": 0
+    },
+    {
+      "file": "gen_10.cpp",
+      "name": "char8_array_unchanged",
+      "intent": "Verify that raw char8_t arrays still produce arrays of code units.",
+      "round": 0
+    },
+    {
+      "file": "gen_11.cpp",
+      "name": "u8string_large_resize",
+      "intent": "Verify large std::u8string conversions relying on the resize/direct-indexing optimization path.",
+      "round": 0
+    },
+    {
+      "file": "gen_12.cpp",
+      "name": "u8string_optional_support",
+      "intent": "Verify std::optional containing std::u8string converts properly to a JSON string or null.",
+      "round": 0
+    },
+    {
+      "file": "gen_13.cpp",
+      "name": "u8string_pair_tuple",
+      "intent": "Verify std::pair and std::tuple containing std::u8string serialize to JSON strings correctly.",
+      "round": 0
+    },
+    {
+      "file": "gen_14.cpp",
+      "name": "u8string_const_pointer",
+      "intent": "Verify const char8_t* behavior versus std::u8string.",
+      "round": 0
+    },
+    {
+      "file": "gen_15.cpp",
+      "name": "u8string_empty_roundtrip",
+      "intent": "Verify that an empty std::u8string correctly serializes to an empty JSON string and back.",
+      "round": 0
+    },
+    {
+      "file": "gen_16.cpp",
+      "name": "u8string_to_json_pointer_access",
+      "intent": "Verify json_pointer lookup with values stored via std::u8string keys or values.",
+      "round": 0
+    },
+    {
+      "file": "gen_17.cpp",
+      "name": "u8string_patch_test",
+      "intent": "Verify JSON patch application involving std::u8string values.",
+      "round": 0,
+      "superseded_by": "gen_21.cpp"
+    },
+    {
+      "file": "gen_18.cpp",
+      "name": "u8string_merge_patch_test",
+      "intent": "Verify JSON merge patch handling of std::u8string values.",
+      "round": 0
+    },
+    {
+      "file": "gen_19.cpp",
+      "name": "u8string_sax_consumer",
+      "intent": "Verify SAX interface behavior when parsing data containing string types compatible with conversions.",
+      "round": 0
+    },
+    {
+      "file": "gen_20.cpp",
+      "name": "u8string_custom_allocator",
+      "intent": "Verify std::u8string with custom allocators converts correctly to and from JSON.",
+      "round": 0
+    },
+    {
+      "file": "gen_21.cpp",
+      "name": "u8string_patch_test_fixed",
+      "intent": "Verify JSON patch application involving std::u8string values.",
+      "round": 1,
+      "fixes": "gen_17.cpp",
+      "kind": "compile"
+    }
+  ],
+  "fix": {
+    "rounds_max": 2,
+    "model": "gemini-3.5-flash-lite"
+  }
+}

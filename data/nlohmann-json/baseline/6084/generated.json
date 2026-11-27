@@ -1,0 +1,424 @@
+{
+  "target": "nlohmann-json",
+  "pr": 6084,
+  "model": "gemini-3.5-flash-lite",
+  "prompt_sha256": "38f6d6d7d6ab7620dfc9db8b519eeda379b5e284b6572d8b2e7556110d38316c",
+  "n_requested": 20,
+  "std": "c++17",
+  "dropped": 0,
+  "variant": "baseline",
+  "usage": {
+    "promptTokenCount": 3178,
+    "candidatesTokenCount": 4749,
+    "totalTokenCount": 7927,
+    "trafficType": "ON_DEMAND",
+    "promptTokensDetails": [
+      {
+        "modality": "TEXT",
+        "tokenCount": 3178
+      }
+    ],
+    "candidatesTokensDetails": [
+      {
+        "modality": "TEXT",
+        "tokenCount": 4749
+      }
+    ]
+  },
+  "tests": [
+    {
+      "file": "gen_01.cpp",
+      "name": "load_view_valid_integer_token_in_float_node_rejected",
+      "intent": "Probe if json_document::load with image_check::full correctly rejects an image where a float node covers an integer token that fits 64 bits.",
+      "round": 0,
+      "superseded_by": "gen_21.cpp"
+    },
+    {
+      "file": "gen_02.cpp",
+      "name": "load_view_true_float_token_accepted",
+      "intent": "Probe if json_document::load with image_check::full successfully accepts a float node whose token actually contains a decimal fraction.",
+      "round": 0,
+      "superseded_by": "gen_22.cpp"
+    },
+    {
+      "file": "gen_03.cpp",
+      "name": "load_view_exponent_float_token_accepted",
+      "intent": "Probe if json_document::load with image_check::full successfully accepts a float node whose token contains an exponent indicator.",
+      "round": 0,
+      "superseded_by": "gen_23.cpp"
+    },
+    {
+      "file": "gen_04.cpp",
+      "name": "load_view_overflow_integer_token_float_node_accepted",
+      "intent": "Probe if json_document::load with image_check::full accepts a float node over an integer token that exceeds 64 bits and thus truly represents a float.",
+      "round": 0,
+      "superseded_by": "gen_24.cpp"
+    },
+    {
+      "file": "gen_05.cpp",
+      "name": "load_view_negative_boundary_int_fits",
+      "intent": "Probe image check behavior on a negative integer token fitting inside signed 64-bit lower bound.",
+      "round": 0,
+      "superseded_by": "gen_25.cpp"
+    },
+    {
+      "file": "gen_06.cpp",
+      "name": "load_view_minimal_check_mode",
+      "intent": "Probe if image_check::none bypasses the strict checks for mismatching float tokens and loaded integer bounds.",
+      "round": 0,
+      "superseded_by": "gen_26.cpp"
+    },
+    {
+      "file": "gen_07.cpp",
+      "name": "load_view_basic_json_document_create",
+      "intent": "Probe basic construction and round-trip serialization using json_document API.",
+      "round": 0,
+      "superseded_by": "gen_27.cpp"
+    },
+    {
+      "file": "gen_08.cpp",
+      "name": "load_view_integer_twenty_digits_fit",
+      "intent": "Probe image loading with an integer token of exactly 20 digits that is less than or equal to 18446744073709551615.",
+      "round": 0,
+      "superseded_by": "gen_28.cpp"
+    },
+    {
+      "file": "gen_09.cpp",
+      "name": "load_view_integer_twenty_digits_exceed",
+      "intent": "Probe image loading with an integer token of 20 digits exceeding 18446744073709551615.",
+      "round": 0,
+      "superseded_by": "gen_29.cpp"
+    },
+    {
+      "file": "gen_10.cpp",
+      "name": "load_view_negative_nineteen_digits_fit",
+      "intent": "Probe a negative 19-digit integer token within the limits of signed 64-bit integer values.",
+      "round": 0,
+      "superseded_by": "gen_30.cpp"
+    },
+    {
+      "file": "gen_11.cpp",
+      "name": "load_view_negative_nineteen_digits_overflow",
+      "intent": "Probe a negative 19-digit integer token exceeding the lower bound of signed 64-bit integers.",
+      "round": 0,
+      "superseded_by": "gen_31.cpp"
+    },
+    {
+      "file": "gen_12.cpp",
+      "name": "load_view_small_integer_node",
+      "intent": "Probe loading a simple small integer node with image_check::full.",
+      "round": 0,
+      "superseded_by": "gen_32.cpp"
+    },
+    {
+      "file": "gen_13.cpp",
+      "name": "load_view_float_nan_inf",
+      "intent": "Probe loading non-finite float numbers (NaN/Inf) through json_document images.",
+      "round": 0,
+      "superseded_by": "gen_33.cpp"
+    },
+    {
+      "file": "gen_14.cpp",
+      "name": "load_view_empty_array_object",
+      "intent": "Probe empty container roundtrip and loading via json_document.",
+      "round": 0,
+      "superseded_by": "gen_34.cpp"
+    },
+    {
+      "file": "gen_15.cpp",
+      "name": "load_view_deeply_nested_structure",
+      "intent": "Probe loading a deeply nested array structure via json_document image.",
+      "round": 0,
+      "superseded_by": "gen_35.cpp"
+    },
+    {
+      "file": "gen_16.cpp",
+      "name": "load_view_boolean_and_null_nodes",
+      "intent": "Probe loading booleans and null values in json_document images.",
+      "round": 0,
+      "superseded_by": "gen_36.cpp"
+    },
+    {
+      "file": "gen_17.cpp",
+      "name": "load_view_string_escaping",
+      "intent": "Probe loading strings with special escape sequences via json_document image.",
+      "round": 0,
+      "superseded_by": "gen_37.cpp"
+    },
+    {
+      "file": "gen_18.cpp",
+      "name": "json_view_element_access",
+      "intent": "Probe direct element access and viewing on loaded json_document.",
+      "round": 0,
+      "superseded_by": "gen_38.cpp"
+    },
+    {
+      "file": "gen_19.cpp",
+      "name": "load_view_multiple_floats_and_ints",
+      "intent": "Probe mixed arrays containing various float and integer representations under image_check::full.",
+      "round": 0,
+      "superseded_by": "gen_39.cpp"
+    },
+    {
+      "file": "gen_20.cpp",
+      "name": "load_view_too_many_digits_token",
+      "intent": "Probe loading an image where an integer token has more than 20 digits.",
+      "round": 0,
+      "superseded_by": "gen_40.cpp"
+    },
+    {
+      "file": "gen_21.cpp",
+      "name": "load_view_valid_integer_token_in_float_node_rejected_fixed",
+      "intent": "Probe if json_document::load with image_check::full correctly rejects an image where a float node covers an integer token that fits 64 bits.",
+      "round": 1,
+      "fixes": "gen_01.cpp",
+      "kind": "compile",
+      "superseded_by": "gen_41.cpp"
+    },
+    {
+      "file": "gen_22.cpp",
+      "name": "load_view_true_float_token_accepted_fixed",
+      "intent": "Probe if json_document::load with image_check::full successfully accepts a float node whose token actually contains a decimal fraction.",
+      "round": 1,
+      "fixes": "gen_02.cpp",
+      "kind": "compile",
+      "superseded_by": "gen_42.cpp"
+    },
+    {
+      "file": "gen_23.cpp",
+      "name": "load_view_exponent_float_token_accepted_fixed",
+      "intent": "Probe if json_document::load with image_check::full successfully accepts a float node whose token contains an exponent indicator.",
+      "round": 1,
+      "fixes": "gen_03.cpp",
+      "kind": "compile",
+      "superseded_by": "gen_43.cpp"
+    },
+    {
+      "file": "gen_24.cpp",
+      "name": "load_view_overflow_integer_token_float_node_accepted_fixed",
+      "intent": "Probe if json_document::load with image_check::full accepts a float node over an integer token that exceeds 64 bits and thus truly represents a float.",
+      "round": 1,
+      "fixes": "gen_04.cpp",
+      "kind": "compile",
+      "superseded_by": "gen_44.cpp"
+    },
+    {
+      "file": "gen_25.cpp",
+      "name": "load_view_negative_boundary_int_fits_fixed",
+      "intent": "Probe image check behavior on a negative integer token fitting inside signed 64-bit lower bound.",
+      "round": 1,
+      "fixes": "gen_05.cpp",
+      "kind": "compile",
+      "superseded_by": "gen_45.cpp"
+    },
+    {
+      "file": "gen_26.cpp",
+      "name": "load_view_minimal_check_mode_fixed",
+      "intent": "Probe if image_check::none bypasses the strict checks for mismatching float tokens and loaded integer bounds.",
+      "round": 1,
+      "fixes": "gen_06.cpp",
+      "kind": "compile",
+      "superseded_by": "gen_46.cpp"
+    },
+    {
+      "file": "gen_27.cpp",
+      "name": "load_view_basic_json_document_create_fixed",
+      "intent": "Probe basic construction and round-trip serialization using json_document API.",
+      "round": 1,
+      "fixes": "gen_07.cpp",
+      "kind": "compile",
+      "superseded_by": "gen_47.cpp"
+    },
+    {
+      "file": "gen_28.cpp",
+      "name": "load_view_integer_twenty_digits_fit_fixed",
+      "intent": "Probe image loading with an integer token of exactly 20 digits that is less than or equal to 18446744073709551615.",
+      "round": 1,
+      "fixes": "gen_08.cpp",
+      "kind": "compile",
+      "superseded_by": "gen_48.cpp"
+    },
+    {
+      "file": "gen_29.cpp",
+      "name": "load_view_integer_twenty_digits_exceed_fixed",
+      "intent": "Probe image loading with an integer token of 20 digits exceeding 18446744073709551615.",
+      "round": 1,
+      "fixes": "gen_09.cpp",
+      "kind": "compile",
+      "superseded_by": "gen_49.cpp"
+    },
+    {
+      "file": "gen_30.cpp",
+      "name": "load_view_negative_nineteen_digits_fit_fixed",
+      "intent": "Probe a negative 19-digit integer token within the limits of signed 64-bit integer values.",
+      "round": 1,
+      "fixes": "gen_10.cpp",
+      "kind": "compile",
+      "superseded_by": "gen_50.cpp"
+    },
+    {
+      "file": "gen_31.cpp",
+      "name": "load_view_negative_nineteen_digits_overflow_fixed",
+      "intent": "Probe a negative 19-digit integer token exceeding the lower bound of signed 64-bit integers.",
+      "round": 1,
+      "fixes": "gen_11.cpp",
+      "kind": "compile"
+    },
+    {
+      "file": "gen_32.cpp",
+      "name": "load_view_small_integer_node_fixed",
+      "intent": "Probe loading a simple small integer node with image_check::full.",
+      "round": 1,
+      "fixes": "gen_12.cpp",
+      "kind": "compile"
+    },
+    {
+      "file": "gen_33.cpp",
+      "name": "load_view_float_nan_inf_fixed",
+      "intent": "Probe loading non-finite float numbers (NaN/Inf) through json_document images.",
+      "round": 1,
+      "fixes": "gen_13.cpp",
+      "kind": "compile"
+    },
+    {
+      "file": "gen_34.cpp",
+      "name": "load_view_empty_array_object_fixed",
+      "intent": "Probe empty container roundtrip and loading via json_document.",
+      "round": 1,
+      "fixes": "gen_14.cpp",
+      "kind": "compile"
+    },
+    {
+      "file": "gen_35.cpp",
+      "name": "load_view_deeply_nested_structure_fixed",
+      "intent": "Probe loading a deeply nested array structure via json_document image.",
+      "round": 1,
+      "fixes": "gen_15.cpp",
+      "kind": "compile"
+    },
+    {
+      "file": "gen_36.cpp",
+      "name": "load_view_boolean_and_null_nodes_fixed",
+      "intent": "Probe loading booleans and null values in json_document images.",
+      "round": 2,
+      "fixes": "gen_16.cpp",
+      "kind": "compile"
+    },
+    {
+      "file": "gen_37.cpp",
+      "name": "load_view_string_escaping_fixed",
+      "intent": "Probe loading strings with special escape sequences via json_document image.",
+      "round": 2,
+      "fixes": "gen_17.cpp",
+      "kind": "compile"
+    },
+    {
+      "file": "gen_38.cpp",
+      "name": "json_view_element_access_fixed",
+      "intent": "Probe direct element access and viewing on loaded json_document.",
+      "round": 2,
+      "fixes": "gen_18.cpp",
+      "kind": "compile"
+    },
+    {
+      "file": "gen_39.cpp",
+      "name": "load_view_multiple_floats_and_ints_fixed",
+      "intent": "Probe mixed arrays containing various float and integer representations under image_check::full.",
+      "round": 2,
+      "fixes": "gen_19.cpp",
+      "kind": "compile"
+    },
+    {
+      "file": "gen_40.cpp",
+      "name": "load_view_too_many_digits_token_fixed",
+      "intent": "Probe loading an image where an integer token has more than 20 digits.",
+      "round": 2,
+      "fixes": "gen_20.cpp",
+      "kind": "compile"
+    },
+    {
+      "file": "gen_41.cpp",
+      "name": "load_view_valid_integer_token_in_float_node_rejected_fixed_fixed",
+      "intent": "Probe if json_document::load with image_check::full correctly rejects an image where a float node covers an integer token that fits 64 bits.",
+      "round": 2,
+      "fixes": "gen_21.cpp",
+      "kind": "compile"
+    },
+    {
+      "file": "gen_42.cpp",
+      "name": "load_view_true_float_token_accepted_fixed_fixed",
+      "intent": "Probe if json_document::load with image_check::full successfully accepts a float node whose token actually contains a decimal fraction.",
+      "round": 2,
+      "fixes": "gen_22.cpp",
+      "kind": "compile"
+    },
+    {
+      "file": "gen_43.cpp",
+      "name": "load_view_exponent_float_token_accepted_fixed_fixed",
+      "intent": "Probe if json_document::load with image_check::full successfully accepts a float node whose token contains an exponent indicator.",
+      "round": 2,
+      "fixes": "gen_23.cpp",
+      "kind": "compile"
+    },
+    {
+      "file": "gen_44.cpp",
+      "name": "load_view_overflow_integer_token_float_node_accepted_fixed_fixed",
+      "intent": "Probe if json_document::load with image_check::full accepts a float node over an integer token that exceeds 64 bits and thus truly represents a float.",
+      "round": 2,
+      "fixes": "gen_24.cpp",
+      "kind": "compile"
+    },
+    {
+      "file": "gen_45.cpp",
+      "name": "load_view_negative_boundary_int_fits_fixed_fixed",
+      "intent": "Probe image check behavior on a negative integer token fitting inside signed 64-bit lower bound.",
+      "round": 2,
+      "fixes": "gen_25.cpp",
+      "kind": "compile"
+    },
+    {
+      "file": "gen_46.cpp",
+      "name": "load_view_minimal_check_mode_fixed_fixed",
+      "intent": "Probe if image_check::none bypasses the strict checks for mismatching float tokens and loaded integer bounds.",
+      "round": 2,
+      "fixes": "gen_26.cpp",
+      "kind": "compile"
+    },
+    {
+      "file": "gen_47.cpp",
+      "name": "load_view_basic_json_document_create_fixed_fixed",
+      "intent": "Probe basic construction and round-trip serialization using json_document API.",
+      "round": 2,
+      "fixes": "gen_27.cpp",
+      "kind": "compile"
+    },
+    {
+      "file": "gen_48.cpp",
+      "name": "load_view_integer_twenty_digits_fit_fixed_fixed",
+      "intent": "Probe image loading with an integer token of exactly 20 digits that is less than or equal to 18446744073709551615.",
+      "round": 2,
+      "fixes": "gen_28.cpp",
+      "kind": "compile"
+    },
+    {
+      "file": "gen_49.cpp",
+      "name": "load_view_integer_twenty_digits_exceed_fixed_fixed",
+      "intent": "Probe image loading with an integer token of 20 digits exceeding 18446744073709551615.",
+      "round": 2,
+      "fixes": "gen_29.cpp",
+      "kind": "compile"
+    },
+    {
+      "file": "gen_50.cpp",
+      "name": "load_view_negative_nineteen_digits_fit_fixed_fixed",
+      "intent": "Probe a negative 19-digit integer token within the limits of signed 64-bit integer values.",
+      "round": 2,
+      "fixes": "gen_30.cpp",
+      "kind": "compile"
+    }
+  ],
+  "fix": {
+    "rounds_max": 2,
+    "model": "gemini-3.5-flash-lite"
+  }
+}

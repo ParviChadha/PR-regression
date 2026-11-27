@@ -1,0 +1,165 @@
+[system]
+You write test programs that probe a C++ library for behavioral changes made by one pull request.
+Each program is compiled and run twice, once against the library before the change and once after, and the two
+outputs are compared. Your job is to produce programs whose output reveals whether the change altered behavior,
+including side effects the author did not intend.
+
+Rules for every program:
+- It is standalone: one file with its own int main(), compiled as C++17, printing results to stdout.
+- Use only the library's documented public API. Never include internal headers or use detail/impl namespaces,
+  private members or undocumented macros.
+- Do not judge results (no assert, no expected-value comparisons): just print what the library returns. Print
+  enough to make differences visible, one fact per line.
+- Output must be deterministic. Never print pointers or addresses, uninitialized data, the order of
+  hash-based containers, timings, thread ids, random values, file paths or environment data. Print floating point
+  values with an explicit precision. No input, files, network, threads, clocks or randomness.
+- Wrap calls that may throw in try/catch and print the exception's type and message, so an exception is an
+  observable result. Do not crash on purpose.
+- Aim at the code the diff changes. Prefer calls that compile against both the old and the new library; one or two
+  programs may use an API the PR adds. Cover ordinary inputs and edge cases (empty, minimum and maximum values,
+  boundaries, special values, nesting, unusual types) and also neighbouring behavior the change could disturb.
+- When the diff changes which types or inputs an API accepts or rejects (constraints, overloads, traits,
+  conversions), test it with the detection idiom (std::void_t or requires) and `if constexpr`, so the program
+  compiles against both versions, prints whether the expression is well-formed, and exercises it when it is.
+  Accepting an input is not enough: also use it through every entry point that should follow (const and
+  non-const, read, write, insert, erase, lookup, nested use), because a change that admits new inputs can leave
+  later code unable to handle them.
+- If the changed code is internal (a detail, impl or internal namespace, a trait, a helper), do not name it in the
+  program. Reach it through the public API that depends on it, using detection (as above) where needed.
+- Use the exact types and values the diff is about (the new trait's argument types, the new overload's
+  parameters), not stand-ins.
+- Spread the programs over distinct public entry points and overloads, one main idea per program. Do not write
+  several programs that only rename a type or change a literal.
+- Make the programs differ from each other: different inputs, different entry points, different features.
+
+Rules specific to this library:
+- Include the library with #include <nlohmann/json.hpp>. The public API is nlohmann::json (nlohmann::basic_json), nlohmann::ordered_json, json_pointer, json patch/merge_patch and the documented SAX and conversion interfaces. Never use the detail namespace.
+- It is a header-only library: nothing to link. Programs are compiled as C++17.
+- Print JSON values with dump() (compact) or dump(2). Keys of nlohmann::json objects print in sorted order, so output is deterministic; do not depend on insertion order except with ordered_json.
+
+[user]
+# Pull request #5936: Fix self-aliasing in json_pointer::operator/= and patch_inplace
+
+## Description
+Two functions misbehaved when an argument was the object itself:
+
+- `json_pointer::operator/=(const json_pointer& ptr)` passed iterators into its own token vector to `std::vector::insert` when called as `p /= p`. That is undefined behavior. With libstdc++ (gcc 16), `/a/b` appended to itself gave `/a/b//` instead of `/a/b/a/b`. The operator now appends a copy when `&ptr == this`.
+- `basic_json::patch_inplace(const basic_json& json_patch)` iterates the patch while changing `*this`, so `j.patch_inplace(j)` read freed memory (heap-use-after-free under ASan). When the patch is the value itself, the function now applies a copy of it. The result equals `j = j.patch(j)`.
+
+A patch stored inside the value, such as `j.patch_inplace(j["patch"])`, is still undefined behavior and is now documented. Copying every patch would close it, but it roughly doubled the time of a 20 000-operation patch (3.3 ms to about 6.6-8.2 ms), so only the self case is handled.
+
+Tests were added to `unit-json_pointer.cpp` and `unit-json_patch.cpp`; both fail without the fix (gcc 16, and clang with ASan/UBSan) and pass with it. The docs of `operator/=` and `patch_inplace` are updated with 3.13.0 version-history entries. Found during a review of the JSON Pointer, JSON Patch, `diff` and Merge Patch implementations against their RFCs and docs.
+
+## Breaking changes
+
+No breaking changes. Both cases were undefined behavior before (a precondition violation in `operator/=`, use-after-free in `patch_inplace`), so no valid program depended on the old behavior. Signatures, ABI and behavior for non-aliasing arguments are unchanged.
+
+- [x] The changes are described in detail, both the what and why.
+- [x] The [Code coverage](https://coveralls.io/github/nlohmann/json) remained at 100%. A test case for every new line of code.
+- [x] If applicable, the [documentation](https://json.nlohmann.me) is updated.
+- [x] The source code is amalgamated (`make amalgamate`).
+
+🤖 Generated with [Claude Code](https://claude.com/claude-code)
+
+## Commit message
+* Fix self-aliasing in json_pointer::operator/= and patch_inplace
+
+json_pointer::operator/=(const json_pointer&) passed iterators into its
+own token vector to insert() when a pointer was appended to itself
+(p /= p), which is undefined behavior; libstdc++ produced "/a/b//" for
+"/a/b". The pointer now appends a copy in that case.
+
+basic_json::patch_inplace iterated the patch while changing *this, so
+j.patch_inplace(j) read freed memory. It now applies a copy of the
+patch when the patch is the value itself. A patch stored inside the
+value remains undefined behavior and is documented as such; copying the
+patch unconditionally would double the time of a large patch.
+
+Signed-off-by: Niels Lohmann <mail@nlohmann.me>
+
+* Fix JSON_DIAGNOSTICS test crash and clang-tidy hit in patch_inplace self-aliasing
+
+The spare-capacity test reallocated non-empty elements through get_ref(), which leaves stale parent pointers under JSON_DIAGNOSTICS; reserve while the array is empty instead. Suppress performance-unnecessary-copy-initialization for the copy that is needed because *this is modified.
+
+Signed-off-by: Niels Lohmann <mail@nlohmann.me>
+
+* Detect a patch stored inside the patched value with JSON_DIAGNOSTICS
+
+patch_inplace applied a copy only when the patch was the value itself. With JSON_DIAGNOSTICS the parent pointers make it cheap to also detect a patch nested inside the value, so that case is handled the same way. Without diagnostics it stays documented undefined behavior.
+
+Signed-off-by: Niels Lohmann <mail@nlohmann.me>
+
+* Silence misc-const-correctness for patch_aliases_this
+
+Signed-off-by: Niels Lohmann <mail@nlohmann.me>
+
+* Fix clang-tidy findings in the operator/= self-append test
+
+Signed-off-by: Niels Lohmann <mail@nlohmann.me>
+
+---------
+
+Signed-off-by: Niels Lohmann <mail@nlohmann.me>
+
+## Discussion before merge
+- gregmarr: If diagnostics is enabled, should it check the parents of `json_patch` to see if any of them are `this`?  Is that too much of an expense to guard against something that this shouldn't be doing?  Maybe it can be an assert so it's debug only.
+- nlohmann: Good point, and it is cheap enough to do more than assert: walking `json_patch.m_parent` up to the root is O(depth), negligible next to applying the patch. With `JSON_DIAGNOSTICS` enabled, `patch_inplace` now also applies a copy when `this` is an ancestor of `json_patch`, so `j.patch_inplace(j["patch"])` is well-defined and equals `j = j.patch(j["patch"])` (fixed in `95519dbbc`, with a test and updated docs).
+
+Without `JSON_DIAGNOSTICS` there are no parent pointers, so that case remains documented undefined behavior; copying every patch would have roughly doubled the time of a 20 000-operation patch.
+
+*(Written by Claude Code on behalf of @nlohmann.)*
+
+## Diff of the library source (before -> after)
+```diff
+diff --git a/include/nlohmann/detail/json_pointer.hpp b/include/nlohmann/detail/json_pointer.hpp
+index eef4ce0a4..6df49fbc0 100644
+--- a/include/nlohmann/detail/json_pointer.hpp
++++ b/include/nlohmann/detail/json_pointer.hpp
+@@ -266,6 +266,13 @@ class json_pointer
+     /// @sa https://json.nlohmann.me/api/json_pointer/operator_slasheq/
+     json_pointer& operator/=(const json_pointer& ptr)
+     {
++        // insert() must not be given iterators into the vector it inserts
++        // into: append a copy when a pointer is appended to itself
++        if (JSON_HEDLEY_UNLIKELY(&ptr == this))
++        {
++            return *this /= json_pointer(ptr);
++        }
++
+         reference_tokens.insert(reference_tokens.end(),
+                                 ptr.reference_tokens.begin(),
+                                 ptr.reference_tokens.end());
+diff --git a/include/nlohmann/json.hpp b/include/nlohmann/json.hpp
+index c2dddd55a..607fd1e5a 100644
+--- a/include/nlohmann/json.hpp
++++ b/include/nlohmann/json.hpp
+@@ -6950,6 +6950,25 @@ public:
+     /// @sa https://json.nlohmann.me/api/basic_json/patch/
+     void patch_inplace(const basic_json& json_patch)
+     {
++        // the operations below change *this while iterating json_patch: apply
++        // a copy when a value is applied as patch to itself or, with
++        // JSON_DIAGNOSTICS, to a value stored inside it
++        // NOLINTNEXTLINE(misc-const-correctness): only the JSON_DIAGNOSTICS build modifies it
++        bool patch_aliases_this = (&json_patch == this);
++#if JSON_DIAGNOSTICS
++        for (const basic_json* p = json_patch.m_parent; !patch_aliases_this && p != nullptr; p = p->m_parent)
++        {
++            patch_aliases_this = (p == this);
++        }
++#endif
++        if (JSON_HEDLEY_UNLIKELY(patch_aliases_this))
++        {
++            // NOLINTNEXTLINE(performance-unnecessary-copy-initialization): *this is modified below
++            const basic_json json_patch_copy = json_patch;
++            patch_inplace(json_patch_copy);
++            return;
++        }
++
+         basic_json& result = *this;
+         // the valid JSON Patch operations
+         enum class patch_operations {add, remove, replace, move, copy, test, invalid};
+```
+
+# Task
+Write 20 test programs for this pull request. Return JSON with a "tests" array; each item has "name" (short snake_case), "intent" (one sentence: what behavior it probes) and "code" (the complete C++ program).

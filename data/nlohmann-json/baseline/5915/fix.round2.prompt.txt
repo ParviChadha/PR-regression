@@ -1,0 +1,607 @@
+[system]
+You write test programs that probe a C++ library for behavioral changes made by one pull request.
+Each program is compiled and run twice, once against the library before the change and once after, and the two
+outputs are compared. Your job is to produce programs whose output reveals whether the change altered behavior,
+including side effects the author did not intend.
+
+Rules for every program:
+- It is standalone: one file with its own int main(), compiled as C++17, printing results to stdout.
+- Use only the library's documented public API. Never include internal headers or use detail/impl namespaces,
+  private members or undocumented macros.
+- Do not judge results (no assert, no expected-value comparisons): just print what the library returns. Print
+  enough to make differences visible, one fact per line.
+- Output must be deterministic. Never print pointers or addresses, uninitialized data, the order of
+  hash-based containers, timings, thread ids, random values, file paths or environment data. Print floating point
+  values with an explicit precision. No input, files, network, threads, clocks or randomness.
+- Wrap calls that may throw in try/catch and print the exception's type and message, so an exception is an
+  observable result. Do not crash on purpose.
+- Aim at the code the diff changes. Prefer calls that compile against both the old and the new library; one or two
+  programs may use an API the PR adds. Cover ordinary inputs and edge cases (empty, minimum and maximum values,
+  boundaries, special values, nesting, unusual types) and also neighbouring behavior the change could disturb.
+- When the diff changes which types or inputs an API accepts or rejects (constraints, overloads, traits,
+  conversions), test it with the detection idiom (std::void_t or requires) and `if constexpr`, so the program
+  compiles against both versions, prints whether the expression is well-formed, and exercises it when it is.
+  Accepting an input is not enough: also use it through every entry point that should follow (const and
+  non-const, read, write, insert, erase, lookup, nested use), because a change that admits new inputs can leave
+  later code unable to handle them.
+- If the changed code is internal (a detail, impl or internal namespace, a trait, a helper), do not name it in the
+  program. Reach it through the public API that depends on it, using detection (as above) where needed.
+- Use the exact types and values the diff is about (the new trait's argument types, the new overload's
+  parameters), not stand-ins.
+- Spread the programs over distinct public entry points and overloads, one main idea per program. Do not write
+  several programs that only rename a type or change a literal.
+- Make the programs differ from each other: different inputs, different entry points, different features.
+
+Rules specific to this library:
+- Include the library with #include <nlohmann/json.hpp>. The public API is nlohmann::json (nlohmann::basic_json), nlohmann::ordered_json, json_pointer, json patch/merge_patch and the documented SAX and conversion interfaces. Never use the detail namespace.
+- It is a header-only library: nothing to link. Programs are compiled as C++17.
+- Print JSON values with dump() (compact) or dump(2). Keys of nlohmann::json objects print in sorted order, so output is deterministic; do not depend on insertion order except with ordered_json.
+
+[user]
+# Pull request #5915: json_view: fewer allocations when parsing small documents
+
+## Description
+1. **Size the buffer of decoded strings on its first growth from the input.** A quarter of the input plus 16 bytes, capped at 4 KiB, instead of 272 bytes: a document with escapes no longer grows it twice, with a zero-filled copy each time. The cap keeps a large document with one escape from zero-filling a large buffer.
+2. **Allocate the node index of documents with an estimate of up to 1024 nodes (was 256) together with the header.** One allocation less. The limit is a named constant, `document_data::max_inline_nodes`.
+
+## Numbers
+
+`compare.py --download --rounds 30`, Apple M1 Max, clang 21, develop vs this PR, each unaligned twice and once aligned (reference engines moved by a median of 1.000 in the aligned run). Ratio = this PR / develop, aligned and the two unaligned runs:
+
+| row (2.5 KB minified tweet with escapes) | ratio |
+|---|---|
+| parse | 0.959, 0.964, 0.950 |
+| traverse | 0.967, 0.981, 0.963 |
+| select | 0.969, 0.975, 0.955 |
+| parse+dump | 0.972, 0.974, 0.960 |
+| `rpc` parse / dump (not affected) | 1.006, 1.007, 0.993 / 1.024, 1.005, 1.011 |
+
+Fresh parse of the tweet: 993 to 958 ns (best of three). It stays behind yyjson (about 1.11x before, about 1.07x after). No `json_view` row is consistently slower in all three runs; a few large-document rows moved by 2-4 % in one run and not in the aligned run, on code this PR does not touch.
+
+Fresh parse and `memory_usage()` of dense numeric arrays (more nodes per byte than the estimate expects):
+
+| document | parse | memory_usage() |
+|---|---|---|
+| 1 KB, 500 numbers | 2047 to 1863 ns | 11,310 to 15,566 B |
+| 4 KB, 2000 numbers | 7907 to 7225 ns | 41,310 to 57,566 B |
+
+### Trade-off
+
+When the estimate is too low (dense numbers), the node block that was allocated with the header stays unused: at most 16 KiB instead of 4 KiB. Documents whose estimate fits keep the same memory. `shrink_to_fit()` cannot release a node index that lives in the header allocation; it was already documented as non-binding, and the page now says which part cannot be released.
+
+## Validation
+
+- New "block sizes" test section: escaping and dense documents of 1 to 5000 elements around the 256 and 1024 node points (also pretty-printed, and after `shrink_to_fit()`), and a 100k-node document with one escape.
+- All six `json_view` unit test files with ASan/UBSan, in C++11 and C++17.
+- `single_include` is a fresh `make amalgamate` (`json.hpp` is unchanged).
+
+## Public API
+
+No breaking changes. `memory_usage()` can report more memory for dense small documents, as described above; no signature or documented guarantee changes.
+
+Written by Claude Code on behalf of @nlohmann.
+
+🤖 Generated with [Claude Code](https://claude.com/claude-code)
+
+## Commit message
+- Size the buffer of decoded strings on its first growth from the input (a
+  quarter of it plus 16 bytes, at most 4 KiB) instead of 272 bytes, so that a
+  document with escapes does not grow it twice, with a zero-filled copy each
+  time.
+- Allocate the node index of documents with an estimate of up to 1024 nodes
+  (was 256) together with the header, which saves one allocation. When the
+  estimate is too low (dense numbers), that block stays unused: at most 16 KiB
+  instead of 4 KiB. shrink_to_fit() cannot release it separately; the
+  documentation says so.
+
+Fresh parse of a 2.5 KB minified tweet: 993 to 958 ns (-3.5 %), traverse and
+select -3 %, with no row consistently slower (Apple M1 Max, 30 rounds, three
+runs). Dense numeric documents parse about 9 % faster and keep up to 16 KiB
+more memory.
+
+Signed-off-by: Niels Lohmann <mail@nlohmann.me>
+
+## Headers the programs must include
+- Also write #include <nlohmann/json_view.hpp>. The json_view feature (json_document, json_view and their image loading and editing API) is declared only in this header; nlohmann/json.hpp does not include it, so without this line those names do not exist. Use only names you can see in the diff or the context below.
+
+## Diff of the library source (before -> after)
+```diff
+diff --git a/include/nlohmann/detail/view/builder.hpp b/include/nlohmann/detail/view/builder.hpp
+index f7b560f50..a0446a1e1 100644
+--- a/include/nlohmann/detail/view/builder.hpp
++++ b/include/nlohmann/detail/view/builder.hpp
+@@ -543,7 +543,15 @@ run_found:
+     NLOHMANN_VIEW_NOINLINE void arena_grow(std::size_t n)
+     {
+         const std::size_t used = arena_used();
+-        m_doc.arena.resize((std::max)(m_doc.arena.size() * 2, used + n + 256));
++        std::size_t wanted = used + n + 256;
++        if (m_doc.arena.empty())
++        {
++            // the first growth: a decoded string is never longer than its source,
++            // so a fraction of the input (capped, as the buffer is zero-filled)
++            // covers the escapes of a typical document without regrowing it
++            wanted = (std::max)(wanted, (std::min)((static_cast<std::size_t>(m_end - m_begin) / 4) + 16, std::size_t{4096}));
++        }
++        m_doc.arena.resize((std::max)(m_doc.arena.size() * 2, wanted));
+         m_arena_write = m_doc.arena.data() + used;
+         m_arena_end = m_doc.arena.data() + m_doc.arena.size();
+     }
+diff --git a/include/nlohmann/detail/view/document_data.hpp b/include/nlohmann/detail/view/document_data.hpp
+index afef5a7a2..2c5f97767 100644
+--- a/include/nlohmann/detail/view/document_data.hpp
++++ b/include/nlohmann/detail/view/document_data.hpp
+@@ -82,14 +82,17 @@ struct document_data
+     };
+     std::unique_ptr<edit_state> edits; ///< created by the first edit
+ 
++    /// the most nodes that are allocated together with the header (16 KiB)
++    static constexpr std::size_t max_inline_nodes = 1024;
++
+     /// One allocation for the header and room for `count` nodes, so that a
+     /// small document needs one allocation instead of two. Large documents get
+     /// a separate node array instead (so it can be trimmed). When a document
+-    /// outgrows the inline array, that array stays unused: at most 256 nodes
+-    /// (4 KiB), and only for documents whose estimate was too small.
++    /// outgrows the inline array, that array stays unused: at most 1024 nodes
++    /// (16 KiB), and only for documents whose estimate was too small.
+     static document_data* create(std::size_t count)
+     {
+-        count = count <= 256 ? count : 0;
++        count = count <= max_inline_nodes ? count : 0;
+         void* mem = ::operator new (sizeof(document_data) + (count * sizeof(node)));
+         auto* d = new (mem) document_data(); // NOLINT(cppcoreguidelines-owning-memory): owned by the returned pointer, freed by deleter
+         // (aligned: sizeof is a multiple of the alignment; through void*, as GCC's -Wcast-align wants)
+```
+
+# Programs to repair
+
+## gen_18.cpp (compile)
+Intent: Probes parsing an object with multiple keys.
+COMPILE ERROR. The program fails to compile, the same way against the old and the new library. Fix the error (wrong or missing include, typo, misuse of the public API) and keep the intent: the call under test must stay. Include only headers that exist; if you are unsure a header exists, use the library's main header.
+Compiler errors:
+```
+gen_18.cpp:11:26: error: ‘class nlohmann::json_abi_v3_12_0::basic_json_document<nlohmann::json_abi_v3_12_0::basic_json<>, nlohmann::json_abi_v3_12_0::view_mode::read_only>’ has no member named ‘to_json’
+```
+Source:
+```cpp
+#include <nlohmann/json.hpp>
+#include <nlohmann/json_view.hpp>
+#include <iostream>
+
+int main() {
+    try {
+        std::string json_str = "{\"k1\": 1, \"k2\": 2, \"k3\": 3, \"k4\": 4}";
+        auto doc = nlohmann::json_document::parse(json_str);
+        std::cout << doc.to_json().size() << std::endl;
+    } catch (const std::exception& e) {
+        std::cout << typeid(e).name() << ": " << e.what() << std::endl;
+    }
+}
+```
+
+## gen_19.cpp (compile)
+Intent: Probes parsing an array with exactly 1024 elements (max_inline_nodes boundary).
+COMPILE ERROR. The program fails to compile, the same way against the old and the new library. Fix the error (wrong or missing include, typo, misuse of the public API) and keep the intent: the call under test must stay. Include only headers that exist; if you are unsure a header exists, use the library's main header.
+Compiler errors:
+```
+gen_19.cpp:15:26: error: ‘class nlohmann::json_abi_v3_12_0::basic_json_document<nlohmann::json_abi_v3_12_0::basic_json<>, nlohmann::json_abi_v3_12_0::view_mode::read_only>’ has no member named ‘to_json’
+```
+Source:
+```cpp
+#include <nlohmann/json.hpp>
+#include <nlohmann/json_view.hpp>
+#include <iostream>
+
+int main() {
+    try {
+        std::string json_str = "[0";
+        for (int i = 1; i < 1024; ++i) {
+            json_str += ",0";
+        }
+        json_str += "]";
+        auto doc = nlohmann::json_document::parse(json_str);
+        std::cout << doc.to_json().size() << std::endl;
+        std::cout << doc.memory_usage() << std::endl;
+    } catch (const std::exception& e) {
+        std::cout << typeid(e).name() << ": " << e.what() << std::endl;
+    }
+}
+```
+
+## gen_20.cpp (compile)
+Intent: Probes parsing documents with empty strings and escape characters.
+COMPILE ERROR. The program fails to compile, the same way against the old and the new library. Fix the error (wrong or missing include, typo, misuse of the public API) and keep the intent: the call under test must stay. Include only headers that exist; if you are unsure a header exists, use the library's main header.
+Compiler errors:
+```
+gen_20.cpp:9:69: error: stray ‘’ in program
+gen_20.cpp:11:26: error: ‘class nlohmann::json_abi_v3_12_0::basic_json_document<nlohmann::json_abi_v3_12_0::basic_json<>, nlohmann::json_abi_v3_12_0::view_mode::read_only>’ has no member named ‘to_json’
+gen_20.cpp:11:60: error: expected primary-expression before ‘>’ token
+gen_20.cpp:11:62: error: expected primary-expression before ‘)’ token
+gen_20.cpp:12:26: error: ‘class nlohmann::json_abi_v3_12_0::basic_json_document<nlohmann::json_abi_v3_12_0::basic_json<>, nlohmann::json_abi_v3_12_0::view_mode::read_only>’ has no member named ‘to_json’
+gen_20.cpp:12:62: error: expected primary-expression before ‘>’ token
+```
+Source:
+```cpp
+#include <nlohmann/json.hpp>
+#include <nlohmann/json_view.hpp>
+#include <iostream>
+
+int main() {
+    try {
+        std::string json_str = "{\"empty\": \"\", \"escaped\": \"\\"\"}";
+        auto doc = nlohmann::json_document::parse(json_str);
+        std::cout << doc.to_json()["empty"].get<std::string>().length() << std::endl;
+        std::cout << doc.to_json()["escaped"].get<std::string>().length() << std::endl;
+    } catch (const std::exception& e) {
+        std::cout << typeid(e).name() << ": " << e.what() << std::endl;
+    }
+}
+```
+
+## gen_21.cpp (compile)
+Intent: Probes parsing a document with string escapes to trigger the new arena buffer sizing logic.
+COMPILE ERROR. The program fails to compile, the same way against the old and the new library. Fix the error (wrong or missing include, typo, misuse of the public API) and keep the intent: the call under test must stay. Include only headers that exist; if you are unsure a header exists, use the library's main header.
+Compiler errors:
+```
+gen_21.cpp:11:40: error: no matching function for call to ‘nlohmann::json_abi_v3_12_0::basic_json<>::basic_json(nlohmann::json_abi_v3_12_0::basic_json_document<nlohmann::json_abi_v3_12_0::basic_json<>, nlohmann::json_abi_v3_12_0::view_mode::read_only>&)’
+json.hpp:2635:105: error: no type named ‘value_type’ in ‘class nlohmann::json_abi_v3_12_0::basic_json_document<nlohmann::json_abi_v3_12_0::basic_json<>, nlohmann::json_abi_v3_12_0::view_mode::read_only>’
+json.hpp:2326:11: error: no type named ‘string_t’ in ‘class nlohmann::json_abi_v3_12_0::basic_json_document<nlohmann::json_abi_v3_12_0::basic_json<>, nlohmann::json_abi_v3_12_0::view_mode::read_only>’
+json.hpp:2326:11: error: no type named ‘string_t’ in ‘class nlohmann::json_abi_v3_12_0::basic_json_document<nlohmann::json_abi_v3_12_0::basic_json<>, nlohmann::json_abi_v3_12_0::view_mode::read_only>’
+json.hpp:2309:30: error: no type named ‘type’ in ‘struct std::enable_if<false, int>’
+```
+Source:
+```cpp
+#include <nlohmann/json.hpp>
+#include <nlohmann/json_view.hpp>
+#include <iostream>
+
+int main() {
+    try {
+        std::string json_str = "{\"key\": \"hello\\nworld\\t!\"}";
+        auto doc = nlohmann::json_document::parse(json_str);
+        std::cout << nlohmann::json(doc).dump() << std::endl;
+        std::cout << doc.memory_usage() << std::endl;
+    } catch (const std::exception& e) {
+        std::cout << typeid(e).name() << ": " << e.what() << std::endl;
+    }
+}
+```
+
+## gen_22.cpp (compile)
+Intent: Probes parsing a dense numeric document within the 1024 inline node limit.
+COMPILE ERROR. The program fails to compile, the same way against the old and the new library. Fix the error (wrong or missing include, typo, misuse of the public API) and keep the intent: the call under test must stay. Include only headers that exist; if you are unsure a header exists, use the library's main header.
+Compiler errors:
+```
+gen_22.cpp:15:40: error: no matching function for call to ‘nlohmann::json_abi_v3_12_0::basic_json<>::basic_json(nlohmann::json_abi_v3_12_0::basic_json_document<nlohmann::json_abi_v3_12_0::basic_json<>, nlohmann::json_abi_v3_12_0::view_mode::read_only>&)’
+json.hpp:2635:105: error: no type named ‘value_type’ in ‘class nlohmann::json_abi_v3_12_0::basic_json_document<nlohmann::json_abi_v3_12_0::basic_json<>, nlohmann::json_abi_v3_12_0::view_mode::read_only>’
+json.hpp:2326:11: error: no type named ‘string_t’ in ‘class nlohmann::json_abi_v3_12_0::basic_json_document<nlohmann::json_abi_v3_12_0::basic_json<>, nlohmann::json_abi_v3_12_0::view_mode::read_only>’
+json.hpp:2326:11: error: no type named ‘string_t’ in ‘class nlohmann::json_abi_v3_12_0::basic_json_document<nlohmann::json_abi_v3_12_0::basic_json<>, nlohmann::json_abi_v3_12_0::view_mode::read_only>’
+json.hpp:2309:30: error: no type named ‘type’ in ‘struct std::enable_if<false, int>’
+```
+Source:
+```cpp
+#include <nlohmann/json.hpp>
+#include <nlohmann/json_view.hpp>
+#include <iostream>
+
+int main() {
+    try {
+        std::string json_str = "[";
+        for (int i = 0; i < 500; ++i) {
+            json_str += std::to_string(i) + (i == 499 ? "" : ",");
+        }
+        json_str += "]";
+        auto doc = nlohmann::json_document::parse(json_str);
+        std::cout << nlohmann::json(doc).size() << std::endl;
+        std::cout << doc.memory_usage() << std::endl;
+    } catch (const std::exception& e) {
+        std::cout << typeid(e).name() << ": " << e.what() << std::endl;
+    }
+}
+```
+
+## gen_23.cpp (compile)
+Intent: Probes parsing a dense numeric document exceeding 1024 nodes to test fallback allocation.
+COMPILE ERROR. The program fails to compile, the same way against the old and the new library. Fix the error (wrong or missing include, typo, misuse of the public API) and keep the intent: the call under test must stay. Include only headers that exist; if you are unsure a header exists, use the library's main header.
+Compiler errors:
+```
+gen_23.cpp:15:40: error: no matching function for call to ‘nlohmann::json_abi_v3_12_0::basic_json<>::basic_json(nlohmann::json_abi_v3_12_0::basic_json_document<nlohmann::json_abi_v3_12_0::basic_json<>, nlohmann::json_abi_v3_12_0::view_mode::read_only>&)’
+json.hpp:2635:105: error: no type named ‘value_type’ in ‘class nlohmann::json_abi_v3_12_0::basic_json_document<nlohmann::json_abi_v3_12_0::basic_json<>, nlohmann::json_abi_v3_12_0::view_mode::read_only>’
+json.hpp:2326:11: error: no type named ‘string_t’ in ‘class nlohmann::json_abi_v3_12_0::basic_json_document<nlohmann::json_abi_v3_12_0::basic_json<>, nlohmann::json_abi_v3_12_0::view_mode::read_only>’
+json.hpp:2326:11: error: no type named ‘string_t’ in ‘class nlohmann::json_abi_v3_12_0::basic_json_document<nlohmann::json_abi_v3_12_0::basic_json<>, nlohmann::json_abi_v3_12_0::view_mode::read_only>’
+json.hpp:2309:30: error: no type named ‘type’ in ‘struct std::enable_if<false, int>’
+```
+Source:
+```cpp
+#include <nlohmann/json.hpp>
+#include <nlohmann/json_view.hpp>
+#include <iostream>
+
+int main() {
+    try {
+        std::string json_str = "[";
+        for (int i = 0; i < 1200; ++i) {
+            json_str += std::to_string(i) + (i == 1199 ? "" : ",");
+        }
+        json_str += "]";
+        auto doc = nlohmann::json_document::parse(json_str);
+        std::cout << nlohmann::json(doc).size() << std::endl;
+        std::cout << doc.memory_usage() << std::endl;
+    } catch (const std::exception& e) {
+        std::cout << typeid(e).name() << ": " << e.what() << std::endl;
+    }
+}
+```
+
+## gen_24.cpp (compile)
+Intent: Probes parsing an empty or minimal valid JSON document via json_document.
+COMPILE ERROR. The program fails to compile, the same way against the old and the new library. Fix the error (wrong or missing include, typo, misuse of the public API) and keep the intent: the call under test must stay. Include only headers that exist; if you are unsure a header exists, use the library's main header.
+Compiler errors:
+```
+gen_24.cpp:11:40: error: no matching function for call to ‘nlohmann::json_abi_v3_12_0::basic_json<>::basic_json(nlohmann::json_abi_v3_12_0::basic_json_document<nlohmann::json_abi_v3_12_0::basic_json<>, nlohmann::json_abi_v3_12_0::view_mode::read_only>&)’
+json.hpp:2635:105: error: no type named ‘value_type’ in ‘class nlohmann::json_abi_v3_12_0::basic_json_document<nlohmann::json_abi_v3_12_0::basic_json<>, nlohmann::json_abi_v3_12_0::view_mode::read_only>’
+json.hpp:2326:11: error: no type named ‘string_t’ in ‘class nlohmann::json_abi_v3_12_0::basic_json_document<nlohmann::json_abi_v3_12_0::basic_json<>, nlohmann::json_abi_v3_12_0::view_mode::read_only>’
+json.hpp:2326:11: error: no type named ‘string_t’ in ‘class nlohmann::json_abi_v3_12_0::basic_json_document<nlohmann::json_abi_v3_12_0::basic_json<>, nlohmann::json_abi_v3_12_0::view_mode::read_only>’
+json.hpp:2309:30: error: no type named ‘type’ in ‘struct std::enable_if<false, int>’
+```
+Source:
+```cpp
+#include <nlohmann/json.hpp>
+#include <nlohmann/json_view.hpp>
+#include <iostream>
+
+int main() {
+    try {
+        std::string json_str = "{}";
+        auto doc = nlohmann::json_document::parse(json_str);
+        std::cout << nlohmann::json(doc).dump() << std::endl;
+        std::cout << doc.memory_usage() << std::endl;
+    } catch (const std::exception& e) {
+        std::cout << typeid(e).name() << ": " << e.what() << std::endl;
+    }
+}
+```
+
+## gen_25.cpp (compile)
+Intent: Probes a large document containing a single escape sequence to verify buffer cap behavior.
+COMPILE ERROR. The program fails to compile, the same way against the old and the new library. Fix the error (wrong or missing include, typo, misuse of the public API) and keep the intent: the call under test must stay. Include only headers that exist; if you are unsure a header exists, use the library's main header.
+Compiler errors:
+```
+gen_25.cpp:15:40: error: no matching function for call to ‘nlohmann::json_abi_v3_12_0::basic_json<>::basic_json(nlohmann::json_abi_v3_12_0::basic_json_document<nlohmann::json_abi_v3_12_0::basic_json<>, nlohmann::json_abi_v3_12_0::view_mode::read_only>&)’
+json.hpp:2635:105: error: no type named ‘value_type’ in ‘class nlohmann::json_abi_v3_12_0::basic_json_document<nlohmann::json_abi_v3_12_0::basic_json<>, nlohmann::json_abi_v3_12_0::view_mode::read_only>’
+json.hpp:2326:11: error: no type named ‘string_t’ in ‘class nlohmann::json_abi_v3_12_0::basic_json_document<nlohmann::json_abi_v3_12_0::basic_json<>, nlohmann::json_abi_v3_12_0::view_mode::read_only>’
+json.hpp:2326:11: error: no type named ‘string_t’ in ‘class nlohmann::json_abi_v3_12_0::basic_json_document<nlohmann::json_abi_v3_12_0::basic_json<>, nlohmann::json_abi_v3_12_0::view_mode::read_only>’
+json.hpp:2309:30: error: no type named ‘type’ in ‘struct std::enable_if<false, int>’
+```
+Source:
+```cpp
+#include <nlohmann/json.hpp>
+#include <nlohmann/json_view.hpp>
+#include <iostream>
+
+int main() {
+    try {
+        std::string json_str = "{\"text\": \"";
+        for (int i = 0; i < 5000; ++i) {
+            json_str += "a";
+        }
+        json_str += "\\n\";}";
+        auto doc = nlohmann::json_document::parse(json_str);
+        std::cout << nlohmann::json(doc).contains("text") << std::endl;
+        std::cout << doc.memory_usage() << std::endl;
+    } catch (const std::exception& e) {
+        std::cout << typeid(e).name() << ": " << e.what() << std::endl;
+    }
+}
+```
+
+## gen_26.cpp (compile)
+Intent: Probes parsing deeply nested structures to ensure node allocations remain correct.
+COMPILE ERROR. The program fails to compile, the same way against the old and the new library. Fix the error (wrong or missing include, typo, misuse of the public API) and keep the intent: the call under test must stay. Include only headers that exist; if you are unsure a header exists, use the library's main header.
+Compiler errors:
+```
+gen_26.cpp:14:40: error: no matching function for call to ‘nlohmann::json_abi_v3_12_0::basic_json<>::basic_json(nlohmann::json_abi_v3_12_0::basic_json_document<nlohmann::json_abi_v3_12_0::basic_json<>, nlohmann::json_abi_v3_12_0::view_mode::read_only>&)’
+json.hpp:2635:105: error: no type named ‘value_type’ in ‘class nlohmann::json_abi_v3_12_0::basic_json_document<nlohmann::json_abi_v3_12_0::basic_json<>, nlohmann::json_abi_v3_12_0::view_mode::read_only>’
+json.hpp:2326:11: error: no type named ‘string_t’ in ‘class nlohmann::json_abi_v3_12_0::basic_json_document<nlohmann::json_abi_v3_12_0::basic_json<>, nlohmann::json_abi_v3_12_0::view_mode::read_only>’
+json.hpp:2326:11: error: no type named ‘string_t’ in ‘class nlohmann::json_abi_v3_12_0::basic_json_document<nlohmann::json_abi_v3_12_0::basic_json<>, nlohmann::json_abi_v3_12_0::view_mode::read_only>’
+json.hpp:2309:30: error: no type named ‘type’ in ‘struct std::enable_if<false, int>’
+```
+Source:
+```cpp
+#include <nlohmann/json.hpp>
+#include <nlohmann/json_view.hpp>
+#include <iostream>
+
+int main() {
+    try {
+        std::string json_str = "";
+        for (int i = 0; i < 50; ++i) json_str += "{\"a\":";
+        json_str += "1";
+        for (int i = 0; i < 50; ++i) json_str += "}";
+        auto doc = nlohmann::json_document::parse(json_str);
+        std::cout << nlohmann::json(doc).is_object() << std::endl;
+        std::cout << doc.memory_usage() << std::endl;
+    } catch (const std::exception& e) {
+        std::cout << typeid(e).name() << ": " << e.what() << std::endl;
+    }
+}
+```
+
+## gen_27.cpp (compile)
+Intent: Probes parsing an array of mixed primitive types.
+COMPILE ERROR. The program fails to compile, the same way against the old and the new library. Fix the error (wrong or missing include, typo, misuse of the public API) and keep the intent: the call under test must stay. Include only headers that exist; if you are unsure a header exists, use the library's main header.
+Compiler errors:
+```
+gen_27.cpp:11:40: error: no matching function for call to ‘nlohmann::json_abi_v3_12_0::basic_json<>::basic_json(nlohmann::json_abi_v3_12_0::basic_json_document<nlohmann::json_abi_v3_12_0::basic_json<>, nlohmann::json_abi_v3_12_0::view_mode::read_only>&)’
+json.hpp:2635:105: error: no type named ‘value_type’ in ‘class nlohmann::json_abi_v3_12_0::basic_json_document<nlohmann::json_abi_v3_12_0::basic_json<>, nlohmann::json_abi_v3_12_0::view_mode::read_only>’
+json.hpp:2326:11: error: no type named ‘string_t’ in ‘class nlohmann::json_abi_v3_12_0::basic_json_document<nlohmann::json_abi_v3_12_0::basic_json<>, nlohmann::json_abi_v3_12_0::view_mode::read_only>’
+json.hpp:2326:11: error: no type named ‘string_t’ in ‘class nlohmann::json_abi_v3_12_0::basic_json_document<nlohmann::json_abi_v3_12_0::basic_json<>, nlohmann::json_abi_v3_12_0::view_mode::read_only>’
+json.hpp:2309:30: error: no type named ‘type’ in ‘struct std::enable_if<false, int>’
+```
+Source:
+```cpp
+#include <nlohmann/json.hpp>
+#include <nlohmann/json_view.hpp>
+#include <iostream>
+
+int main() {
+    try {
+        std::string json_str = "[true, false, null, 42, 3.14, \"string\"]";
+        auto doc = nlohmann::json_document::parse(json_str);
+        std::cout << nlohmann::json(doc).size() << std::endl;
+        std::cout << doc.memory_usage() << std::endl;
+    } catch (const std::exception& e) {
+        std::cout << typeid(e).name() << ": " << e.what() << std::endl;
+    }
+}
+```
+
+## gen_28.cpp (compile)
+Intent: Probes modifying a json_document via edits and checking output conversion.
+COMPILE ERROR. The program fails to compile, the same way against the old and the new library. Fix the error (wrong or missing include, typo, misuse of the public API) and keep the intent: the call under test must stay. Include only headers that exist; if you are unsure a header exists, use the library's main header.
+Compiler errors:
+```
+gen_28.cpp:11:36: error: no matching function for call to ‘nlohmann::json_abi_v3_12_0::basic_json<>::basic_json(nlohmann::json_abi_v3_12_0::basic_json_document<nlohmann::json_abi_v3_12_0::basic_json<>, nlohmann::json_abi_v3_12_0::view_mode::read_only>&)’
+json.hpp:2635:105: error: no type named ‘value_type’ in ‘class nlohmann::json_abi_v3_12_0::basic_json_document<nlohmann::json_abi_v3_12_0::basic_json<>, nlohmann::json_abi_v3_12_0::view_mode::read_only>’
+json.hpp:2326:11: error: no type named ‘string_t’ in ‘class nlohmann::json_abi_v3_12_0::basic_json_document<nlohmann::json_abi_v3_12_0::basic_json<>, nlohmann::json_abi_v3_12_0::view_mode::read_only>’
+json.hpp:2326:11: error: no type named ‘string_t’ in ‘class nlohmann::json_abi_v3_12_0::basic_json_document<nlohmann::json_abi_v3_12_0::basic_json<>, nlohmann::json_abi_v3_12_0::view_mode::read_only>’
+json.hpp:2309:30: error: no type named ‘type’ in ‘struct std::enable_if<false, int>’
+```
+Source:
+```cpp
+#include <nlohmann/json.hpp>
+#include <nlohmann/json_view.hpp>
+#include <iostream>
+
+int main() {
+    try {
+        std::string json_str = "{\"a\": 1}";
+        auto doc = nlohmann::json_document::parse(json_str);
+        auto j = nlohmann::json(doc);
+        j["b"] = 2;
+        std::cout << j.dump() << std::endl;
+    } catch (const std::exception& e) {
+        std::cout << typeid(e).name() << ": " << e.what() << std::endl;
+    }
+}
+```
+
+## gen_29.cpp (compile)
+Intent: Probes parsing strings with multiple escaped characters.
+COMPILE ERROR. The program fails to compile, the same way against the old and the new library. Fix the error (wrong or missing include, typo, misuse of the public API) and keep the intent: the call under test must stay. Include only headers that exist; if you are unsure a header exists, use the library's main header.
+Compiler errors:
+```
+gen_29.cpp:11:40: error: no matching function for call to ‘nlohmann::json_abi_v3_12_0::basic_json<>::basic_json(nlohmann::json_abi_v3_12_0::basic_json_document<nlohmann::json_abi_v3_12_0::basic_json<>, nlohmann::json_abi_v3_12_0::view_mode::read_only>&)’
+json.hpp:2635:105: error: no type named ‘value_type’ in ‘class nlohmann::json_abi_v3_12_0::basic_json_document<nlohmann::json_abi_v3_12_0::basic_json<>, nlohmann::json_abi_v3_12_0::view_mode::read_only>’
+json.hpp:2326:11: error: no type named ‘string_t’ in ‘class nlohmann::json_abi_v3_12_0::basic_json_document<nlohmann::json_abi_v3_12_0::basic_json<>, nlohmann::json_abi_v3_12_0::view_mode::read_only>’
+json.hpp:2326:11: error: no type named ‘string_t’ in ‘class nlohmann::json_abi_v3_12_0::basic_json_document<nlohmann::json_abi_v3_12_0::basic_json<>, nlohmann::json_abi_v3_12_0::view_mode::read_only>’
+json.hpp:2309:30: error: no type named ‘type’ in ‘struct std::enable_if<false, int>’
+gen_29.cpp:11:64: error: expected primary-expression before ‘>’ token
+```
+Source:
+```cpp
+#include <nlohmann/json.hpp>
+#include <nlohmann/json_view.hpp>
+#include <iostream>
+
+int main() {
+    try {
+        std::string json_str = "{\"msg\": \"line1\\nline2\\rline3\\t\"}";
+        auto doc = nlohmann::json_document::parse(json_str);
+        std::cout << nlohmann::json(doc)["msg"].get<std::string>().length() << std::endl;
+    } catch (const std::exception& e) {
+        std::cout << typeid(e).name() << ": " << e.what() << std::endl;
+    }
+}
+```
+
+## gen_30.cpp (compile)
+Intent: Probes parsing JSON strings containing unicode escape sequences.
+COMPILE ERROR. The program fails to compile, the same way against the old and the new library. Fix the error (wrong or missing include, typo, misuse of the public API) and keep the intent: the call under test must stay. Include only headers that exist; if you are unsure a header exists, use the library's main header.
+Compiler errors:
+```
+gen_30.cpp:11:40: error: no matching function for call to ‘nlohmann::json_abi_v3_12_0::basic_json<>::basic_json(nlohmann::json_abi_v3_12_0::basic_json_document<nlohmann::json_abi_v3_12_0::basic_json<>, nlohmann::json_abi_v3_12_0::view_mode::read_only>&)’
+json.hpp:2635:105: error: no type named ‘value_type’ in ‘class nlohmann::json_abi_v3_12_0::basic_json_document<nlohmann::json_abi_v3_12_0::basic_json<>, nlohmann::json_abi_v3_12_0::view_mode::read_only>’
+json.hpp:2326:11: error: no type named ‘string_t’ in ‘class nlohmann::json_abi_v3_12_0::basic_json_document<nlohmann::json_abi_v3_12_0::basic_json<>, nlohmann::json_abi_v3_12_0::view_mode::read_only>’
+json.hpp:2326:11: error: no type named ‘string_t’ in ‘class nlohmann::json_abi_v3_12_0::basic_json_document<nlohmann::json_abi_v3_12_0::basic_json<>, nlohmann::json_abi_v3_12_0::view_mode::read_only>’
+json.hpp:2309:30: error: no type named ‘type’ in ‘struct std::enable_if<false, int>’
+```
+Source:
+```cpp
+#include <nlohmann/json.hpp>
+#include <nlohmann/json_view.hpp>
+#include <iostream>
+
+int main() {
+    try {
+        std::string json_str = "{\"unicode\": \"\\u0048\\u0065\\u006c\\u006c\\u006f\"}";
+        auto doc = nlohmann::json_document::parse(json_str);
+        std::cout << nlohmann::json(doc)["unicode"] << std::endl;
+    } catch (const std::exception& e) {
+        std::cout << typeid(e).name() << ": " << e.what() << std::endl;
+    }
+}
+```
+
+## gen_31.cpp (compile)
+Intent: Probes parsing objects with boolean values at boundaries.
+COMPILE ERROR. The program fails to compile, the same way against the old and the new library. Fix the error (wrong or missing include, typo, misuse of the public API) and keep the intent: the call under test must stay. Include only headers that exist; if you are unsure a header exists, use the library's main header.
+Compiler errors:
+```
+gen_31.cpp:11:40: error: no matching function for call to ‘nlohmann::json_abi_v3_12_0::basic_json<>::basic_json(nlohmann::json_abi_v3_12_0::basic_json_document<nlohmann::json_abi_v3_12_0::basic_json<>, nlohmann::json_abi_v3_12_0::view_mode::read_only>&)’
+json.hpp:2635:105: error: no type named ‘value_type’ in ‘class nlohmann::json_abi_v3_12_0::basic_json_document<nlohmann::json_abi_v3_12_0::basic_json<>, nlohmann::json_abi_v3_12_0::view_mode::read_only>’
+json.hpp:2326:11: error: no type named ‘string_t’ in ‘class nlohmann::json_abi_v3_12_0::basic_json_document<nlohmann::json_abi_v3_12_0::basic_json<>, nlohmann::json_abi_v3_12_0::view_mode::read_only>’
+json.hpp:2326:11: error: no type named ‘string_t’ in ‘class nlohmann::json_abi_v3_12_0::basic_json_document<nlohmann::json_abi_v3_12_0::basic_json<>, nlohmann::json_abi_v3_12_0::view_mode::read_only>’
+json.hpp:2309:30: error: no type named ‘type’ in ‘struct std::enable_if<false, int>’
+gen_31.cpp:11:51: error: expected primary-expression before ‘bool’
+```
+Source:
+```cpp
+#include <nlohmann/json.hpp>
+#include <nlohmann/json_view.hpp>
+#include <iostream>
+
+int main() {
+    try {
+        std::string json_str = "{\"t\": true, \"f\": false}";
+        auto doc = nlohmann::json_document::parse(json_str);
+        std::cout << nlohmann::json(doc)["t"].get<bool>() << nlohmann::json(doc)["f"].get<bool>() << std::endl;
+    } catch (const std::exception& e) {
+        std::cout << typeid(e).name() << ": " << e.what() << std::endl;
+    }
+}
+```
+
+## gen_32.cpp (compile)
+Intent: Probes parsing extreme numerical values.
+COMPILE ERROR. The program fails to compile, the same way against the old and the new library. Fix the error (wrong or missing include, typo, misuse of the public API) and keep the intent: the call under test must stay. Include only headers that exist; if you are unsure a header exists, use the library's main header.
+Compiler errors:
+```
+gen_32.cpp:11:40: error: no matching function for call to ‘nlohmann::json_abi_v3_12_0::basic_json<>::basic_json(nlohmann::json_abi_v3_12_0::basic_json_document<nlohmann::json_abi_v3_12_0::basic_json<>, nlohmann::json_abi_v3_12_0::view_mode::read_only>&)’
+json.hpp:2635:105: error: no type named ‘value_type’ in ‘class nlohmann::json_abi_v3_12_0::basic_json_document<nlohmann::json_abi_v3_12_0::basic_json<>, nlohmann::json_abi_v3_12_0::view_mode::read_only>’
+json.hpp:2326:11: error: no type named ‘string_t’ in ‘class nlohmann::json_abi_v3_12_0::basic_json_document<nlohmann::json_abi_v3_12_0::basic_json<>, nlohmann::json_abi_v3_12_0::view_mode::read_only>’
+json.hpp:2326:11: error: no type named ‘string_t’ in ‘class nlohmann::json_abi_v3_12_0::basic_json_document<nlohmann::json_abi_v3_12_0::basic_json<>, nlohmann::json_abi_v3_12_0::view_mode::read_only>’
+json.hpp:2309:30: error: no type named ‘type’ in ‘struct std::enable_if<false, int>’
+gen_32.cpp:12:40: error: no matching function for call to ‘nlohmann::json_abi_v3_12_0::basic_json<>::basic_json(nlohmann::json_abi_v3_12_0::basic_json_document<nlohmann::json_abi_v3_12_0::basic_json<>, nlohmann::json_abi_v3_12_0::view_mode::read_only>&)’
+```
+Source:
+```cpp
+#include <nlohmann/json.hpp>
+#include <nlohmann/json_view.hpp>
+#include <iostream>
+
+int main() {
+    try {
+        std::string json_str = "{\"min\": -9223372036854775807, \"max\": 9223372036854775807}";
+        auto doc = nlohmann::json_document::parse(json_str);
+        std::cout << nlohmann::json(doc)["min"] << std::endl;
+        std::cout << nlohmann::json(doc)["max"] << std::endl;
+    } catch (const std::exception& e) {
+        std::cout << typeid(e).name() << ": " << e.what() << std::endl;
+    }
+}
+```
+
+# Task
+Return JSON with a "fixes" array: one item per program above, with "file" (exactly as given) and "code" (the complete repaired program, standalone, with its own int main). Do not return programs you cannot repair.

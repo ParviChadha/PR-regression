@@ -80,6 +80,9 @@ int64_t when negative).
 
 Signed-off-by: Niels Lohmann <mail@nlohmann.me>
 
+## Headers the programs must include
+- Also write #include <nlohmann/json_view.hpp>. The json_view feature (json_document, json_view and their image loading and editing API) is declared only in this header; nlohmann/json.hpp does not include it, so without this line those names do not exist. Use only names you can see in the diff or the context below.
+
 ## Changed functions (from changes.py)
 - nlohmann::detail::view::check_float_ranges(std::vector<float_range> &, const unsigned char *) (private); reached from the public API through: nlohmann::basic_json_document::load(std::vector<std::uint8_t> &&, const image_check), nlohmann::basic_json_document::load(const std::uint8_t *, std::size_t, const image_check)
 - nlohmann::detail::view::integer_token_fits(const number_token &) (private); reached from the public API through: nlohmann::basic_json_document::load(std::vector<std::uint8_t> &&, const image_check), nlohmann::basic_json_document::load(const std::uint8_t *, std::size_t, const image_check)
@@ -133,13 +136,13 @@ index e6680730f..5459f435f 100644
 
 # Programs to repair
 
-## gen_16.cpp (compile)
-Intent: Probes image_check::full validation on a float node backed by a small explicitly signed positive integer token.
+## gen_31.cpp (compile)
+Intent: Test that a small integer token masquerading as a float range is rejected by image_check::full.
 COMPILE ERROR. The program fails to compile, the same way against the old and the new library. Fix the error (wrong or missing include, typo, misuse of the public API) and keep the intent: the call under test must stay. Include only headers that exist; if you are unsure a header exists, use the library's main header.
 Compiler errors:
 ```
-gen_16.cpp:10:45: error: ‘materialize’ is not a member of ‘nlohmann::json_abi_v3_12_0::json_document’ {aka ‘nlohmann::json_abi_v3_12_0::basic_json_document<nlohmann::json_abi_v3_12_0::basic_json<>, nlohmann::json_abi_v3_12_0::view_mode::read_only>’}
-gen_16.cpp:12:70: error: ‘nlohmann::image_check’ has not been declared
+gen_31.cpp:10:66: error: ‘to_image’ is not a member of ‘nlohmann::json_abi_v3_12_0::json_document’ {aka ‘nlohmann::json_abi_v3_12_0::basic_json_document<nlohmann::json_abi_v3_12_0::basic_json<>, nlohmann::json_abi_v3_12_0::view_mode::read_only>’}
+gen_31.cpp:18:81: error: ‘nlohmann::json_view_image_check’ has not been declared
 ```
 Source:
 ```cpp
@@ -149,294 +152,31 @@ Source:
 
 int main() {
     try {
-        nlohmann::json j = 42.0;
-        auto doc = nlohmann::json_document::materialize(j);
-        auto image = doc.save();
-        auto loaded = nlohmann::json_document::load(image, nlohmann::image_check::full);
-        std::cout << "SUCCESS: " << loaded.materialize().dump() << std::endl;
-    } catch (const std::exception& e) {
-        std::cout << "EXCEPTION: " << e.what() << std::endl;
-    }
-}
-```
-
-## gen_17.cpp (compile)
-Intent: Probes integer_token_fits code paths explicitly for 19-digit negative tokens starting with digit other than 9.
-COMPILE ERROR. The program fails to compile, the same way against the old and the new library. Fix the error (wrong or missing include, typo, misuse of the public API) and keep the intent: the call under test must stay. Include only headers that exist; if you are unsure a header exists, use the library's main header.
-Compiler errors:
-```
-gen_17.cpp:10:45: error: ‘materialize’ is not a member of ‘nlohmann::json_abi_v3_12_0::json_document’ {aka ‘nlohmann::json_abi_v3_12_0::basic_json_document<nlohmann::json_abi_v3_12_0::basic_json<>, nlohmann::json_abi_v3_12_0::view_mode::read_only>’}
-gen_17.cpp:12:70: error: ‘nlohmann::image_check’ has not been declared
-```
-Source:
-```cpp
-#include <nlohmann/json.hpp>
-#include <nlohmann/json_view.hpp>
-#include <iostream>
-
-int main() {
-    try {
-        nlohmann::json j = -1234567890123456789.0;
-        auto doc = nlohmann::json_document::materialize(j);
-        auto image = doc.save();
-        auto loaded = nlohmann::json_document::load(image, nlohmann::image_check::full);
-        std::cout << "SUCCESS: " << loaded.materialize().dump() << std::endl;
-    } catch (const std::exception& e) {
-        std::cout << "EXCEPTION: " << e.what() << std::endl;
-    }
-}
-```
-
-## gen_18.cpp (compile)
-Intent: Probes integer_token_fits branch where 20-digit token starts with a digit greater than 1.
-COMPILE ERROR. The program fails to compile, the same way against the old and the new library. Fix the error (wrong or missing include, typo, misuse of the public API) and keep the intent: the call under test must stay. Include only headers that exist; if you are unsure a header exists, use the library's main header.
-Compiler errors:
-```
-gen_18.cpp:10:45: error: ‘materialize’ is not a member of ‘nlohmann::json_abi_v3_12_0::json_document’ {aka ‘nlohmann::json_abi_v3_12_0::basic_json_document<nlohmann::json_abi_v3_12_0::basic_json<>, nlohmann::json_abi_v3_12_0::view_mode::read_only>’}
-gen_18.cpp:12:70: error: ‘nlohmann::image_check’ has not been declared
-```
-Source:
-```cpp
-#include <nlohmann/json.hpp>
-#include <nlohmann/json_view.hpp>
-#include <iostream>
-
-int main() {
-    try {
-        nlohmann::json j = 2e19;
-        auto doc = nlohmann::json_document::materialize(j);
-        auto image = doc.save();
-        auto loaded = nlohmann::json_document::load(image, nlohmann::image_check::full);
-        std::cout << "SUCCESS: " << loaded.materialize().dump() << std::endl;
-    } catch (const std::exception& e) {
-        std::cout << "EXCEPTION: " << e.what() << std::endl;
-    }
-}
-```
-
-## gen_19.cpp (compile)
-Intent: Probes loading a complex JSON structure containing various numeric types with image_check::full.
-COMPILE ERROR. The program fails to compile, the same way against the old and the new library. Fix the error (wrong or missing include, typo, misuse of the public API) and keep the intent: the call under test must stay. Include only headers that exist; if you are unsure a header exists, use the library's main header.
-Compiler errors:
-```
-gen_19.cpp:10:45: error: ‘materialize’ is not a member of ‘nlohmann::json_abi_v3_12_0::json_document’ {aka ‘nlohmann::json_abi_v3_12_0::basic_json_document<nlohmann::json_abi_v3_12_0::basic_json<>, nlohmann::json_abi_v3_12_0::view_mode::read_only>’}
-gen_19.cpp:12:70: error: ‘nlohmann::image_check’ has not been declared
-```
-Source:
-```cpp
-#include <nlohmann/json.hpp>
-#include <nlohmann/json_view.hpp>
-#include <iostream>
-
-int main() {
-    try {
-        nlohmann::json j = {{"int_val", 100}, {"float_val", 3.14}, {"large_val", 18446744073709551616.0}};
-        auto doc = nlohmann::json_document::materialize(j);
-        auto image = doc.save();
-        auto loaded = nlohmann::json_document::load(image, nlohmann::image_check::full);
-        std::cout << "SUCCESS: " << loaded.materialize().dump() << std::endl;
-    } catch (const std::exception& e) {
-        std::cout << "EXCEPTION: " << e.what() << std::endl;
-    }
-}
-```
-
-## gen_20.cpp (compile)
-Intent: Exercise integer_token_fits where t.int_digits == 20, t.negative is false, leading digit is '2', returning false without memcmp.
-COMPILE ERROR. The program fails to compile, the same way against the old and the new library. Fix the error (wrong or missing include, typo, misuse of the public API) and keep the intent: the call under test must stay. Include only headers that exist; if you are unsure a header exists, use the library's main header.
-Compiler errors:
-```
-gen_20.cpp:9:51: error: ‘nlohmann::json_document’ has not been declared
-gen_20.cpp:10:30: error: ‘nlohmann::json_document’ has not been declared
-gen_20.cpp:10:76: error: ‘nlohmann::image_check’ has not been declared
-```
-Source:
-```cpp
-#include <nlohmann/json.hpp>
-#include <iostream>
-#include <vector>
-int main() {
-    try {
-        nlohmann::json j = 20000000000000000000ULL;
+        nlohmann::json j = 123.0;
         std::vector<std::uint8_t> img = nlohmann::json_document::to_image(j);
-        auto doc = nlohmann::json_document::load(std::move(img), nlohmann::image_check::full);
-        std::cout << "loaded: " << doc.materialize().dump() << std::endl;
-    } catch (const std::exception& e) {
-        std::cout << "exception: " << e.what() << std::endl;
-    }
-}
-```
-
-## gen_21.cpp (compile)
-Intent: Exercise integer_token_fits where t.int_digits == 19, t.negative is true, leading digit is '8', returning true without memcmp.
-COMPILE ERROR. The program fails to compile, the same way against the old and the new library. Fix the error (wrong or missing include, typo, misuse of the public API) and keep the intent: the call under test must stay. Include only headers that exist; if you are unsure a header exists, use the library's main header.
-Compiler errors:
-```
-gen_21.cpp:9:51: error: ‘nlohmann::json_document’ has not been declared
-gen_21.cpp:10:30: error: ‘nlohmann::json_document’ has not been declared
-gen_21.cpp:10:76: error: ‘nlohmann::image_check’ has not been declared
-```
-Source:
-```cpp
-#include <nlohmann/json.hpp>
-#include <iostream>
-#include <vector>
-int main() {
-    try {
-        nlohmann::json j = -8000000000000000000LL;
-        std::vector<std::uint8_t> img = nlohmann::json_document::to_image(j);
-        auto doc = nlohmann::json_document::load(std::move(img), nlohmann::image_check::full);
-        std::cout << "loaded: " << doc.materialize().dump() << std::endl;
-    } catch (const std::exception& e) {
-        std::cout << "exception: " << e.what() << std::endl;
-    }
-}
-```
-
-## gen_22.cpp (compile)
-Intent: Exercise integer_token_fits where t.int_digits == 19, t.negative is true, leading digit is '9', executing memcmp with "9223372036854775808".
-COMPILE ERROR. The program fails to compile, the same way against the old and the new library. Fix the error (wrong or missing include, typo, misuse of the public API) and keep the intent: the call under test must stay. Include only headers that exist; if you are unsure a header exists, use the library's main header.
-Compiler errors:
-```
-gen_22.cpp:9:51: error: ‘nlohmann::json_document’ has not been declared
-gen_22.cpp:10:30: error: ‘nlohmann::json_document’ has not been declared
-gen_22.cpp:10:76: error: ‘nlohmann::image_check’ has not been declared
-```
-Source:
-```cpp
-#include <nlohmann/json.hpp>
-#include <iostream>
-#include <vector>
-int main() {
-    try {
-        nlohmann::json j = -9000000000000000000LL;
-        std::vector<std::uint8_t> img = nlohmann::json_document::to_image(j);
-        auto doc = nlohmann::json_document::load(std::move(img), nlohmann::image_check::full);
-        std::cout << "loaded: " << doc.materialize().dump() << std::endl;
-    } catch (const std::exception& e) {
-        std::cout << "exception: " << e.what() << std::endl;
-    }
-}
-```
-
-## gen_23.cpp (compile)
-Intent: Exercise integer_token_fits where t.int_digits > 20, returning false immediately.
-COMPILE ERROR. The program fails to compile, the same way against the old and the new library. Fix the error (wrong or missing include, typo, misuse of the public API) and keep the intent: the call under test must stay. Include only headers that exist; if you are unsure a header exists, use the library's main header.
-Compiler errors:
-```
-gen_23.cpp:9:51: error: ‘nlohmann::json_document’ has not been declared
-gen_23.cpp:10:30: error: ‘nlohmann::json_document’ has not been declared
-gen_23.cpp:10:76: error: ‘nlohmann::image_check’ has not been declared
-```
-Source:
-```cpp
-#include <nlohmann/json.hpp>
-#include <iostream>
-#include <vector>
-int main() {
-    try {
-        nlohmann::json j = 1.5e30;
-        std::vector<std::uint8_t> img = nlohmann::json_document::to_image(j);
-        auto doc = nlohmann::json_document::load(std::move(img), nlohmann::image_check::full);
-        std::cout << "loaded: " << doc.materialize().dump() << std::endl;
-    } catch (const std::exception& e) {
-        std::cout << "exception: " << e.what() << std::endl;
-    }
-}
-```
-
-## gen_24.cpp (compile)
-Intent: Exercise integer_token_fits where t.int_digits < 19 and positive, returning true directly.
-COMPILE ERROR. The program fails to compile, the same way against the old and the new library. Fix the error (wrong or missing include, typo, misuse of the public API) and keep the intent: the call under test must stay. Include only headers that exist; if you are unsure a header exists, use the library's main header.
-Compiler errors:
-```
-gen_24.cpp:9:51: error: ‘nlohmann::json_document’ has not been declared
-gen_24.cpp:10:30: error: ‘nlohmann::json_document’ has not been declared
-gen_24.cpp:10:76: error: ‘nlohmann::image_check’ has not been declared
-```
-Source:
-```cpp
-#include <nlohmann/json.hpp>
-#include <iostream>
-#include <vector>
-int main() {
-    try {
-        nlohmann::json j = 12345;
-        std::vector<std::uint8_t> img = nlohmann::json_document::to_image(j);
-        auto doc = nlohmann::json_document::load(std::move(img), nlohmann::image_check::full);
-        std::cout << "loaded: " << doc.materialize().dump() << std::endl;
-    } catch (const std::exception& e) {
-        std::cout << "exception: " << e.what() << std::endl;
-    }
-}
-```
-
-## gen_25.cpp (compile)
-Intent: Probes whether image_check::full accepts a float node whose integer token exceeds 64-bit limits.
-COMPILE ERROR. The program fails to compile, the same way against the old and the new library. Fix the error (wrong or missing include, typo, misuse of the public API) and keep the intent: the call under test must stay. Include only headers that exist; if you are unsure a header exists, use the library's main header.
-Compiler errors:
-```
-gen_25.cpp:10:45: error: ‘from_json’ is not a member of ‘nlohmann::json_abi_v3_12_0::json_document’ {aka ‘nlohmann::json_abi_v3_12_0::basic_json_document<nlohmann::json_abi_v3_12_0::basic_json<>, nlohmann::json_abi_v3_12_0::view_mode::read_only>’}
-gen_25.cpp:12:70: error: ‘nlohmann::json_view_check’ has not been declared
-```
-Source:
-```cpp
-#include <nlohmann/json.hpp>
-#include <nlohmann/json_view.hpp>
-#include <iostream>
-
-int main() {
-    try {
-        nlohmann::json j = 18446744073709551616.0;
-        auto doc = nlohmann::json_document::from_json(j);
-        auto image = doc.save();
-        auto loaded = nlohmann::json_document::load(image, nlohmann::json_view_check::full);
-        std::cout << "SUCCESS: " << loaded.to_json().dump() << std::endl;
-    } catch (const std::exception& e) {
-        std::cout << "EXCEPTION: " << e.what() << std::endl;
-    }
-}
-```
-
-## gen_26.cpp (compile)
-Intent: Probes whether image_check::full rejects a float node whose integer token fits 64 bits.
-COMPILE ERROR. The program fails to compile, the same way against the old and the new library. Fix the error (wrong or missing include, typo, misuse of the public API) and keep the intent: the call under test must stay. Include only headers that exist; if you are unsure a header exists, use the library's main header.
-Compiler errors:
-```
-gen_26.cpp:10:45: error: ‘from_json’ is not a member of ‘nlohmann::json_abi_v3_12_0::json_document’ {aka ‘nlohmann::json_abi_v3_12_0::basic_json_document<nlohmann::json_abi_v3_12_0::basic_json<>, nlohmann::json_abi_v3_12_0::view_mode::read_only>’}
-gen_26.cpp:18:70: error: ‘nlohmann::json_view_check’ has not been declared
-```
-Source:
-```cpp
-#include <nlohmann/json.hpp>
-#include <nlohmann/json_view.hpp>
-#include <iostream>
-
-int main() {
-    try {
-        nlohmann::json j = 18446744073709551616.0;
-        auto doc = nlohmann::json_document::from_json(j);
-        auto image = doc.save();
-        for (std::size_t i = 0; i < image.size(); ++i) {
-            if (image[i] == '1' && i + 1 < image.size() && image[i+1] == '8') {
-                image[i+1] = '0';
-                break;
+        std::string s(img.begin(), img.end());
+        for (std::size_t i = 0; i + 3 < s.size(); ++i) {
+            if (s[i] == '1' && s[i+1] == '2' && s[i+2] == '3' && s[i+3] == '.') {
+                s[i+3] = '0';
             }
         }
-        auto loaded = nlohmann::json_document::load(image, nlohmann::json_view_check::full);
-        std::cout << "SUCCESS: " << loaded.to_json().dump() << std::endl;
+        std::vector<std::uint8_t> tampered(s.begin(), s.end());
+        auto doc = nlohmann::json_document::load(std::move(tampered), nlohmann::json_view_image_check::full);
+        std::cout << "LOADED" << std::endl;
     } catch (const std::exception& e) {
-        std::cout << "EXCEPTION: " << e.what() << std::endl;
+        std::cout << "EXCEPTION_CAUGHT: " << e.what() << std::endl;
     }
+    return 0;
 }
 ```
 
-## gen_27.cpp (compile)
-Intent: Probes loading a float node for the exact boundary value 2^64 via an integer token format.
+## gen_32.cpp (compile)
+Intent: Test handling of a 20-digit integer token edge case via image loading.
 COMPILE ERROR. The program fails to compile, the same way against the old and the new library. Fix the error (wrong or missing include, typo, misuse of the public API) and keep the intent: the call under test must stay. Include only headers that exist; if you are unsure a header exists, use the library's main header.
 Compiler errors:
 ```
-gen_27.cpp:11:67: error: ‘nlohmann::json_view_check’ has not been declared
+gen_32.cpp:10:66: error: ‘to_image’ is not a member of ‘nlohmann::json_abi_v3_12_0::json_document’ {aka ‘nlohmann::json_abi_v3_12_0::basic_json_document<nlohmann::json_abi_v3_12_0::basic_json<>, nlohmann::json_abi_v3_12_0::view_mode::read_only>’}
+gen_32.cpp:11:76: error: ‘nlohmann::json_view_image_check’ has not been declared
 ```
 Source:
 ```cpp
@@ -446,23 +186,24 @@ Source:
 
 int main() {
     try {
-        std::string s = "[18446744073709551616]";
-        std::vector<std::uint8_t> bytes(s.begin(), s.end());
-        auto doc = nlohmann::json_document::load(bytes, nlohmann::json_view_check::full);
-        std::cout << "SUCCESS: " << doc.to_json().dump() << std::endl;
+        nlohmann::json j = 1.0e20;
+        std::vector<std::uint8_t> img = nlohmann::json_document::to_image(j);
+        auto doc = nlohmann::json_document::load(std::move(img), nlohmann::json_view_image_check::full);
+        std::cout << "LOADED_20_DIGIT" << std::endl;
     } catch (const std::exception& e) {
         std::cout << "EXCEPTION: " << e.what() << std::endl;
     }
+    return 0;
 }
 ```
 
-## gen_28.cpp (compile)
-Intent: Probes image_check::full on a negative float node with a token magnitude exceeding int64_t range.
+## gen_33.cpp (compile)
+Intent: Test a 21-digit integer token which exceeds 64-bits and should be treated as a float node.
 COMPILE ERROR. The program fails to compile, the same way against the old and the new library. Fix the error (wrong or missing include, typo, misuse of the public API) and keep the intent: the call under test must stay. Include only headers that exist; if you are unsure a header exists, use the library's main header.
 Compiler errors:
 ```
-gen_28.cpp:10:45: error: ‘from_json’ is not a member of ‘nlohmann::json_abi_v3_12_0::json_document’ {aka ‘nlohmann::json_abi_v3_12_0::basic_json_document<nlohmann::json_abi_v3_12_0::basic_json<>, nlohmann::json_abi_v3_12_0::view_mode::read_only>’}
-gen_28.cpp:12:70: error: ‘nlohmann::json_view_check’ has not been declared
+gen_33.cpp:10:66: error: ‘to_image’ is not a member of ‘nlohmann::json_abi_v3_12_0::json_document’ {aka ‘nlohmann::json_abi_v3_12_0::basic_json_document<nlohmann::json_abi_v3_12_0::basic_json<>, nlohmann::json_abi_v3_12_0::view_mode::read_only>’}
+gen_33.cpp:11:76: error: ‘nlohmann::json_view_image_check’ has not been declared
 ```
 Source:
 ```cpp
@@ -472,24 +213,24 @@ Source:
 
 int main() {
     try {
-        nlohmann::json j = -9223372036854775809.0;
-        auto doc = nlohmann::json_document::from_json(j);
-        auto image = doc.save();
-        auto loaded = nlohmann::json_document::load(image, nlohmann::json_view_check::full);
-        std::cout << "SUCCESS: " << loaded.to_json().dump() << std::endl;
+        nlohmann::json j = 1.0e25;
+        std::vector<std::uint8_t> img = nlohmann::json_document::to_image(j);
+        auto doc = nlohmann::json_document::load(std::move(img), nlohmann::json_view_image_check::full);
+        std::cout << "LOADED_21_DIGIT" << std::endl;
     } catch (const std::exception& e) {
         std::cout << "EXCEPTION: " << e.what() << std::endl;
     }
+    return 0;
 }
 ```
 
-## gen_29.cpp (compile)
-Intent: Probes image_check::full rejection of a negative float node whose token fits int64_t.
+## gen_34.cpp (compile)
+Intent: Test a 19-digit negative integer token boundary case with image_check::full.
 COMPILE ERROR. The program fails to compile, the same way against the old and the new library. Fix the error (wrong or missing include, typo, misuse of the public API) and keep the intent: the call under test must stay. Include only headers that exist; if you are unsure a header exists, use the library's main header.
 Compiler errors:
 ```
-gen_29.cpp:10:45: error: ‘from_json’ is not a member of ‘nlohmann::json_abi_v3_12_0::json_document’ {aka ‘nlohmann::json_abi_v3_12_0::basic_json_document<nlohmann::json_abi_v3_12_0::basic_json<>, nlohmann::json_abi_v3_12_0::view_mode::read_only>’}
-gen_29.cpp:18:70: error: ‘nlohmann::json_view_check’ has not been declared
+gen_34.cpp:10:66: error: ‘to_image’ is not a member of ‘nlohmann::json_abi_v3_12_0::json_document’ {aka ‘nlohmann::json_abi_v3_12_0::basic_json_document<nlohmann::json_abi_v3_12_0::basic_json<>, nlohmann::json_abi_v3_12_0::view_mode::read_only>’}
+gen_34.cpp:11:76: error: ‘nlohmann::json_view_image_check’ has not been declared
 ```
 Source:
 ```cpp
@@ -499,30 +240,261 @@ Source:
 
 int main() {
     try {
-        nlohmann::json j = -9223372036854775809.0;
-        auto doc = nlohmann::json_document::from_json(j);
-        auto image = doc.save();
-        for (std::size_t i = 0; i < image.size(); ++i) {
-            if (image[i] == '-' && i + 1 < image.size() && image[i+1] == '9') {
-                image[i+1] = '1';
-                break;
+        nlohmann::json j = -9.2233720368547758e+18;
+        std::vector<std::uint8_t> img = nlohmann::json_document::to_image(j);
+        auto doc = nlohmann::json_document::load(std::move(img), nlohmann::json_view_image_check::full);
+        std::cout << "LOADED_NEG_19" << std::endl;
+    } catch (const std::exception& e) {
+        std::cout << "EXCEPTION: " << e.what() << std::endl;
+    }
+    return 0;
+}
+```
+
+## gen_35.cpp (compile)
+Intent: Test iterating over an array inside a successfully loaded json_view document.
+COMPILE ERROR. The program fails to compile, the same way against the old and the new library. Fix the error (wrong or missing include, typo, misuse of the public API) and keep the intent: the call under test must stay. Include only headers that exist; if you are unsure a header exists, use the library's main header.
+Compiler errors:
+```
+gen_35.cpp:10:66: error: ‘to_image’ is not a member of ‘nlohmann::json_abi_v3_12_0::json_document’ {aka ‘nlohmann::json_abi_v3_12_0::basic_json_document<nlohmann::json_abi_v3_12_0::basic_json<>, nlohmann::json_abi_v3_12_0::view_mode::read_only>’}
+gen_35.cpp:11:76: error: ‘nlohmann::json_view_image_check’ has not been declared
+```
+Source:
+```cpp
+#include <nlohmann/json.hpp>
+#include <nlohmann/json_view.hpp>
+#include <iostream>
+
+int main() {
+    try {
+        nlohmann::json j = nlohmann::json::array({1, 2, 3, 4, 5});
+        std::vector<std::uint8_t> img = nlohmann::json_document::to_image(j);
+        auto doc = nlohmann::json_document::load(std::move(img), nlohmann::json_view_image_check::full);
+        auto view = doc.view();
+        for (const auto& el : view) {
+            std::cout << el.dump() << " ";
+        }
+        std::cout << std::endl;
+    } catch (const std::exception& e) {
+        std::cout << "EXCEPTION: " << e.what() << std::endl;
+    }
+    return 0;
+}
+```
+
+## gen_36.cpp (compile)
+Intent: Test performing object member lookup on a loaded json_view document.
+COMPILE ERROR. The program fails to compile, the same way against the old and the new library. Fix the error (wrong or missing include, typo, misuse of the public API) and keep the intent: the call under test must stay. Include only headers that exist; if you are unsure a header exists, use the library's main header.
+Compiler errors:
+```
+gen_36.cpp:10:66: error: ‘to_vector’ is not a member of ‘nlohmann::json_abi_v3_12_0::json_document’ {aka ‘nlohmann::json_abi_v3_12_0::basic_json_document<nlohmann::json_abi_v3_12_0::basic_json<>, nlohmann::json_abi_v3_12_0::view_mode::read_only>’}
+gen_36.cpp:11:76: error: ‘nlohmann::json_view_image_check’ has not been declared
+```
+Source:
+```cpp
+#include <nlohmann/json.hpp>
+#include <nlohmann/json_view.hpp>
+#include <iostream>
+
+int main() {
+    try {
+        nlohmann::json j = {{"key", "value"}, {"number", 100}};
+        std::vector<std::uint8_t> img = nlohmann::json_document::to_vector(j);
+        auto doc = nlohmann::json_document::load(std::move(img), nlohmann::json_view_image_check::full);
+        auto view = doc.view();
+        if (view.contains("number")) {
+            std::cout << "FOUND: " << view["number"].dump() << std::endl;
+        }
+    } catch (const std::exception& e) {
+        std::cout << "EXCEPTION: " << e.what() << std::endl;
+    }
+    return 0;
+}
+```
+
+## gen_37.cpp (compile)
+Intent: Test materializing a loaded json_document back into a standard basic_json object.
+COMPILE ERROR. The program fails to compile, the same way against the old and the new library. Fix the error (wrong or missing include, typo, misuse of the public API) and keep the intent: the call under test must stay. Include only headers that exist; if you are unsure a header exists, use the library's main header.
+Compiler errors:
+```
+gen_37.cpp:10:66: error: ‘to_vector’ is not a member of ‘nlohmann::json_abi_v3_12_0::json_document’ {aka ‘nlohmann::json_abi_v3_12_0::basic_json_document<nlohmann::json_abi_v3_12_0::basic_json<>, nlohmann::json_abi_v3_12_0::view_mode::read_only>’}
+gen_37.cpp:11:76: error: ‘nlohmann::json_view_image_check’ has not been declared
+```
+Source:
+```cpp
+#include <nlohmann/json.hpp>
+#include <nlohmann/json_view.hpp>
+#include <iostream>
+
+int main() {
+    try {
+        nlohmann::json j = {{"hello", "world"}, {"pi", 3.14}};
+        std::vector<std::uint8_t> img = nlohmann::json_document::to_vector(j);
+        auto doc = nlohmann::json_document::load(std::move(img), nlohmann::json_view_image_check::full);
+        nlohmann::json materialized = nlohmann::json(doc.view());
+        std::cout << "MATERIALIZED: " << materialized.dump() << std::endl;
+    } catch (const std::exception& e) {
+        std::cout << "EXCEPTION: " << e.what() << std::endl;
+    }
+    return 0;
+}
+```
+
+## gen_38.cpp (compile)
+Intent: Test loading a json document containing booleans and null values via image_check::full.
+COMPILE ERROR. The program fails to compile, the same way against the old and the new library. Fix the error (wrong or missing include, typo, misuse of the public API) and keep the intent: the call under test must stay. Include only headers that exist; if you are unsure a header exists, use the library's main header.
+Compiler errors:
+```
+gen_38.cpp:10:66: error: ‘to_vector’ is not a member of ‘nlohmann::json_abi_v3_12_0::json_document’ {aka ‘nlohmann::json_abi_v3_12_0::basic_json_document<nlohmann::json_abi_v3_12_0::basic_json<>, nlohmann::json_abi_v3_12_0::view_mode::read_only>’}
+gen_38.cpp:11:76: error: ‘nlohmann::json_view_image_check’ has not been declared
+```
+Source:
+```cpp
+#include <nlohmann/json.hpp>
+#include <nlohmann/json_view.hpp>
+#include <iostream>
+
+int main() {
+    try {
+        nlohmann::json j = {{"b_true", true}, {"b_false", false}, {"n_val", nullptr}};
+        std::vector<std::uint8_t> img = nlohmann::json_document::to_vector(j);
+        auto doc = nlohmann::json_document::load(std::move(img), nlohmann::json_view_image_check::full);
+        std::cout << "LOADED_BOOL_NULL: " << doc.view().dump() << std::endl;
+    } catch (const std::exception& e) {
+        std::cout << "EXCEPTION: " << e.what() << std::endl;
+    }
+    return 0;
+}
+```
+
+## gen_39.cpp (compile)
+Intent: Test loading a complex nested structure with mixed types using image_check::full.
+COMPILE ERROR. The program fails to compile, the same way against the old and the new library. Fix the error (wrong or missing include, typo, misuse of the public API) and keep the intent: the call under test must stay. Include only headers that exist; if you are unsure a header exists, use the library's main header.
+Compiler errors:
+```
+gen_39.cpp:14:66: error: ‘to_vector’ is not a member of ‘nlohmann::json_abi_v3_12_0::json_document’ {aka ‘nlohmann::json_abi_v3_12_0::basic_json_document<nlohmann::json_abi_v3_12_0::basic_json<>, nlohmann::json_abi_v3_12_0::view_mode::read_only>’}
+gen_39.cpp:15:76: error: ‘nlohmann::json_view_image_check’ has not been declared
+```
+Source:
+```cpp
+#include <nlohmann/json.hpp>
+#include <nlohmann/json_view.hpp>
+#include <iostream>
+
+int main() {
+    try {
+        nlohmann::json j = {
+            {"array", {1, 2, 3}},
+            {"nested", {{"x", 10.5}, {"y", 20.1}}},
+            {"active", true}
+        };
+        std::vector<std::uint8_t> img = nlohmann::json_document::to_vector(j);
+        auto doc = nlohmann::json_document::load(std::move(img), nlohmann::json_view_image_check::full);
+        std::cout << "LOADED_NESTED: " << doc.view().dump() << std::endl;
+    } catch (const std::exception& e) {
+        std::cout << "EXCEPTION: " << e.what() << std::endl;
+    }
+    return 0;
+}
+```
+
+## gen_40.cpp (compile)
+Intent: Test loading an image of empty array and empty object via image_check::full.
+COMPILE ERROR. The program fails to compile, the same way against the old and the new library. Fix the error (wrong or missing include, typo, misuse of the public API) and keep the intent: the call under test must stay. Include only headers that exist; if you are unsure a header exists, use the library's main header.
+Compiler errors:
+```
+gen_40.cpp:10:66: error: ‘to_vector’ is not a member of ‘nlohmann::json_abi_v3_12_0::json_document’ {aka ‘nlohmann::json_abi_v3_12_0::basic_json_document<nlohmann::json_abi_v3_12_0::basic_json<>, nlohmann::json_abi_v3_12_0::view_mode::read_only>’}
+gen_40.cpp:11:76: error: ‘nlohmann::json_view_image_check’ has not been declared
+```
+Source:
+```cpp
+#include <nlohmann/json.hpp>
+#include <nlohmann/json_view.hpp>
+#include <iostream>
+
+int main() {
+    try {
+        nlohmann::json j = {{"empty_obj", nlohmann::json::object()}, {"empty_arr", nlohmann::json::array()}};
+        std::vector<std::uint8_t> img = nlohmann::json_document::to_vector(j);
+        auto doc = nlohmann::json_document::load(std::move(img), nlohmann::json_view_image_check::full);
+        std::cout << "LOADED_EMPTY: " << doc.view().dump() << std::endl;
+    } catch (const std::exception& e) {
+        std::cout << "EXCEPTION: " << e.what() << std::endl;
+    }
+    return 0;
+}
+```
+
+## gen_41.cpp (compile)
+Intent: Test that json_document successfully loads a float node with an integer-looking token that exceeds 64-bit limits using image_check::full.
+COMPILE ERROR. The program fails to compile, the same way against the old and the new library. Fix the error (wrong or missing include, typo, misuse of the public API) and keep the intent: the call under test must stay. Include only headers that exist; if you are unsure a header exists, use the library's main header.
+Compiler errors:
+```
+gen_41.cpp:10:66: error: ‘to_vector’ is not a member of ‘nlohmann::json_abi_v3_12_0::json_document’ {aka ‘nlohmann::json_abi_v3_12_0::basic_json_document<nlohmann::json_abi_v3_12_0::basic_json<>, nlohmann::json_abi_v3_12_0::view_mode::read_only>’}
+gen_41.cpp:11:76: error: ‘nlohmann::json_view_image_check’ has not been declared
+```
+Source:
+```cpp
+#include <nlohmann/json.hpp>
+#include <nlohmann/json_view.hpp>
+#include <iostream>
+
+int main() {
+    try {
+        nlohmann::json j = 1.8446744073709552e+19;
+        std::vector<std::uint8_t> img = nlohmann::json_document::to_vector(j);
+        auto doc = nlohmann::json_document::load(std::move(img), nlohmann::json_view_image_check::full);
+        std::cout << "LOADED_SUCCESS" << std::endl;
+    } catch (const std::exception& e) {
+        std::cout << "EXCEPTION: " << e.what() << std::endl;
+    }
+    return 0;
+}
+```
+
+## gen_42.cpp (compile)
+Intent: Test that image_check::full rejects a float node whose token is an unsigned integer fitting 64 bits.
+COMPILE ERROR. The program fails to compile, the same way against the old and the new library. Fix the error (wrong or missing include, typo, misuse of the public API) and keep the intent: the call under test must stay. Include only headers that exist; if you are unsure a header exists, use the library's main header.
+Compiler errors:
+```
+gen_42.cpp:11:67: error: ‘to_vector’ is not a member of ‘nlohmann::json_abi_v3_12_0::json_document’ {aka ‘nlohmann::json_abi_v3_12_0::basic_json_document<nlohmann::json_abi_v3_12_0::basic_json<>, nlohmann::json_abi_v3_12_0::view_mode::read_only>’}
+gen_42.cpp:20:77: error: ‘nlohmann::json_view_image_check’ has not been declared
+```
+Source:
+```cpp
+#include <nlohmann/json.hpp>
+#include <nlohmann/json_view.hpp>
+#include <iostream>
+#include <string>
+
+int main() {
+    try {
+        nlohmann::json jf = 1.0e20;
+        std::vector<std::uint8_t> imgf = nlohmann::json_document::to_vector(jf);
+        std::string s(imgf.begin(), imgf.end());
+        auto pos = s.find("1e+20");
+        if (pos != std::string::npos) {
+            std::string replacement = "18446744073709551615";
+            for (std::size_t i = 0; i < replacement.size() && (pos + i) < imgf.size(); ++i) {
+                imgf[pos + i] = static_cast<std::uint8_t>(replacement[i]);
             }
         }
-        auto loaded = nlohmann::json_document::load(image, nlohmann::json_view_check::full);
-        std::cout << "SUCCESS: " << loaded.to_json().dump() << std::endl;
+        auto doc = nlohmann::json_document::load(std::move(imgf), nlohmann::json_view_image_check::full);
+        std::cout << "LOADED" << std::endl;
     } catch (const std::exception& e) {
         std::cout << "EXCEPTION: " << e.what() << std::endl;
     }
+    return 0;
 }
 ```
 
-## gen_30.cpp (compile)
-Intent: Probes that float tokens containing a decimal point are correctly loaded and unaffected by integer checks.
+## gen_43.cpp (compile)
+Intent: Test loading a standard floating point number with an exponent via image_check::full.
 COMPILE ERROR. The program fails to compile, the same way against the old and the new library. Fix the error (wrong or missing include, typo, misuse of the public API) and keep the intent: the call under test must stay. Include only headers that exist; if you are unsure a header exists, use the library's main header.
 Compiler errors:
 ```
-gen_30.cpp:10:45: error: ‘from_json’ is not a member of ‘nlohmann::json_abi_v3_12_0::json_document’ {aka ‘nlohmann::json_abi_v3_12_0::basic_json_document<nlohmann::json_abi_v3_12_0::basic_json<>, nlohmann::json_abi_v3_12_0::view_mode::read_only>’}
-gen_30.cpp:12:70: error: ‘nlohmann::json_view_check’ has not been declared
+gen_43.cpp:10:66: error: ‘to_vector’ is not a member of ‘nlohmann::json_abi_v3_12_0::json_document’ {aka ‘nlohmann::json_abi_v3_12_0::basic_json_document<nlohmann::json_abi_v3_12_0::basic_json<>, nlohmann::json_abi_v3_12_0::view_mode::read_only>’}
+gen_43.cpp:11:76: error: ‘nlohmann::json_view_image_check’ has not been declared
 ```
 Source:
 ```cpp
@@ -532,14 +504,68 @@ Source:
 
 int main() {
     try {
-        nlohmann::json j = 123.456;
-        auto doc = nlohmann::json_document::from_json(j);
-        auto image = doc.save();
-        auto loaded = nlohmann::json_document::load(image, nlohmann::json_view_check::full);
-        std::cout << "SUCCESS: " << loaded.to_json().dump() << std::endl;
+        nlohmann::json j = 1.23456e-10;
+        std::vector<std::uint8_t> img = nlohmann::json_document::to_vector(j);
+        auto doc = nlohmann::json_document::load(std::move(img), nlohmann::json_view_image_check::full);
+        std::cout << "LOADED: " << doc.view().dump() << std::endl;
     } catch (const std::exception& e) {
         std::cout << "EXCEPTION: " << e.what() << std::endl;
     }
+    return 0;
+}
+```
+
+## gen_44.cpp (compile)
+Intent: Test loading a standard floating point number with a fraction point via image_check::full.
+COMPILE ERROR. The program fails to compile, the same way against the old and the new library. Fix the error (wrong or missing include, typo, misuse of the public API) and keep the intent: the call under test must stay. Include only headers that exist; if you are unsure a header exists, use the library's main header.
+Compiler errors:
+```
+gen_44.cpp:10:66: error: ‘to_vector’ is not a member of ‘nlohmann::json_abi_v3_12_0::json_document’ {aka ‘nlohmann::json_abi_v3_12_0::basic_json_document<nlohmann::json_abi_v3_12_0::basic_json<>, nlohmann::json_abi_v3_12_0::view_mode::read_only>’}
+gen_44.cpp:11:76: error: ‘nlohmann::json_view_image_check’ has not been declared
+```
+Source:
+```cpp
+#include <nlohmann/json.hpp>
+#include <nlohmann/json_view.hpp>
+#include <iostream>
+
+int main() {
+    try {
+        nlohmann::json j = 3.1415926535;
+        std::vector<std::uint8_t> img = nlohmann::json_document::to_vector(j);
+        auto doc = nlohmann::json_document::load(std::move(img), nlohmann::json_view_image_check::full);
+        std::cout << "LOADED: " << doc.view().dump() << std::endl;
+    } catch (const std::exception& e) {
+        std::cout << "EXCEPTION: " << e.what() << std::endl;
+    }
+    return 0;
+}
+```
+
+## gen_45.cpp (compile)
+Intent: Test loading a normal 64-bit integer node with image_check::full.
+COMPILE ERROR. The program fails to compile, the same way against the old and the new library. Fix the error (wrong or missing include, typo, misuse of the public API) and keep the intent: the call under test must stay. Include only headers that exist; if you are unsure a header exists, use the library's main header.
+Compiler errors:
+```
+gen_45.cpp:10:66: error: ‘to_vector’ is not a member of ‘nlohmann::json_abi_v3_12_0::json_document’ {aka ‘nlohmann::json_abi_v3_12_0::basic_json_document<nlohmann::json_abi_v3_12_0::basic_json<>, nlohmann::json_abi_v3_12_0::view_mode::read_only>’}
+gen_45.cpp:11:76: error: ‘nlohmann::json_view_image_check’ has not been declared
+```
+Source:
+```cpp
+#include <nlohmann/json.hpp>
+#include <nlohmann/json_view.hpp>
+#include <iostream>
+
+int main() {
+    try {
+        nlohmann::json j = 9223372036854775807LL;
+        std::vector<std::uint8_t> img = nlohmann::json_document::to_vector(j);
+        auto doc = nlohmann::json_document::load(std::move(img), nlohmann::json_view_image_check::full);
+        std::cout << "LOADED: " << doc.view().dump() << std::endl;
+    } catch (const std::exception& e) {
+        std::cout << "EXCEPTION: " << e.what() << std::endl;
+    }
+    return 0;
 }
 ```
 

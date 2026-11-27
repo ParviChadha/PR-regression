@@ -1,0 +1,145 @@
+[system]
+You write test programs that probe a C++ library for behavioral changes made by one pull request.
+Each program is compiled and run twice, once against the library before the change and once after, and the two
+outputs are compared. Your job is to produce programs whose output reveals whether the change altered behavior,
+including side effects the author did not intend.
+
+Rules for every program:
+- It is standalone: one file with its own int main(), compiled as C++17, printing results to stdout.
+- Use only the library's documented public API. Never include internal headers or use detail/impl namespaces,
+  private members or undocumented macros.
+- Do not judge results (no assert, no expected-value comparisons): just print what the library returns. Print
+  enough to make differences visible, one fact per line.
+- Output must be deterministic. Never print pointers or addresses, uninitialized data, the order of
+  hash-based containers, timings, thread ids, random values, file paths or environment data. Print floating point
+  values with an explicit precision. No input, files, network, threads, clocks or randomness.
+- Wrap calls that may throw in try/catch and print the exception's type and message, so an exception is an
+  observable result. Do not crash on purpose.
+- Aim at the code the diff changes. Prefer calls that compile against both the old and the new library; one or two
+  programs may use an API the PR adds. Cover ordinary inputs and edge cases (empty, minimum and maximum values,
+  boundaries, special values, nesting, unusual types) and also neighbouring behavior the change could disturb.
+- When the diff changes which types or inputs an API accepts or rejects (constraints, overloads, traits,
+  conversions), test it with the detection idiom (std::void_t or requires) and `if constexpr`, so the program
+  compiles against both versions, prints whether the expression is well-formed, and exercises it when it is.
+  Accepting an input is not enough: also use it through every entry point that should follow (const and
+  non-const, read, write, insert, erase, lookup, nested use), because a change that admits new inputs can leave
+  later code unable to handle them.
+- If the changed code is internal (a detail, impl or internal namespace, a trait, a helper), do not name it in the
+  program. Reach it through the public API that depends on it, using detection (as above) where needed.
+- Use the exact types and values the diff is about (the new trait's argument types, the new overload's
+  parameters), not stand-ins.
+- Spread the programs over distinct public entry points and overloads, one main idea per program. Do not write
+  several programs that only rename a type or change a literal.
+- Make the programs differ from each other: different inputs, different entry points, different features.
+
+Rules specific to this library:
+- Include the library with #include <nlohmann/json.hpp>. The public API is nlohmann::json (nlohmann::basic_json), nlohmann::ordered_json, json_pointer, json patch/merge_patch and the documented SAX and conversion interfaces. Never use the detail namespace.
+- It is a header-only library: nothing to link. Programs are compiled as C++17.
+- Print JSON values with dump() (compact) or dump(2). Keys of nlohmann::json objects print in sorted order, so output is deterministic; do not depend on insertion order except with ordered_json.
+
+[user]
+# Pull request #6077: Resume patch operations from the common prefix in constant time per step
+
+## Description
+`patch()` and `patch_inplace()` take quadratic time for consecutive operations with long paths that share a prefix on current `develop` (3.13.0 work in progress; 3.12.0 is linear). A two-operation patch on a 1.8 MB document takes 0.6 to 1.0 s; 3.12.0 needs 11 to 37 ms. The time quadruples with each doubling of the path length. `patch.md` and `patch_inplace.md` promise "Linear in the size of the JSON value and the length of the JSON patch". The attacker must control the patch and the target must be deeply nested, so this is weaker than the `unflatten()` problem, which is fixed in a separate PR.
+
+## Cause
+
+`patch_inplace()` keeps the values along the previously resolved pointer, so that the next operation resumes from the prefix the two paths have in common. To find the resume point, each cached step was tested from the deepest upwards with a `memcmp` over its whole prefix. If two paths share a prefix and the previous path continues for D more tokens, the search compared D prefixes of that length.
+
+## Change
+
+With more than 16 cached steps, the length of the common prefix of the two paths is computed once, and the deepest cached step that ends within it, at a token boundary of the new path, is taken. Steps that are skipped are dropped from the cache, so the search is amortized constant per token. With 16 or fewer steps (the usual case) they are compared as before: an earlier version that used the new search for all path lengths cost 1 to 3 % on short-path patches. Which values stay valid after an operation is unchanged. Only private helpers of `detail::json_pointer` changed.
+
+## Measurements (Apple clang -O2, arm64)
+
+`patch_inplace()` of two `test` operations whose paths share n tokens and continue for n more:
+
+| n | 25k | 50k | 100k | 200k |
+|---|---|---|---|---|
+| before | 42 ms | 182 ms | 1194 ms | 5433 ms |
+| after | 0 ms | 2 ms | 4 ms | 8 ms |
+| 3.12.0 | 3 ms | 5 ms | 10 ms | 19 ms |
+
+Patches of ordinary documents (`diff()` then `patch()`, many short operations, canada, citm_catalog, twitter, mesh, update-center): within 0.5 % of before in instructions retired (worst single row +0.8 % at noise level). Interleaved branches, 100k operations of 100 tokens and alternating deep paths are all linear.
+
+## Tests
+
+`unit-json_patch.cpp`: hand-written cases (a prefix that differs only at a token boundary: `/a/bc` vs `/a/b`, a path that is a prefix of another, insert/remove/replace above a cached path, removal making the cached path vanish, a 40-level case that takes the new branch), a random test (300 documents with 25 operations each, biased to share prefixes) that checks `patch()`, `patch_inplace()` and an `ordered_json` run against applying one operation at a time, and a time-ratio check (best of 5 CPU-time runs, two `test` operations sharing n = 25,000 tokens vs. two identical ones; ratio about 1.5 now, about 90 on the previous code, bound 10). The new test fails on `develop`. Flakiness runs (50× 8 and 64× 16 in parallel, -O0 and -O1) gave no failure. Differential runs against `develop` (36,000 cases including the 16/17-step boundary, `json`, `ordered_json`, `JSON_DIAGNOSTICS=1`) gave identical results and errors. The suite passes under ASan and UBSan; clang-tidy 22, clang `-Weverything` and g++ 16 report nothing new.
+
+## Breaking changes
+
+No breaking changes. `patch()` and `patch_inplace()` behave identically; only private helpers changed.
+
+## Commit message
+Signed-off-by: Niels Lohmann <mail@nlohmann.me>
+
+## Diff of the library source (before -> after)
+```diff
+diff --git a/include/nlohmann/detail/json_pointer.hpp b/include/nlohmann/detail/json_pointer.hpp
+index ec30e17c5..2ab3f7ddb 100644
+--- a/include/nlohmann/detail/json_pointer.hpp
++++ b/include/nlohmann/detail/json_pointer.hpp
+@@ -1091,6 +1091,32 @@ class json_pointer
+         }
+     };
+ 
++    /*!
++    @brief the number of the deepest step of the previous path that is a prefix of the new one
++
++    Comparing every one of many steps with the beginning of the path would take
++    quadratic time. Instead, the length of the common beginning of the two paths
++    is computed once: a step whose prefix is not longer is a prefix of the new
++    path, too. For few steps, which is the usual case, @ref resolve_plain
++    compares them, which is cheaper.
++    */
++    template<typename Steps>
++    JSON_HEDLEY_NEVER_INLINE static std::size_t deepest_shared_step(const string_t& path, const std::size_t length, const string_t& previous, const Steps& steps) noexcept
++    {
++        const std::size_t same = common_prefix_length(path.data(), previous.data(), (std::min)(length, previous.size()));
++        std::size_t depth = steps.size();
++        for (; depth > 1; --depth)
++        {
++            // a step ends at a token boundary of the previous path
++            const std::size_t prefix = steps[depth - 1].first;
++            if (prefix <= same && (prefix == length || path[prefix] == '/'))
++            {
++                break;
++            }
++        }
++        return depth;
++    }
++
+     /*!
+     @brief resolve a plain JSON pointer without building its reference tokens
+ 
+@@ -1119,13 +1145,20 @@ class json_pointer
+         if (cache.path != nullptr && !steps.empty() && steps[0].second == root)
+         {
+             const string_t& previous = *cache.path;
+-            for (depth = steps.size(); depth > 1; --depth)
++            if (JSON_HEDLEY_UNLIKELY(steps.size() > 16))
++            {
++                depth = deepest_shared_step(path, length, previous, steps);
++            }
++            else
+             {
+-                // a step ends at a token boundary of the previous path
+-                const std::size_t prefix = steps[depth - 1].first;
+-                if (prefix <= length && (prefix == length || path[prefix] == '/') && std::memcmp(path.data(), previous.data(), prefix) == 0)
++                for (depth = steps.size(); depth > 1; --depth)
+                 {
+-                    break;
++                    // a step ends at a token boundary of the previous path
++                    const std::size_t prefix = steps[depth - 1].first;
++                    if (prefix <= length && (prefix == length || path[prefix] == '/') && std::memcmp(path.data(), previous.data(), prefix) == 0)
++                    {
++                        break;
++                    }
+                 }
+             }
+             steps.resize(depth);
+```
+
+# Task
+Write 20 test programs for this pull request. Return JSON with a "tests" array; each item has "name" (short snake_case), "intent" (one sentence: what behavior it probes) and "code" (the complete C++ program).

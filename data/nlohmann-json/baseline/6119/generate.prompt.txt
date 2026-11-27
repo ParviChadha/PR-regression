@@ -1,0 +1,147 @@
+[system]
+You write test programs that probe a C++ library for behavioral changes made by one pull request.
+Each program is compiled and run twice, once against the library before the change and once after, and the two
+outputs are compared. Your job is to produce programs whose output reveals whether the change altered behavior,
+including side effects the author did not intend.
+
+Rules for every program:
+- It is standalone: one file with its own int main(), compiled as C++17, printing results to stdout.
+- Use only the library's documented public API. Never include internal headers or use detail/impl namespaces,
+  private members or undocumented macros.
+- Do not judge results (no assert, no expected-value comparisons): just print what the library returns. Print
+  enough to make differences visible, one fact per line.
+- Output must be deterministic. Never print pointers or addresses, uninitialized data, the order of
+  hash-based containers, timings, thread ids, random values, file paths or environment data. Print floating point
+  values with an explicit precision. No input, files, network, threads, clocks or randomness.
+- Wrap calls that may throw in try/catch and print the exception's type and message, so an exception is an
+  observable result. Do not crash on purpose.
+- Aim at the code the diff changes. Prefer calls that compile against both the old and the new library; one or two
+  programs may use an API the PR adds. Cover ordinary inputs and edge cases (empty, minimum and maximum values,
+  boundaries, special values, nesting, unusual types) and also neighbouring behavior the change could disturb.
+- When the diff changes which types or inputs an API accepts or rejects (constraints, overloads, traits,
+  conversions), test it with the detection idiom (std::void_t or requires) and `if constexpr`, so the program
+  compiles against both versions, prints whether the expression is well-formed, and exercises it when it is.
+  Accepting an input is not enough: also use it through every entry point that should follow (const and
+  non-const, read, write, insert, erase, lookup, nested use), because a change that admits new inputs can leave
+  later code unable to handle them.
+- If the changed code is internal (a detail, impl or internal namespace, a trait, a helper), do not name it in the
+  program. Reach it through the public API that depends on it, using detection (as above) where needed.
+- Use the exact types and values the diff is about (the new trait's argument types, the new overload's
+  parameters), not stand-ins.
+- Spread the programs over distinct public entry points and overloads, one main idea per program. Do not write
+  several programs that only rename a type or change a literal.
+- Make the programs differ from each other: different inputs, different entry points, different features.
+
+Rules specific to this library:
+- Include the library with #include <nlohmann/json.hpp>. The public API is nlohmann::json (nlohmann::basic_json), nlohmann::ordered_json, json_pointer, json patch/merge_patch and the documented SAX and conversion interfaces. Never use the detail namespace.
+- It is a header-only library: nothing to link. Programs are compiled as C++17.
+- Print JSON values with dump() (compact) or dump(2). Keys of nlohmann::json objects print in sorted order, so output is deterministic; do not depend on insertion order except with ordered_json.
+
+[user]
+# Pull request #6119: Report a missing 0xFF after a final BON8 string also without strict
+
+## Description
+Fixes #6110.
+
+## Problem
+
+A BON8 string ends at the first byte that cannot continue it. When a string ends a value and is not terminated by 0xFF, that byte belongs to whatever follows the value. The reader has already taken it from the input and keeps it in its push-back buffer. With `strict = true` the end-of-input check reports it. With `strict = false` the buffer was discarded, so the next read from the same stream started behind it, and a following value lost its first byte or bytes without an error:
+
+| input (two values in one `std::istringstream`) | first `from_bon8(s, false)` | second `from_bon8(s, false)` |
+|---|---|---|
+| `61 90` | `"a"` | the `0` is gone |
+| `61 C2 41 90` | `"a"` | `0` instead of the integer `C2 41` |
+
+[`bon8.md`](https://json.nlohmann.me/features/binary_formats/bon8/) already says that "a string at the very end of a message must be terminated by 0xFF". This applied only with `strict = true`.
+
+## Change
+
+`binary_reader::sax_parse` now reports `parse_error.110` ("string at the end of the value is not terminated by 0xFF") when a BON8 value is complete, `strict` is false and the push-back buffer is not empty. The position and "last byte" are the first byte that does not belong to the value, as in the strict message for the same input. With `strict = true` nothing changes.
+
+Giving the bytes back to the input instead was considered and rejected: `sputbackc`/`ungetc` guarantee only one byte (the `C2 41` case needs two), and the bulk windows of the stream and `FILE*` adapters would have to rewind too. That is a lot of code for input the format calls invalid.
+
+Docs: `from_bon8.md` (exceptions) and `bon8.md` (non-canonical input) describe the new case.
+
+## Tests
+
+- `unit-bon8.cpp`: the two assertions that pinned the old behaviour (`{0x81, 'a', 0x90}` and `{0x81, 'a', 0xC2, 0x00}` accepted with `strict = false`) now expect the exception. New stream cases: a terminated string leaves the next value in the stream (`tellg() == 2`, the next read gives `0`), and an unterminated one throws. Passes in C++11 and C++17, with `JSON_DIAGNOSTICS=0` and `=1`, under ASan and UBSan (908,428 / 908,431 assertions).
+- The 14 other test files that read BON8 pass unchanged (class_parser, class_lexer, binary_formats, guard-page, recursion_depth_limit, the custom-type tests, ...). The BON8 fuzzer uses `strict = true` and is not affected.
+- Round trip: 50,269 random values written with `to_bon8`, concatenated in groups of 1 to 5 into one stream, and read back one by one with `strict = false`: all equal. `to_bon8` always writes the final 0xFF, so canonical input is not affected.
+- clang-tidy (CI configuration) is clean.
+
+## Breaking changes
+
+None against a release: BON8 is new in 3.13.0. Compared with develop, non-canonical input (a final string without 0xFF followed by more bytes) read with `strict = false` now throws `parse_error.110` (or returns a discarded value with `allow_exceptions = false`) instead of returning the value and dropping the following bytes. This applies to pointer, iterator and container input as well, where the dropped bytes could not be observed. Fixing it now keeps that behaviour from being part of the first release.
+
+🤖 Generated with [Claude Code](https://claude.com/claude-code)
+
+## Commit message
+A BON8 string ends at the first byte that cannot continue it. When a
+string ends a value and is not terminated by 0xFF, that byte belongs to
+whatever follows the value, but the reader has already taken it from the
+input and keeps it in its push-back buffer. With strict = true the
+end-of-input check reports it; with strict = false the buffer was
+discarded, so a following value in a stream lost its first byte or bytes
+without an error ({0x61, 0x90} read "a" and then dropped the 0 that
+follows).
+
+Report parse_error.110 "string at the end of the value is not terminated
+by 0xFF" when the push-back buffer is not empty once a BON8 value is
+complete and strict is false, as bon8.md requires the final 0xFF. Output
+of to_bon8 always has it, so canonical input is not affected.
+
+Fixes #6110.
+
+Signed-off-by: Niels Lohmann <mail@nlohmann.me>
+
+## Linked issue #6110: from_bon8 with strict = false drops the bytes after a final string that has no 0xFF terminator
+### Description
+A BON8 string has no length and ends at the first byte that cannot continue it. When a string is the last thing in a value and is not terminated by `0xFF`, that ending byte (or two bytes, for an integer such as `C2 41`) belongs to whatever follows the value. The reader takes it from the input, keeps it in its private push-back buffer, and finishes the value. With `strict = true` the end-of-input check reads the buffer and reports trailing data. With `strict = false` the buffer is simply discarded, so the next read from the same stream starts behind the lost bytes, without any error.
+
+The documentation promises two things that this contradicts:
+
+- [BON8](https://json.nlohmann.me/features/binary_formats/bon8/): "Input that ends prematurely, trailing data after the value, and a missing final 0xFF after a string at the end of the message are reported as parse_error.110." and "a string at the very end of a message must be terminated by 0xFF."
+- [Parsing large and partial input](https://json.nlohmann.me/features/parsing/large_and_partial_input/): "`from_cbor` and its relatives accept `strict = false` to stop after the first value and leave the rest of the stream untouched".
+
+With `strict = false`, the input `61 90` (the string `"a"` directly followed by the integer `0`) is accepted as `"a"`, and the following `from_bon8` call on the same stream finds nothing. With `61 C2 41 90`, the two-byte integer `C2 41` is lost and the next call silently returns `0`, a wrong value rather than an error.
+
+Where the bytes are taken: [`include/nlohmann/detail/input/binary_reader.hpp#L4398-L4419`](https://github.com/nlohmann/json/blob/5bad6c518bf6663b69f505511a19c98c91f77c3a/include/nlohmann/detail/input/binary_reader.hpp#L4398-L4419)
+
+```cpp
+            // a byte that cannot begin a character ends the string and begins
+            // the next value
+            if (byte < 0xC2 || byte > 0xF7)
+            {
+                unget_bon8(byte);
+                return true;
+     
+[... truncated, 10365 more characters]
+
+## Diff of the library source (before -> after)
+```diff
+diff --git a/include/nlohmann/detail/input/binary_reader.hpp b/include/nlohmann/detail/input/binary_reader.hpp
+index 81a3ebd42..3df2867a1 100644
+--- a/include/nlohmann/detail/input/binary_reader.hpp
++++ b/include/nlohmann/detail/input/binary_reader.hpp
+@@ -177,6 +177,17 @@ class binary_reader
+                 JSON_ASSERT(false); // NOLINT(cert-dcl03-c,hicpp-static-assert,misc-static-assert) LCOV_EXCL_LINE
+         }
+ 
++        // BON8: a string ends at the first byte that cannot continue it. If
++        // that byte follows the value, the reader has already taken it from
++        // the input and holds it in bon8_pushback. Without the end-of-input
++        // check below it would be dropped, and the next read would start
++        // behind it, so report the missing 0xFF instead.
++        if (result && !strict && input_format == input_format_t::bon8 && bon8_pushback_size != 0)
++        {
++            get_bon8();
++            return last_byte_error(exception_id::unexpected_end_of_input, "string at the end of the value is not terminated by 0xFF", "value", "");
++        }
++
+         // strict mode: next byte must be EOF
+         if (result && strict)
+         {
+```
+
+# Task
+Write 20 test programs for this pull request. Return JSON with a "tests" array; each item has "name" (short snake_case), "intent" (one sentence: what behavior it probes) and "code" (the complete C++ program).

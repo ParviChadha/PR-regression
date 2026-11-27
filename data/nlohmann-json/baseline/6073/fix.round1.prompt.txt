@@ -1,0 +1,298 @@
+[system]
+You write test programs that probe a C++ library for behavioral changes made by one pull request.
+Each program is compiled and run twice, once against the library before the change and once after, and the two
+outputs are compared. Your job is to produce programs whose output reveals whether the change altered behavior,
+including side effects the author did not intend.
+
+Rules for every program:
+- It is standalone: one file with its own int main(), compiled as C++17, printing results to stdout.
+- Use only the library's documented public API. Never include internal headers or use detail/impl namespaces,
+  private members or undocumented macros.
+- Do not judge results (no assert, no expected-value comparisons): just print what the library returns. Print
+  enough to make differences visible, one fact per line.
+- Output must be deterministic. Never print pointers or addresses, uninitialized data, the order of
+  hash-based containers, timings, thread ids, random values, file paths or environment data. Print floating point
+  values with an explicit precision. No input, files, network, threads, clocks or randomness.
+- Wrap calls that may throw in try/catch and print the exception's type and message, so an exception is an
+  observable result. Do not crash on purpose.
+- Aim at the code the diff changes. Prefer calls that compile against both the old and the new library; one or two
+  programs may use an API the PR adds. Cover ordinary inputs and edge cases (empty, minimum and maximum values,
+  boundaries, special values, nesting, unusual types) and also neighbouring behavior the change could disturb.
+- When the diff changes which types or inputs an API accepts or rejects (constraints, overloads, traits,
+  conversions), test it with the detection idiom (std::void_t or requires) and `if constexpr`, so the program
+  compiles against both versions, prints whether the expression is well-formed, and exercises it when it is.
+  Accepting an input is not enough: also use it through every entry point that should follow (const and
+  non-const, read, write, insert, erase, lookup, nested use), because a change that admits new inputs can leave
+  later code unable to handle them.
+- If the changed code is internal (a detail, impl or internal namespace, a trait, a helper), do not name it in the
+  program. Reach it through the public API that depends on it, using detection (as above) where needed.
+- Use the exact types and values the diff is about (the new trait's argument types, the new overload's
+  parameters), not stand-ins.
+- Spread the programs over distinct public entry points and overloads, one main idea per program. Do not write
+  several programs that only rename a type or change a literal.
+- Make the programs differ from each other: different inputs, different entry points, different features.
+
+Rules specific to this library:
+- Include the library with #include <nlohmann/json.hpp>. The public API is nlohmann::json (nlohmann::basic_json), nlohmann::ordered_json, json_pointer, json patch/merge_patch and the documented SAX and conversion interfaces. Never use the detail namespace.
+- It is a header-only library: nothing to link. Programs are compiled as C++17.
+- Print JSON values with dump() (compact) or dump(2). Keys of nlohmann::json objects print in sorted order, so output is deterministic; do not depend on insertion order except with ordered_json.
+
+[user]
+# Pull request #6073: Fix parse(container, function) for plain functions as callback
+
+## Description
+Passing a plain function or function pointer as parser callback, as in `json::parse(std::string("[1,2]"), cb)`, no longer compiles in C++11, C++14 and C++17 on current `develop` (3.12.0 compiles it, and so does C++20). This is a source break of existing code that was introduced by the iterator+sentinel overloads added for 3.13.0 and has not been released yet.
+
+## Cause
+
+The sentinel overloads of `parse`, `accept`, `sax_parse` and the `from_*` functions are constrained by `detail::can_compare_ne`, i.e. whether `first != last` is well-formed. The callback's parameter types make `basic_json` an associated class, so argument-dependent lookup finds the friend `operator!=(const_reference, ScalarType)`: the container converts to `basic_json` and the function pointer is a scalar. The sentinel overload was thereby selected for `(container, function)` and failed hard in its body. C++20 does not declare these friends, which is why it compiled there.
+
+Affected inputs: `std::string` (lvalue, const, rvalue), `std::string_view`, `std::vector<char>`, `std::vector<std::uint8_t>`, `std::deque<char>`, `std::u16string` and user containers found through `begin`/`end`. Lambdas, `std::function`, `parser_callback_t` objects, `nullptr`, `const char*`, arrays, streams, `FILE*` and iterator pairs were not affected.
+
+## Fix
+
+`can_compare_ne` now excludes function pointers and functions as the sentinel type, since a callback is never a sentinel. The shared constraint guards all sentinel overloads, so they are fixed together. I deliberately did not check `std::iterator_traits<IteratorType>`: that would instantiate `iterator_traits` for every two-argument call, which is a hard error on standard libraries with a non-SFINAE-friendly `iterator_traits` (see #1341).
+
+## Tests
+
+A new test case in `unit-class_parser.cpp` (built by the C++11 job) calls `json::parse` with a namespace-scope function (`cb` and `&cb`) and `std::string` (lvalue and rvalue), `std::vector<std::uint8_t>` and `std::vector<char>`, an iterator pair plus callback, and checks the trait directly for the other overloads. It fails to compile on `develop` and passes with the fix.
+
+I also ran a broader matrix (lambdas, `std::function`, `std::ref`, `parser_callback_t`, callable structs, streams, `FILE*`, custom sentinel types, and in C++20 `counted_iterator` + `default_sentinel`, `subrange`, `take_while`, `transform` and `move_iterator` views) with clang 21 and g++ 16 in C++11, 14, 17, 20 and 23, from `include/` and `single_include/`: no failures. The affected suites also pass under ASan and UBSan.
+
+## Breaking changes
+
+No breaking changes. This restores the 3.12.0 behaviour for code that compiled there. The only types newly excluded as the second argument of the sentinel overloads are functions and function pointers, which are never valid sentinels.
+
+## Commit message
+Signed-off-by: Niels Lohmann <mail@nlohmann.me>
+
+## Diff of the library source (before -> after)
+```diff
+diff --git a/include/nlohmann/detail/input/input_adapters.hpp b/include/nlohmann/detail/input/input_adapters.hpp
+index 96d4691ef..b4c998259 100644
+--- a/include/nlohmann/detail/input/input_adapters.hpp
++++ b/include/nlohmann/detail/input/input_adapters.hpp
+@@ -1312,15 +1312,23 @@ struct can_compare_ne_either_order : std::integral_constant < bool,
+     can_compare_ne_impl<IteratorType, SentinelType>::value ||
+     can_compare_ne_reversed<IteratorType, SentinelType>::value > {};
+ 
+-// std::nullptr_t is excluded explicitly: a literal `nullptr` passed as a
+-// trailing default argument (e.g. parse(s, nullptr, ...)) must never be
+-// mistaken for a sentinel, and some compilers (e.g. GCC 4.8) unreliably
+-// SFINAE the `operator!=` detection above for std::nullptr_t against
+-// container/string types, which would otherwise make such calls ambiguous
+-// with the compatible-input overload.
++// Two kinds of SentinelType are excluded explicitly:
++//
++// - std::nullptr_t: a literal `nullptr` passed as a trailing default argument
++//   (e.g. parse(s, nullptr, ...)) must never be mistaken for a sentinel, and
++//   some compilers (e.g. GCC 4.8) unreliably SFINAE the `operator!=` detection
++//   above for std::nullptr_t against container/string types, which would
++//   otherwise make such calls ambiguous with the compatible-input overload.
++// - function pointers and functions: a parser callback passed as plain function
++//   (e.g. parse(s, cb)) is never a sentinel. The callback's parameter types
++//   make basic_json an associated class, so ADL finds the friend
++//   operator!=(const_reference, ScalarType) of basic_json, which makes
++//   `s != cb` well-formed (both convert to basic_json) and would select the
++//   iterator/sentinel overload.
+ template<typename IteratorType, typename SentinelType>
+ struct can_compare_ne : std::integral_constant < bool,
+     !std::is_same<SentinelType, std::nullptr_t>::value &&
++    !std::is_function<typename std::remove_pointer<SentinelType>::type>::value &&
+     can_compare_ne_either_order<IteratorType, SentinelType>::value > {};
+ 
+ template<typename T>
+```
+
+# Programs to repair
+
+## gen_01.cpp (detect)
+Intent: Probes json::parse with a std::string container and a plain function pointer as callback.
+DETECTION REWRITE. The program fails to compile against the OLD library because the API or type it uses is not accepted there; it compiles against the NEW one. Rewrite it so it compiles against both. Check whether the expression is well-formed with the detection idiom (std::void_t or requires), print that result, and use the expression ONLY inside a function template that depends on the types involved, guarded by `if constexpr`. This matters: `if constexpr` in a plain function such as main() does NOT discard the other branch, so the old library would still fail to compile. Call that function template from main. When the expression is supported, exercise it fully (print every result, wrap throwing calls in try/catch). Keep the same types and inputs. Skeleton:
+```cpp
+template <class J, class K, class = void> struct can_use : std::false_type {};
+template <class J, class K>
+struct can_use<J, K, std::void_t<decltype(std::declval<J&>()[std::declval<K>()])>> : std::true_type {};
+template <class J, class K> void probe(J& j, K&& k) {
+    std::cout << "supported: " << can_use<J, K>::value << "\n";
+    if constexpr (can_use<J, K>::value) { /* use j[k] here, print results */ }
+}
+```
+(Replace the decltype expression with the one under test.)
+Compiler errors:
+```
+input_adapters.hpp:1329:11: error: no type named ‘value_type’ in ‘struct std::iterator_traits<std::__cxx11::basic_string<char> >’
+input_adapters.hpp:1283:11: error: no type named ‘value_type’ in ‘struct std::iterator_traits<std::__cxx11::basic_string<char> >’
+input_adapters.hpp:924:11: error: no type named ‘value_type’ in ‘struct std::iterator_traits<std::__cxx11::basic_string<char> >’
+input_adapters.hpp:941:47: error: no type named ‘value_type’ in ‘struct std::iterator_traits<std::__cxx11::basic_string<char> >’
+```
+Source:
+```cpp
+#include <nlohmann/json.hpp>
+#include <string>
+#include <iostream>
+
+bool my_cb(int, nlohmann::json::parse_event_t, nlohmann::json&) { return true; }
+
+int main() {
+    try {
+        std::string s = "[1, 2]";
+        auto j = nlohmann::json::parse(s, my_cb);
+        std::cout << j.dump() << std::endl;
+    } catch (const std::exception& e) {
+        std::cout << "Exception: " << e.what() << std::endl;
+    }
+    return 0;
+}
+```
+
+## gen_02.cpp (detect)
+Intent: Probes json::parse with an rvalue std::string container and a plain function pointer as callback.
+DETECTION REWRITE. The program fails to compile against the OLD library because the API or type it uses is not accepted there; it compiles against the NEW one. Rewrite it so it compiles against both. Check whether the expression is well-formed with the detection idiom (std::void_t or requires), print that result, and use the expression ONLY inside a function template that depends on the types involved, guarded by `if constexpr`. This matters: `if constexpr` in a plain function such as main() does NOT discard the other branch, so the old library would still fail to compile. Call that function template from main. When the expression is supported, exercise it fully (print every result, wrap throwing calls in try/catch). Keep the same types and inputs. Skeleton:
+```cpp
+template <class J, class K, class = void> struct can_use : std::false_type {};
+template <class J, class K>
+struct can_use<J, K, std::void_t<decltype(std::declval<J&>()[std::declval<K>()])>> : std::true_type {};
+template <class J, class K> void probe(J& j, K&& k) {
+    std::cout << "supported: " << can_use<J, K>::value << "\n";
+    if constexpr (can_use<J, K>::value) { /* use j[k] here, print results */ }
+}
+```
+(Replace the decltype expression with the one under test.)
+Compiler errors:
+```
+input_adapters.hpp:1329:11: error: no type named ‘value_type’ in ‘struct std::iterator_traits<std::__cxx11::basic_string<char> >’
+input_adapters.hpp:1283:11: error: no type named ‘value_type’ in ‘struct std::iterator_traits<std::__cxx11::basic_string<char> >’
+input_adapters.hpp:924:11: error: no type named ‘value_type’ in ‘struct std::iterator_traits<std::__cxx11::basic_string<char> >’
+input_adapters.hpp:941:47: error: no type named ‘value_type’ in ‘struct std::iterator_traits<std::__cxx11::basic_string<char> >’
+```
+Source:
+```cpp
+#include <nlohmann/json.hpp>
+#include <string>
+#include <iostream>
+
+bool my_cb(int, nlohmann::json::parse_event_t, nlohmann::json&) { return true; }
+
+int main() {
+    try {
+        auto j = nlohmann::json::parse(std::string("[3, 4]"), my_cb);
+        std::cout << j.dump() << std::endl;
+    } catch (const std::exception& e) {
+        std::cout << "Exception: " << e.what() << std::endl;
+    }
+    return 0;
+}
+```
+
+## gen_03.cpp (detect)
+Intent: Probes json::parse with a std::vector<char> container and a plain function pointer as callback.
+DETECTION REWRITE. The program fails to compile against the OLD library because the API or type it uses is not accepted there; it compiles against the NEW one. Rewrite it so it compiles against both. Check whether the expression is well-formed with the detection idiom (std::void_t or requires), print that result, and use the expression ONLY inside a function template that depends on the types involved, guarded by `if constexpr`. This matters: `if constexpr` in a plain function such as main() does NOT discard the other branch, so the old library would still fail to compile. Call that function template from main. When the expression is supported, exercise it fully (print every result, wrap throwing calls in try/catch). Keep the same types and inputs. Skeleton:
+```cpp
+template <class J, class K, class = void> struct can_use : std::false_type {};
+template <class J, class K>
+struct can_use<J, K, std::void_t<decltype(std::declval<J&>()[std::declval<K>()])>> : std::true_type {};
+template <class J, class K> void probe(J& j, K&& k) {
+    std::cout << "supported: " << can_use<J, K>::value << "\n";
+    if constexpr (can_use<J, K>::value) { /* use j[k] here, print results */ }
+}
+```
+(Replace the decltype expression with the one under test.)
+Compiler errors:
+```
+input_adapters.hpp:1329:11: error: no type named ‘value_type’ in ‘struct std::iterator_traits<std::vector<char> >’
+input_adapters.hpp:1283:11: error: no type named ‘value_type’ in ‘struct std::iterator_traits<std::vector<char> >’
+input_adapters.hpp:924:11: error: no type named ‘value_type’ in ‘struct std::iterator_traits<std::vector<char> >’
+input_adapters.hpp:941:47: error: no type named ‘value_type’ in ‘struct std::iterator_traits<std::vector<char> >’
+```
+Source:
+```cpp
+#include <nlohmann/json.hpp>
+#include <vector>
+#include <iostream>
+
+bool my_cb(int, nlohmann::json::parse_event_t, nlohmann::json&) { return true; }
+
+int main() {
+    try {
+        std::vector<char> v = {'[', '5', ',', ' ', '6', ']'};
+        auto j = nlohmann::json::parse(v, my_cb);
+        std::cout << j.dump() << std::endl;
+    } catch (const std::exception& e) {
+        std::cout << "Exception: " << e.what() << std::endl;
+    }
+    return 0;
+}
+```
+
+## gen_04.cpp (detect)
+Intent: Probes json::parse with a std::vector<std::uint8_t> container and a plain function pointer as callback.
+DETECTION REWRITE. The program fails to compile against the OLD library because the API or type it uses is not accepted there; it compiles against the NEW one. Rewrite it so it compiles against both. Check whether the expression is well-formed with the detection idiom (std::void_t or requires), print that result, and use the expression ONLY inside a function template that depends on the types involved, guarded by `if constexpr`. This matters: `if constexpr` in a plain function such as main() does NOT discard the other branch, so the old library would still fail to compile. Call that function template from main. When the expression is supported, exercise it fully (print every result, wrap throwing calls in try/catch). Keep the same types and inputs. Skeleton:
+```cpp
+template <class J, class K, class = void> struct can_use : std::false_type {};
+template <class J, class K>
+struct can_use<J, K, std::void_t<decltype(std::declval<J&>()[std::declval<K>()])>> : std::true_type {};
+template <class J, class K> void probe(J& j, K&& k) {
+    std::cout << "supported: " << can_use<J, K>::value << "\n";
+    if constexpr (can_use<J, K>::value) { /* use j[k] here, print results */ }
+}
+```
+(Replace the decltype expression with the one under test.)
+Compiler errors:
+```
+input_adapters.hpp:1329:11: error: no type named ‘value_type’ in ‘struct std::iterator_traits<std::vector<unsigned char> >’
+input_adapters.hpp:1283:11: error: no type named ‘value_type’ in ‘struct std::iterator_traits<std::vector<unsigned char> >’
+input_adapters.hpp:924:11: error: no type named ‘value_type’ in ‘struct std::iterator_traits<std::vector<unsigned char> >’
+input_adapters.hpp:941:47: error: no type named ‘value_type’ in ‘struct std::iterator_traits<std::vector<unsigned char> >’
+```
+Source:
+```cpp
+#include <nlohmann/json.hpp>
+#include <vector>
+#include <cstdint>
+#include <iostream>
+
+bool my_cb(int, nlohmann::json::parse_event_t, nlohmann::json&) { return true; }
+
+int main() {
+    try {
+        std::vector<std::uint8_t> v = {'[', '7', ',', ' ', '8', ']'};
+        auto j = nlohmann::json::parse(v, my_cb);
+        std::cout << j.dump() << std::endl;
+    } catch (const std::exception& e) {
+        std::cout << "Exception: " << e.what() << std::endl;
+    }
+    return 0;
+}
+```
+
+## gen_11.cpp (compile)
+Intent: Probes json::parse with iterator pair and nullptr sentinel argument.
+COMPILE ERROR. The program fails to compile, the same way against the old and the new library. Fix the error (wrong or missing include, typo, misuse of the public API) and keep the intent: the call under test must stay. Include only headers that exist; if you are unsure a header exists, use the library's main header.
+Compiler errors:
+```
+json.hpp:6093:48: error: no matching function for call to ‘input_adapter(__gnu_cxx::__normal_iterator<char*, std::__cxx11::basic_string<char> >)’
+input_adapters.hpp:1496:109: error: no type named ‘adapter_type’ in ‘struct nlohmann::json_abi_v3_12_0::detail::container_input_adapter_factory_impl::container_input_adapter_factory<__gnu_cxx::__normal_iterator<char*, std::__cxx11::basic_string<char> >, void>’
+input_adapters.hpp:1511:86: error: no type named ‘type’ in ‘struct std::enable_if<false, int>’
+input_adapters.hpp:1556:30: error: no type named ‘type’ in ‘struct std::enable_if<false, int>’
+```
+Source:
+```cpp
+#include <nlohmann/json.hpp>
+#include <string>
+#include <iostream>
+
+int main() {
+    try {
+        std::string s = "[1, 2]";
+        auto j = nlohmann::json::parse(s.begin(), nullptr);
+        std::cout << j.dump() << std::endl;
+    } catch (const std::exception& e) {
+        std::cout << "Exception: " << e.what() << std::endl;
+    }
+    return 0;
+}
+```
+
+# Task
+Return JSON with a "fixes" array: one item per program above, with "file" (exactly as given) and "code" (the complete repaired program, standalone, with its own int main). Do not return programs you cannot repair.

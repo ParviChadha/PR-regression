@@ -1,0 +1,226 @@
+[system]
+You write test programs that probe a C++ library for behavioral changes made by one pull request.
+Each program is compiled and run twice, once against the library before the change and once after, and the two
+outputs are compared. Your job is to produce programs whose output reveals whether the change altered behavior,
+including side effects the author did not intend.
+
+Rules for every program:
+- It is standalone: one file with its own int main(), compiled as C++17, printing results to stdout.
+- Use only the library's documented public API. Never include internal headers or use detail/impl namespaces,
+  private members or undocumented macros.
+- Do not judge results (no assert, no expected-value comparisons): just print what the library returns. Print
+  enough to make differences visible, one fact per line.
+- Output must be deterministic. Never print pointers or addresses, uninitialized data, the order of
+  hash-based containers, timings, thread ids, random values, file paths or environment data. Print floating point
+  values with an explicit precision. No input, files, network, threads, clocks or randomness.
+- Wrap calls that may throw in try/catch and print the exception's type and message, so an exception is an
+  observable result. Do not crash on purpose.
+- Aim at the code the diff changes. Prefer calls that compile against both the old and the new library; one or two
+  programs may use an API the PR adds. Cover ordinary inputs and edge cases (empty, minimum and maximum values,
+  boundaries, special values, nesting, unusual types) and also neighbouring behavior the change could disturb.
+- When the diff changes which types or inputs an API accepts or rejects (constraints, overloads, traits,
+  conversions), test it with the detection idiom (std::void_t or requires) and `if constexpr`, so the program
+  compiles against both versions, prints whether the expression is well-formed, and exercises it when it is.
+  Accepting an input is not enough: also use it through every entry point that should follow (const and
+  non-const, read, write, insert, erase, lookup, nested use), because a change that admits new inputs can leave
+  later code unable to handle them.
+- If the changed code is internal (a detail, impl or internal namespace, a trait, a helper), do not name it in the
+  program. Reach it through the public API that depends on it, using detection (as above) where needed.
+- Use the exact types and values the diff is about (the new trait's argument types, the new overload's
+  parameters), not stand-ins.
+- Spread the programs over distinct public entry points and overloads, one main idea per program. Do not write
+  several programs that only rename a type or change a literal.
+- Make the programs differ from each other: different inputs, different entry points, different features.
+
+Rules specific to this library:
+- Include the library with #include <nlohmann/json.hpp>. The public API is nlohmann::json (nlohmann::basic_json), nlohmann::ordered_json, json_pointer, json patch/merge_patch and the documented SAX and conversion interfaces. Never use the detail namespace.
+- It is a header-only library: nothing to link. Programs are compiled as C++17.
+- Print JSON values with dump() (compact) or dump(2). Keys of nlohmann::json objects print in sorted order, so output is deterministic; do not depend on insertion order except with ordered_json.
+
+[user]
+# Pull request #6029: Read iterator pairs of std::string and std::vector as pointer ranges
+
+## Description
+## Summary
+
+Before C++20, a pair of iterators of a contiguous container cannot be told from any other random-access iterator. So `json::parse(s.begin(), s.end())` on a `std::string` or a `std::vector<char>` was read one character at a time, without the bulk scans of strings, numbers and indentation. The container itself gets those scans: the container overload of `input_adapter()` already maps it to a pointer range.
+
+The iterators of `std::string` and of a `std::vector` of 1-byte integral elements (not `bool`) are now matched exactly and mapped to the pointer range they cover. The same applies to `accept()`, `sax_parse()` and the binary readers such as `from_cbor(first, last)`. An empty range is not dereferenced. The character type stays the same, so the results and error positions do not change.
+
+This is a new partial specialization of the existing `iterator_input_adapter_factory`, selected for these iterator types, so `input_adapter(first, last)` picks it up without any change at the call sites.
+
+## Measurements
+
+Apple M1 Max, C++17:
+
+| | `twitter.json` | `canada.json` |
+|---|---|---|
+| `parse(s.begin(), s.end())` | 2.0× | 1.7× |
+| `parse(v.cbegin(), v.cend())`, `std::vector<std::uint8_t>` | 2.0× | 1.8× |
+| `accept(s.cbegin(), s.cend())` | 2.7× | 3.1× |
+| `from_cbor(v.begin(), v.end())` | −8% | −23% |
+
+## Tests
+
+A new test case in `unit-deserialization.cpp` compares iterator pairs of `std::string` and `std::vector<char>` / `<unsigned char>` / `<signed char>` (also `const_iterator`) with the byte path (`std::list` iterators). It checks values, exception messages including positions, and `accept()`, also for the empty range. It passes in C++11 and C++20 with ASan and UBSan.
+
+## Breaking changes
+
+No breaking changes. The public API and all results are unchanged. Only the internal adapter type that these iterator pairs are read through changes.
+
+🤖 Generated with [Claude Code](https://claude.com/claude-code)
+
+## Commit message
+* Read iterator pairs of std::string and std::vector as pointer ranges
+
+Before C++20, a pair of iterators of a contiguous container cannot be told
+from any other random-access iterator, so json::parse(s.begin(), s.end())
+on a std::string or std::vector<char> was read one character at a time,
+without the bulk scans of strings, numbers and indentation that the
+container itself gets (the container overload of input_adapter() already
+maps it to a pointer range). The iterators of std::string and of a
+std::vector of 1-byte integral elements are now matched exactly and mapped
+to the pointer range they cover; an empty range is not dereferenced. The
+character type stays the same, so the results and error positions do not
+change.
+
+parse(first, last) of a std::string gets 1.7-2.0x as fast in C++17 on an
+Apple M1 Max, accept(first, last) 2.7-3.1x, and from_cbor(first, last) of a
+std::vector 8-23% faster.
+
+Signed-off-by: Niels Lohmann <mail@nlohmann.me>
+
+* Fix CI: clang-tidy, unused result, Infer false positive in tests
+
+- unit-deserialization.cpp: raw string literals, and assign the result
+  of parse() in CHECK_THROWS_AS (-Wunused-result)
+- unit-bson.cpp: mark Infer's NULLPTR_DEREFERENCE on from_bson() with an
+  iterator pair as a false positive
+
+Signed-off-by: Niels Lohmann <mail@nlohmann.me>
+
+* Fix implicit char conversion in iterator-pair test
+
+The test built std::vector<unsigned char> and <signed char> from a char
+range, which -fsanitize=integer reports as an implicit conversion.
+
+Signed-off-by: Niels Lohmann <mail@nlohmann.me>
+
+* Tests: sweep_allocator::construct() accepts pointers to const
+
+Recent libc++ (emsdk latest) probes construct(const T*, const T&) in an
+unevaluated context while checking for trivial copies; the static_cast to
+void* in the noexcept specification then fails to compile.
+
+Co-Authored-By: Claude Sonnet 5.5 <noreply@anthropic.com>
+Claude-Session: https://claude.ai/code/session_01N5NasEsrzHhSNouxSoEwqz
+Signed-off-by: Niels Lohmann <mail@nlohmann.me>
+
+* T
+[... truncated, 1368 more characters]
+
+## Discussion before merge
+- github-actions[bot]: ## 🔴 Amalgamation check failed! 🔴
+The source code has not been amalgamated and/or formatted correctly, or `BUILD.bazel`, `nlohmann_json.natvis`, or the macro_builder tables in `macro_scope.hpp` are out of date. `make amalgamate BUILD.bazel natvis` fixes all but the tables (see `tools/macro_builder/README.md`).
+
+📎 A ready-to-apply patch is attached to the [failed workflow run](https://github.com/nlohmann/json/actions/runs/42354834885) as the `amalgamation-patch` artifact. Download it, then apply it locally from the repository root with:
+
+```shell
+git apply amalgamation.patch
+```
+
+This does not require installing astyle yourself.
+- github-actions[bot]: ## 🔴 Amalgamation check failed! 🔴
+The source code has not been amalgamated and/or formatted correctly, or `BUILD.bazel`, `nlohmann_json.natvis`, or the macro_builder tables in `macro_scope.hpp` are out of date. `make amalgamate BUILD.bazel natvis` fixes all but the tables (see `tools/macro_builder/README.md`).
+
+📎 A ready-to-apply patch is attached to the [failed workflow run](https://github.com/nlohmann/json/actions/runs/42356199718) as the `amalgamation-patch` artifact. Download it, then apply it locally from the repository root with:
+
+```shell
+git apply amalgamation.patch
+```
+
+This does not require installing astyle yourself.
+- nlohmann: @gregmarr Good point, thanks. I added to the description that this is a new partial specialization of `iterator_input_adapter_factory`, and why nothing calls it directly.
+
+*(Written by Claude Code on behalf of @nlohmann.)*
+- gregmarr: Astyle here and next function
+
+Then multiple times below in unedited code, so maybe a new PR for cleaning up template formatting issues across the repo.
+- gregmarr: reserve?
+- gregmarr: Doesn't this `<IteratorType, IteratorType` mean that they have to be the same type, and if so, why specify them twice?
+
+## Diff of the library source (before -> after)
+```diff
+diff --git a/include/nlohmann/detail/input/input_adapters.hpp b/include/nlohmann/detail/input/input_adapters.hpp
+index 7b7222f06..96d4691ef 100644
+--- a/include/nlohmann/detail/input/input_adapters.hpp
++++ b/include/nlohmann/detail/input/input_adapters.hpp
+@@ -1348,6 +1348,64 @@ struct iterator_input_adapter_factory<IteratorType, SentinelType, enable_if_t<is
+     }
+ };
+ 
++/*!
++@brief whether @a IteratorType is an iterator of std::string or of a
++       std::vector of 1-byte elements
++
++Their elements are contiguous, but before C++20 that cannot be detected from
++the iterator type (std::contiguous_iterator), so an iterator pair of them would
++be read one character at a time through the iterators. They are read as the
++pointer range they are instead, as the containers themselves are (see the
++container overload of input_adapter()). The types are matched exactly, so no
++other iterator can be mistaken for one. (std::basic_string is only matched for
++char: other character types need std::char_traits specializations that the
++standard library need not have.)
++*/
++template<typename CharType>
++struct is_byte_char_type
++{
++    // a member, not an integral_constant argument, which astyle misformats
++    static constexpr bool value = sizeof(CharType) == 1 && std::is_integral<CharType>::value && !std::is_same<CharType, bool>::value;
++};
++
++template<typename IteratorType, typename CharType, bool IsByte = is_byte_char_type<CharType>::value>
++struct is_std_contiguous_byte_iterator_impl : std::false_type {};
++
++// (the containers are only named for byte types)
++template<typename IteratorType, typename CharType>
++struct is_std_contiguous_byte_iterator_impl<IteratorType, CharType, true>
++{
++    static constexpr bool value = !std::is_pointer<IteratorType>::value
++                                  && (std::is_same<IteratorType, typename std::vector<CharType>::iterator>::value
++                                      || std::is_same<IteratorType, typename std::vector<CharType>::const_iterator>::value
++                                      || std::is_same<IteratorType, std::string::iterator>::value
++                                      || std::is_same<IteratorType, std::string::const_iterator>::value);
++};
++
++template<typename IteratorType>
++struct is_std_contiguous_byte_iterator
++    : is_std_contiguous_byte_iterator_impl<IteratorType, typename std::remove_cv<typename std::iterator_traits<IteratorType>::value_type>::type> {};
++
++template<typename IteratorType>
++struct iterator_input_adapter_factory<IteratorType, IteratorType, enable_if_t<is_std_contiguous_byte_iterator<IteratorType>::value>>
++{
++    using iterator_type = IteratorType;
++    using sentinel_type = IteratorType;
++    using char_type = typename std::remove_cv<typename std::iterator_traits<iterator_type>::value_type>::type;
++    using adapter_type = iterator_input_adapter<const char_type*>;
++
++    static adapter_type create(IteratorType first, IteratorType last)
++    {
++        if (first == last)
++        {
++            // (an empty range must not be dereferenced)
++            return adapter_type(nullptr, nullptr);
++        }
++        const char_type* const begin = std::addressof(*first);
++        return adapter_type(begin, begin + (last - first));
++    }
++};
++
+ // General purpose iterator-based input (iterator+sentinel pair; SentinelType
+ // defaults to IteratorType for the common same-type case, but may differ for
+ // C++20 ranges-style iterator+sentinel pairs). Only enable for types that can
+```
+
+# Task
+Write 20 test programs for this pull request. Return JSON with a "tests" array; each item has "name" (short snake_case), "intent" (one sentence: what behavior it probes) and "code" (the complete C++ program).

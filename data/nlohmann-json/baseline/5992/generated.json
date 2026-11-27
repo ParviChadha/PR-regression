@@ -1,0 +1,163 @@
+{
+  "target": "nlohmann-json",
+  "pr": 5992,
+  "model": "gemini-3.5-flash-lite",
+  "prompt_sha256": "86074fb916ef048dd001ff6fadb12e074a489c04c4c342260b7aad12a37dd827",
+  "n_requested": 20,
+  "std": "c++17",
+  "dropped": 0,
+  "variant": "baseline",
+  "usage": {
+    "promptTokenCount": 4427,
+    "candidatesTokenCount": 4882,
+    "totalTokenCount": 9309,
+    "trafficType": "ON_DEMAND",
+    "promptTokensDetails": [
+      {
+        "modality": "TEXT",
+        "tokenCount": 4427
+      }
+    ],
+    "candidatesTokensDetails": [
+      {
+        "modality": "TEXT",
+        "tokenCount": 4882
+      }
+    ]
+  },
+  "tests": [
+    {
+      "file": "gen_01.cpp",
+      "name": "json_view_bool_to_int64",
+      "intent": "Verify that calling get<std::int64_t>() on a json_view boolean throws a type error instead of returning 0 or 1.",
+      "round": 0
+    },
+    {
+      "file": "gen_02.cpp",
+      "name": "json_view_bool_to_uint64",
+      "intent": "Verify that calling get<std::uint64_t>() on a json_view boolean throws a type error.",
+      "round": 0
+    },
+    {
+      "file": "gen_03.cpp",
+      "name": "json_view_bool_to_double",
+      "intent": "Verify that calling get<double>() on a json_view boolean throws a type error.",
+      "round": 0
+    },
+    {
+      "file": "gen_04.cpp",
+      "name": "json_view_bool_to_int_succeeds",
+      "intent": "Verify that calling get<int>() on a json_view boolean successfully returns 1 instead of throwing.",
+      "round": 0
+    },
+    {
+      "file": "gen_05.cpp",
+      "name": "json_view_bool_to_float_succeeds",
+      "intent": "Verify that calling get<float>() on a json_view boolean successfully returns 1.0 instead of throwing.",
+      "round": 0
+    },
+    {
+      "file": "gen_06.cpp",
+      "name": "basic_json_bool_to_int64_parity",
+      "intent": "Confirm basic_json get<std::int64_t>() on boolean throws type_error for behavioral parity check.",
+      "round": 0
+    },
+    {
+      "file": "gen_07.cpp",
+      "name": "json_view_get_to_int64",
+      "intent": "Verify that get_to() into a std::int64_t variable from a json_view boolean throws type_error.",
+      "round": 0
+    },
+    {
+      "file": "gen_08.cpp",
+      "name": "json_view_value_int64",
+      "intent": "Verify that view.value<std::int64_t>() on a boolean throws type_error.",
+      "round": 0,
+      "superseded_by": "gen_21.cpp"
+    },
+    {
+      "file": "gen_09.cpp",
+      "name": "json_view_bool_to_bool",
+      "intent": "Verify that view.get<bool>() works correctly on a boolean value.",
+      "round": 0
+    },
+    {
+      "file": "gen_10.cpp",
+      "name": "json_view_rejects_boolean_trait_check",
+      "intent": "Examine the visibility and behavior of rejects_boolean logic via template instantiation checks on arithmetic types.",
+      "round": 0
+    },
+    {
+      "file": "gen_11.cpp",
+      "name": "json_view_bool_to_unsigned_long_long",
+      "intent": "Verify that get<unsigned long long>() (number_unsigned_t usually) throws on a json_view boolean.",
+      "round": 0
+    },
+    {
+      "file": "gen_12.cpp",
+      "name": "json_view_bool_to_long_long",
+      "intent": "Verify that get<long long>() (number_integer_t usually) throws on a json_view boolean.",
+      "round": 0
+    },
+    {
+      "file": "gen_13.cpp",
+      "name": "json_view_number_float_actual",
+      "intent": "Verify that get<double>() on an actual floating point view succeeds without throwing.",
+      "round": 0
+    },
+    {
+      "file": "gen_14.cpp",
+      "name": "json_view_number_integer_actual",
+      "intent": "Verify that get<std::int64_t>() on an actual integer view succeeds without throwing.",
+      "round": 0
+    },
+    {
+      "file": "gen_15.cpp",
+      "name": "json_view_bool_to_short",
+      "intent": "Verify that get<short>() on a json_view boolean succeeds and returns 1.",
+      "round": 0
+    },
+    {
+      "file": "gen_16.cpp",
+      "name": "json_view_bool_to_char",
+      "intent": "Verify that get<char>() on a json_view boolean succeeds and returns non-zero.",
+      "round": 0
+    },
+    {
+      "file": "gen_17.cpp",
+      "name": "json_view_false_to_int",
+      "intent": "Verify that get<int>() on a json_view false boolean returns 0.",
+      "round": 0
+    },
+    {
+      "file": "gen_18.cpp",
+      "name": "json_view_false_to_int64",
+      "intent": "Verify that get<std::int64_t>() on a json_view false boolean throws type_error.",
+      "round": 0
+    },
+    {
+      "file": "gen_19.cpp",
+      "name": "json_view_bool_to_long_double",
+      "intent": "Verify that get<long double>() on a json_view boolean succeeds, since it is not number_float_t (double).",
+      "round": 0
+    },
+    {
+      "file": "gen_20.cpp",
+      "name": "json_view_multiple_gets_parity",
+      "intent": "Verify sequence of calls to get<int>() and get<std::int64_t>() demonstrating mixed behavior on the same boolean view.",
+      "round": 0
+    },
+    {
+      "file": "gen_21.cpp",
+      "name": "json_view_value_int64_fixed",
+      "intent": "Verify that view.value<std::int64_t>() on a boolean throws type_error.",
+      "round": 1,
+      "fixes": "gen_08.cpp",
+      "kind": "compile"
+    }
+  ],
+  "fix": {
+    "rounds_max": 2,
+    "model": "gemini-3.5-flash-lite"
+  }
+}

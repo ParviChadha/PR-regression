@@ -1,0 +1,755 @@
+[system]
+You write test programs that probe a C++ library for behavioral changes made by one pull request.
+Each program is compiled and run twice, once against the library before the change and once after, and the two
+outputs are compared. Your job is to produce programs whose output reveals whether the change altered behavior,
+including side effects the author did not intend.
+
+Rules for every program:
+- It is standalone: one file with its own int main(), compiled as C++20, printing results to stdout.
+- Use only the library's documented public API. Never include internal headers or use detail/impl namespaces,
+  private members or undocumented macros.
+- Do not judge results (no assert, no expected-value comparisons): just print what the library returns. Print
+  enough to make differences visible, one fact per line.
+- Output must be deterministic. Never print pointers or addresses, uninitialized data, the order of
+  hash-based containers, timings, thread ids, random values, file paths or environment data. Print floating point
+  values with an explicit precision. No input, files, network, threads, clocks or randomness.
+- Wrap calls that may throw in try/catch and print the exception's type and message, so an exception is an
+  observable result. Do not crash on purpose.
+- Aim at the code the diff changes. Prefer calls that compile against both the old and the new library; one or two
+  programs may use an API the PR adds. Cover ordinary inputs and edge cases (empty, minimum and maximum values,
+  boundaries, special values, nesting, unusual types) and also neighbouring behavior the change could disturb.
+- When the diff changes which types or inputs an API accepts or rejects (constraints, overloads, traits,
+  conversions), test it with the detection idiom (std::void_t or requires) and `if constexpr`, so the program
+  compiles against both versions, prints whether the expression is well-formed, and exercises it when it is.
+  Accepting an input is not enough: also use it through every entry point that should follow (const and
+  non-const, read, write, insert, erase, lookup, nested use), because a change that admits new inputs can leave
+  later code unable to handle them.
+- If the changed code is internal (a detail, impl or internal namespace, a trait, a helper), do not name it in the
+  program. Reach it through the public API that depends on it, using detection (as above) where needed.
+- Use the exact types and values the diff is about (the new trait's argument types, the new overload's
+  parameters), not stand-ins.
+- Spread the programs over distinct public entry points and overloads, one main idea per program. Do not write
+  several programs that only rename a type or change a literal.
+- Make the programs differ from each other: different inputs, different entry points, different features.
+
+Rules specific to this library:
+- Include the library with #include <nlohmann/json.hpp>. The public API is nlohmann::json (nlohmann::basic_json), nlohmann::ordered_json, json_pointer, json patch/merge_patch and the documented SAX and conversion interfaces. Never use the detail namespace.
+- It is a header-only library: nothing to link. Programs are compiled as C++17.
+- Print JSON values with dump() (compact) or dump(2). Keys of nlohmann::json objects print in sorted order, so output is deterministic; do not depend on insertion order except with ordered_json.
+
+[user]
+# Pull request #6075: Read a std::u8string from a JSON string and store it as one in every configuration
+
+## Description
+In C++20, `json(std::u8string)` was stored as a JSON string only when `std::filesystem::path` support was available (the `to_json` overload sat inside the `JSON_HAS_FILESYSTEM` guard), and there was no matching `from_json`, so `get<std::u8string>()` threw `type_error.302` ("type must be array, but is string"). Without `std::filesystem` the same expression still produced an array of code units, the 3.12.0 behaviour. So the same source gave different JSON types depending on the configuration, and the stored value could not be read back.
+
+## Change
+
+- Move the `to_json` overload out of the filesystem guard, so that a `std::u8string` is a JSON string in every configuration. The value is built directly from the code units, which also works for a custom `string_t` such as the tests' `alt_string`.
+- Add a `from_json` overload for `std::basic_string<char8_t>` that reads a JSON string. The array of numbers written by 3.12.0 is still accepted; other types throw `type_error.302` ("type must be string or array").
+- `std::u8string_view`, `char8_t` arrays and `const char8_t*` are unchanged (they still produce arrays of code units, as in 3.12.0). `std::filesystem::path` still round-trips.
+- Documented in `home/releases/unreleased.md`, `basic_json.md`, `get.md` and `template_parameters.md`.
+
+## Tests
+
+- `unit-conversions2.cpp`: the `std::u8string` case now covers ASCII and UTF-8 content, round trips (`get`, `get_to`, embedded NUL, `vector`, `map`), the old array form, wrong types, `ordered_json`, and the unchanged `u8string_view` and `char8_t` arrays. The file now also mentions `JSON_HAS_CPP_20`/`_23`, so it is built as `_cpp20` and `_cpp23` as well (the test previously never ran in C++20 under CMake).
+- A new target `test-conversions2_no_filesystem` runs it with `JSON_HAS_FILESYSTEM=0` and `JSON_HAS_EXPERIMENTAL_FILESYSTEM=0`.
+- `unit-alt-string.cpp` gets a test with a custom string type.
+- The new tests fail on `develop` (`get<std::u8string>` throws; without `std::filesystem` the value is an array) and pass with the change. Passes with clang 21 and g++ 16 in C++11/17/20/23, and with `JSON_DIAGNOSTICS=1`. The full unit suite passes under ASan and UBSan. Compile time and conversion benchmarks (`std::string`, `std::vector<int>`, `std::filesystem::path` to JSON) show no regression; the path conversion retires about 3 % fewer instructions.
+
+## Breaking changes
+
+This is a behaviour change relative to 3.12.0 for C++20 code with `__cpp_lib_char8_t`, although it is not a source break and no signature was removed.
+
+- **Who is affected:** code that converts a `std::u8string` to JSON and then looks at the JSON form: `is_array()` checks, reading it as `std::vector<char8_t>` or `std::vector<std::uint8_t>`, or comparing the serialised output with `[...]`. Such a value now serialises as a string. The change is transitive: a `std::u8string` inside a `std::vector`, `std::pair`, `std::tuple`, `std::optional` or as a `std::map` key also becomes a string.
+- **Not affected:** reading old data (`get<std::u8string>()` still accepts the 3.12.0 array), code that only round-trips a `std::u8string`, and anyone already on current `develop` with `std::filesystem` available, where it was already a string.
+- **Mitigation:** build the array form explicitly, e.g. `json(std::vector<char8_t>(s.begin(), s.end()))`.
+
+## Commit message
+* Read a std::u8string from a JSON string and store it as one in every configuration
+
+In C++20, json(std::u8string) was stored as a JSON string only when
+std::filesystem::path support was available (the to_json overload sat
+inside the JSON_HAS_FILESYSTEM guard), and there was no matching
+from_json, so get<std::u8string>() threw type_error.302 ("type must be
+array, but is string"). Without std::filesystem, the same expression
+still produced an array of code units (the 3.12.0 behavior).
+
+Move the to_json overload out of the filesystem guard so that a
+std::u8string is a string in every configuration, build the value
+directly from the code units (this also works for a custom string_t
+such as the tests' alt_string), and add a from_json overload that reads
+a JSON string. The array of numbers written by 3.12.0 is still accepted;
+other types throw type_error.302 ("type must be string or array").
+std::u8string_view and char8_t arrays are unchanged.
+
+The tests now run in C++20/23 (the file mentions JSON_HAS_CPP_20/23),
+also without std::filesystem (test-conversions2_no_filesystem), and with
+ordered_json and a custom string type. The new behavior is documented.
+
+Signed-off-by: Niels Lohmann <mail@nlohmann.me>
+
+* Fill the std::u8string with resize and indexing instead of push_back
+
+The push_back loop is not vectorized: reading a 1 kB string took about
+2.2 us against 0.39 us with resize and direct element access (clang -O2).
+
+Signed-off-by: Niels Lohmann <mail@nlohmann.me>
+
+* Write the std::u8string from_json template header in the compact form
+
+Signed-off-by: Niels Lohmann <mail@nlohmann.me>
+
+* Ignore libstdc++ char to char8_t sign change in the clang sanitizer job
+
+Signed-off-by: Niels Lohmann <mail@nlohmann.me>
+
+---------
+
+Signed-off-by: Niels Lohmann <mail@nlohmann.me>
+
+## Discussion before merge
+- gregmarr: astyle
+- gregmarr: Does `reserve` and `push_back` perform better than `resize` and direct access?
+- nlohmann: `astyle` 3.4.13 (the version pinned in `tools/astyle`) leaves this declaration unchanged, so the spacing in `template < … enable_if_t < … > = 0 >` is what it produces. Did you mean something else, e.g. a different layout for the `enable_if_t` default parameter?
+
+*(Written by Claude Code on behalf of @nlohmann.)*
+- nlohmann: No, `resize` plus direct access is faster. I measured `std::string` → `std::u8string` with clang `-std=c++20 -O2`: 16 bytes is equal (about 44 ns), 1000 bytes takes 2189 ns with `reserve` + `push_back` against 388 ns with `resize` + `[i]`, and 1 MB takes 2.14 ms against 0.36 ms. The `push_back` loop is not vectorized. Fixed in `95424664a`. I did not measure GCC.
+
+*(Written by Claude Code on behalf of @nlohmann.)*
+- gregmarr: I just noticed it was spread out, couldn't tell why.  I know that there are some that need to be fixed manually, and some that can't be fixed at all.  I can't keep track of them.
+- nlohmann: You were right to ask, and my earlier answer was misleading: astyle 3.4.13 also leaves the compact form `template<typename …, enable_if_t<…, int> = 0>` unchanged, so the spread form was not required by astyle, only written that way. Fixed in `9b686490f6`: the declaration now uses the compact form like the other `from_json` overloads in this file.
+
+*(Written by Claude Code on behalf of @nlohmann.)*
+
+## Changed functions (from changes.py)
+- nlohmann::detail::to_json(BasicJsonType &, const std::basic_string<char8_t, Tr, Allocator> &) (private); reached from the public API through: nlohmann::adl_serializer::to_json(BasicJsonType &, TargetType &&); compiled only with -std=c++20 (the test run must use that compiler setting)
+- nlohmann::detail::from_json(const BasicJsonType &, std::basic_string<char8_t, Tr, Allocator> &) (private); reached from the public API through: nlohmann::adl_serializer::from_json(BasicJsonType &&), nlohmann::adl_serializer::from_json(BasicJsonType &&, TargetType &); compiled only with -std=c++20 (the test run must use that compiler setting)
+- nlohmann::detail::to_json::string_t (private); reached from the public API through: nlohmann::adl_serializer::to_json(BasicJsonType &, TargetType &&); compiled only with -std=c++20 (the test run must use that compiler setting)
+- nlohmann::detail::to_json::OtherAllocator (private); reached from the public API through: nlohmann::adl_serializer::to_json(BasicJsonType &, TargetType &&); compiled only with -std=c++20 (the test run must use that compiler setting)
+
+## Diff of the library source (before -> after)
+```diff
+diff --git a/include/nlohmann/detail/conversions/from_json.hpp b/include/nlohmann/detail/conversions/from_json.hpp
+index 09f0713ea..18c0775ec 100644
+--- a/include/nlohmann/detail/conversions/from_json.hpp
++++ b/include/nlohmann/detail/conversions/from_json.hpp
+@@ -785,6 +785,37 @@ void from_json(const BasicJsonType& j, std::unordered_map<Key, Value, Hash, KeyE
+     from_json_pair_array_to_map(j, m);
+ }
+ 
++#if defined(__cpp_lib_char8_t)
++// a std::u8string is read from a JSON string; the array of code units written by
++// versions before 3.13.0 is still accepted
++template<typename BasicJsonType, typename Tr, typename Allocator,
++         enable_if_t<std::is_same<typename json_type_of_t<BasicJsonType>::string_t::value_type, char>::value, int> = 0>
++inline void from_json(const BasicJsonType& j, std::basic_string<char8_t, Tr, Allocator>& s)
++{
++    if (j.is_string())
++    {
++        const auto& str = string_value(j);
++        const char* const data = str.data();
++        const std::size_t size = str.size();
++        std::basic_string<char8_t, Tr, Allocator> ret(s.get_allocator());
++        ret.resize(size);
++        for (std::size_t i = 0; i < size; ++i)
++        {
++            ret[i] = static_cast<char8_t>(static_cast<unsigned char>(data[i]));
++        }
++        s = std::move(ret);
++    }
++    else if (j.is_array())
++    {
++        from_json_array_impl(j, s, priority_tag<3> {});
++    }
++    else
++    {
++        throw_type_must_be("string or array", j);
++    }
++}
++#endif
++
+ #if JSON_HAS_FILESYSTEM || JSON_HAS_EXPERIMENTAL_FILESYSTEM
+ 
+ // Workaround for MSVC 19.51 (and possibly later): in large cpp files, the compiler may fail to resolve with generic has_from_json (issue #4996)
+diff --git a/include/nlohmann/detail/conversions/to_json.hpp b/include/nlohmann/detail/conversions/to_json.hpp
+index 05ae82370..3d95370d6 100644
+--- a/include/nlohmann/detail/conversions/to_json.hpp
++++ b/include/nlohmann/detail/conversions/to_json.hpp
+@@ -625,16 +625,20 @@ inline void to_json(BasicJsonType& j, const T& t)
+     to_json_tuple_impl(j, t, make_index_sequence<std::tuple_size<T>::value> {});
+ }
+ 
+-#if JSON_HAS_FILESYSTEM || JSON_HAS_EXPERIMENTAL_FILESYSTEM
++// a std::u8string is a JSON string (it was an array of code units before 3.13.0);
++// defined outside the std::filesystem guard so that the result does not depend
++// on whether std::filesystem::path is supported
+ #if defined(__cpp_lib_char8_t)
+ template<typename BasicJsonType, typename Tr, typename Allocator>
+ inline void to_json(BasicJsonType& j, const std::basic_string<char8_t, Tr, Allocator>& s)
+ {
+-    using OtherAllocator = typename std::allocator_traits<Allocator>::template rebind_alloc<char>;
+-    j = std::basic_string<char, std::char_traits<char>, OtherAllocator>(s.begin(), s.end(), s.get_allocator());
++    using string_t = typename BasicJsonType::string_t;
++    // char may alias any object; the code units are copied unchanged
++    j = string_t(reinterpret_cast<const char*>(s.data()), s.size());
+ }
+ #endif
+ 
++#if JSON_HAS_FILESYSTEM || JSON_HAS_EXPERIMENTAL_FILESYSTEM
+ // Workaround for MSVC 19.51 (and possibly later): in large cpp files, the compiler may fail to resolve with generic has_to_json (issue #4996)
+ template<typename BasicJsonType>
+ struct has_to_json<BasicJsonType, std_fs::path, void> : std::true_type {};
+```
+
+## Existing upstream tests that call the changed code (for style and API usage)
+// Upstream tests at the PR's parent commit 17e3de0fc that use the changed code.
+// Names searched (test lines using each): to_json (0), from_json (0), string_t (193), OtherAllocator (0)
+
+// ---- tests/src/unit-allocator.cpp:167-175  (uses: string_t)
+        SECTION("json_value(const string_t&)")
+        {
+            next_construct_fails = false;
+            const my_json::string_t v("foo");
+            CHECK_NOTHROW(my_allocator_clean_up(my_json::json_value(v).string));
+            next_construct_fails = true;
+            CHECK_THROWS_AS(my_json::json_value(v), std::bad_alloc&);
+            next_construct_fails = false;
+        }
+
+// ---- tests/src/unit-allocator.cpp:200-207  (uses: string_t)
+        SECTION("basic_json(const typename string_t::value_type*)")
+        {
+            next_construct_fails = false;
+            CHECK_NOTHROW(my_json("foo"));
+            next_construct_fails = true;
+            CHECK_THROWS_AS(my_json("foo"), std::bad_alloc&);
+            next_construct_fails = false;
+        }
+
+// ---- tests/src/unit-binary_utf8_error_handler.cpp:429-441  (uses: string_t)
+TEST_CASE("UBJSON and BJData writers with an object_t whose key_type is not string_t")
+{
+    const std::string long_prefix(70, 'k');
+
+    SECTION("well-formed keys, every error_handler")
+    {
+        const std::string key1 = long_prefix + "-first";
+        const std::string key2 = long_prefix + "-second";
+
+        converting_key_json::object_t o;
+        o.emplace(converting_key(key1), 1);
+        o.emplace(converting_key(key2), "value");
+        const converting_key_json v(std::move(o));
+
+// ---- tests/src/unit-bjdata.cpp:4148-4183  (uses: string_t)
+        SECTION("ill-formed UTF-8 (see #5529, #5651)")
+        {
+            // none of the binary format specs requires a decoder to reject
+            // ill-formed UTF-8 in a text string, so a value whose bytes are
+            // not valid UTF-8 (0xC0 0xAE is an overlong encoding of '.')
+            // round-trips byte for byte as a string value; to_bjdata() writes
+            // the bytes unchanged, as before 3.13.0, unless
+            // JSON_STRICT_BINARY_UTF8 is enabled (see
+            // unit-binary_utf8_strict.cpp)
+            const std::vector<uint8_t> v = {'S', 'i', 2, 0xc0, 0xae};
+            json j;
+            CHECK_NOTHROW(j = json::from_bjdata(v));
+            REQUIRE(j.is_string());
+            CHECK(j.get_ref<const json::string_t&>() == std::string("\xc0\xae"));
+            CHECK_THROWS_AS(utils::ignore_return_value(j.dump()), json::type_error&);
+            CHECK(json::from_bjdata(json::to_bjdata(j)) == j);
+
+            // the same bytes as an object key round-trip as well
+            const std::vector<uint8_t> v_key = {'{', 'i', 2, 0xc0, 0xae, 'i', 1, '}'};
+            json j_key;
+            CHECK_NOTHROW(j_key = json::from_bjdata(v_key));
+            REQUIRE(j_key.is_object());
+            CHECK(j_key.contains(std::string("\xc0\xae")));
+            CHECK(json::from_bjdata(json::to_bjdata(j_key)) == j_key);
+
+            CHECK(json::from_bjdata(json::to_bjdata(json("\xFF"))) == json("\xFF"));
+            // a truncated multi-byte sequence
+            CHECK(json::from_bjdata(json::to_bjdata(json("\xC3"))) == json("\xC3"));
+            // an encoded surrogate half (U+D800)
+            CHECK(json::from_bjdata(json::to_bjdata(json("\xED\xA0\x80"))) == json("\xED\xA0\x80"));
+            // an overlong encoding of '.'
+            CHECK(json::from_bjdata(json::to_bjdata(json("\xC0\xAF"))) == json("\xC0\xAF"));
+
+            // an object key with ill-formed UTF-8 is kept the same way
+            CHECK(json::from_bjdata(json::to_bjdata(json{{"\xFF", 1}})) == json{{"\xFF", 1}});
+        }
+
+// ---- tests/src/unit-bson.cpp:226-261  (uses: string_t)
+    SECTION("ill-formed UTF-8 (see #5529, #5651)")
+    {
+        // a BSON document {"s": "\xC0\xAE"} (0xC0 0xAE is an overlong
+        // encoding of '.'); the BSON spec does not require a decoder to
+        // reject ill-formed UTF-8 in a string value, so the reader hands the
+        // bytes back unchanged
+        const std::vector<uint8_t> v =
+        {
+            0x0F, 0x00, 0x00, 0x00, // document length
+            0x02, 's', 0x00,        // type 0x02 (string), key "s"
+            0x03, 0x00, 0x00, 0x00, // string length (including null)
+            0xc0, 0xae, 0x00,       // string content and its null terminator
+            0x00                    // document terminator
+        };
+        json j;
+        CHECK_NOTHROW(j = json::from_bson(v));
+        REQUIRE(j.is_object());
+        REQUIRE(j.contains("s"));
+        CHECK(j["s"].get_ref<const json::string_t&>() == std::string("\xc0\xae"));
+        // dump() still requires valid UTF-8 and throws for such a value
+        CHECK_THROWS_AS(utils::ignore_return_value(j.dump()), json::type_error&);
+        // to_bson() writes the bytes back unchanged, as before 3.13.0,
+        // unless JSON_STRICT_BINARY_UTF8 is enabled (see unit-binary_utf8_strict.cpp)
+        CHECK(json::from_bson(json::to_bson(j)) == j);
+
+        CHECK(json::from_bson(json::to_bson(json{{"s", "\xFF"}})) == json{{"s", "\xFF"}});
+        // a truncated multi-byte sequence
+        CHECK(json::from_bson(json::to_bson(json{{"s", "\xC3"}})) == json{{"s", "\xC3"}});
+        // an encoded surrogate half (U+D800)
+        CHECK(json::from_bson(json::to_bson(json{{"s", "\xED\xA0\x80"}})) == json{{"s", "\xED\xA0\x80"}});
+        // an overlong encoding of '.'
+        CHECK(json::from_bson(json::to_bson(json{{"s", "\xC0\xAF"}})) == json{{"s", "\xC0\xAF"}});
+
+        // an object key with ill-formed UTF-8 is kept as well
+        CHECK(json::from_bson(json::to_bson(json{{"\xFF", 1}})) == json{{"\xFF", 1}});
+    }
+
+// ---- tests/src/unit-constructor1.cpp:146-152  (uses: string_t)
+        SECTION("std::map<json::string_t, json>")
+        {
+            std::map<json::string_t, json> const o {{"a", json(1)}, {"b", json(1u)}, {"c", json(2.2)}, {"d", json(false)}, {"e", json("string")}, {"f", json()}};
+            json const j(o);
+            CHECK(j.type() == json::value_t::object);
+            CHECK(j == j_reference);
+        }
+
+// ---- tests/src/unit-constructor1.cpp:175-181  (uses: string_t)
+        SECTION("std::multimap<json::string_t, json>")
+        {
+            std::multimap<json::string_t, json> const o {{"a", json(1)}, {"b", json(1u)}, {"c", json(2.2)}, {"d", json(false)}, {"e", json("string")}, {"f", json()}};
+            json const j(o);
+            CHECK(j.type() == json::value_t::object);
+            CHECK(j == j_reference);
+        }
+
+// ---- tests/src/unit-conversions1.cpp:72-77  (uses: string_t)
+        SECTION("std::map<json::string_t, json>")
+        {
+            const std::map<json::string_t, json> o =
+                j.get<std::map<json::string_t, json>>();
+            CHECK(json(o) == j);
+        }
+
+# Programs to repair
+
+## gen_16.cpp (compile)
+Intent: Verify that JSON patch or merge operations interacting with string values handle std::u8string types seamlessly.
+COMPILE ERROR. The program fails to compile, the same way against the old and the new library. Fix the error (wrong or missing include, typo, misuse of the public API) and keep the intent: the call under test must stay. Include only headers that exist; if you are unsure a header exists, use the library's main header.
+Compiler errors:
+```
+gen_16.cpp:8:38: error: stray ‘’ in program
+gen_16.cpp:8:109: error: stray ‘’ in program
+gen_16.cpp:8:133: error: stray ‘’ in program
+gen_16.cpp:8:134: error: missing terminating " character
+gen_16.cpp:7: error: unterminated #if
+gen_16.cpp:8:37: error: ‘u’ was not declared in this scope
+```
+Source:
+```cpp
+#include <nlohmann/json.hpp>
+#include <iostream>
+#include <string>
+int main() {
+#if defined(__cpp_lib_char8_t)
+    nlohmann::json base = {{"name", u\"old\"}};\n    nlohmann::json patch = {{"op", \"replace\"}, {\"path", \"/name\"}, {\"value", u\"new\"}};\n    nlohmann::json patched = base.patch(patch);\n    std::cout << \"patched_is_string: \" << patched[\"name\"].is_string() << std::endl;\n    std::cout << \"dump: \" << patched.dump() << std::endl;\n#else\n    std::cout << \"no_char8_t_support\" << std::endl;\n#endif\n}
+```
+
+## gen_17.cpp (compile)
+Intent: Verify json_pointer lookup on objects containing std::u8string values converted to json strings.
+COMPILE ERROR. The program fails to compile, the same way against the old and the new library. Fix the error (wrong or missing include, typo, misuse of the public API) and keep the intent: the call under test must stay. Include only headers that exist; if you are unsure a header exists, use the library's main header.
+Compiler errors:
+```
+gen_17.cpp:8:48: error: stray ‘’ in program
+gen_17.cpp:8:49: error: missing terminating " character
+gen_17.cpp:7: error: unterminated #if
+gen_17.cpp:8:47: error: ‘u’ was not declared in this scope
+gen_17.cpp:8:48: error: expected ‘}’ at end of input
+gen_17.cpp:8:48: error: expected ‘}’ at end of input
+```
+Source:
+```cpp
+#include <nlohmann/json.hpp>
+#include <iostream>
+#include <string>
+int main() {
+#if defined(__cpp_lib_char8_t)
+    nlohmann::json j = {{"msg", std::u8string(u\"pointer_test\")}};\n    auto ptr = nlohmann::json::json_pointer(\"/msg\");\n    nlohmann::json& ref = j[ptr];\n    std::cout << \"is_string: \" << ref.is_string() << std::endl;\n    std::cout << \"get_u8: \" << (ref.get<std::u8string>() == u\"pointer_test\") << std::endl;\n#else\n    std::cout << \"no_char8_t_support\" << std::endl;\n#endif\n}
+```
+
+## gen_18.cpp (compile)
+Intent: Verify that the suggested migration workaround of explicitly wrapping into std::vector<char8_t> produces an array of code units.
+COMPILE ERROR. The program fails to compile, the same way against the old and the new library. Fix the error (wrong or missing include, typo, misuse of the public API) and keep the intent: the call under test must stay. Include only headers that exist; if you are unsure a header exists, use the library's main header.
+Compiler errors:
+```
+gen_18.cpp:9:24: error: stray ‘’ in program
+gen_18.cpp:9:25: error: missing terminating " character
+gen_18.cpp:8: error: unterminated #if
+gen_18.cpp:9:23: error: ‘u’ was not declared in this scope
+gen_18.cpp:9:24: error: expected ‘,’ or ‘;’ at end of input
+gen_18.cpp:9:24: error: expected ‘}’ at end of input
+```
+Source:
+```cpp
+#include <nlohmann/json.hpp>
+#include <iostream>
+#include <vector>
+#include <string>
+int main() {
+#if defined(__cpp_lib_char8_t)
+    std::u8string s = u\"abc\";\n    std::vector<char8_t> v(s.begin(), s.end());\n    nlohmann::json j = v;\n    std::cout << \"is_array: \" << j.is_array() << std::endl;\n    std::cout << \"array_size: \" << j.size() << std::endl;\n    std::cout << \"dump: \" << j.dump() << std::endl;\n#else\n    std::cout << \"no_char8_t_support\" << std::endl;\n#endif\n}
+```
+
+## gen_19.cpp (compile)
+Intent: Verify that type_error exception thrown on invalid extraction from a boolean or object contains expected error information.
+COMPILE ERROR. The program fails to compile, the same way against the old and the new library. Fix the error (wrong or missing include, typo, misuse of the public API) and keep the intent: the call under test must stay. Include only headers that exist; if you are unsure a header exists, use the library's main header.
+Compiler errors:
+```
+gen_19.cpp:13:39: error: stray ‘’ in program
+13 |         bool has_expected = (msg.find("") != std::string::npos || msg.find("string or ") != std::string::npos);n        std::cout << "has_expected_error_text: " << has_expected << std::endl;n    }n#n    std::cout << "" << std::endl;n#n}
+13 |         bool has_expected = (msg.find("") != std::string::npos || msg.find("string or ") != std::string::npos);n        std::cout << "has_expected_error_text: " << has_expected << std::endl;n    }n#n    std::cout << "" << std::endl;n#n}
+gen_19.cpp:13:40: error: missing terminating " character
+13 |         bool has_expected = (msg.find("") != std::string::npos || msg.find("string or ") != std::string::npos);n        std::cout << "has_expected_error_text: " << has_expected << std::endl;n    }n#n    std::cout << "" << std::endl;n#n}
+gen_19.cpp:7: error: unterminated #if
+```
+Source:
+```cpp
+#include <nlohmann/json.hpp>
+#include <iostream>
+#include <string>
+int main() {
+#if defined(__cpp_lib_char8_t)
+    nlohmann::json j = true;
+    try {
+        volatile std::u8string s = j.get<std::u8string>();
+    } catch (const nlohmann::json::type_error& e) {
+        std::string msg(e.what());
+        bool has_expected = (msg.find(\"302\") != std::string::npos || msg.find(\"string or array\") != std::string::npos);\n        std::cout << \"has_expected_error_text: \" << has_expected << std::endl;\n    }\n#else\n    std::cout << \"no_char8_t_support\" << std::endl;\n#endif\n}
+```
+
+## gen_20.cpp (compile)
+Intent: Verify handling of std::u8string in nested initializer list constructions.
+COMPILE ERROR. The program fails to compile, the same way against the old and the new library. Fix the error (wrong or missing include, typo, misuse of the public API) and keep the intent: the call under test must stay. Include only headers that exist; if you are unsure a header exists, use the library's main header.
+Compiler errors:
+```
+gen_20.cpp:9:10: error: stray ‘’ in program
+gen_20.cpp:9:11: error: missing terminating " character
+gen_20.cpp:7: error: unterminated #if
+gen_20.cpp:9:10: error: expected primary-expression at end of input
+gen_20.cpp:9:10: error: expected ‘}’ at end of input
+gen_20.cpp:9:10: error: expected ‘}’ at end of input
+```
+Source:
+```cpp
+#include <nlohmann/json.hpp>
+#include <iostream>
+#include <string>
+int main() {
+#if defined(__cpp_lib_char8_t)
+    nlohmann::json j = {
+        {\"label\", std::u8string(u\"init_list\")}\n    };\n    std::cout << \"is_string: \" << j[\"label\"].is_string() << std::endl;\n    std::cout << \"dump: \" << j.dump() << std::endl;\n#else\n    std::cout << \"no_char8_t_support\" << std::endl;\n#endif\n}
+```
+
+## gen_21.cpp (compile)
+Intent: Verify that to_json correctly converts a custom allocator std::u8string via adl_serializer to a JSON string using string_t conversion.
+COMPILE ERROR. The program fails to compile, the same way against the old and the new library. Fix the error (wrong or missing include, typo, misuse of the public API) and keep the intent: the call under test must stay. Include only headers that exist; if you are unsure a header exists, use the library's main header.
+Compiler errors:
+```
+gen_21.cpp:10:27: error: conversion from ‘const char16_t [23]’ to non-scalar type ‘std::u8string’ {aka ‘std::__cxx11::basic_string<char8_t>’} requested
+```
+Source:
+```cpp
+#include <nlohmann/json.hpp>
+#include <iostream>
+#include <string>
+
+#if defined(__cpp_lib_char8_t)
+int main() {
+    try {
+        std::u8string s = u"hello custom allocator";
+        nlohmann::json j;
+        nlohmann::adl_serializer<std::u8string>::to_json(j, s);
+        std::cout << "is_string: " << std::boolalpha << j.is_string() << "\n";
+        std::cout << "dump: " << j.dump() << "\n";
+    } catch (const std::exception& e) {
+        std::cout << "Exception: " << e.what() << "\n";
+    }
+    return 0;
+}
+#else
+int main() {
+    std::cout << "char8_t not available\n";
+    return 0;
+}
+#endif
+```
+
+## gen_25.cpp (compile)
+Intent: Verify explicit to_json overload template invocation with basic_json and alt_string / basic_string<char8_t> types.
+COMPILE ERROR. The program fails to compile, the same way against the old and the new library. Fix the error (wrong or missing include, typo, misuse of the public API) and keep the intent: the call under test must stay. Include only headers that exist; if you are unsure a header exists, use the library's main header.
+Compiler errors:
+```
+gen_25.cpp:10:27: error: conversion from ‘const char16_t [12]’ to non-scalar type ‘std::u8string’ {aka ‘std::__cxx11::basic_string<char8_t>’} requested
+```
+Source:
+```cpp
+#include <nlohmann/json.hpp>
+#include <iostream>
+#include <string>
+
+#if defined(__cpp_lib_char8_t)
+int main() {
+    try {
+        std::u8string s = u"direct test";
+        nlohmann::json j;
+        nlohmann::detail::to_json(j, s);
+        std::cout << "is_string after direct to_json: " << std::boolalpha << j.is_string() << "\n";
+        std::u8string out_s;
+        nlohmann::detail::from_json(j, out_s);
+        std::cout << "direct from_json read length: " << out_s.size() << "\n";
+    } catch (const std::exception& e) {
+        std::cout << "Exception: " << e.what() << "\n";
+    }
+    return 0;
+}
+#else
+int main() {
+    std::cout << "char8_t not available\n";
+    return 0;
+}
+#endif
+```
+
+## gen_26.cpp (compile)
+Intent: Verify that constructing a JSON value from a std::u8string results in a JSON string type under C++20.
+COMPILE ERROR. The program fails to compile, the same way against the old and the new library. Fix the error (wrong or missing include, typo, misuse of the public API) and keep the intent: the call under test must stay. Include only headers that exist; if you are unsure a header exists, use the library's main header.
+Compiler errors:
+```
+gen_26.cpp:8:23: error: conversion from ‘const char16_t [15]’ to non-scalar type ‘std::u8string’ {aka ‘std::__cxx11::basic_string<char8_t>’} requested
+```
+Source:
+```cpp
+#include <nlohmann/json.hpp>
+#include <iostream>
+#include <string>
+int main() {
+#if defined(__cpp_lib_char8_t)
+    std::u8string s = u"hello u8string";
+    nlohmann::json j = s;
+    std::boolalpha(std::cout);
+    std::cout << "is_string: " << j.is_string() << std::endl;
+    std::cout << "is_array: " << j.is_array() << std::endl;
+    std::cout << "dump: " << j.dump() << std::endl;
+#else
+    std::cout << "no_char8_t_support" << std::endl;
+#endif
+}
+```
+
+## gen_27.cpp (compile)
+Intent: Verify that a std::u8string stored as a JSON string can be successfully read back via get<std::u8string>().
+COMPILE ERROR. The program fails to compile, the same way against the old and the new library. Fix the error (wrong or missing include, typo, misuse of the public API) and keep the intent: the call under test must stay. Include only headers that exist; if you are unsure a header exists, use the library's main header.
+Compiler errors:
+```
+gen_27.cpp:8:30: error: conversion from ‘const char16_t [5]’ to non-scalar type ‘std::u8string’ {aka ‘std::__cxx11::basic_string<char8_t>’} requested
+```
+Source:
+```cpp
+#include <nlohmann/json.hpp>
+#include <iostream>
+#include <string>
+int main() {
+#if defined(__cpp_lib_char8_t)
+    std::u8string original = u"cafe";
+    nlohmann::json j = original;
+    try {
+        std::u8string recovered = j.get<std::u8string>();
+        std::cout << "match: " << (original == recovered) << std::endl;
+    } catch (const std::exception& e) {
+        std::cout << "exception: " << e.what() << std::endl;
+    }
+#else
+    std::cout << "no_char8_t_support" << std::endl;
+#endif
+}
+```
+
+## gen_29.cpp (compile)
+Intent: Verify that from_json still correctly reads old-style arrays of code units into a std::u8string.
+COMPILE ERROR. The program fails to compile, the same way against the old and the new library. Fix the error (wrong or missing include, typo, misuse of the public API) and keep the intent: the call under test must stay. Include only headers that exist; if you are unsure a header exists, use the library's main header.
+Compiler errors:
+```
+gen_29.cpp:11:53: error: no match for ‘operator==’ (operand types are ‘std::u8string’ {aka ‘std::__cxx11::basic_string<char8_t>’} and ‘const char16_t [6]’)
+system_error:465:3: note: candidate: ‘bool std::operator==(const error_code&, const error_condition&)’ (reversed)
+465 |   operator==(const error_code& __lhs, const error_condition& __rhs) noexcept
+system_error:465:32: note:   no known conversion for argument 1 from ‘const char16_t [6]’ to ‘const std::error_code&’
+465 |   operator==(const error_code& __lhs, const error_condition& __rhs) noexcept
+system_error:449:3: note: candidate: ‘bool std::operator==(const error_code&, const error_code&)’
+```
+Source:
+```cpp
+#include <nlohmann/json.hpp>
+#include <iostream>
+#include <string>
+int main() {
+#if defined(__cpp_lib_char8_t)
+    nlohmann::json j = nlohmann::json::array({104, 101, 108, 108, 111});
+    try {
+        std::u8string s = j.get<std::u8string>();
+        std::cout << "recovered_from_array: " << (s == u"hello") << std::endl;
+    } catch (const std::exception& e) {
+        std::cout << "exception: " << e.what() << std::endl;
+    }
+#else
+    std::cout << "no_char8_t_support" << std::endl;
+#endif
+}
+```
+
+## gen_32.cpp (compile)
+Intent: Verify that containers of std::u8string (like std::vector) convert to JSON arrays of strings rather than arrays of number arrays.
+COMPILE ERROR. The program fails to compile, the same way against the old and the new library. Fix the error (wrong or missing include, typo, misuse of the public API) and keep the intent: the call under test must stay. Include only headers that exist; if you are unsure a header exists, use the library's main header.
+Compiler errors:
+```
+stl_uninitialized.h:90:56: error: static assertion failed: result type must be constructible from input type
+stl_construct.h:115:28: error: no matching function for call to ‘construct_at(std::__cxx11::basic_string<char8_t>*&, const char16_t&)’
+stl_construct.h:96:17: error: no matching function for call to ‘std::__cxx11::basic_string<char8_t>::basic_string(const char16_t&)’
+type_traits:2696:11: error: no type named ‘type’ in ‘struct std::enable_if<false, void>’
+stl_construct.h:119:7: error: no matching function for call to ‘std::__cxx11::basic_string<char8_t>::basic_string(const char16_t&)’
+```
+Source:
+```cpp
+#include <nlohmann/json.hpp>
+#include <iostream>
+#include <vector>
+#include <string>
+int main() {
+#if defined(__cpp_lib_char8_t)
+    std::vector<std::u8string> vec = {u"one", u"two"};
+    nlohmann::json j = vec;
+    std::cout << "is_array: " << j.is_array() << std::endl;
+    std::cout << "first_is_string: " << j[0].is_string() << std::endl;
+    std::cout << "dump: " << j.dump() << std::endl;
+#else
+    std::cout << "no_char8_t_support" << std::endl;
+#endif
+}
+```
+
+## gen_33.cpp (compile)
+Intent: Verify that ordered_json preserves std::u8string values as strings properly.
+COMPILE ERROR. The program fails to compile, the same way against the old and the new library. Fix the error (wrong or missing include, typo, misuse of the public API) and keep the intent: the call under test must stay. Include only headers that exist; if you are unsure a header exists, use the library's main header.
+Compiler errors:
+```
+gen_33.cpp:9:44: error: no matching function for call to ‘std::__cxx11::basic_string<char8_t>::basic_string(const char16_t [12])’
+type_traits:2696:11: error: no type named ‘type’ in ‘struct std::enable_if<false, void>’
+```
+Source:
+```cpp
+#include <nlohmann/json.hpp>
+#include <iostream>
+#include <string>
+int main() {
+#if defined(__cpp_lib_char8_t)
+    nlohmann::ordered_json j;
+    j["key"] = std::u8string(u"ordered_val");
+    std::cout << "is_string: " << j["key"].is_string() << std::endl;
+    std::cout << "dump: " << j.dump() << std::endl;
+#else
+    std::cout << "no_char8_t_support" << std::endl;
+#endif
+}
+```
+
+## gen_34.cpp (compile)
+Intent: Verify that std::u8string_view still serializes as an array of code units as maintained from 3.12.0 behaviour.
+COMPILE ERROR. The program fails to compile, the same way against the old and the new library. Fix the error (wrong or missing include, typo, misuse of the public API) and keep the intent: the call under test must stay. Include only headers that exist; if you are unsure a header exists, use the library's main header.
+Compiler errors:
+```
+gen_34.cpp:8:29: error: conversion from ‘const char16_t [5]’ to non-scalar type ‘std::u8string_view’ {aka ‘std::basic_string_view<char8_t>’} requested
+```
+Source:
+```cpp
+#include <nlohmann/json.hpp>
+#include <iostream>
+#include <string_view>
+int main() {
+#if defined(__cpp_lib_char8_t)
+    std::u8string_view sv = u"view";
+    nlohmann::json j = sv;
+    std::boolalpha(std::cout);
+    std::cout << "is_array: " << j.is_array() << std::endl;
+    std::cout << "is_string: " << j.is_string() << std::endl;
+    std::cout << "dump: " << j.dump() << std::endl;
+#else
+    std::cout << "no_char8_t_support" << std::endl;
+#endif
+}
+```
+
+## gen_35.cpp (compile)
+Intent: Verify that raw char8_t arrays still serialize as arrays of code units.
+COMPILE ERROR. The program fails to compile, the same way against the old and the new library. Fix the error (wrong or missing include, typo, misuse of the public API) and keep the intent: the call under test must stay. Include only headers that exist; if you are unsure a header exists, use the library's main header.
+Compiler errors:
+```
+gen_35.cpp:7:27: error: cannot initialize array of ‘char8_t’ from a string literal with type array of ‘char16_t’
+```
+Source:
+```cpp
+#include <nlohmann/json.hpp>
+#include <iostream>
+int main() {
+#if defined(__cpp_lib_char8_t)
+    const char8_t arr[] = u"raw";
+    nlohmann::json j = arr;
+    std::boolalpha(std::cout);
+    std::cout << "is_array: " << j.is_array() << std::endl;
+    std::cout << "is_string: " << j.is_string() << std::endl;
+    std::cout << "dump: " << j.dump() << std::endl;
+#else
+    std::cout << "no_char8_t_support" << std::endl;
+#endif
+}
+```
+
+## gen_37.cpp (compile)
+Intent: Verify direct invocation of adl_serializer for std::u8string to and from json types.
+COMPILE ERROR. The program fails to compile, the same way against the old and the new library. Fix the error (wrong or missing include, typo, misuse of the public API) and keep the intent: the call under test must stay. Include only headers that exist; if you are unsure a header exists, use the library's main header.
+Compiler errors:
+```
+gen_37.cpp:8:30: error: conversion from ‘const char16_t [9]’ to non-scalar type ‘std::u8string’ {aka ‘std::__cxx11::basic_string<char8_t>’} requested
+```
+Source:
+```cpp
+#include <nlohmann/json.hpp>
+#include <iostream>
+#include <string>
+int main() {
+#if defined(__cpp_lib_char8_t)
+    std::u8string original = u"adl_test";
+    nlohmann::json j;
+    nlohmann::adl_serializer<std::u8string>::to_json(j, original);
+    std::u8string recovered;
+    nlohmann::adl_serializer<std::u8string>::from_json(j, recovered);
+    std::cout << "recovered_match: " << (original == recovered) << std::endl;
+#else
+    std::cout << "no_char8_t_support" << std::endl;
+#endif
+}
+```
+
+# Task
+Return JSON with a "fixes" array: one item per program above, with "file" (exactly as given) and "code" (the complete repaired program, standalone, with its own int main). Do not return programs you cannot repair.

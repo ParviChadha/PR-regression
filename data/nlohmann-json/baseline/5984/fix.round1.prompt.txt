@@ -1,0 +1,219 @@
+[system]
+You write test programs that probe a C++ library for behavioral changes made by one pull request.
+Each program is compiled and run twice, once against the library before the change and once after, and the two
+outputs are compared. Your job is to produce programs whose output reveals whether the change altered behavior,
+including side effects the author did not intend.
+
+Rules for every program:
+- It is standalone: one file with its own int main(), compiled as C++17, printing results to stdout.
+- Use only the library's documented public API. Never include internal headers or use detail/impl namespaces,
+  private members or undocumented macros.
+- Do not judge results (no assert, no expected-value comparisons): just print what the library returns. Print
+  enough to make differences visible, one fact per line.
+- Output must be deterministic. Never print pointers or addresses, uninitialized data, the order of
+  hash-based containers, timings, thread ids, random values, file paths or environment data. Print floating point
+  values with an explicit precision. No input, files, network, threads, clocks or randomness.
+- Wrap calls that may throw in try/catch and print the exception's type and message, so an exception is an
+  observable result. Do not crash on purpose.
+- Aim at the code the diff changes. Prefer calls that compile against both the old and the new library; one or two
+  programs may use an API the PR adds. Cover ordinary inputs and edge cases (empty, minimum and maximum values,
+  boundaries, special values, nesting, unusual types) and also neighbouring behavior the change could disturb.
+- When the diff changes which types or inputs an API accepts or rejects (constraints, overloads, traits,
+  conversions), test it with the detection idiom (std::void_t or requires) and `if constexpr`, so the program
+  compiles against both versions, prints whether the expression is well-formed, and exercises it when it is.
+  Accepting an input is not enough: also use it through every entry point that should follow (const and
+  non-const, read, write, insert, erase, lookup, nested use), because a change that admits new inputs can leave
+  later code unable to handle them.
+- If the changed code is internal (a detail, impl or internal namespace, a trait, a helper), do not name it in the
+  program. Reach it through the public API that depends on it, using detection (as above) where needed.
+- Use the exact types and values the diff is about (the new trait's argument types, the new overload's
+  parameters), not stand-ins.
+- Spread the programs over distinct public entry points and overloads, one main idea per program. Do not write
+  several programs that only rename a type or change a literal.
+- Make the programs differ from each other: different inputs, different entry points, different features.
+
+Rules specific to this library:
+- Include the library with #include <nlohmann/json.hpp>. The public API is nlohmann::json (nlohmann::basic_json), nlohmann::ordered_json, json_pointer, json patch/merge_patch and the documented SAX and conversion interfaces. Never use the detail namespace.
+- It is a header-only library: nothing to link. Programs are compiled as C++17.
+- Print JSON values with dump() (compact) or dump(2). Keys of nlohmann::json objects print in sorted order, so output is deterministic; do not depend on insertion order except with ordered_json.
+
+[user]
+# Pull request #5984: BSON reader: check array element names in place in strict mode
+
+## Description
+Follow-up to #5968, suggested by @gregmarr in https://github.com/nlohmann/json/pull/5968#discussion_r4428974879.
+
+## What
+
+With `error_handler_t::strict`, the BSON reader must reject ill-formed UTF-8 in the names of an array's elements (`"0"`, `"1"`, ...), although these names are never passed on. So far they were copied into the key buffer, only so that `check_string_utf8` had a string to look at.
+
+The new `check_bson_cstr` checks such a name in place on contiguous input (`valid_utf8_string` on the input bytes) and skips it without copying. If the scannable input has no `\x00`-byte, or the name is ill-formed, it falls back to `get_bson_cstr`, which reads the name and reports the same error as before (same message, same byte position).
+
+`get_bson_cstr` itself is unchanged. A first version gave it a separate `validate` parameter instead. That pushed `get_bson_cstr_bulk` over clang's inlining threshold and made the **default** (`keep`) path 7.6 % slower on x86, so this PR uses a separate function for the strict case only.
+
+## Performance
+
+BSON document with an array of 1,000,000 int32 values; best of 15 runs; "sax" = `binary_reader` with a no-op SAX handler, "dom" = `from_bson`.
+
+Linux x86 (Haswell VPS, pinned core, builds with aligned functions/loops):
+
+| | clang 18 develop | clang 18 PR | GCC 13 develop | GCC 13 PR |
+|---|---|---|---|---|
+| sax, `strict` | 36.1 ms | 25.7 ms (**−29 %**) | 32.9 ms | 21.3 ms (**−36 %**) |
+| sax, `keep` | 17.4 ms | 17.4 ms (±0 %) | 15.3 ms | 15.1 ms (−1 %) |
+| dom, `keep` | ~42 ms | ~43 ms (within DOM noise) | ~43 ms | ~43 ms (within DOM noise) |
+
+macOS arm64 (Apple clang, GCC 16):
+
+| | clang develop | clang PR | GCC develop | GCC PR |
+|---|---|---|---|---|
+| sax, `strict` | 22.1 ms | 14.8 ms (**−33 %**) | 27.6 ms | 20.0 ms (**−28 %**) |
+| dom, `strict` | 26.2 ms | 18.3 ms (**−30 %**) | 26.0 ms | 21.8 ms (**−16 %**) |
+| sax, `keep` | 12.4 ms | 12.1 ms | 14.2 ms | 14.0 ms |
+| dom, `keep` | 16.1 ms | 15.7 ms | 15.1 ms | 15.2 ms |
+
+With clang, the `keep` path runs the same number of instructions as develop. With GCC 16 on arm64, it runs about 9 % more instructions in the SAX benchmark, but the time is the same on both machines.
+
+## Tests
+
+- "BSON array element names": the ill-formed name is also rejected on non-contiguous input (`std::list`, read byte by byte); with `allow_exceptions = false` the parse result is discarded; well-formed names pass in strict mode.
+- "BSON keys from contiguous and stream input": every truncation of the document now also runs in strict mode, on contiguous and non-contiguous input, and must give the same value or error as in `keep` mode. This covers the fallback when the scannable input has no `\x00`-byte.
+- Disabling the in-place check, or the byte-by-byte check, makes these tests fail.
+
+## Public API
+
+No breaking changes. Only private members of `detail::binary_reader` change; results and error messages for every input and error handler stay the same.
+
+🤖 Generated with [Claude Code](https://claude.com/claude-code)
+
+## Commit message
+
+
+## Diff of the library source (before -> after)
+```diff
+diff --git a/include/nlohmann/detail/input/binary_reader.hpp b/include/nlohmann/detail/input/binary_reader.hpp
+index da5a0263e..8a6a0a6d5 100644
+--- a/include/nlohmann/detail/input/binary_reader.hpp
++++ b/include/nlohmann/detail/input/binary_reader.hpp
+@@ -467,11 +467,13 @@ class binary_reader
+ 
+             const std::size_t element_type_parse_position = chars_read;
+             // an array's elements are named "0", "1", ... in the wire format,
+-            // and those names are not passed on: they are skipped unless
+-            // error_handler_t::strict must reject ill-formed UTF-8 in them
++            // and those names are not passed on: they are skipped, and only
++            // checked if error_handler_t::strict must reject ill-formed UTF-8
+             const bool is_object = container_stack.back().is_object;
+             key.clear();
+-            if (JSON_HEDLEY_UNLIKELY(!get_bson_cstr(key, is_object || error_handler == error_handler_t::strict)))
++            if (JSON_HEDLEY_UNLIKELY(!(is_object || error_handler != error_handler_t::strict
++                                       ? get_bson_cstr(key, is_object)
++                                       : check_bson_cstr(key, std::integral_constant<bool, bulk_scan> {}))))
+             {
+                 return false;
+             }
+@@ -495,7 +497,7 @@ class binary_reader
+     @param[in] store  whether the characters are needed; if not (the names of
+                       an array's elements), they are skipped and @a result may
+                       be left unchanged, and they are not checked against
+-                      @ref error_handler
++                      @ref error_handler (@ref check_bson_cstr checks them)
+     @return `true` if the \\x00-byte indicating the end of the string was
+              encountered before the EOF; false` indicates an unexpected EOF.
+     */
+@@ -554,6 +556,42 @@ class binary_reader
+         return true;
+     }
+ 
++    /*!
++    @brief skip a C-style string that error_handler_t::strict must check
++
++    The names of an array's elements are not passed on. On contiguous input,
++    a well-formed name is checked in place and skipped without being copied.
++    Otherwise (no \\x00-byte in the input that can be scanned, or ill-formed
++    UTF-8), it is read by @ref get_bson_cstr, which reports the error.
++
++    @param[in,out] result  an empty string, which may receive the name
++    @return whether the name was read and is well-formed
++    */
++    bool check_bson_cstr(string_t& result, std::true_type /*bulk*/)
++    {
++        const std::size_t remaining = ia.bulk_remaining();
++        if (remaining != 0)
++        {
++            const auto* const data = reinterpret_cast<const unsigned char*>(ia.bulk_data());
++            const std::size_t length = find_zero_byte(data, remaining);
++            if (length != remaining && JSON_HEDLEY_LIKELY(valid_utf8_string(data, length)))
++            {
++                // consume the string and its \x00-byte, as get_bson_cstr does
++                ia.bulk_skip(length + 1);
++                chars_read += length + 1;
++                current = 0x00;
++                return true;
++            }
++        }
++        return get_bson_cstr(result);
++    }
++
++    /// input that is not contiguous: the name is read and checked byte by byte
++    bool check_bson_cstr(string_t& result, std::false_type /*bulk*/)
++    {
++        return get_bson_cstr(result);
++    }
++
+     /// input that is not contiguous: C-style strings are read byte by byte
+     bool get_bson_cstr_bulk(string_t& /*result*/, const bool /*store*/, std::false_type /*bulk*/) const noexcept
+     {
+```
+
+# Programs to repair
+
+## gen_12.cpp (compile)
+Intent: Probes SAX parser interface behavior directly with strict BSON array parsing.
+COMPILE ERROR. The program fails to compile, the same way against the old and the new library. Fix the error (wrong or missing include, typo, misuse of the public API) and keep the intent: the call under test must stay. Include only headers that exist; if you are unsure a header exists, use the library's main header.
+Compiler errors:
+```
+gen_12.cpp:35:32: error: ‘sax_parse_bson’ is not a member of ‘nlohmann::json_abi_v3_12_0::json’ {aka ‘nlohmann::json_abi_v3_12_0::basic_json<>’}
+35 |     bool res = nlohmann::json::sax_parse_bson(bson, &sax, nlohmann::json::error_handler_t::strict);
+```
+Source:
+```cpp
+#include <nlohmann/json.hpp>
+#include <iostream>
+#include <vector>
+class NullSax : public nlohmann::json::json_sax_t {
+public:
+    bool null() override { return true; }
+    bool boolean(bool) override { return true; }
+    bool number_integer(number_integer_t) override { return true; }
+    bool number_unsigned(number_unsigned_t) override { return true; }
+    bool number_float(number_float_t, const string_t&) override { return true; }
+    bool string(string_t&) override { return true; }
+    bool binary(binary_t&) override { return true; }
+    bool start_object(std::size_t) override { return true; }
+    bool key(string_t&) override { return true; }
+    bool end_object() override { return true; }
+    bool start_array(std::size_t) override { return true; }
+    bool end_array() override { return true; }
+    bool parse_error(std::size_t, const std::string&, const nlohmann::json::exception& e) override {
+        std::cout << "sax error: " << e.what() << std::endl;
+        return false;
+    }
+};
+int main() {
+    std::vector<uint8_t> bson = {
+        0x0c, 0x00, 0x00, 0x00, 
+        0x04, 
+        0xff, 0x00, 
+        0x05, 0x00, 0x00, 0x00, 
+        0x00, 
+        0x00 
+    };
+    NullSax sax;
+    bool res = nlohmann::json::sax_parse_bson(bson, &sax, nlohmann::json::error_handler_t::strict);
+    std::cout << "sax result: " << (res ? "true" : "false") << std::endl;
+}
+```
+
+# Task
+Return JSON with a "fixes" array: one item per program above, with "file" (exactly as given) and "code" (the complete repaired program, standalone, with its own int main). Do not return programs you cannot repair.

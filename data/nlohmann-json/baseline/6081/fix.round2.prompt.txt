@@ -1,0 +1,361 @@
+[system]
+You write test programs that probe a C++ library for behavioral changes made by one pull request.
+Each program is compiled and run twice, once against the library before the change and once after, and the two
+outputs are compared. Your job is to produce programs whose output reveals whether the change altered behavior,
+including side effects the author did not intend.
+
+Rules for every program:
+- It is standalone: one file with its own int main(), compiled as C++17, printing results to stdout.
+- Use only the library's documented public API. Never include internal headers or use detail/impl namespaces,
+  private members or undocumented macros.
+- Do not judge results (no assert, no expected-value comparisons): just print what the library returns. Print
+  enough to make differences visible, one fact per line.
+- Output must be deterministic. Never print pointers or addresses, uninitialized data, the order of
+  hash-based containers, timings, thread ids, random values, file paths or environment data. Print floating point
+  values with an explicit precision. No input, files, network, threads, clocks or randomness.
+- Wrap calls that may throw in try/catch and print the exception's type and message, so an exception is an
+  observable result. Do not crash on purpose.
+- Aim at the code the diff changes. Prefer calls that compile against both the old and the new library; one or two
+  programs may use an API the PR adds. Cover ordinary inputs and edge cases (empty, minimum and maximum values,
+  boundaries, special values, nesting, unusual types) and also neighbouring behavior the change could disturb.
+- When the diff changes which types or inputs an API accepts or rejects (constraints, overloads, traits,
+  conversions), test it with the detection idiom (std::void_t or requires) and `if constexpr`, so the program
+  compiles against both versions, prints whether the expression is well-formed, and exercises it when it is.
+  Accepting an input is not enough: also use it through every entry point that should follow (const and
+  non-const, read, write, insert, erase, lookup, nested use), because a change that admits new inputs can leave
+  later code unable to handle them.
+- If the changed code is internal (a detail, impl or internal namespace, a trait, a helper), do not name it in the
+  program. Reach it through the public API that depends on it, using detection (as above) where needed.
+- Use the exact types and values the diff is about (the new trait's argument types, the new overload's
+  parameters), not stand-ins.
+- Spread the programs over distinct public entry points and overloads, one main idea per program. Do not write
+  several programs that only rename a type or change a literal.
+- Make the programs differ from each other: different inputs, different entry points, different features.
+
+Rules specific to this library:
+- Include the library with #include <nlohmann/json.hpp>. The public API is nlohmann::json (nlohmann::basic_json), nlohmann::ordered_json, json_pointer, json patch/merge_patch and the documented SAX and conversion interfaces. Never use the detail namespace.
+- It is a header-only library: nothing to link. Programs are compiled as C++17.
+- Print JSON values with dump() (compact) or dump(2). Keys of nlohmann::json objects print in sorted order, so output is deterministic; do not depend on insertion order except with ordered_json.
+
+[user]
+# Pull request #6081: Add JSON_RECURSION_DEPTH_LIMIT to set how deep value walks recurse
+
+## Description
+Copying, comparing, serializing, hashing, merging, diffing, converting and
+destroying a value, and the CBOR, MessagePack, UBJSON, BJData and BON8 writers
+recurse a fixed number of nesting levels on the call stack and finish deeper
+levels with an explicit stack (#5387). The number was hard-coded to 128. That is
+too much for small stacks: a 128-level dump() needs about 288 KiB at -O0 with
+Clang (2.3 KiB per level; 256 KiB with GCC) and crashed in a thread with a
+256 KiB stack, and musl threads have 128 KiB by default. Others may want the
+opposite.
+
+The macro JSON_RECURSION_DEPTH_LIMIT, defined before including the library,
+sets the number; the default stays 128. The value must be an integer constant
+from 0 to 254 (not a floating-point number or bool), otherwise a static_assert
+names the macro. 254 is the largest value because the copy constructor and the
+comparison operators cannot pass a depth down and count it in a byte per thread
+(nesting_depth()). The guard that counts now counts only the levels it enters,
+so the count never exceeds the limit. It used to count the level that finds the
+limit reached as well, which made the count 255 at limit 254: a copy made by a
+custom base class while a copy was going on then wrapped the byte to 0 and
+recursed another 254 levels (twice the stack).
+
+0 is allowed: every walk then uses its explicit stack from the first level on
+and needs a constant amount of stack (16 KiB or less at
+-O0 with Clang and GCC, for a value nested 20,000 levels deep). All uses of the
+limit compare a depth with it; none computes limit - 1 or limit + 1, and no
+walk has a constant 128 of its own.
+
+The macro changes only stack use and speed, never a result. Like
+JSON_NO_THREAD_LOCAL it is not part of the ABI tag and must be the same in all
+translation units (ODR); the page of the macro says what happens otherwise.
+
+Supporting a limit of 0 needed one fix: update() without merge_objects reached
+the explicit-stack merge at depth 0, which always merges objects. update_members
+now takes that path only with merge_objects, which is the only case in which it
+recurses at all.
+
+Measurements (macOS arm64, Apple clang 21 and g++ 16, documented in the macro
+page with a table per operation and optimization level, and a program to
+reproduce them): the stack needed at the default of 128 levels is up to 288 KiB
+(dump at -O0, Clang), 224 KiB (copy), and 48 KiB or less at -O2; at 254 levels
+up to 576 KiB at -O0 and 112 KiB at -O2. Speed at -O2 relative to the default:
+ordinary documents (nested 2 to 10 levels) are 1.1 to 2.4 times as slow with a
+limit of 0 or 1 and unchanged (within about 0.1) with 16 or 254; values nested
+1,000 or 100,000 levels deep show no difference for any limit. The default
+build does the same work as before: the instructions retired for copy and conversion
+(the walks whose guard changed; net of loading, canada, citm, twitter, jeopardy
+and deep values), ==, dump and hash differ from the base by at most 0.02 % for copy
+and 0.71 % in either direction for the others (noise), and the cycles for copy
+by at most 0.65 %.
+
+Tests: the existing tests that depended on 128 (comparison, allocator, custom
+base class, diagnostics, binary writers, patch, merge_diff, conversions, custom
+array type) derive their depths from the limit, and two assumed a limit of at
+least 1 (limit - 1 wrapped around). tests/src/unit-recursion_depth_limit.cpp
+checks that the macro is honoured (the array type of a value counts the levels
+that a copy and a comparison descend) and that all walks return the same results
+for values nested 1 to 300 levels deep as arrays, objects and both, against
+expected strings and bytes built independently of the library; CMake builds it
+with limits 0, 1 and 254 besides the default, and the CI target
+ci_test_recursion_depth_limit_0 runs the whole suite with a limit of 0. A test
+with a base class that copies the value from its copy constructor covers the
+wrap-around at 254. The new test does not compile against the
+previous
+[... truncated, 630 more characters]
+
+## Commit message
+Signed-off-by: Niels Lohmann <mail@nlohmann.me>
+
+## Discussion before merge
+- gregmarr: I would hope that this gets optimized to a simple return.  Should it be put in a `constexpr std::size_t depth_limit` to be sure?
+- gregmarr: Is this needed now that there are static asserts in `recursion_depth_limit.hpp`?  I suppose it doesn't hurt either way.
+- nlohmann: It already is a simple return: `recursion_depth_limit()` is `constexpr`, so the value is computed at compile time even at -O0 (the function body is `mov x0, #128; ret`), and from -O1 on Clang and GCC 16 inline the call into `cmp x0, #127`. Only an unoptimized build keeps the call, so I kept the function, which predates this PR and has about 20 callers. With the redundant `static_assert` in `json.hpp` removed in `e3940d20b7`, the `% 255` is gone as well, and the function is a plain `return static_cast<std::size_t>(JSON_RECURSION_DEPTH_LIMIT);`.
+
+*(Written by Claude Code on behalf of @nlohmann.)*
+- nlohmann: Right: it was not needed. Because of the `% 255`, `recursion_depth_limit()` could never return 255 or more, so this assert could never fire. The remainder only existed to keep it from reporting the same error a second time. Fixed in `e3940d20b7`: both are removed, and the comment at `nesting_depth()` now points to the range check in `recursion_depth_limit()`. Defining the macro as 255, -1, 1000, 1.5 or `true` still gives exactly one error naming `JSON_RECURSION_DEPTH_LIMIT` (checked with Clang and GCC 16).
+
+*(Written by Claude Code on behalf of @nlohmann.)*
+- gregmarr: >Only an unoptimized build keeps the call, so I kept the function, which predates this PR and has about 20 callers
+
+Sorry, I wasn't clear.  I meant a static variable inside the function so that the computation isn't done on each call, but if that is already being handled, that's fine.
+- nlohmann: Right, that is already handled: there is nothing to compute per call. `recursion_depth_limit()` is `constexpr` and returns the macro value cast to `std::size_t`, so the result is a compile-time constant, and a `static` local would add nothing (and is not allowed in a C++11 `constexpr` function).
+
+*(Written by Claude Code on behalf of @nlohmann.)*
+
+## Diff of the library source (before -> after)
+```diff
+diff --git a/include/nlohmann/detail/macro_scope.hpp b/include/nlohmann/detail/macro_scope.hpp
+index 208c1c3ce..76d191128 100644
+--- a/include/nlohmann/detail/macro_scope.hpp
++++ b/include/nlohmann/detail/macro_scope.hpp
+@@ -224,6 +224,12 @@
+     #define JSON_NO_THREAD_LOCAL 1
+ #endif
+ 
++// JSON_RECURSION_DEPTH_LIMIT (the number of nesting levels the walks over a
++// value recurse into before they continue with an explicit stack; 128 by
++// default, 0 to 254 allowed) is defined and checked where it is used, in
++// detail/recursion_depth_limit.hpp. Like JSON_NO_THREAD_LOCAL it is neither part
++// of the ABI tag nor undefined at the end of json.hpp.
++
+ // allow disabling exceptions
+ #if (defined(__cpp_exceptions) || defined(__EXCEPTIONS) || defined(_CPPUNWIND)) && !defined(JSON_NOEXCEPTION)
+     #define JSON_THROW(exception) throw exception
+diff --git a/include/nlohmann/detail/recursion_depth_limit.hpp b/include/nlohmann/detail/recursion_depth_limit.hpp
+index 6553a4d05..dced5d73c 100644
+--- a/include/nlohmann/detail/recursion_depth_limit.hpp
++++ b/include/nlohmann/detail/recursion_depth_limit.hpp
+@@ -9,9 +9,22 @@
+ #pragma once
+ 
+ #include <cstddef> // size_t
++#include <type_traits> // false_type, is_integral, remove_cv, true_type
+ 
+ #include <nlohmann/detail/abi_macros.hpp>
+ 
++// JSON_RECURSION_DEPTH_LIMIT: the number of nesting levels the operations that
++// walk a value recurse into on the call stack before they continue with an
++// explicit stack (see detail::recursion_depth_limit() below).
++//
++// May be defined by the user before the first include of the library; it has
++// to be the same in every translation unit of a program (it is not part of the
++// ABI tag, see https://json.nlohmann.me/api/macros/json_recursion_depth_limit/).
++// Allowed: an integer constant expression from 0 to 254. The default is 128.
++#ifndef JSON_RECURSION_DEPTH_LIMIT
++    #define JSON_RECURSION_DEPTH_LIMIT 128
++#endif
++
+ NLOHMANN_JSON_NAMESPACE_BEGIN
+ namespace detail
+ {
+@@ -20,21 +33,71 @@ namespace detail
+ @brief the number of nesting levels an operation recurses into
+ 
+ Operations that walk a value (copying, comparing, serializing, hashing, merging,
+-...) recurse once
+-per nesting level, which is fastest, but a value nested deeply enough would
+-exhaust the call stack. So they recurse only this many levels deep and finish
+-whatever lies below with an explicit stack. All of them share this limit.
++diffing, converting, destroying, and writing the binary formats CBOR,
++MessagePack, UBJSON, BJData, and BON8) recurse once per nesting level, which is
++fastest, but a value nested deeply enough would exhaust the call stack. So they
++recurse only this many levels deep and finish whatever lies below with an
++explicit stack that lives on the heap. All of them share this limit and none has
++a constant of its own. It is the value of the macro JSON_RECURSION_DEPTH_LIMIT,
++128 by default. (Parsing, the binary readers, flatten(), unflatten(), and
++to_bson() always use an explicit stack and do not read it, and the lockstep
++comparison of json_view documents has a fixed bound of its own, 48 levels.)
++
++Most of the operations pass the depth down as an argument. The copy constructor
++and the comparison operators cannot, as their signatures are fixed, so they
++count it in basic_json::nesting_depth() instead, a byte per thread. Only the
++levels that are descended into are counted, so the count never exceeds the limit.
++The limit must fit in the byte with some headroom, so that the count cannot wrap
++around: it must be below 255, and 254 is the largest value allowed. (More levels
++would hardly be useful: 254 levels need up to 576 KiB of stack in an unoptimized
++build already, twice the stack of the default.)
+ 
+-Most of them pass the depth down as an argument. The copy constructor and the
+-comparison operators cannot, as their signatures are fixed, so they count it
+-in basic_json::nesting_depth() instead, a byte per thread; the limit must
+-therefore stay below 255.
++The smallest value is 0: every operation then uses its explicit stack from the
++first level on and no operation recurses over the nesting of a value at all.
++That is slower, but needs a constant amount of call stack. It works because
++every use of the limit compares a depth with it (`depth >= limit`, or `<` for
++the opposite), which holds for 0 as for any other value; nothing computes
++`limit - 1` or `limit + 1`, so nothing wraps around. Each operation's explicit
++stack handles any nesting level, including the first, so none of them relies on
++having recursed first.
+ 
++The call stack that an operation needs is roughly a few KiB plus a cost per level
++times the limit. At the default of 128 levels, an unoptimized build needs up to
++about 290 KiB (`dump()` with Clang at -O0: about 2.3 KiB per level) and an
++optimized build up to about 48 KiB; with 254 levels it is up to 576 KiB and
++112 KiB, and with 0 it is 16 KiB or less. Lower the limit for threads with small
++stacks (RTOS tasks, fibers, musl threads), raise it to trade stack for speed on
++deeply nested values. All of this, with the measurements, is in the
++documentation of the macro.
++
++@sa https://json.nlohmann.me/api/macros/json_recursion_depth_limit/
+ @sa https://github.com/nlohmann/json/issues/5387
+ */
++/// the type of the value of JSON_RECURSION_DEPTH_LIMIT is bool or a character type
++template<typename T> struct recursion_depth_limit_is_char_or_bool : std::false_type {};
++template<> struct recursion_depth_limit_is_char_or_bool<bool> : std::true_type {};
++template<> struct recursion_depth_limit_is_char_or_bool<char> : std::true_type {};
++template<> struct recursion_depth_limit_is_char_or_bool<signed char> : std::true_type {};
++template<> struct recursion_depth_limit_is_char_or_bool<unsigned char> : std::true_type {};
++template<> struct recursion_depth_limit_is_char_or_bool<wchar_t> : std::true_type {};
++template<> struct recursion_depth_limit_is_char_or_bool<char16_t> : std::true_type {};
++template<> struct recursion_depth_limit_is_char_or_bool<char32_t> : std::true_type {};
++#if defined(__cpp_char8_t)
++template<> struct recursion_depth_limit_is_char_or_bool<char8_t> : std::true_type {};
++#endif
++
+ constexpr std::size_t recursion_depth_limit() noexcept
+ {
+-    return 128;
++    // an integer: not a floating-point number, whose range check would pass for 1.5 or 254.0
++    // (bool and the character types are integer types, too, but true, false or 'a' are
++    // no way to say a limit; JSON_UBJSON_VALUELESS_ELEMENTS_PER_BYTE refuses them as well)
++    static_assert(std::is_integral<decltype(JSON_RECURSION_DEPTH_LIMIT)>::value
++                  && !recursion_depth_limit_is_char_or_bool<typename std::remove_cv<decltype(JSON_RECURSION_DEPTH_LIMIT)>::type>::value,
++                  "JSON_RECURSION_DEPTH_LIMIT must be an integer constant (not bool or a character type)");
++    static_assert(JSON_RECURSION_DEPTH_LIMIT >= 0 && JSON_RECURSION_DEPTH_LIMIT <= 254,
++                  "JSON_RECURSION_DEPTH_LIMIT must be between 0 and 254: the nesting depth is counted in a byte per thread "
++                  "and may exceed the limit by one (see https://json.nlohmann.me/api/macros/json_recursion_depth_limit/)");
++    return static_cast<std::size_t>(JSON_RECURSION_DEPTH_LIMIT);
+ }
+ 
+ }  // namespace detail
+diff --git a/include/nlohmann/json.hpp b/include/nlohmann/json.hpp
+index bd06811d9..ea5977460 100644
+--- a/include/nlohmann/json.hpp
++++ b/include/nlohmann/json.hpp
+@@ -1256,8 +1256,10 @@ public:
+     }
+ 
+ #ifndef JSON_NO_THREAD_LOCAL
+-    // nesting_depth() is a byte and may exceed the limit by one level
+-    static_assert(detail::recursion_depth_limit() < 255, "the nesting depth count must fit in a byte");
++    // nesting_depth() is a byte that never exceeds the limit (JSON_RECURSION_DEPTH_LIMIT),
++    // which is at most 254: the largest value stays one below the byte's maximum, so
++    // that the count cannot wrap around to 0 and let a descent go on without a bound.
++    // recursion_depth_limit() checks this range with a static_assert.
+ 
+     /*!
+     @brief how many levels the operation going on in this thread has descended into
+@@ -1268,8 +1270,15 @@ public:
+     user code nests them anyway, sharing the count only ends a descent sooner
+     than it had to, which costs a little speed and is never wrong.
+ 
+-    A byte is enough: the count never exceeds the limit by more than the single
+-    level that notices the limit has been reached.
++    A byte is enough: only the levels that are descended into are counted
++    (@ref nesting_depth_guard), so the count never exceeds the limit, and the
++    limit is at most 254.
++
++    The count is per thread and not per value or per library configuration: all
++    translation units of a program share it, even if they were compiled with
++    different values of JSON_RECURSION_DEPTH_LIMIT (which is not supported, see
++    the documentation of the macro); each of them then compares the shared count
++    with its own limit.
+     */
+     static std::uint8_t& nesting_depth() noexcept
+     {
+@@ -1327,14 +1336,25 @@ public:
+ #endif
+         {
+ #ifndef JSON_NO_THREAD_LOCAL
+-            ++nesting_depth();
++            // Only a level that is entered is counted, so that the count never
++            // exceeds the limit. A level that is not entered is finished without
++            // descending, and whatever runs while it is (a copy made by a custom
++            // base class, say) sees the same count as the level itself did and
++            // is not entered either.
++            if (m_okay)
++            {
++                ++nesting_depth();
++            }
+ #endif
+         }
+ 
+         ~nesting_depth_guard()
+         {
+ #ifndef JSON_NO_THREAD_LOCAL
+-            --nesting_depth();
++            if (m_okay)
++            {
++                --nesting_depth();
++            }
+ #endif
+         }
+ 
+@@ -5246,7 +5266,10 @@ public:
+     */
+     void update_members(const iterator& first, const iterator& last, const bool merge_objects, const std::size_t depth)
+     {
+-        if (JSON_HEDLEY_UNLIKELY(depth >= detail::recursion_depth_limit()))
++        // without merge_objects the loop below never descends, so there is no
++        // call stack to save (and the explicit stack always merges); the
++        // distinction matters for a limit of 0, which reaches this at depth 0
++        if (JSON_HEDLEY_UNLIKELY(merge_objects && depth >= detail::recursion_depth_limit()))
+         {
+             update_members_iteratively(first, last);
+             return;
+```
+
+# Programs to repair
+
+## gen_22.cpp (compile)
+Intent: Verify basic_json::nesting_depth() accessibility if thread_local is enabled.
+COMPILE ERROR. The program fails to compile, the same way against the old and the new library. Fix the error (wrong or missing include, typo, misuse of the public API) and keep the intent: the call under test must stay. Include only headers that exist; if you are unsure a header exists, use the library's main header.
+Compiler errors:
+```
+gen_22.cpp:9:70: error: ‘static uint8_t& nlohmann::json_abi_v3_12_0::basic_json<ObjectType, ArrayType, StringType, BooleanType, NumberIntegerType, NumberUnsignedType, NumberFloatType, AllocatorType, JSONSerializer, BinaryType, CustomBaseClass>::nesting_depth() [with ObjectType = std::map; ArrayType 
+gen_22.cpp:9:83: error: ‘static uint8_t& nlohmann::json_abi_v3_12_0::basic_json<ObjectType, ArrayType, StringType, BooleanType, NumberIntegerType, NumberUnsignedType, NumberFloatType, AllocatorType, JSONSerializer, BinaryType, CustomBaseClass>::nesting_depth() [with ObjectType = std::map; ArrayType
+```
+Source:
+```cpp
+#include <nlohmann/json.hpp>
+#include <iostream>
+int main() {
+#ifndef JSON_NO_THREAD_LOCAL
+    try {
+        nlohmann::json j = nlohmann::json::object();
+        std::cout << "Initial nesting depth: " << static_cast<int>(j.nesting_depth()) << "\n";
+    } catch (...) {
+        std::cout << "Exception caught\n";
+    }
+#else
+    std::cout << "Thread local disabled\n";
+#endif
+    return 0;
+}
+```
+
+# Task
+Return JSON with a "fixes" array: one item per program above, with "file" (exactly as given) and "code" (the complete repaired program, standalone, with its own int main). Do not return programs you cannot repair.

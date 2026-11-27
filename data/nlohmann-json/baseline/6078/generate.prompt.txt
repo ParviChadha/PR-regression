@@ -1,0 +1,339 @@
+[system]
+You write test programs that probe a C++ library for behavioral changes made by one pull request.
+Each program is compiled and run twice, once against the library before the change and once after, and the two
+outputs are compared. Your job is to produce programs whose output reveals whether the change altered behavior,
+including side effects the author did not intend.
+
+Rules for every program:
+- It is standalone: one file with its own int main(), compiled as C++17, printing results to stdout.
+- Use only the library's documented public API. Never include internal headers or use detail/impl namespaces,
+  private members or undocumented macros.
+- Do not judge results (no assert, no expected-value comparisons): just print what the library returns. Print
+  enough to make differences visible, one fact per line.
+- Output must be deterministic. Never print pointers or addresses, uninitialized data, the order of
+  hash-based containers, timings, thread ids, random values, file paths or environment data. Print floating point
+  values with an explicit precision. No input, files, network, threads, clocks or randomness.
+- Wrap calls that may throw in try/catch and print the exception's type and message, so an exception is an
+  observable result. Do not crash on purpose.
+- Aim at the code the diff changes. Prefer calls that compile against both the old and the new library; one or two
+  programs may use an API the PR adds. Cover ordinary inputs and edge cases (empty, minimum and maximum values,
+  boundaries, special values, nesting, unusual types) and also neighbouring behavior the change could disturb.
+- When the diff changes which types or inputs an API accepts or rejects (constraints, overloads, traits,
+  conversions), test it with the detection idiom (std::void_t or requires) and `if constexpr`, so the program
+  compiles against both versions, prints whether the expression is well-formed, and exercises it when it is.
+  Accepting an input is not enough: also use it through every entry point that should follow (const and
+  non-const, read, write, insert, erase, lookup, nested use), because a change that admits new inputs can leave
+  later code unable to handle them.
+- If the changed code is internal (a detail, impl or internal namespace, a trait, a helper), do not name it in the
+  program. Reach it through the public API that depends on it, using detection (as above) where needed.
+- Use the exact types and values the diff is about (the new trait's argument types, the new overload's
+  parameters), not stand-ins.
+- Spread the programs over distinct public entry points and overloads, one main idea per program. Do not write
+  several programs that only rename a type or change a literal.
+- Make the programs differ from each other: different inputs, different entry points, different features.
+
+Rules specific to this library:
+- Include the library with #include <nlohmann/json.hpp>. The public API is nlohmann::json (nlohmann::basic_json), nlohmann::ordered_json, json_pointer, json patch/merge_patch and the documented SAX and conversion interfaces. Never use the detail namespace.
+- It is a header-only library: nothing to link. Programs are compiled as C++17.
+- Print JSON values with dump() (compact) or dump(2). Keys of nlohmann::json objects print in sorted order, so output is deterministic; do not depend on insertion order except with ordered_json.
+
+[user]
+# Pull request #6078: Bound the total number of valueless UBJSON elements per input
+
+## Description
+An optimized UBJSON array of type `Z`, `T` or `F` has no payload, so its declared count is not bounded by the input. The limit of 1,048,576 applied to each array on its own, so 9 bytes (`[$Z#l` and a count) produced 1,048,576 values and every further 9 bytes another 1,048,576: 362 bytes allocated 661 MB in a DOM, and a SAX handler received 1M events per 9 bytes.
+
+## Change
+
+- The reader adds the counts of all such arrays of one input and rejects the input with `out_of_range.408` when the sum exceeds 1,048,576 plus 4 for every byte read so far. The per-array limit is the base, so an array accepted on its own before is still accepted at the start of an input. The check runs once per valueless array, before its start event, with plain `size_t` arithmetic that cannot overflow for a 32-bit `size_t`.
+- Containers with a payload type and objects are bounded by the input already and are unchanged. BJData rejects these types.
+- `to_ubjson` counts the elements of the typed arrays it writes in one call and writes an array in the unoptimized form (`[#n Z Z ...`) once it would bring the total above 1,048,576, which a reader accepts at any input size. Everything `to_ubjson` writes in 3.13.0 can therefore be read back. BJData and other arrays do not pay for the check.
+- Documented in `ubjson.md`, `from_ubjson.md`, `to_ubjson.md`, `exceptions.md` and `untrusted_input.md`.
+
+## Also: an optimized array of no-ops is empty (#6079)
+
+#6079 was merged into this branch. A no-op (`N`) is not a value, so `[$N#n` holds no element whatever count it declares, but the reader passed the declared count on: a SAX handler was told `start_array(n)` and no element followed, and the DOM parser reserved `min(n, 16384)` values (256 KB) for an array that stays empty. Nine bytes (`[$N#l 0x7FFFFFFF`) committed 256 KB, and 2,000 of them (18 KB of input) 512 MB. The reader now announces 0 elements for such an array. A count that does not fit into `std::size_t` is still rejected.
+
+## Measurements (Apple clang -O2, arm64)
+
+Reproducer (K arrays of 1,048,576 nulls): K=40 (362 bytes) before 41,943,040 values, 664 MB, after rejected, 33 MB; K=2 (20 bytes) before 2,097,152 values, 53 MB, after rejected, 33 MB. Accepted valueless arrays cost about 80 bytes of memory per input byte plus the base; the memory of a document as a whole is not bounded by this.
+
+No file of `json_test_data` (846 round trips in all three modes) holds an array of this kind with more than 0.17 values per byte; all of them are read back. The review measured the reader and writer on canada, twitter and a small message: within noise.
+
+## Tests
+
+`unit-ubjson.cpp`: limit, boundary and accounting cases, the writer fallback and round trips, and arrays of no-ops that are reported and stored as empty. Counting events with a SAX handler where possible keeps them cheap (about 22 s under Valgrind).
+
+## Breaking changes
+
+Behaviour changes, no signature change:
+- **Reader:** an input with more than 1,048,576 elements in arrays of type `Z`, `T` or `F` at more than 4 per byte is rejected with `out_of_range.408`.
+- **Writer:** `to_ubjson` writes an array in the unoptimized form once the total of valueless typed elements exceeds 1,048,576, e.g. 270,000 rows of 100 nulls take 26.8 MB instead of 1.35 MB (up to about 20× larger).
+- **No-op arrays (#6079):** `sax_parse` reports `start_array(0)` for `[$N#n` (before: `n`), and `from_ubjson` no longer throws `out_of_range.408` for such an array whose count exceeds the maximum size of the array type, because the array is empty.
+- **Files written by 3.12.0 and earlier** can be rejected: 3.12.0 writes a row of up to 255 nulls in 5 bytes (6 above 255), so a table is rejected from 1,075 rows of 1,000 nulls or 209,723 rows of 25 (accepted: 1,000 rows of 1,000, 209,000 rows of 25). Rows of 20 or fewer are never rejected.
+
+The rate can be changed with `JSON_UBJSON_VALUELESS_ELEMENTS_PER_BYTE`, added by #6083, which is part of #6082. #6082 is stacked on this PR; the two should be merged o
+[... truncated, 78 more characters]
+
+## Commit message
+* Bound the total number of valueless UBJSON elements per input
+
+An optimized UBJSON array of type Z, T or F has no payload, so its
+declared count is not bounded by the input. The limit of 1048576 applied
+to each array on its own, so 9 bytes (`[$Z#l` and a count) produced
+1048576 values and every further 9 bytes another 1048576: 362 bytes
+allocated 661 MB in a DOM, and a SAX handler received 1M events per 9
+bytes.
+
+The reader now adds the counts of all such arrays of one input and
+rejects the input with out_of_range.408 when the sum exceeds 1048576
+plus 4 for every byte read so far. The base is the per-array limit, so
+an array that was accepted on its own before is still accepted at the
+start of an input. These arrays add about 80 bytes of memory per input
+byte (measured 77; one `Z` per byte needs 32), plus the base; the memory
+of a document as a whole is not bounded by this. The check runs once per
+valueless array, before its start event, with plain size_t arithmetic
+that cannot overflow for a 32-bit size_t. Containers with a payload type
+and objects (every member needs a key) are bounded by the input already
+and are unchanged. BJData rejects these types.
+
+to_ubjson counts the elements of the typed arrays it writes in one call
+and writes an array in the unoptimized form (`[#n Z Z ...`) once it would
+bring the total above 1048576, which a reader accepts at any input size.
+The check is made only for a typed array of a valueless type, so BJData
+and other arrays do not pay for it. Everything to_ubjson writes in
+version 3.13.0 can therefore be read back.
+
+Two consequences:
+- to_ubjson output changes for values with more than 1048576 elements in
+  arrays of type Z, T or F: such an array is written at one byte per
+  element, e.g. 270000 rows of 100 nulls take 26.8 MB instead of 1.35 MB.
+- Output of version 3.12.0 and earlier (typed arrays without such a
+  total) is rejected by from_ubjson when the arrays hold more than
+  1048576 elements plus 4 per byte of input. 3.12.0 w
+[... truncated, 2922 more characters]
+
+## Discussion before merge
+- github-advanced-security[bot]: ## Flawfinder / Function tmpfile() has a security flaw on some systems (e.g., older System V systems) (CWE-377).
+
+tmpfile/tmpfile:Function tmpfile() has a security flaw on some systems (e.g., older System V systems) (CWE-377).
+
+[Show more details](https://github.com/nlohmann/json/security/code-scanning/1167)
+
+## Diff of the library source (before -> after)
+```diff
+diff --git a/include/nlohmann/detail/input/binary_reader.hpp b/include/nlohmann/detail/input/binary_reader.hpp
+index 3df2867a1..a4de84a35 100644
+--- a/include/nlohmann/detail/input/binary_reader.hpp
++++ b/include/nlohmann/detail/input/binary_reader.hpp
+@@ -73,13 +73,46 @@ the input.
+ 
+ This is a sanity bound rather than a security boundary, and it is far above
+ any container met in practice. @ref binary_writer falls back to the
+-unoptimized encoding for longer containers, so that a value serialized by
+-this library can always be read back.
++unoptimized encoding for longer containers, and for containers that together
++with the ones before them would exceed @ref valueless_elements_base, so that a
++value serialized by this library can always be read back.
+ 
+ @sa https://github.com/nlohmann/json/issues/2793
+ */
+ JSON_INLINE_VARIABLE constexpr std::size_t max_valueless_container_size = 1 << 20;
+ 
++/*!
++@brief number of elements of valueless UBJSON containers accepted on top of
++       @ref valueless_elements_per_byte
++
++The limit @ref max_valueless_container_size applies to each container on its
++own, so on its own it lets 9 bytes announce 1048576 values, and every further
++9 bytes another 1048576. The elements of all containers of a valueless type
++in one input are therefore added up, and the sum must stay below this base
++plus @ref valueless_elements_per_byte for every byte read so far. The base is
++the per-container limit, so a container that was accepted on its own before
++the sum was introduced is still accepted at the start of an input.
++*/
++JSON_INLINE_VARIABLE constexpr std::size_t valueless_elements_base = max_valueless_container_size;
++
++/*!
++@brief number of elements of valueless UBJSON containers accepted per byte of
++       input, in addition to @ref valueless_elements_base
++
++An element of a value that has a payload costs at least one byte of input.
++Valueless elements are accepted at a rate of 4 per byte. A value takes 16
++bytes of memory in a DOM, so these arrays add about 80 bytes of memory per
++byte of input (measured: 77; one `Z` per byte needs about 32), beyond what the
++same bytes cost anyway, plus the base. This bounds the arrays of valueless
++type, not the memory of a whole document. Containers written by
++@ref binary_writer never need more than the base, because it writes an array
++in the unoptimized form once the typed arrays written so far and this one add
++up to more than that. The rate matters for input written by other encoders and
++by versions before 3.13.0 only; in the data this was measured on, no input has
++more than 0.17 elements per byte.
++*/
++JSON_INLINE_VARIABLE constexpr std::size_t valueless_elements_per_byte = 4;
++
+ ///////////////////
+ // binary reader //
+ ///////////////////
+@@ -3711,6 +3744,37 @@ class binary_reader
+         return emit_unsigned(number);
+     }
+ 
++    /*!
++    @brief add the elements of a container of a valueless type to the total of
++           the input and check the total against the input read so far
++
++    A container of type 'Z', 'T' or 'F' has no payload, so its elements are the
++    only ones for which the input does not bound the count. The check is made
++    once per container, not per element.
++
++    @param[in] count  number of elements the container declares; at most
++                      @ref max_valueless_container_size
++    @return false if the total is more than @ref valueless_elements_base plus
++            @ref valueless_elements_per_byte for every byte read so far; the
++            total is not changed then
++    */
++    bool charge_valueless_elements(const std::size_t count) noexcept
++    {
++        // the limit saturates instead of overflowing when size_t is 32 bits
++        // wide and a very large input has been read; valueless_elements
++        // never exceeds the limit, so the difference cannot underflow
++        constexpr std::size_t max_size = (std::numeric_limits<std::size_t>::max)();
++        const std::size_t limit = chars_read <= (max_size - valueless_elements_base) / valueless_elements_per_byte
++                                  ? valueless_elements_base + (valueless_elements_per_byte * chars_read)
++                                  : max_size;
++        if (JSON_HEDLEY_UNLIKELY(count > limit - valueless_elements))
++        {
++            return false;
++        }
++        valueless_elements += count;
++        return true;
++    }
++
+     /*!
+     @return whether array creation completed
+     */
+@@ -3796,24 +3860,27 @@ class binary_reader
+             // declared count alone decides how much is allocated; the check is
+             // made before the start event so that no container is opened that
+             // is then abandoned. See @ref max_valueless_container_size.
+-            if (JSON_HEDLEY_UNLIKELY((size_and_type.second == 'Z' || size_and_type.second == 'T' || size_and_type.second == 'F')
+-                                     && size_and_type.first > max_valueless_container_size))
++            if (JSON_HEDLEY_UNLIKELY(size_and_type.second == 'Z' || size_and_type.second == 'T' || size_and_type.second == 'F'))
+             {
+-                return out_of_range_error(exception_id::container_too_large, "excessive array size", "size");
++                if (JSON_HEDLEY_UNLIKELY(size_and_type.first > max_valueless_container_size))
++                {
++                    return out_of_range_error(exception_id::container_too_large, "excessive array size", "size");
++                }
++                if (JSON_HEDLEY_UNLIKELY(!charge_valueless_elements(size_and_type.first)))
++                {
++                    return out_of_range_error(exception_id::container_too_large, "excessive number of elements without payload", "size");
++                }
+             }
+ 
+-            if (JSON_HEDLEY_UNLIKELY(!enter_array(size_and_type.first, size_and_type.second)))
++            // a no-op is not a value, so an array of them is empty whatever
++            // count it declares: the SAX parser is told so, instead of being
++            // made to reserve storage for a count that no input backs
++            const std::size_t announced = size_and_type.second == 'N' ? 0 : size_and_type.first;
++            if (JSON_HEDLEY_UNLIKELY(!enter_array(announced, size_and_type.second)))
+             {
+                 return false;
+             }
+ 
+-            if (size_and_type.second == 'N')
+-            {
+-                // a no-op is not a value, so a container of them holds none;
+-                // the declared size has already been passed to the SAX parser
+-                container_stack.back().remaining = 0;
+-            }
+-
+             return size_and_type.second == 0
+                    || parse_ubjson_typed_run(container_stack.back().remaining, size_and_type.second, std::integral_constant<bool, bulk_scan> {});
+         }
+@@ -5125,6 +5192,10 @@ class binary_reader
+     /// the number of characters read
+     std::size_t chars_read = 0;
+ 
++    /// UBJSON: the sum of the element counts of the containers of a valueless
++    /// type read so far; see @ref charge_valueless_elements
++    std::size_t valueless_elements = 0;
++
+     /// whether we can assume little endianness
+     const bool is_little_endian = little_endianness();
+diff --git a/include/nlohmann/detail/output/binary_writer.hpp b/include/nlohmann/detail/output/binary_writer.hpp
+index dda9c3758..c579eb705 100644
+--- a/include/nlohmann/detail/output/binary_writer.hpp
++++ b/include/nlohmann/detail/output/binary_writer.hpp
+@@ -1169,6 +1169,14 @@ class binary_writer
+         write_container_iterative<msgpack_walk>(root);
+     }
+ 
++    // a function, not an inline condition: for an object the type is never
++    // valueless and MSVC would warn about a constant expression (C4127)
++    static constexpr bool valueless_array_fits(const bool valueless_type, const std::size_t size,
++            const std::size_t written) noexcept
++    {
++        return !valueless_type || size <= detail::valueless_elements_base - written;
++    }
++
+     /*!
+     @brief write the start of an array (@a IsArray) or object: its opening
+            marker, the optimized type, and the count
+@@ -1204,20 +1212,27 @@ class binary_writer
+ 
+             // an optimized array of a valueless type carries no payload, so a
+             // reader has nothing but the declared count to bound the allocation
+-            // by and refuses an excessive one. Write the unoptimized form for
+-            // those, at one byte per element, so the result can be read back.
+-            // Objects are not affected: every element is preceded by its key.
+-            const bool valueless_type = (first_prefix == 'Z' || first_prefix == 'T' || first_prefix == 'F');
+-            const bool excessive_valueless = IsArray
+-                                             && valueless_type
+-                                             && size > detail::max_valueless_container_size;
+-
+-            if (same_prefix && !excessive_valueless
+-                    && !(use_bjdata && is_bjdata_excluded_type_marker(first_prefix)))
++            // by. It refuses one array of more than max_valueless_container_size
++            // elements, and all such arrays of one input together when they add
++            // up to more than valueless_elements_base plus a number per byte
++            // read. Write the unoptimized form, at one byte per element, for
++            // an array that would exceed the base with the arrays written so
++            // far, so that the result can be read back: the limit of a reader
++            // is never below the base. Objects are not affected: every element
++            // is preceded by its key.
++            if (same_prefix && !(use_bjdata && is_bjdata_excluded_type_marker(first_prefix)))
+             {
+-                prefix_required = false;
+-                oa.write_character(to_char_type('$'));
+-                oa.write_character(first_prefix);
++                const bool valueless_type = IsArray && (first_prefix == 'Z' || first_prefix == 'T' || first_prefix == 'F');
++                if (valueless_array_fits(valueless_type, size, valueless_elements_written))
++                {
++                    prefix_required = false;
++                    oa.write_character(to_char_type('$'));
++                    oa.write_character(first_prefix);
++                    if (valueless_type)
++                    {
++                        valueless_elements_written += size;
++                    }
++                }
+             }
+         }
+ 
+@@ -5441,6 +5456,10 @@ class binary_writer
+     /// how to treat a string value or object key that is not valid UTF-8
+     /// (CBOR, MessagePack, UBJSON, BJData, and BSON; not BON8)
+     const error_handler_t error_handler = binary_writer_default_error_handler();
++
++    /// UBJSON: the number of elements written so far in optimized arrays of a
++    /// valueless type, which a reader adds up and bounds
++    std::size_t valueless_elements_written = 0;
+ };
+ 
+ }  // namespace detail
+```
+
+# Task
+Write 20 test programs for this pull request. Return JSON with a "tests" array; each item has "name" (short snake_case), "intent" (one sentence: what behavior it probes) and "code" (the complete C++ program).

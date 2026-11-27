@@ -1,0 +1,334 @@
+{
+  "target": "nlohmann-json",
+  "pr": 5908,
+  "model": "gemini-3.5-flash-lite",
+  "prompt_sha256": "800d8c3e9350384516c5a8fcd0756f07cb4ed3f8722c5624d8888b8c98b3e87f",
+  "n_requested": 20,
+  "std": "c++17",
+  "dropped": 0,
+  "variant": "baseline",
+  "usage": {
+    "promptTokenCount": 12374,
+    "candidatesTokenCount": 4946,
+    "totalTokenCount": 17320,
+    "trafficType": "ON_DEMAND",
+    "promptTokensDetails": [
+      {
+        "modality": "TEXT",
+        "tokenCount": 12374
+      }
+    ],
+    "candidatesTokensDetails": [
+      {
+        "modality": "TEXT",
+        "tokenCount": 4946
+      }
+    ]
+  },
+  "tests": [
+    {
+      "file": "gen_01.cpp",
+      "name": "sixteen_digits_neon_sse2",
+      "intent": "Probe sixteen_digits via layout_decimal and layout_float for float and double types with 16-17 digit inputs.",
+      "round": 0,
+      "superseded_by": "gen_21.cpp"
+    },
+    {
+      "file": "gen_02.cpp",
+      "name": "layout_decimal_sign_and_exp",
+      "intent": "Probe layout_decimal with negative numbers and explicit exponents outside the 16-17 digit range.",
+      "round": 0,
+      "superseded_by": "gen_22.cpp"
+    },
+    {
+      "file": "gen_03.cpp",
+      "name": "coordinate_float_precision",
+      "intent": "Probe coordinate_float with 16 or 17 digit numbers without exponents resembling GeoJSON coordinates.",
+      "round": 0,
+      "superseded_by": "gen_23.cpp"
+    },
+    {
+      "file": "gen_04.cpp",
+      "name": "locate_token_bounds",
+      "intent": "Probe locate_token indirectly via serializer dump for tokens requiring specific decimal exponents and fixed-point positions.",
+      "round": 0,
+      "superseded_by": "gen_24.cpp"
+    },
+    {
+      "file": "gen_05.cpp",
+      "name": "mask_and_select_if",
+      "intent": "Probe mask_if and select_if internal logic via token digitization paths during serialization of floats.",
+      "round": 0,
+      "superseded_by": "gen_25.cpp"
+    },
+    {
+      "file": "gen_06.cpp",
+      "name": "four_digit_text_conversion",
+      "intent": "Probe four_digit_text via float serialization batching mechanism for replacing last four digits.",
+      "round": 0,
+      "superseded_by": "gen_26.cpp"
+    },
+    {
+      "file": "gen_07.cpp",
+      "name": "readonly_coordinate_pair_optimization",
+      "intent": "Probe the optimization for a pair of floats in an array without a frame during serialization.",
+      "round": 0,
+      "superseded_by": "gen_27.cpp"
+    },
+    {
+      "file": "gen_08.cpp",
+      "name": "float_batch_capacity_limit",
+      "intent": "Probe float_batch capacity handling by serializing an array containing more than 256 consecutive float elements.",
+      "round": 0,
+      "superseded_by": "gen_28.cpp"
+    },
+    {
+      "file": "gen_09.cpp",
+      "name": "float_batch_storage_heap_allocation",
+      "intent": "Probe heap allocation of float_batch storage on first float conversion during view serialization.",
+      "round": 0,
+      "superseded_by": "gen_29.cpp"
+    },
+    {
+      "file": "gen_10.cpp",
+      "name": "coordinate_bits_subnormal_zero",
+      "intent": "Probe coordinate_bits handling edge cases such as zero and values near subnormals.",
+      "round": 0,
+      "superseded_by": "gen_30.cpp"
+    },
+    {
+      "file": "gen_11.cpp",
+      "name": "token_digits_exact_tie",
+      "intent": "Probe token_digits_1 and token_digits_2 fallback behavior when exact ties between candidates occur.",
+      "round": 0,
+      "superseded_by": "gen_31.cpp"
+    },
+    {
+      "file": "gen_12.cpp",
+      "name": "biased_distance_computation",
+      "intent": "Probe biased_distance function via token digit calculations during serialization rounding.",
+      "round": 0,
+      "superseded_by": "gen_32.cpp"
+    },
+    {
+      "file": "gen_13.cpp",
+      "name": "layout_float_direct_eisel_lemire",
+      "intent": "Probe layout_float directly invoking Eisel-Lemire for tokens with 16 or more digits.",
+      "round": 0,
+      "superseded_by": "gen_33.cpp"
+    },
+    {
+      "file": "gen_14.cpp",
+      "name": "write_double_ahead_mixed_nodes",
+      "intent": "Probe write_double_ahead with mixed float and non-float nodes inside a JSON document.",
+      "round": 0,
+      "superseded_by": "gen_34.cpp"
+    },
+    {
+      "file": "gen_15.cpp",
+      "name": "batched_float_decision_loop",
+      "intent": "Probe batched float classification loop ahead of tree walk during view serialization.",
+      "round": 0,
+      "superseded_by": "gen_35.cpp"
+    },
+    {
+      "file": "gen_16.cpp",
+      "name": "coordinate_float_fallback_short",
+      "intent": "Probe coordinate_float returning false for short tokens under 16 digits, falling back to standard parsing.",
+      "round": 0,
+      "superseded_by": "gen_36.cpp"
+    },
+    {
+      "file": "gen_17.cpp",
+      "name": "float_carried_rounding_flag",
+      "intent": "Probe carried rounding flags when serialization token replacement carries beyond the last four digits.",
+      "round": 0,
+      "superseded_by": "gen_37.cpp"
+    },
+    {
+      "file": "gen_18.cpp",
+      "name": "multiple_batch_scans_in_walk",
+      "intent": "Probe multiple sequential batch scans across large arrays during tree walk serialization.",
+      "round": 0,
+      "superseded_by": "gen_38.cpp"
+    },
+    {
+      "file": "gen_19.cpp",
+      "name": "edited_float_fallback_serializer",
+      "intent": "Probe edited_float fallback paths when a float node has been modified via the editing API.",
+      "round": 0,
+      "superseded_by": "gen_39.cpp"
+    },
+    {
+      "file": "gen_20.cpp",
+      "name": "simd_vector_little_endian_edge_cases",
+      "intent": "Probe SIMD vector and little-endian code paths with boundary digit counts (exactly 16 digits).",
+      "round": 0,
+      "superseded_by": "gen_40.cpp"
+    },
+    {
+      "file": "gen_21.cpp",
+      "name": "sixteen_digits_neon_sse2_fixed",
+      "intent": "Probe sixteen_digits via layout_decimal and layout_float for float and double types with 16-17 digit inputs.",
+      "round": 1,
+      "fixes": "gen_01.cpp",
+      "kind": "compile"
+    },
+    {
+      "file": "gen_22.cpp",
+      "name": "layout_decimal_sign_and_exp_fixed",
+      "intent": "Probe layout_decimal with negative numbers and explicit exponents outside the 16-17 digit range.",
+      "round": 1,
+      "fixes": "gen_02.cpp",
+      "kind": "compile"
+    },
+    {
+      "file": "gen_23.cpp",
+      "name": "coordinate_float_precision_fixed",
+      "intent": "Probe coordinate_float with 16 or 17 digit numbers without exponents resembling GeoJSON coordinates.",
+      "round": 1,
+      "fixes": "gen_03.cpp",
+      "kind": "compile"
+    },
+    {
+      "file": "gen_24.cpp",
+      "name": "locate_token_bounds_fixed",
+      "intent": "Probe locate_token indirectly via serializer dump for tokens requiring specific decimal exponents and fixed-point positions.",
+      "round": 1,
+      "fixes": "gen_04.cpp",
+      "kind": "compile"
+    },
+    {
+      "file": "gen_25.cpp",
+      "name": "mask_and_select_if_fixed",
+      "intent": "Probe mask_if and select_if internal logic via token digitization paths during serialization of floats.",
+      "round": 1,
+      "fixes": "gen_05.cpp",
+      "kind": "compile"
+    },
+    {
+      "file": "gen_26.cpp",
+      "name": "four_digit_text_conversion_fixed",
+      "intent": "Probe four_digit_text via float serialization batching mechanism for replacing last four digits.",
+      "round": 1,
+      "fixes": "gen_06.cpp",
+      "kind": "compile"
+    },
+    {
+      "file": "gen_27.cpp",
+      "name": "readonly_coordinate_pair_optimization_fixed",
+      "intent": "Probe the optimization for a pair of floats in an array without a frame during serialization.",
+      "round": 1,
+      "fixes": "gen_07.cpp",
+      "kind": "compile"
+    },
+    {
+      "file": "gen_28.cpp",
+      "name": "float_batch_capacity_limit_fixed",
+      "intent": "Probe float_batch capacity handling by serializing an array containing more than 256 consecutive float elements.",
+      "round": 1,
+      "fixes": "gen_08.cpp",
+      "kind": "compile"
+    },
+    {
+      "file": "gen_29.cpp",
+      "name": "float_batch_storage_heap_allocation_fixed",
+      "intent": "Probe heap allocation of float_batch storage on first float conversion during view serialization.",
+      "round": 1,
+      "fixes": "gen_09.cpp",
+      "kind": "compile"
+    },
+    {
+      "file": "gen_30.cpp",
+      "name": "coordinate_bits_subnormal_zero_fixed",
+      "intent": "Probe coordinate_bits handling edge cases such as zero and values near subnormals.",
+      "round": 1,
+      "fixes": "gen_10.cpp",
+      "kind": "compile"
+    },
+    {
+      "file": "gen_31.cpp",
+      "name": "token_digits_exact_tie_fixed",
+      "intent": "Probe token_digits_1 and token_digits_2 fallback behavior when exact ties between candidates occur.",
+      "round": 1,
+      "fixes": "gen_11.cpp",
+      "kind": "compile"
+    },
+    {
+      "file": "gen_32.cpp",
+      "name": "biased_distance_computation_fixed",
+      "intent": "Probe biased_distance function via token digit calculations during serialization rounding.",
+      "round": 1,
+      "fixes": "gen_12.cpp",
+      "kind": "compile"
+    },
+    {
+      "file": "gen_33.cpp",
+      "name": "layout_float_direct_eisel_lemire_fixed",
+      "intent": "Probe layout_float directly invoking Eisel-Lemire for tokens with 16 or more digits.",
+      "round": 1,
+      "fixes": "gen_13.cpp",
+      "kind": "compile"
+    },
+    {
+      "file": "gen_34.cpp",
+      "name": "write_double_ahead_mixed_nodes_fixed",
+      "intent": "Probe write_double_ahead with mixed float and non-float nodes inside a JSON document.",
+      "round": 1,
+      "fixes": "gen_14.cpp",
+      "kind": "compile"
+    },
+    {
+      "file": "gen_35.cpp",
+      "name": "batched_float_decision_loop_fixed",
+      "intent": "Probe batched float classification loop ahead of tree walk during view serialization.",
+      "round": 1,
+      "fixes": "gen_15.cpp",
+      "kind": "compile"
+    },
+    {
+      "file": "gen_36.cpp",
+      "name": "coordinate_float_fallback_short_fixed",
+      "intent": "Probe coordinate_float returning false for short tokens under 16 digits, falling back to standard parsing.",
+      "round": 2,
+      "fixes": "gen_16.cpp",
+      "kind": "compile"
+    },
+    {
+      "file": "gen_37.cpp",
+      "name": "float_carried_rounding_flag_fixed",
+      "intent": "Probe carried rounding flags when serialization token replacement carries beyond the last four digits.",
+      "round": 2,
+      "fixes": "gen_17.cpp",
+      "kind": "compile"
+    },
+    {
+      "file": "gen_38.cpp",
+      "name": "multiple_batch_scans_in_walk_fixed",
+      "intent": "Probe multiple sequential batch scans across large arrays during tree walk serialization.",
+      "round": 2,
+      "fixes": "gen_18.cpp",
+      "kind": "compile"
+    },
+    {
+      "file": "gen_39.cpp",
+      "name": "edited_float_fallback_serializer_fixed",
+      "intent": "Probe edited_float fallback paths when a float node has been modified via the editing API.",
+      "round": 2,
+      "fixes": "gen_19.cpp",
+      "kind": "compile"
+    },
+    {
+      "file": "gen_40.cpp",
+      "name": "simd_vector_little_endian_edge_cases_fixed",
+      "intent": "Probe SIMD vector and little-endian code paths with boundary digit counts (exactly 16 digits).",
+      "round": 2,
+      "fixes": "gen_20.cpp",
+      "kind": "compile"
+    }
+  ],
+  "fix": {
+    "rounds_max": 2,
+    "model": "gemini-3.5-flash-lite"
+  }
+}

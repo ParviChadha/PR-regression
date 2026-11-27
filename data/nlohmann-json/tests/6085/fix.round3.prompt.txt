@@ -107,6 +107,9 @@ The same holds in `same_float()` and `floats_equal()`: the NaN test runs only af
 *(Written by Claude Code on behalf of @nlohmann.)*
 - gregmarr: Okay, didn't see enough of the context and realize that `na == nb` was that level of comparison.  I thought it was a value-based comparison.
 
+## Headers the programs must include
+- Also write #include <nlohmann/json_view.hpp>. The json_view feature (json_document, json_view and their image loading and editing API) is declared only in this header; nlohmann/json.hpp does not include it, so without this line those names do not exist. Use only names you can see in the diff or the context below.
+
 ## Changed functions (from changes.py)
 - nlohmann::detail::view::certainly_equal(const view_side<BasicJsonType, ViewA> &, const view_side<BasicJsonType, ViewB> &, lockstep_path &, bool) (private); reached from the public API through: nlohmann::operator==(const basic_json_view<BasicJsonType, Mode> &, const BasicJsonType &), nlohmann::operator==(const basic_json_view<BasicJsonType, Mode> &, const basic_json_view<BasicJsonType, Mode> &), nlohmann::operator==(const basic_json_view<BasicJsonType, Mode> &, const basic_json_view<BasicJsonType, M> &)
 - nlohmann::detail::view::lockstep (private); reached from the public API through: nlohmann::operator==(const basic_json_view<BasicJsonType, Mode> &, const BasicJsonType &), nlohmann::operator==(const basic_json_view<BasicJsonType, Mode> &, const basic_json_view<BasicJsonType, Mode> &), nlohmann::operator==(const basic_json_view<BasicJsonType, Mode> &, const basic_json_view<BasicJsonType, M> &)
@@ -331,397 +334,391 @@ TEST_CASE("json_view comparison of differing values")
 
 # Programs to repair
 
-## gen_16.cpp (compile)
-Intent: Probes whether a negative NaN or custom bit pattern NaN written via edit behaves consistently.
+## gen_33.cpp (compile)
+Intent: Probes equality traversal on an editable document with multiple non-NaN edits to ensure fallback walk correctness.
 COMPILE ERROR. The program fails to compile, the same way against the old and the new library. Fix the error (wrong or missing include, typo, misuse of the public API) and keep the intent: the call under test must stay. Include only headers that exist; if you are unsure a header exists, use the library's main header.
 Compiler errors:
 ```
-gen_16.cpp:7:19: error: ‘json_editable_document’ is not a member of ‘nlohmann’
-gen_16.cpp:9:9: error: ‘doc’ was not declared in this scope
+gen_33.cpp:10:26: error: no match for ‘operator=’ (operand types are ‘nlohmann::json_abi_v3_12_0::basic_json_view<nlohmann::json_abi_v3_12_0::basic_json<>, nlohmann::json_abi_v3_12_0::view_mode::editable>’ and ‘int’)
 ```
 Source:
 ```cpp
 #include <nlohmann/json.hpp>
+#include <nlohmann/json_view.hpp>
 #include <iostream>
 int main() {
     try {
-        nlohmann::json_editable_document doc = nlohmann::json_editable_document::parse("[0]");
-        double neg_nan = -std::numeric_limits<double>::quiet_NaN();
-        doc.root()[0] = neg_nan;
+        nlohmann::json_editable_document doc1 = nlohmann::json_editable_document::parse("[1, 2, 3]");
+        nlohmann::json_editable_document doc2 = nlohmann::json_editable_document::parse("[1, 99, 3]");
+        doc1.root()[1] = 99;
+        std::cout << "doc1.root() == doc2.root(): " << (doc1.root() == doc2.root()) << std::endl;
+    } catch (const std::exception& e) {
+        std::cout << "Exception: " << e.what() << std::endl;
+    }
+}
+```
+
+## gen_34.cpp (compile)
+Intent: Probes comparison between root nodes of two distinct editable documents independently assigned NaN.
+COMPILE ERROR. The program fails to compile, the same way against the old and the new library. Fix the error (wrong or missing include, typo, misuse of the public API) and keep the intent: the call under test must stay. Include only headers that exist; if you are unsure a header exists, use the library's main header.
+Compiler errors:
+```
+gen_34.cpp:11:62: error: no match for ‘operator=’ (operand types are ‘nlohmann::json_abi_v3_12_0::basic_json_document<nlohmann::json_abi_v3_12_0::basic_json<>, nlohmann::json_abi_v3_12_0::view_mode::editable>::view_type’ {aka ‘nlohmann::json_abi_v3_12_0::basic_json_view<nlohmann::json_abi_v3_12_0::b
+gen_34.cpp:12:62: error: no match for ‘operator=’ (operand types are ‘nlohmann::json_abi_v3_12_0::basic_json_document<nlohmann::json_abi_v3_12_0::basic_json<>, nlohmann::json_abi_v3_12_0::view_mode::editable>::view_type’ {aka ‘nlohmann::json_abi_v3_12_0::basic_json_view<nlohmann::json_abi_v3_12_0::b
+```
+Source:
+```cpp
+#include <nlohmann/json.hpp>
+#include <nlohmann/json_view.hpp>
+#include <iostream>
+#include <limits>
+int main() {
+    try {
+        nlohmann::json_editable_document docA = nlohmann::json_editable_document::parse("0.0");
+        nlohmann::json_editable_document docB = nlohmann::json_editable_document::parse("0.0");
+        docA.root() = std::numeric_limits<double>::quiet_NaN();
+        docB.root() = std::numeric_limits<double>::quiet_NaN();
+        std::cout << "docA.root() == docB.root(): " << (docA.root() == docB.root()) << std::endl;
+    } catch (const std::exception& e) {
+        std::cout << "Exception: " << e.what() << std::endl;
+    }
+}
+```
+
+## gen_35.cpp (compile)
+Intent: Probes deep nested structure containing an edited NaN for self-equality behavior.
+COMPILE ERROR. The program fails to compile, the same way against the old and the new library. Fix the error (wrong or missing include, typo, misuse of the public API) and keep the intent: the call under test must stay. Include only headers that exist; if you are unsure a header exists, use the library's main header.
+Compiler errors:
+```
+gen_35.cpp:10:71: error: no match for ‘operator=’ (operand types are ‘nlohmann::json_abi_v3_12_0::basic_json_view<nlohmann::json_abi_v3_12_0::basic_json<>, nlohmann::json_abi_v3_12_0::view_mode::editable>’ and ‘double’)
+```
+Source:
+```cpp
+#include <nlohmann/json.hpp>
+#include <nlohmann/json_view.hpp>
+#include <iostream>
+#include <limits>
+int main() {
+    try {
+        nlohmann::json_editable_document doc = nlohmann::json_editable_document::parse("{\"a\": {\"b\": 1.0}}");
+        doc.root()["a"]["b"] = std::numeric_limits<double>::quiet_NaN();
         auto r = doc.root();
-        std::cout << "neg_nan root == root: " << (r == r) << "\n";
-        std::cout << "neg_nan root[0] == root[0]: " << (r[0] == r[0]) << "\n";
+        std::cout << "r == r: " << (r == r) << std::endl;
     } catch (const std::exception& e) {
-        std::cout << "Exception: " << e.what() << "\n";
+        std::cout << "Exception: " << e.what() << std::endl;
     }
 }
 ```
 
-## gen_17.cpp (compile)
-Intent: Probes comparison between an integer node and an edited NaN node.
+## gen_36.cpp (compile)
+Intent: Probes conversion of an editable view with an edited NaN into a standard json object.
 COMPILE ERROR. The program fails to compile, the same way against the old and the new library. Fix the error (wrong or missing include, typo, misuse of the public API) and keep the intent: the call under test must stay. Include only headers that exist; if you are unsure a header exists, use the library's main header.
 Compiler errors:
 ```
-gen_17.cpp:7:19: error: ‘json_editable_document’ is not a member of ‘nlohmann’
-gen_17.cpp:8:9: error: ‘doc’ was not declared in this scope
-gen_17.cpp:9:19: error: ‘json_editable_document’ is not a member of ‘nlohmann’
-gen_17.cpp:10:65: error: ‘doc2’ was not declared in this scope
+gen_36.cpp:10:80: error: no match for ‘operator=’ (operand types are ‘nlohmann::json_abi_v3_12_0::basic_json_view<nlohmann::json_abi_v3_12_0::basic_json<>, nlohmann::json_abi_v3_12_0::view_mode::editable>’ and ‘nlohmann::json_abi_v3_12_0::json’ {aka ‘nlohmann::json_abi_v3_12_0::basic_json<>’})
+gen_36.cpp:11:36: error: conversion from ‘nlohmann::json_abi_v3_12_0::basic_json_document<nlohmann::json_abi_v3_12_0::basic_json<>, nlohmann::json_abi_v3_12_0::view_mode::editable>::view_type’ {aka ‘nlohmann::json_abi_v3_12_0::basic_json_view<nlohmann::json_abi_v3_12_0::basic_json<>, nlohmann::json_
 ```
 Source:
 ```cpp
 #include <nlohmann/json.hpp>
+#include <nlohmann/json_view.hpp>
 #include <iostream>
+#include <limits>
 int main() {
     try {
-        nlohmann::json_editable_document doc = nlohmann::json_editable_document::parse("[42]");
-        doc.root()[0] = std::numeric_limits<double>::quiet_NaN();
-        nlohmann::json_editable_document doc2 = nlohmann::json_editable_document::parse("[42]");
-        std::cout << "nan view == int view: " << (doc.root() == doc2.root()) << "\n";
+        nlohmann::json_editable_document doc = nlohmann::json_editable_document::parse("[1.0]");
+        doc.root()[0] = nlohmann::json(std::numeric_limits<double>::quiet_NaN());
+        nlohmann::json j = doc.root();
+        std::cout << "j[0].is_number_float(): " << j[0].is_number_float() << std::endl;
+        std::cout << "j[0] == j[0]: " << (j[0] == j[0]) << std::endl;
     } catch (const std::exception& e) {
-        std::cout << "Exception: " << e.what() << "\n";
+        std::cout << "Exception: " << e.what() << std::endl;
     }
 }
 ```
 
-## gen_18.cpp (compile)
-Intent: Probes comparison between a string node and an edited NaN node.
+## gen_37.cpp (compile)
+Intent: Probes equality handling of negative zeros written as edits in editable json_view documents.
 COMPILE ERROR. The program fails to compile, the same way against the old and the new library. Fix the error (wrong or missing include, typo, misuse of the public API) and keep the intent: the call under test must stay. Include only headers that exist; if you are unsure a header exists, use the library's main header.
 Compiler errors:
 ```
-gen_18.cpp:7:19: error: ‘json_editable_document’ is not a member of ‘nlohmann’
-gen_18.cpp:8:19: error: ‘json_editable_document’ is not a member of ‘nlohmann’
-gen_18.cpp:9:9: error: ‘doc2’ was not declared in this scope
-gen_18.cpp:10:57: error: ‘doc’ was not declared in this scope
+gen_37.cpp:10:45: error: no match for ‘operator=’ (operand types are ‘nlohmann::json_abi_v3_12_0::basic_json_view<nlohmann::json_abi_v3_12_0::basic_json<>, nlohmann::json_abi_v3_12_0::view_mode::editable>’ and ‘nlohmann::json_abi_v3_12_0::json’ {aka ‘nlohmann::json_abi_v3_12_0::basic_json<>’})
+gen_37.cpp:11:44: error: no match for ‘operator=’ (operand types are ‘nlohmann::json_abi_v3_12_0::basic_json_view<nlohmann::json_abi_v3_12_0::basic_json<>, nlohmann::json_abi_v3_12_0::view_mode::editable>’ and ‘nlohmann::json_abi_v3_12_0::json’ {aka ‘nlohmann::json_abi_v3_12_0::basic_json<>’})
 ```
 Source:
 ```cpp
 #include <nlohmann/json.hpp>
+#include <nlohmann/json_view.hpp>
 #include <iostream>
 int main() {
     try {
-        nlohmann::json_editable_document doc = nlohmann::json_editable_document::parse("[\"nan\"]");
-        nlohmann::json_editable_document doc2 = nlohmann::json_editable_document::parse("[0]");
-        doc2.root()[0] = std::numeric_limits<double>::quiet_NaN();
-        std::cout << "string 'nan' == edited nan: " << (doc.root() == doc2.root()) << "\n";
+        nlohmann::json_editable_document doc1 = nlohmann::json_editable_document::parse("[0.0]");
+        nlohmann::json_editable_document doc2 = nlohmann::json_editable_document::parse("[0.0]");
+        doc1.root()[0] = nlohmann::json(-0.0);
+        doc2.root()[0] = nlohmann::json(0.0);
+        std::cout << "doc1.root() == doc2.root(): " << (doc1.root() == doc2.root()) << std::endl;
     } catch (const std::exception& e) {
-        std::cout << "Exception: " << e.what() << "\n";
+        std::cout << "Exception: " << e.what() << std::endl;
     }
 }
 ```
 
-## gen_19.cpp (compile)
-Intent: Probes behavior when applying a patch or checking equality on an edited view with structural modifications.
+## gen_38.cpp (compile)
+Intent: Probes equality comparison between an edited NaN view and a null value in an editable document.
 COMPILE ERROR. The program fails to compile, the same way against the old and the new library. Fix the error (wrong or missing include, typo, misuse of the public API) and keep the intent: the call under test must stay. Include only headers that exist; if you are unsure a header exists, use the library's main header.
 Compiler errors:
 ```
-gen_19.cpp:7:19: error: ‘json_editable_document’ is not a member of ‘nlohmann’
-gen_19.cpp:8:9: error: ‘doc’ was not declared in this scope
+gen_38.cpp:10:80: error: no match for ‘operator=’ (operand types are ‘nlohmann::json_abi_v3_12_0::basic_json_view<nlohmann::json_abi_v3_12_0::basic_json<>, nlohmann::json_abi_v3_12_0::view_mode::editable>’ and ‘nlohmann::json_abi_v3_12_0::json’ {aka ‘nlohmann::json_abi_v3_12_0::basic_json<>’})
 ```
 Source:
 ```cpp
 #include <nlohmann/json.hpp>
+#include <nlohmann/json_view.hpp>
 #include <iostream>
+#include <limits>
 int main() {
     try {
-        nlohmann::json_editable_document doc = nlohmann::json_editable_document::parse("{\"a\": 1}");
-        doc.root()["b"] = std::numeric_limits<double>::quiet_NaN();
+        nlohmann::json_editable_document doc = nlohmann::json_editable_document::parse("[null]");
+        doc.root()[0] = nlohmann::json(std::numeric_limits<double>::quiet_NaN());
+        std::cout << "doc.root()[0] == doc.root()[0]: " << (doc.root()[0] == doc.root()[0]) << std::endl;
+        std::cout << "doc.root()[0].is_null(): " << doc.root()[0].is_null() << std::endl;
+    } catch (const std::exception& e) {
+        std::cout << "Exception: " << e.what() << std::endl;
+    }
+}
+```
+
+## gen_39.cpp (compile)
+Intent: Probes an array filled with multiple edited NaN values and checks self-equality.
+COMPILE ERROR. The program fails to compile, the same way against the old and the new library. Fix the error (wrong or missing include, typo, misuse of the public API) and keep the intent: the call under test must stay. Include only headers that exist; if you are unsure a header exists, use the library's main header.
+Compiler errors:
+```
+gen_39.cpp:10:80: error: no match for ‘operator=’ (operand types are ‘nlohmann::json_abi_v3_12_0::basic_json_view<nlohmann::json_abi_v3_12_0::basic_json<>, nlohmann::json_abi_v3_12_0::view_mode::editable>’ and ‘nlohmann::json_abi_v3_12_0::json’ {aka ‘nlohmann::json_abi_v3_12_0::basic_json<>’})
+gen_39.cpp:11:80: error: no match for ‘operator=’ (operand types are ‘nlohmann::json_abi_v3_12_0::basic_json_view<nlohmann::json_abi_v3_12_0::basic_json<>, nlohmann::json_abi_v3_12_0::view_mode::editable>’ and ‘nlohmann::json_abi_v3_12_0::json’ {aka ‘nlohmann::json_abi_v3_12_0::basic_json<>’})
+```
+Source:
+```cpp
+#include <nlohmann/json.hpp>
+#include <nlohmann/json_view.hpp>
+#include <iostream>
+#include <limits>
+int main() {
+    try {
+        nlohmann::json_editable_document doc = nlohmann::json_editable_document::parse("[1.0, 2.0]");
+        doc.root()[0] = nlohmann::json(std::numeric_limits<double>::quiet_NaN());
+        doc.root()[1] = nlohmann::json(std::numeric_limits<double>::quiet_NaN());
         auto r = doc.root();
-        std::cout << "patched doc root == root: " << (r == r) << "\n";
+        std::cout << "r[0] == r[1]: " << (r[0] == r[1]) << std::endl;
+        std::cout << "r == r: " << (r == r) << std::endl;
     } catch (const std::exception& e) {
-        std::cout << "Exception: " << e.what() << "\n";
+        std::cout << "Exception: " << e.what() << std::endl;
     }
 }
 ```
 
-## gen_20.cpp (compile)
-Intent: Probes comparison of two separately created editable documents both containing edited NaNs.
+## gen_40.cpp (compile)
+Intent: Probes string dumping behavior of an editable json_view document containing an edited NaN value.
 COMPILE ERROR. The program fails to compile, the same way against the old and the new library. Fix the error (wrong or missing include, typo, misuse of the public API) and keep the intent: the call under test must stay. Include only headers that exist; if you are unsure a header exists, use the library's main header.
 Compiler errors:
 ```
-gen_20.cpp:7:19: error: ‘json_editable_document’ is not a member of ‘nlohmann’
-gen_20.cpp:8:19: error: ‘json_editable_document’ is not a member of ‘nlohmann’
-gen_20.cpp:10:9: error: ‘doc1’ was not declared in this scope
-gen_20.cpp:11:9: error: ‘doc2’ was not declared in this scope
+gen_40.cpp:10:80: error: no match for ‘operator=’ (operand types are ‘nlohmann::json_abi_v3_12_0::basic_json_view<nlohmann::json_abi_v3_12_0::basic_json<>, nlohmann::json_abi_v3_12_0::view_mode::editable>’ and ‘nlohmann::json_abi_v3_12_0::json’ {aka ‘nlohmann::json_abi_v3_12_0::basic_json<>’})
 ```
 Source:
 ```cpp
 #include <nlohmann/json.hpp>
+#include <nlohmann/json_view.hpp>
 #include <iostream>
+#include <limits>
 int main() {
     try {
-        nlohmann::json_editable_document doc1 = nlohmann::json_editable_document::parse("[1]");
-        nlohmann::json_editable_document doc2 = nlohmann::json_editable_document::parse("[2]");
-        double nan_val = std::numeric_limits<double>::quiet_NaN();
-        doc1.root()[0] = nan_val;
-        doc2.root()[0] = nan_val;
-        std::cout << "doc1.root() == doc2.root() with nans: " << (doc1.root() == doc2.root()) << "\n";
+        nlohmann::json_editable_document doc = nlohmann::json_editable_document::parse("[1.0]");
+        doc.root()[0] = nlohmann::json(std::numeric_limits<double>::quiet_NaN());
+        std::string s = doc.root().dump();
+        std::cout << "dump size: " << s.size() << std::endl;
     } catch (const std::exception& e) {
-        std::cout << "Exception: " << e.what() << "\n";
+        std::cout << "Exception: " << e.what() << std::endl;
     }
 }
 ```
 
-## gen_21.cpp (compile)
-Intent: Exercises same_float with std::false_type via comparison of two read-only document views containing float values.
+## gen_41.cpp (compile)
+Intent: Probes whether a NaN written into an editable json_view document compares equal to itself.
 COMPILE ERROR. The program fails to compile, the same way against the old and the new library. Fix the error (wrong or missing include, typo, misuse of the public API) and keep the intent: the call under test must stay. Include only headers that exist; if you are unsure a header exists, use the library's main header.
 Compiler errors:
 ```
-gen_21.cpp:8:31: error: ‘nlohmann::json_document’ has not been declared
-gen_21.cpp:9:31: error: ‘nlohmann::json_document’ has not been declared
+gen_41.cpp:11:74: error: no match for ‘operator=’ (operand types are ‘nlohmann::json_abi_v3_12_0::basic_json_view<nlohmann::json_abi_v3_12_0::basic_json<>, nlohmann::json_abi_v3_12_0::view_mode::editable>’ and ‘nlohmann::json_abi_v3_12_0::json’ {aka ‘nlohmann::json_abi_v3_12_0::basic_json<>’})
 ```
 Source:
 ```cpp
 #include <nlohmann/json.hpp>
-#include <iostream>
-
-int main() {
-    try {
-        auto doc1 = nlohmann::json_document::parse("[1.5]");
-        auto doc2 = nlohmann::json_document::parse("[1.5]");
-        auto v1 = doc1.root()[0];
-        auto v2 = doc2.root()[0];
-        std::cout << std::boolalpha << (v1 == v2) << std::endl;
-    } catch (const std::exception& e) {
-        std::cout << e.what() << std::endl;
-    }
-    return 0;
-}
-```
-
-## gen_22.cpp (compile)
-Intent: Exercises same_float with std::true_type via comparison of two editable document views containing unedited float values.
-COMPILE ERROR. The program fails to compile, the same way against the old and the new library. Fix the error (wrong or missing include, typo, misuse of the public API) and keep the intent: the call under test must stay. Include only headers that exist; if you are unsure a header exists, use the library's main header.
-Compiler errors:
-```
-gen_22.cpp:8:31: error: ‘nlohmann::json_editable_document’ has not been declared
-gen_22.cpp:9:31: error: ‘nlohmann::json_editable_document’ has not been declared
-```
-Source:
-```cpp
-#include <nlohmann/json.hpp>
-#include <iostream>
-
-int main() {
-    try {
-        auto doc1 = nlohmann::json_editable_document::parse("[2.5]");
-        auto doc2 = nlohmann::json_editable_document::parse("[2.5]");
-        auto v1 = doc1.root()[0];
-        auto v2 = doc2.root()[0];
-        std::cout << std::boolalpha << (v1 == v2) << std::endl;
-    } catch (const std::exception& e) {
-        std::cout << e.what() << std::endl;
-    }
-    return 0;
-}
-```
-
-## gen_23.cpp (compile)
-Intent: Exercises certainly_equal node-identity shortcut with editable documents that have never been edited.
-COMPILE ERROR. The program fails to compile, the same way against the old and the new library. Fix the error (wrong or missing include, typo, misuse of the public API) and keep the intent: the call under test must stay. Include only headers that exist; if you are unsure a header exists, use the library's main header.
-Compiler errors:
-```
-gen_23.cpp:8:30: error: ‘nlohmann::json_editable_document’ has not been declared
-gen_23.cpp:8:66: error: unable to find string literal operator ‘operator""key’ with ‘const char [9]’, ‘long unsigned int’ arguments
-```
-Source:
-```cpp
-#include <nlohmann/json.hpp>
-#include <iostream>
-
-int main() {
-    try {
-        auto doc = nlohmann::json_editable_document::parse("{"key": 3.14}");
-        auto root = doc.root();
-        std::cout << std::boolalpha << (root == root) << std::endl;
-    } catch (const std::exception& e) {
-        std::cout << e.what() << std::endl;
-    }
-    return 0;
-}
-```
-
-## gen_24.cpp (compile)
-Intent: Exercises floats_equal with an editable view of a NaN assigned via set() and compared against another view or float.
-COMPILE ERROR. The program fails to compile, the same way against the old and the new library. Fix the error (wrong or missing include, typo, misuse of the public API) and keep the intent: the call under test must stay. Include only headers that exist; if you are unsure a header exists, use the library's main header.
-Compiler errors:
-```
-gen_24.cpp:8:19: error: ‘json_editable_document’ is not a member of ‘nlohmann’
-gen_24.cpp:9:18: error: ‘doc’ was not declared in this scope
-```
-Source:
-```cpp
-#include <nlohmann/json.hpp>
-#include <iostream>
-
-int main() {
-    try {
-        nlohmann::json_editable_document doc = nlohmann::json_editable_document::parse("[0.0]");
-        auto r = doc.root();
-        r[0].set(std::numeric_limits<double>::quiet_NaN());
-        // This triggers floats_equal between two views or view and floating value where NaN is present
-        std::cout << std::boolalpha << (r[0] == r[0]) << std::endl;
-        std::cout << std::boolalpha << (r[0] == std::numeric_limits<double>::quiet_NaN()) << std::endl;
-    } catch (const std::exception& e) {
-        std::cout << e.what() << std::endl;
-    }
-    return 0;
-}
-```
-
-## gen_25.cpp (compile)
-Intent: Exercises float_token_is_nan and number_float lockstep comparison where an editable document with an edit is compared via operator==.
-COMPILE ERROR. The program fails to compile, the same way against the old and the new library. Fix the error (wrong or missing include, typo, misuse of the public API) and keep the intent: the call under test must stay. Include only headers that exist; if you are unsure a header exists, use the library's main header.
-Compiler errors:
-```
-gen_25.cpp:8:19: error: ‘json_editable_document’ is not a member of ‘nlohmann’
-gen_25.cpp:9:19: error: ‘json_editable_document’ is not a member of ‘nlohmann’
-gen_25.cpp:10:19: error: ‘doc1’ was not declared in this scope
-gen_25.cpp:11:19: error: ‘doc2’ was not declared in this scope
-```
-Source:
-```cpp
-#include <nlohmann/json.hpp>
-#include <iostream>
-
-int main() {
-    try {
-        nlohmann::json_editable_document doc1 = nlohmann::json_editable_document::parse("[1.0]");
-        nlohmann::json_editable_document doc2 = nlohmann::json_editable_document::parse("[1.0]");
-        auto r1 = doc1.root();
-        auto r2 = doc2.root();
-        r1[0].set(std::numeric_limits<double>::quiet_NaN());
-        r2[0].set(std::numeric_limits<double>::quiet_NaN());
-        std::cout << std::boolalpha << (r1[0] == r2[0]) << std::endl;
-    } catch (const std::exception& e) {
-        std::cout << e.what() << std::endl;
-    }
-    return 0;
-}
-```
-
-## gen_26.cpp (compile)
-Intent: Probes whether a NaN written by an editable document json_view compares equal to itself.
-COMPILE ERROR. The program fails to compile, the same way against the old and the new library. Fix the error (wrong or missing include, typo, misuse of the public API) and keep the intent: the call under test must stay. Include only headers that exist; if you are unsure a header exists, use the library's main header.
-Compiler errors:
-```
-gen_26.cpp:8:19: error: ‘json_editable_document’ is not a member of ‘nlohmann’
-gen_26.cpp:9:21: error: ‘doc’ was not declared in this scope
-```
-Source:
-```cpp
-#include <nlohmann/json.hpp>
+#include <nlohmann/json_view.hpp>
 #include <iostream>
 #include <limits>
 int main() {
     try {
         nlohmann::json_editable_document doc = nlohmann::json_editable_document::parse("[1.0]");
         auto root = doc.root();
-        double nan_val = std::numeric_limits<double>::quiet_NaN();
-        root[0] = nan_val;
-        std::cout << "root[0] == root[0]: " << (root[0] == root[0]) << "\n";
-        std::cout << "root == root: " << (root == root) << "\n";
+        root[0] = nlohmann::json(std::numeric_limits<double>::quiet_NaN());
+        std::cout << "root[0] == root[0]: " << (root[0] == root[0]) << std::endl;
+        std::cout << "root == root: " << (root == root) << std::endl;
     } catch (const std::exception& e) {
-        std::cout << "Exception: " << e.what() << "\n";
+        std::cout << "Exception: " << e.what() << std::endl;
     }
 }
 ```
 
-## gen_27.cpp (compile)
-Intent: Probes whether an unedited editable document root view still compares equal to itself correctly.
+## gen_42.cpp (compile)
+Intent: Probes equality between two different views of editable documents both containing NaN.
 COMPILE ERROR. The program fails to compile, the same way against the old and the new library. Fix the error (wrong or missing include, typo, misuse of the public API) and keep the intent: the call under test must stay. Include only headers that exist; if you are unsure a header exists, use the library's main header.
 Compiler errors:
 ```
-gen_27.cpp:7:19: error: ‘json_editable_document’ is not a member of ‘nlohmann’
-gen_27.cpp:8:21: error: ‘doc’ was not declared in this scope
+gen_42.cpp:11:81: error: no match for ‘operator=’ (operand types are ‘nlohmann::json_abi_v3_12_0::basic_json_view<nlohmann::json_abi_v3_12_0::basic_json<>, nlohmann::json_abi_v3_12_0::view_mode::editable>’ and ‘nlohmann::json_abi_v3_12_0::json’ {aka ‘nlohmann::json_abi_v3_12_0::basic_json<>’})
+gen_42.cpp:12:81: error: no match for ‘operator=’ (operand types are ‘nlohmann::json_abi_v3_12_0::basic_json_view<nlohmann::json_abi_v3_12_0::basic_json<>, nlohmann::json_abi_v3_12_0::view_mode::editable>’ and ‘nlohmann::json_abi_v3_12_0::json’ {aka ‘nlohmann::json_abi_v3_12_0::basic_json<>’})
 ```
 Source:
 ```cpp
 #include <nlohmann/json.hpp>
-#include <iostream>
-int main() {
-    try {
-        nlohmann::json_editable_document doc = nlohmann::json_editable_document::parse("[1.5, 2.5]");
-        auto root = doc.root();
-        std::cout << "unedited root == root: " << (root == root) << "\n";
-        std::cout << "unedited root[0] == root[0]: " << (root[0] == root[0]) << "\n";
-    } catch (const std::exception& e) {
-        std::cout << "Exception: " << e.what() << "\n";
-    }
-}
-```
-
-## gen_28.cpp (compile)
-Intent: Probes equality behavior for read-only document views where NaN cannot be entered via parse.
-COMPILE ERROR. The program fails to compile, the same way against the old and the new library. Fix the error (wrong or missing include, typo, misuse of the public API) and keep the intent: the call under test must stay. Include only headers that exist; if you are unsure a header exists, use the library's main header.
-Compiler errors:
-```
-gen_28.cpp:7:19: error: ‘json_document’ is not a member of ‘nlohmann’
-gen_28.cpp:8:21: error: ‘doc’ was not declared in this scope
-```
-Source:
-```cpp
-#include <nlohmann/json.hpp>
-#include <iostream>
-int main() {
-    try {
-        nlohmann::json_document doc = nlohmann::json_document::parse("[1.0]");
-        auto root = doc.root();
-        std::cout << "readonly root == root: " << (root == root) << "\n";
-    } catch (const std::exception& e) {
-        std::cout << "Exception: " << e.what() << "\n";
-    }
-}
-```
-
-## gen_29.cpp (compile)
-Intent: Probes whether an array containing an edited NaN compares equal to itself or another view.
-COMPILE ERROR. The program fails to compile, the same way against the old and the new library. Fix the error (wrong or missing include, typo, misuse of the public API) and keep the intent: the call under test must stay. Include only headers that exist; if you are unsure a header exists, use the library's main header.
-Compiler errors:
-```
-gen_29.cpp:8:19: error: ‘json_editable_document’ is not a member of ‘nlohmann’
-gen_29.cpp:9:19: error: ‘json_editable_document’ is not a member of ‘nlohmann’
-gen_29.cpp:10:9: error: ‘doc1’ was not declared in this scope
-gen_29.cpp:11:9: error: ‘doc2’ was not declared in this scope
-```
-Source:
-```cpp
-#include <nlohmann/json.hpp>
+#include <nlohmann/json_view.hpp>
 #include <iostream>
 #include <limits>
 int main() {
     try {
-        nlohmann::json_editable_document doc1 = nlohmann::json_editable_document::parse("[0]");
-        nlohmann::json_editable_document doc2 = nlohmann::json_editable_document::parse("[0]");
-        doc1.root()[0] = std::numeric_limits<double>::quiet_NaN();
-        doc2.root()[0] = std::numeric_limits<double>::quiet_NaN();
-        std::cout << "doc1.root() == doc2.root(): " << (doc1.root() == doc2.root()) << "\n";
-        std::cout << "doc1.root() == doc1.root(): " << (doc1.root() == doc1.root()) << "\n";
+        nlohmann::json_editable_document doc1 = nlohmann::json_editable_document::parse("[0.0]");
+        nlohmann::json_editable_document doc2 = nlohmann::json_editable_document::parse("[0.0]");
+        doc1.root()[0] = nlohmann::json(std::numeric_limits<double>::quiet_NaN());
+        doc2.root()[0] = nlohmann::json(std::numeric_limits<double>::quiet_NaN());
+        std::cout << "doc1.root() == doc2.root(): " << (doc1.root() == doc2.root()) << std::endl;
     } catch (const std::exception& e) {
-        std::cout << "Exception: " << e.what() << "\n";
+        std::cout << "Exception: " << e.what() << std::endl;
     }
 }
 ```
 
-## gen_30.cpp (compile)
-Intent: Probes whether an object containing an edited NaN compares equal to itself.
+## gen_43.cpp (compile)
+Intent: Probes whether positive and negative infinities written by edits still compare equal to themselves.
 COMPILE ERROR. The program fails to compile, the same way against the old and the new library. Fix the error (wrong or missing include, typo, misuse of the public API) and keep the intent: the call under test must stay. Include only headers that exist; if you are unsure a header exists, use the library's main header.
 Compiler errors:
 ```
-gen_30.cpp:8:19: error: ‘json_editable_document’ is not a member of ‘nlohmann’
-gen_30.cpp:9:9: error: ‘doc’ was not declared in this scope
+gen_43.cpp:11:80: error: no match for ‘operator=’ (operand types are ‘nlohmann::json_abi_v3_12_0::basic_json_view<nlohmann::json_abi_v3_12_0::basic_json<>, nlohmann::json_abi_v3_12_0::view_mode::editable>’ and ‘nlohmann::json_abi_v3_12_0::json’ {aka ‘nlohmann::json_abi_v3_12_0::basic_json<>’})
+gen_43.cpp:12:80: error: no match for ‘operator=’ (operand types are ‘nlohmann::json_abi_v3_12_0::basic_json_view<nlohmann::json_abi_v3_12_0::basic_json<>, nlohmann::json_abi_v3_12_0::view_mode::editable>’ and ‘nlohmann::json_abi_v3_12_0::json’ {aka ‘nlohmann::json_abi_v3_12_0::basic_json<>’})
 ```
 Source:
 ```cpp
 #include <nlohmann/json.hpp>
+#include <nlohmann/json_view.hpp>
 #include <iostream>
 #include <limits>
 int main() {
     try {
-        nlohmann::json_editable_document doc = nlohmann::json_editable_document::parse("{\"a\": 1}");
-        doc.root()["a"] = std::numeric_limits<double>::quiet_NaN();
-        std::cout << "object root == root: " << (doc.root() == doc.root()) << "\n";
+        nlohmann::json_editable_document doc1 = nlohmann::json_editable_document::parse("[0.0]");
+        nlohmann::json_editable_document doc2 = nlohmann::json_editable_document::parse("[0.0]");
+        doc1.root()[0] = nlohmann::json(std::numeric_limits<double>::infinity());
+        doc2.root()[0] = nlohmann::json(std::numeric_limits<double>::infinity());
+        std::cout << "inf == inf: " << (doc1.root()[0] == doc2.root()[0]) << std::endl;
+        std::cout << "doc1 == doc2: " << (doc1.root() == doc2.root()) << std::endl;
     } catch (const std::exception& e) {
-        std::cout << "Exception: " << e.what() << "\n";
+        std::cout << "Exception: " << e.what() << std::endl;
+    }
+}
+```
+
+## gen_44.cpp (compile)
+Intent: Probes comparing an edited view containing NaN against a standard nlohmann::json object holding NaN.
+COMPILE ERROR. The program fails to compile, the same way against the old and the new library. Fix the error (wrong or missing include, typo, misuse of the public API) and keep the intent: the call under test must stay. Include only headers that exist; if you are unsure a header exists, use the library's main header.
+Compiler errors:
+```
+gen_44.cpp:10:80: error: no match for ‘operator=’ (operand types are ‘nlohmann::json_abi_v3_12_0::basic_json_view<nlohmann::json_abi_v3_12_0::basic_json<>, nlohmann::json_abi_v3_12_0::view_mode::editable>’ and ‘nlohmann::json_abi_v3_12_0::json’ {aka ‘nlohmann::json_abi_v3_12_0::basic_json<>’})
+```
+Source:
+```cpp
+#include <nlohmann/json.hpp>
+#include <nlohmann/json_view.hpp>
+#include <iostream>
+#include <limits>
+int main() {
+    try {
+        nlohmann::json_editable_document doc = nlohmann::json_editable_document::parse("[0.0]");
+        doc.root()[0] = nlohmann::json(std::numeric_limits<double>::quiet_NaN());
+        nlohmann::json j = nlohmann::json::array({std::numeric_limits<double>::quiet_NaN()});
+        std::cout << "view == json: " << (doc.root() == j) << std::endl;
+    } catch (const std::exception& e) {
+        std::cout << "Exception: " << e.what() << std::endl;
+    }
+}
+```
+
+## gen_45.cpp (compile)
+Intent: Probes whether an array containing an edited NaN propagates inequality when comparing the parent container.
+COMPILE ERROR. The program fails to compile, the same way against the old and the new library. Fix the error (wrong or missing include, typo, misuse of the public API) and keep the intent: the call under test must stay. Include only headers that exist; if you are unsure a header exists, use the library's main header.
+Compiler errors:
+```
+gen_45.cpp:10:83: error: no match for ‘operator=’ (operand types are ‘nlohmann::json_abi_v3_12_0::basic_json_view<nlohmann::json_abi_v3_12_0::basic_json<>, nlohmann::json_abi_v3_12_0::view_mode::editable>’ and ‘nlohmann::json_abi_v3_12_0::json’ {aka ‘nlohmann::json_abi_v3_12_0::basic_json<>’})
+```
+Source:
+```cpp
+#include <nlohmann/json.hpp>
+#include <nlohmann/json_view.hpp>
+#include <iostream>
+#include <limits>
+int main() {
+    try {
+        nlohmann::json_editable_document doc = nlohmann::json_editable_document::parse("[[1.0]]");
+        doc.root()[0][0] = nlohmann::json(std::numeric_limits<double>::quiet_NaN());
+        auto r = doc.root();
+        std::cout << "r == r: " << (r == r) << std::endl;
+    } catch (const std::exception& e) {
+        std::cout << "Exception: " << e.what() << std::endl;
+    }
+}
+```
+
+## gen_46.cpp (compile)
+Intent: Probes whether an object containing a field set to NaN compares equal to itself.
+COMPILE ERROR. The program fails to compile, the same way against the old and the new library. Fix the error (wrong or missing include, typo, misuse of the public API) and keep the intent: the call under test must stay. Include only headers that exist; if you are unsure a header exists, use the library's main header.
+Compiler errors:
+```
+gen_46.cpp:10:84: error: no match for ‘operator=’ (operand types are ‘nlohmann::json_abi_v3_12_0::basic_json_view<nlohmann::json_abi_v3_12_0::basic_json<>, nlohmann::json_abi_v3_12_0::view_mode::editable>’ and ‘nlohmann::json_abi_v3_12_0::json’ {aka ‘nlohmann::json_abi_v3_12_0::basic_json<>’})
+```
+Source:
+```cpp
+#include <nlohmann/json.hpp>
+#include <nlohmann/json_view.hpp>
+#include <iostream>
+#include <limits>
+int main() {
+    try {
+        nlohmann::json_editable_document doc = nlohmann::json_editable_document::parse("{\"key\": 1.0}");
+        doc.root()["key"] = nlohmann::json(std::numeric_limits<double>::quiet_NaN());
+        auto r = doc.root();
+        std::cout << "r == r: " << (r == r) << std::endl;
+    } catch (const std::exception& e) {
+        std::cout << "Exception: " << e.what() << std::endl;
+    }
+}
+```
+
+## gen_47.cpp (compile)
+Intent: Probes equality when a NaN is pushed into an editable json_view array.
+COMPILE ERROR. The program fails to compile, the same way against the old and the new library. Fix the error (wrong or missing include, typo, misuse of the public API) and keep the intent: the call under test must stay. Include only headers that exist; if you are unsure a header exists, use the library's main header.
+Compiler errors:
+```
+gen_47.cpp:10:20: error: ‘using nlohmann::json_abi_v3_12_0::basic_json_document<nlohmann::json_abi_v3_12_0::basic_json<>, nlohmann::json_abi_v3_12_0::view_mode::editable>::view_type = class nlohmann::json_abi_v3_12_0::basic_json_view<nlohmann::json_abi_v3_12_0::basic_json<>, nlohmann::json_abi_v3_12
+```
+Source:
+```cpp
+#include <nlohmann/json.hpp>
+#include <nlohmann/json_view.hpp>
+#include <iostream>
+#include <limits>
+int main() {
+    try {
+        nlohmann::json_editable_document doc = nlohmann::json_editable_document::parse("[]");
+        doc.root().push_back(nlohmann::json(std::numeric_limits<double>::quiet_NaN()));
+        auto r = doc.root();
+        std::cout << "r[0] == r[0]: " << (r[0] == r[0]) << std::endl;
+        std::cout << "r == r: " << (r == r) << std::endl;
+    } catch (const std::exception& e) {
+        std::cout << "Exception: " << e.what() << std::endl;
     }
 }
 ```
